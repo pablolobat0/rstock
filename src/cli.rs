@@ -10,6 +10,10 @@ pub struct Cli {
 #[derive(Subcommand)]
 pub enum Commands {
     /// Record a buy transaction, creates asset if it doesn't exist
+    /// Show current portfolio overview
+    Get,
+
+    /// Record a buy transaction, creates asset if it doesn't exist
     Buy {
         /// Ticker symbol
         #[arg(long)]

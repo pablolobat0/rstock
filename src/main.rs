@@ -8,6 +8,7 @@ mod settings;
 use clap::Parser;
 use cli::{Cli, Commands};
 use models::{AssetInfo, BuyOrder};
+use tabled::Table;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -15,6 +16,14 @@ async fn main() -> anyhow::Result<()> {
     let db = db::connect().await?;
 
     match cli.command {
+        Commands::Get => {
+            let rows = services::portfolio::get_portfolio(&db).await?;
+            if rows.is_empty() {
+                println!("No positions found.");
+            } else {
+                println!("{}", Table::new(&rows));
+            }
+        }
         Commands::Buy {
             ticker,
             name,
