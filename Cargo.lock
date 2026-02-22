@@ -2336,6 +2336,8 @@ dependencies = [
  "clap",
  "migration",
  "sea-orm",
+ "serde",
+ "serde_json",
  "thiserror",
  "tokio",
  "yfinance-rs",

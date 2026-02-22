@@ -1,3 +1,5 @@
+use serde::Deserialize;
+
 pub struct AssetInfo {
     pub ticker: String,
     pub name: String,
@@ -12,4 +14,11 @@ pub struct BuyOrder {
     pub price: f64,
     pub fees: f64,
     pub notes: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct FundPriceResponse {
+    pub price: f64,
+    #[allow(dead_code)]
+    pub date: String,
 }
