@@ -1,9 +1,10 @@
 use anyhow::Context;
+use chrono::{Datelike, NaiveDate};
 use sea_orm::*;
 
 use crate::db::entities::{asset, transaction};
-use crate::models::PortfolioRow;
-use crate::services::price;
+use crate::models::{PortfolioRow, PortfolioSummary};
+use crate::services::{nav, price};
 
 pub async fn get_portfolio(db: &DatabaseConnection) -> anyhow::Result<Vec<PortfolioRow>> {
     let assets = asset::Entity::find().all(db).await?;
@@ -72,6 +73,74 @@ pub async fn get_portfolio(db: &DatabaseConnection) -> anyhow::Result<Vec<Portfo
     }
 
     Ok(rows)
+}
+
+pub async fn get_portfolio_summary(
+    db: &DatabaseConnection,
+) -> anyhow::Result<Option<PortfolioSummary>> {
+    // Rebuild portfolio history (smart: only fills from last snapshot)
+    nav::rebuild_portfolio_history(db, None).await?;
+
+    let current_snapshot = nav::get_latest_snapshot(db).await?;
+    let current_snapshot = match current_snapshot {
+        Some(s) => s,
+        None => return Ok(None),
+    };
+
+    let today = chrono::Local::now().date_naive();
+    let current_nav = current_snapshot.nav;
+
+    // Calculate returns for each period
+    let ytd_date = NaiveDate::from_ymd_opt(today.year(), 1, 1)
+        .unwrap()
+        .format("%Y-%m-%d")
+        .to_string();
+    let one_year_date = (today - chrono::Duration::days(365))
+        .format("%Y-%m-%d")
+        .to_string();
+    let three_year_date = (today - chrono::Duration::days(1095))
+        .format("%Y-%m-%d")
+        .to_string();
+    let five_year_date = (today - chrono::Duration::days(1825))
+        .format("%Y-%m-%d")
+        .to_string();
+
+    let ytd_return = calc_return(db, current_nav, &ytd_date, true).await?;
+    let one_year_return = calc_return(db, current_nav, &one_year_date, false).await?;
+    let three_year_return = calc_return(db, current_nav, &three_year_date, false).await?;
+    let five_year_return = calc_return(db, current_nav, &five_year_date, false).await?;
+
+    Ok(Some(PortfolioSummary {
+        total_value: current_snapshot.total_value,
+        nav: current_nav,
+        ytd_return,
+        one_year_return,
+        three_year_return,
+        five_year_return,
+    }))
+}
+
+async fn calc_return(
+    db: &DatabaseConnection,
+    current_nav: f64,
+    target_date: &str,
+    fallback_to_inception: bool,
+) -> anyhow::Result<Option<f64>> {
+    let snapshot = match nav::get_snapshot_at_or_before(db, target_date).await? {
+        Some(s) => s,
+        None if fallback_to_inception => match nav::get_earliest_snapshot(db).await? {
+            Some(s) => s,
+            None => return Ok(None),
+        },
+        None => return Ok(None),
+    };
+    if snapshot.nav > 0.0 {
+        Ok(Some(
+            ((current_nav - snapshot.nav) / snapshot.nav) * 100.0,
+        ))
+    } else {
+        Ok(None)
+    }
 }
 
 fn format_qty(qty: f64) -> String {

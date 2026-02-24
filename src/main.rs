@@ -23,6 +23,28 @@ async fn main() -> anyhow::Result<()> {
             } else {
                 println!("{}", Table::new(&rows));
             }
+
+            if let Some(summary) = services::portfolio::get_portfolio_summary(&db).await? {
+                println!();
+                println!("Portfolio Value: {:.2}", summary.total_value);
+                println!("NAV:            {:.2}", summary.nav);
+
+                let fmt_ret = |r: Option<f64>| match r {
+                    Some(v) => {
+                        let sign = if v >= 0.0 { "+" } else { "" };
+                        format!("{}{:.2}%", sign, v)
+                    }
+                    None => "N/A".to_string(),
+                };
+
+                println!(
+                    "YTD: {}  1Y: {}  3Y: {}  5Y: {}",
+                    fmt_ret(summary.ytd_return),
+                    fmt_ret(summary.one_year_return),
+                    fmt_ret(summary.three_year_return),
+                    fmt_ret(summary.five_year_return),
+                );
+            }
         }
         Commands::Buy {
             ticker,

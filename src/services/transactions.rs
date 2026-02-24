@@ -20,6 +20,7 @@ pub async fn buy(
     let price_cents = (order.price * 100.0).round() as i64;
     let fees_cents = (order.fees * 100.0).round() as i64;
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let tx_date = order.date.clone();
 
     let tx = transaction::ActiveModel {
         asset_id: Set(asset_id),
@@ -36,6 +37,8 @@ pub async fn buy(
     tx.insert(db).await?;
 
     println!("{}", summary);
+
+    super::nav::rebuild_portfolio_history(db, Some(tx_date)).await?;
 
     Ok(())
 }

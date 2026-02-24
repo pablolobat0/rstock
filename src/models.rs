@@ -49,3 +49,18 @@ pub struct FundPriceResponse {
     #[allow(dead_code)]
     pub date: String,
 }
+
+#[derive(Deserialize)]
+pub struct FundPriceHistoryEntry {
+    pub date: String,
+    pub price: f64,
+}
+
+pub struct PortfolioSummary {
+    pub total_value: f64,
+    pub nav: f64,
+    pub ytd_return: Option<f64>,
+    pub one_year_return: Option<f64>,
+    pub three_year_return: Option<f64>,
+    pub five_year_return: Option<f64>,
+}

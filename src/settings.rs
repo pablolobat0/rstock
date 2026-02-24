@@ -1,6 +1,7 @@
 pub enum Settings {
     ScriptsDir,
     GetFundPriceScript,
+    GetFundPriceHistoryScript,
 }
 
 impl Settings {
@@ -8,6 +9,7 @@ impl Settings {
         match self {
             Settings::ScriptsDir => "scripts",
             Settings::GetFundPriceScript => "get_fund_price.py",
+            Settings::GetFundPriceHistoryScript => "get_fund_price_history.py",
         }
     }
 }
