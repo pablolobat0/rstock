@@ -3,9 +3,10 @@ use chrono::NaiveDate;
 use sea_orm::*;
 
 use crate::db::entities::{asset, daily_asset_price};
-use crate::services::price;
+use crate::services::price::PriceFetcher;
 
 pub async fn get_closing_price(
+    // Rebuild portfolio history (smart: only fills from last snapshot)
     db: &DatabaseConnection,
     asset: &asset::Model,
     date: &str,
@@ -41,28 +42,14 @@ pub async fn fill_prices_for_range(
     asset: &asset::Model,
     start_date: &str,
     end_date: &str,
+    price_fetcher: &dyn PriceFetcher,
 ) -> anyhow::Result<()> {
-    // Fetch historical prices from API
-    let api_prices = match asset.asset_type.as_str() {
-        "stock" => {
-            price::get_historical_stock_prices(&asset.ticker, start_date, end_date).await
-        }
-        "fund" | "etf" => match &asset.isin {
-            Some(isin) => {
-                price::get_historical_fund_prices(isin, start_date, end_date).await
-            }
-            None => {
-                anyhow::bail!(
-                    "no ISIN for {} ({}), cannot fetch historical prices",
-                    asset.ticker,
-                    asset.asset_type
-                );
-            }
-        },
-        other => {
-            anyhow::bail!("unknown asset type '{}' for {}", other, asset.ticker);
-        }
-    };
+    // Fetch historical prices from API (Yahoo Finance for all asset types)
+    // Use ISIN for funds/ETFs (Yahoo Finance resolves ISINs), ticker for stocks
+    let lookup = asset.isin.as_deref().unwrap_or(&asset.ticker);
+    let api_prices = price_fetcher
+        .get_historical_prices(lookup, start_date, end_date, &asset.asset_type)
+        .await;
 
     let api_failed = api_prices.is_err();
     let price_map: std::collections::HashMap<String, f64> = match api_prices {
@@ -77,10 +64,8 @@ pub async fn fill_prices_for_range(
     };
 
     // Iterate calendar days and store prices
-    let start = NaiveDate::parse_from_str(start_date, "%Y-%m-%d")
-        .context("invalid start date")?;
-    let end = NaiveDate::parse_from_str(end_date, "%Y-%m-%d")
-        .context("invalid end date")?;
+    let start = NaiveDate::parse_from_str(start_date, "%Y-%m-%d").context("invalid start date")?;
+    let end = NaiveDate::parse_from_str(end_date, "%Y-%m-%d").context("invalid end date")?;
 
     let mut last_known_price: Option<f64> = None;
 

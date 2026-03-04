@@ -1,15 +1,146 @@
-use std::path::PathBuf;
-
 use anyhow::{bail, Context};
 use chrono::{NaiveDate, TimeZone, Utc};
 use yfinance_rs::core::conversions::money_to_f64;
 use yfinance_rs::history::HistoryBuilder;
 use yfinance_rs::{Ticker, YfClient};
 
-use crate::models::{FundPriceHistoryEntry, FundPriceResponse};
-use crate::settings::Settings;
+#[async_trait::async_trait]
+pub trait PriceFetcher: Send + Sync {
+    async fn get_last_price(&self, ticker: &str, asset_type: &str) -> anyhow::Result<f64>;
+    async fn get_historical_prices(
+        &self,
+        ticker: &str,
+        start: &str,
+        end: &str,
+        asset_type: &str,
+    ) -> anyhow::Result<Vec<(String, f64)>>;
+}
 
-pub async fn get_last_price(ticker: &str) -> anyhow::Result<f64> {
+pub struct RealPriceFetcher;
+
+#[async_trait::async_trait]
+impl PriceFetcher for RealPriceFetcher {
+    async fn get_last_price(&self, ticker: &str, asset_type: &str) -> anyhow::Result<f64> {
+        match asset_type {
+            "fund" | "etf" => get_fund_last_price(ticker).await,
+            _ => get_stock_last_price(ticker).await,
+        }
+    }
+    async fn get_historical_prices(
+        &self,
+        ticker: &str,
+        start: &str,
+        end: &str,
+        asset_type: &str,
+    ) -> anyhow::Result<Vec<(String, f64)>> {
+        match asset_type {
+            "fund" | "etf" => get_fund_historical_prices(ticker, start, end).await,
+            _ => get_stock_historical_prices(ticker, start, end).await,
+        }
+    }
+}
+
+// --- Scripts directory resolution ---
+
+fn resolve_scripts_dir() -> anyhow::Result<std::path::PathBuf> {
+    if let Ok(dir) = std::env::var("RSTOCK_SCRIPTS_DIR") {
+        let path = std::path::PathBuf::from(dir);
+        if path.is_dir() {
+            return Ok(path);
+        }
+        bail!("RSTOCK_SCRIPTS_DIR is set but not a valid directory: {}", path.display());
+    }
+
+    // Walk up from the executable looking for a scripts/ folder
+    let exe = std::env::current_exe().context("cannot determine executable path")?;
+    let mut dir = exe.parent();
+    while let Some(d) = dir {
+        let candidate = d.join("scripts");
+        if candidate.is_dir() {
+            return Ok(candidate);
+        }
+        dir = d.parent();
+    }
+
+    bail!("could not find scripts/ directory (set RSTOCK_SCRIPTS_DIR to override)")
+}
+
+// --- Fund/ETF via Python scripts ---
+
+async fn get_fund_last_price(identifier: &str) -> anyhow::Result<f64> {
+    let scripts_dir = resolve_scripts_dir()?;
+    let script = scripts_dir.join("get_fund_price.py");
+
+    let output = tokio::process::Command::new("uv")
+        .arg("run")
+        .arg(&script)
+        .arg(identifier)
+        .output()
+        .await
+        .context("failed to run get_fund_price.py via uv")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("get_fund_price.py failed for {identifier}: {stderr}");
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(stdout.trim()).context("failed to parse get_fund_price.py output")?;
+
+    let price = parsed["price"]
+        .as_f64()
+        .context("missing or invalid 'price' in get_fund_price.py output")?;
+
+    if price <= 0.0 {
+        bail!("invalid fund price for {identifier}: {price}");
+    }
+
+    Ok(price)
+}
+
+async fn get_fund_historical_prices(
+    identifier: &str,
+    start: &str,
+    end: &str,
+) -> anyhow::Result<Vec<(String, f64)>> {
+    let scripts_dir = resolve_scripts_dir()?;
+    let script = scripts_dir.join("get_fund_price_history.py");
+
+    let output = tokio::process::Command::new("uv")
+        .arg("run")
+        .arg(&script)
+        .arg(identifier)
+        .arg(start)
+        .arg(end)
+        .output()
+        .await
+        .context("failed to run get_fund_price_history.py via uv")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("get_fund_price_history.py failed for {identifier}: {stderr}");
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: Vec<serde_json::Value> = serde_json::from_str(stdout.trim())
+        .context("failed to parse get_fund_price_history.py output")?;
+
+    let results: Vec<(String, f64)> = parsed
+        .iter()
+        .filter_map(|entry| {
+            let date = entry["date"].as_str()?.to_owned();
+            let price = entry["price"].as_f64()?;
+            Some((date, price))
+        })
+        .collect();
+
+    Ok(results)
+}
+
+// --- Stock via Yahoo Finance ---
+
+async fn get_stock_last_price(ticker: &str) -> anyhow::Result<f64> {
     let client = YfClient::default();
     let tk = Ticker::new(&client, ticker);
     let quote = tk.quote().await.context("failed to fetch quote")?;
@@ -21,27 +152,7 @@ pub async fn get_last_price(ticker: &str) -> anyhow::Result<f64> {
     Ok(value)
 }
 
-pub async fn get_last_fund_price(identifier: &str) -> anyhow::Result<f64> {
-    let script = find_scripts_dir()?.join(Settings::GetFundPriceScript.as_str());
-
-    let output = tokio::process::Command::new("uv")
-        .args(["run", &script.to_string_lossy(), identifier])
-        .output()
-        .await
-        .context("failed to spawn uv process")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("get_fund_price.py failed: {}", stderr.trim());
-    }
-
-    let resp: FundPriceResponse =
-        serde_json::from_slice(&output.stdout).context("failed to parse fund price JSON output")?;
-
-    Ok(resp.price)
-}
-
-pub async fn get_historical_stock_prices(
+async fn get_stock_historical_prices(
     ticker: &str,
     start: &str,
     end: &str,
@@ -75,46 +186,4 @@ pub async fn get_historical_stock_prices(
         .collect();
 
     Ok(results)
-}
-
-pub async fn get_historical_fund_prices(
-    identifier: &str,
-    start: &str,
-    end: &str,
-) -> anyhow::Result<Vec<(String, f64)>> {
-    let script = find_scripts_dir()?.join(Settings::GetFundPriceHistoryScript.as_str());
-
-    let output = tokio::process::Command::new("uv")
-        .args(["run", &script.to_string_lossy(), identifier, start, end])
-        .output()
-        .await
-        .context("failed to spawn uv process for fund price history")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("get_fund_price_history.py failed: {}", stderr.trim());
-    }
-
-    let entries: Vec<FundPriceHistoryEntry> = serde_json::from_slice(&output.stdout)
-        .context("failed to parse fund price history JSON")?;
-
-    Ok(entries.into_iter().map(|e| (e.date, e.price)).collect())
-}
-
-fn find_scripts_dir() -> anyhow::Result<PathBuf> {
-    if let Ok(dir) = std::env::var("RSTOCK_SCRIPTS_DIR") {
-        return Ok(PathBuf::from(dir));
-    }
-
-    let exe = std::env::current_exe().context("failed to get current executable path")?;
-    let mut dir = exe.parent().map(|p| p.to_path_buf());
-    while let Some(d) = dir {
-        let scripts = d.join(Settings::ScriptsDir.as_str());
-        if scripts.is_dir() {
-            return Ok(scripts);
-        }
-        dir = d.parent().map(|p| p.to_path_buf());
-    }
-
-    bail!("could not find scripts directory; set RSTOCK_SCRIPTS_DIR env var")
 }

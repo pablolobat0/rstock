@@ -5,7 +5,6 @@ use sea_orm::entity::prelude::*;
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub date: String,
-    pub cash_balance: f64,
     pub asset_value: f64,
     pub total_value: f64,
     pub outstanding_shares: f64,

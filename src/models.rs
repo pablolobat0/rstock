@@ -1,4 +1,3 @@
-use serde::Deserialize;
 use tabled::Tabled;
 
 pub struct AssetInfo {
@@ -41,24 +40,38 @@ pub struct PortfolioRow {
     pub gain_loss: String,
     #[tabled(rename = "G/L %")]
     pub gain_loss_pct: String,
+    #[tabled(rename = "Weight")]
+    pub weight: String,
 }
 
-#[derive(Deserialize)]
-pub struct FundPriceResponse {
-    pub price: f64,
-    #[allow(dead_code)]
-    pub date: String,
+pub struct AssetPosition {
+    pub ticker: String,
+    pub name: String,
+    pub asset_type: String,
+    pub currency: String,
+    pub total_qty: f64,
+    pub avg_cost: f64,
+    pub current_price: f64,
+    pub total_invested: f64,
+    pub current_value: f64,
+    pub gain_loss: f64,
+    pub gain_loss_pct: f64,
 }
 
-#[derive(Deserialize)]
-pub struct FundPriceHistoryEntry {
-    pub date: String,
-    pub price: f64,
+pub struct PortfolioResult {
+    pub rows: Vec<AssetPosition>,
+    pub total_invested: f64,
+    pub total_current_value: f64,
+    pub total_gain_loss: f64,
+    pub total_gain_loss_pct: f64,
 }
 
 pub struct PortfolioSummary {
     pub total_value: f64,
     pub nav: f64,
+    pub daily_change: Option<f64>,
+    pub daily_change_pct: Option<f64>,
+    pub inception_date: Option<String>,
     pub ytd_return: Option<f64>,
     pub one_year_return: Option<f64>,
     pub three_year_return: Option<f64>,

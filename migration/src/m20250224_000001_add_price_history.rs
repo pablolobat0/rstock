@@ -43,7 +43,7 @@ impl MigrationTrait for Migration {
                     .table(PortfolioHistory::Table)
                     .if_not_exists()
                     .col(string(PortfolioHistory::Date).primary_key())
-                    .col(double(PortfolioHistory::CashBalance))
+                    .col(double(PortfolioHistory::CashBalance).default(0.0))
                     .col(double(PortfolioHistory::AssetValue))
                     .col(double(PortfolioHistory::TotalValue))
                     .col(double(PortfolioHistory::OutstandingShares))
