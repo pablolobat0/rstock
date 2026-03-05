@@ -125,14 +125,12 @@ pub async fn get_asset_snapshots(
 }
 
 pub struct MockPriceFetcher {
-    pub last_prices: HashMap<String, f64>,
     pub historical_prices: HashMap<String, Vec<(String, f64)>>,
 }
 
 impl MockPriceFetcher {
     pub fn new() -> Self {
         Self {
-            last_prices: HashMap::new(),
             historical_prices: HashMap::new(),
         }
     }
@@ -140,13 +138,6 @@ impl MockPriceFetcher {
 
 #[async_trait::async_trait]
 impl PriceFetcher for MockPriceFetcher {
-    async fn get_last_price(&self, ticker: &str, _asset_type: &str) -> anyhow::Result<f64> {
-        self.last_prices
-            .get(ticker)
-            .copied()
-            .ok_or_else(|| anyhow::anyhow!("mock: no last price for {}", ticker))
-    }
-
     async fn get_historical_prices(
         &self,
         ticker: &str,

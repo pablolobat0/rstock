@@ -1,11 +1,10 @@
 use anyhow::Context;
 use chrono::{Datelike, NaiveDate};
-use sea_orm::*;
+use sea_orm::DatabaseConnection;
 use std::collections::HashMap;
 
-use crate::db::entities::{
-    asset, portfolio_asset_history,
-    transaction::{self, Entity as Transaction},
+use crate::db::repos::{
+    asset_repo, portfolio_asset_history_repo, portfolio_history_repo, transaction_repo,
 };
 use crate::models::{AssetPosition, PortfolioResult, PortfolioSummary};
 use crate::services::nav;
@@ -15,10 +14,7 @@ pub async fn get_portfolio(db: &DatabaseConnection) -> anyhow::Result<PortfolioR
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
 
     // Read today's asset snapshots (built by get_portfolio_summary)
-    let asset_snapshots = portfolio_asset_history::Entity::find()
-        .filter(portfolio_asset_history::Column::Date.eq(&today))
-        .all(db)
-        .await?;
+    let asset_snapshots = portfolio_asset_history_repo::find_by_date(db, &today).await?;
 
     if asset_snapshots.is_empty() {
         return Ok(PortfolioResult {
@@ -32,11 +28,8 @@ pub async fn get_portfolio(db: &DatabaseConnection) -> anyhow::Result<PortfolioR
 
     // Load asset metadata
     let asset_ids: Vec<i32> = asset_snapshots.iter().map(|s| s.asset_id).collect();
-    let assets = asset::Entity::find()
-        .filter(asset::Column::Id.is_in(asset_ids))
-        .all(db)
-        .await?;
-    let asset_map: HashMap<i32, &asset::Model> = assets.iter().map(|a| (a.id, a)).collect();
+    let assets = asset_repo::find_by_ids(db, asset_ids).await?;
+    let asset_map: HashMap<i32, _> = assets.iter().map(|a| (a.id, a)).collect();
 
     let mut rows: Vec<AssetPosition> = Vec::new();
 
@@ -47,10 +40,7 @@ pub async fn get_portfolio(db: &DatabaseConnection) -> anyhow::Result<PortfolioR
         };
 
         // Compute avg_cost from transactions
-        let transactions = transaction::Entity::find()
-            .filter(transaction::Column::AssetId.eq(snap.asset_id))
-            .all(db)
-            .await?;
+        let transactions = transaction_repo::find_by_asset_id(db, snap.asset_id).await?;
 
         let total_cost: f64 = transactions
             .iter()
@@ -111,7 +101,7 @@ pub async fn get_portfolio_summary(
     let today = chrono::Local::now().date_naive();
     let today_str = today.format("%Y-%m-%d").to_string();
 
-    let latest_snapshot = nav::get_latest_snapshot(db).await?;
+    let latest_snapshot = portfolio_history_repo::find_latest(db).await?;
     match &latest_snapshot {
         Some(snap) if snap.date == today_str => {
             // Already up to date, skip rebuild
@@ -125,11 +115,7 @@ pub async fn get_portfolio_summary(
         }
         None => {
             // No history at all, full rebuild from first transaction date
-            let first_tx = Transaction::find()
-                .order_by_asc(transaction::Column::Date)
-                .one(db)
-                .await?;
-            if let Some(tx) = first_tx {
+            if let Some(tx) = transaction_repo::find_earliest(db).await? {
                 let start = NaiveDate::parse_from_str(&tx.date, "%Y-%m-%d")
                     .context("invalid first transaction date")?;
                 nav::rebuild_portfolio_history(db, start, None, price_fetcher).await?;
@@ -137,8 +123,7 @@ pub async fn get_portfolio_summary(
         }
     }
 
-    let current_snapshot = nav::get_latest_snapshot(db).await?;
-    let current_snapshot = match current_snapshot {
+    let current_snapshot = match portfolio_history_repo::find_latest(db).await? {
         Some(s) => s,
         None => return Ok(None),
     };
@@ -149,7 +134,7 @@ pub async fn get_portfolio_summary(
         .format("%Y-%m-%d")
         .to_string();
     let (daily_change, daily_change_pct) =
-        if let Some(prev) = nav::get_snapshot_at_or_before(db, &yesterday).await? {
+        if let Some(prev) = portfolio_history_repo::find_at_or_before(db, &yesterday).await? {
             if prev.date != current_snapshot.date && prev.total_value > 0.0 {
                 let change = current_snapshot.total_value - prev.total_value;
                 let change_pct = (change / prev.total_value) * 100.0;
@@ -162,7 +147,9 @@ pub async fn get_portfolio_summary(
         };
 
     // Inception date
-    let inception_date = nav::get_earliest_snapshot(db).await?.map(|s| s.date);
+    let inception_date = portfolio_history_repo::find_earliest(db)
+        .await?
+        .map(|s| s.date);
 
     // Calculate returns for each period
     let ytd_date = NaiveDate::from_ymd_opt(today.year(), 1, 1)
@@ -183,7 +170,8 @@ pub async fn get_portfolio_summary(
     let one_year_return = calc_return(db, current_nav, &one_year_date, false, None).await?;
     let three_year_return =
         calc_return(db, current_nav, &three_year_date, false, Some(3.0)).await?;
-    let five_year_return = calc_return(db, current_nav, &five_year_date, false, Some(5.0)).await?;
+    let five_year_return =
+        calc_return(db, current_nav, &five_year_date, false, Some(5.0)).await?;
 
     Ok(Some(PortfolioSummary {
         total_value: current_snapshot.total_value,
@@ -205,9 +193,9 @@ async fn calc_return(
     fallback_to_inception: bool,
     annualize_years: Option<f64>,
 ) -> anyhow::Result<Option<f64>> {
-    let snapshot = match nav::get_snapshot_at_or_before(db, target_date).await? {
+    let snapshot = match portfolio_history_repo::find_at_or_before(db, target_date).await? {
         Some(s) => s,
-        None if fallback_to_inception => match nav::get_earliest_snapshot(db).await? {
+        None if fallback_to_inception => match portfolio_history_repo::find_earliest(db).await? {
             Some(s) => s,
             None => return Ok(None),
         },

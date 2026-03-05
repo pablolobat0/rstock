@@ -1,7 +1,7 @@
 mod common;
 
 use rstock::db::entities::portfolio_history;
-use rstock::services::nav;
+use rstock::db::repos::portfolio_history_repo;
 use sea_orm::{EntityTrait, Set};
 
 async fn insert_snapshot(
@@ -24,12 +24,12 @@ async fn insert_snapshot(
         .unwrap();
 }
 
-/// No portfolio_history -> get_latest_snapshot returns None.
+/// No portfolio_history -> find_latest returns None.
 #[tokio::test]
 async fn test_returns_none_when_no_history() {
     let db = common::setup_test_db().await;
 
-    let snapshot = nav::get_latest_snapshot(&db).await.unwrap();
+    let snapshot = portfolio_history_repo::find_latest(&db).await.unwrap();
     assert!(snapshot.is_none());
 }
 
@@ -41,12 +41,15 @@ async fn test_ytd_return_calculation() {
     insert_snapshot(&db, "2025-01-01", 100.0, 500.0, 5.0).await;
     insert_snapshot(&db, "2025-06-15", 110.0, 550.0, 5.0).await;
 
-    // Use get_snapshot_at_or_before to get the reference point
-    let base = nav::get_snapshot_at_or_before(&db, "2025-01-01")
+    // Use find_at_or_before to get the reference point
+    let base = portfolio_history_repo::find_at_or_before(&db, "2025-01-01")
         .await
         .unwrap()
         .unwrap();
-    let current = nav::get_latest_snapshot(&db).await.unwrap().unwrap();
+    let current = portfolio_history_repo::find_latest(&db)
+        .await
+        .unwrap()
+        .unwrap();
 
     let return_pct = ((current.nav - base.nav) / base.nav) * 100.0;
     assert!((return_pct - 10.0).abs() < 0.01);
@@ -61,7 +64,7 @@ async fn test_return_none_when_period_predates_portfolio() {
     insert_snapshot(&db, "2025-06-01", 100.0, 500.0, 5.0).await;
 
     // Query for 2024 -> None (portfolio didn't exist)
-    let snapshot = nav::get_snapshot_at_or_before(&db, "2024-01-01")
+    let snapshot = portfolio_history_repo::find_at_or_before(&db, "2024-01-01")
         .await
         .unwrap();
     assert!(snapshot.is_none());
@@ -75,11 +78,14 @@ async fn test_negative_return() {
     insert_snapshot(&db, "2025-01-01", 100.0, 500.0, 5.0).await;
     insert_snapshot(&db, "2025-06-15", 85.0, 425.0, 5.0).await;
 
-    let base = nav::get_snapshot_at_or_before(&db, "2025-01-01")
+    let base = portfolio_history_repo::find_at_or_before(&db, "2025-01-01")
         .await
         .unwrap()
         .unwrap();
-    let current = nav::get_latest_snapshot(&db).await.unwrap().unwrap();
+    let current = portfolio_history_repo::find_latest(&db)
+        .await
+        .unwrap()
+        .unwrap();
 
     let return_pct = ((current.nav - base.nav) / base.nav) * 100.0;
     assert!((return_pct - (-15.0)).abs() < 0.01);
@@ -94,7 +100,7 @@ async fn test_snapshot_at_or_before_finds_closest() {
     insert_snapshot(&db, "2025-01-05", 110.0, 550.0, 5.0).await;
     insert_snapshot(&db, "2025-01-10", 120.0, 600.0, 5.0).await;
 
-    let snap = nav::get_snapshot_at_or_before(&db, "2025-01-07")
+    let snap = portfolio_history_repo::find_at_or_before(&db, "2025-01-07")
         .await
         .unwrap()
         .unwrap();

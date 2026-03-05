@@ -2,11 +2,10 @@ use anyhow::{bail, Context};
 use chrono::{NaiveDate, TimeZone, Utc};
 use yfinance_rs::core::conversions::money_to_f64;
 use yfinance_rs::history::HistoryBuilder;
-use yfinance_rs::{Ticker, YfClient};
+use yfinance_rs::YfClient;
 
 #[async_trait::async_trait]
 pub trait PriceFetcher: Send + Sync {
-    async fn get_last_price(&self, ticker: &str, asset_type: &str) -> anyhow::Result<f64>;
     async fn get_historical_prices(
         &self,
         ticker: &str,
@@ -20,12 +19,6 @@ pub struct RealPriceFetcher;
 
 #[async_trait::async_trait]
 impl PriceFetcher for RealPriceFetcher {
-    async fn get_last_price(&self, ticker: &str, asset_type: &str) -> anyhow::Result<f64> {
-        match asset_type {
-            "fund" | "etf" => get_fund_last_price(ticker).await,
-            _ => get_stock_last_price(ticker).await,
-        }
-    }
     async fn get_historical_prices(
         &self,
         ticker: &str,
@@ -67,38 +60,6 @@ fn resolve_scripts_dir() -> anyhow::Result<std::path::PathBuf> {
 
 // --- Fund/ETF via Python scripts ---
 
-async fn get_fund_last_price(identifier: &str) -> anyhow::Result<f64> {
-    let scripts_dir = resolve_scripts_dir()?;
-    let script = scripts_dir.join("get_fund_price.py");
-
-    let output = tokio::process::Command::new("uv")
-        .arg("run")
-        .arg(&script)
-        .arg(identifier)
-        .output()
-        .await
-        .context("failed to run get_fund_price.py via uv")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("get_fund_price.py failed for {identifier}: {stderr}");
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let parsed: serde_json::Value =
-        serde_json::from_str(stdout.trim()).context("failed to parse get_fund_price.py output")?;
-
-    let price = parsed["price"]
-        .as_f64()
-        .context("missing or invalid 'price' in get_fund_price.py output")?;
-
-    if price <= 0.0 {
-        bail!("invalid fund price for {identifier}: {price}");
-    }
-
-    Ok(price)
-}
-
 async fn get_fund_historical_prices(
     identifier: &str,
     start: &str,
@@ -139,18 +100,6 @@ async fn get_fund_historical_prices(
 }
 
 // --- Stock via Yahoo Finance ---
-
-async fn get_stock_last_price(ticker: &str) -> anyhow::Result<f64> {
-    let client = YfClient::default();
-    let tk = Ticker::new(&client, ticker);
-    let quote = tk.quote().await.context("failed to fetch quote")?;
-    let price = quote.price.as_ref().context("no price available")?;
-    let value = money_to_f64(price);
-    if value <= 0.0 {
-        bail!("invalid price for {ticker}: {value}");
-    }
-    Ok(value)
-}
 
 async fn get_stock_historical_prices(
     ticker: &str,

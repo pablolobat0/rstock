@@ -4,6 +4,7 @@ use std::fs;
 use std::path::PathBuf;
 
 pub mod entities;
+pub mod repos;
 
 fn db_path() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());

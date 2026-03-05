@@ -1,6 +1,7 @@
 mod common;
 
 use chrono::NaiveDate;
+use rstock::db::repos::portfolio_history_repo;
 use rstock::services::nav;
 
 /// Full flow: insert asset + 2 transactions + daily prices -> rebuild ->
@@ -126,7 +127,9 @@ async fn test_incremental_rebuild_after_second_buy() {
     common::insert_transaction(&db, asset_id, "2025-01-06", 10.0, 110.0, 0.0).await;
 
     // Rebuild from Jan 6 (incremental, using Jan 5 snapshot as prev)
-    let prev_snap = nav::get_snapshot_at_or_before(&db, "2025-01-05").await.unwrap();
+    let prev_snap = portfolio_history_repo::find_at_or_before(&db, "2025-01-05")
+        .await
+        .unwrap();
     let start_d6 = NaiveDate::from_ymd_opt(2025, 1, 6).unwrap();
     nav::rebuild_portfolio_history(&db, start_d6, prev_snap.as_ref(), &mock)
         .await

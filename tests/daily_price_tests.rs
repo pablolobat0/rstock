@@ -1,16 +1,18 @@
 mod common;
 
-use rstock::db::entities::asset;
+use rstock::db::entities::{asset, daily_asset_price};
+use rstock::models::Asset;
 use rstock::services::daily_prices;
 use sea_orm::{EntityTrait, Set};
 
-async fn make_asset(db: &sea_orm::DatabaseConnection) -> asset::Model {
+async fn make_asset(db: &sea_orm::DatabaseConnection) -> Asset {
     let id = common::insert_asset(db, "TEST", "Test Stock", "stock", None, "EUR").await;
-    asset::Entity::find_by_id(id)
+    let model = asset::Entity::find_by_id(id)
         .one(db)
         .await
         .unwrap()
-        .unwrap()
+        .unwrap();
+    Asset::from(model)
 }
 
 /// Insert price for date → get_closing_price returns it.
@@ -92,8 +94,8 @@ async fn test_forward_fill_prefers_recent() {
 /// Insert failure entry, then upsert with good data → record updated.
 #[tokio::test]
 async fn test_upsert_overwrites_failure() {
-    use rstock::db::entities::daily_asset_price;
-    use sea_orm::{ColumnTrait, QueryFilter};
+    use sea_orm::ColumnTrait;
+    use sea_orm::QueryFilter;
 
     let db = common::setup_test_db().await;
     let asset = make_asset(&db).await;

@@ -3,6 +3,8 @@ mod common;
 use std::collections::HashMap;
 
 use chrono::NaiveDate;
+use rstock::db::repos::portfolio_history_repo;
+use rstock::models::Transaction;
 use rstock::services::nav;
 
 /// No transactions -> rebuild returns Ok, no portfolio_history rows.
@@ -12,7 +14,9 @@ async fn test_empty_portfolio() {
     let mock = common::MockPriceFetcher::new();
 
     let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(&db, start, None, &mock).await.unwrap();
+    nav::rebuild_portfolio_history(&db, start, None, &mock)
+        .await
+        .unwrap();
 
     let snapshots = common::get_all_snapshots(&db).await;
     assert!(snapshots.is_empty());
@@ -231,7 +235,9 @@ async fn test_rebuild_from_specific_date() {
         .unwrap();
 
     // Rebuild from day 4 only (incremental, using day 3 snapshot as prev)
-    let prev_snap = nav::get_snapshot_at_or_before(&db, "2025-01-03").await.unwrap();
+    let prev_snap = portfolio_history_repo::find_at_or_before(&db, "2025-01-03")
+        .await
+        .unwrap();
     let start_d4 = NaiveDate::from_ymd_opt(2025, 1, 4).unwrap();
     nav::rebuild_portfolio_history(&db, start_d4, prev_snap.as_ref(), &mock)
         .await
@@ -295,7 +301,9 @@ async fn test_back_dated_buy() {
     common::insert_transaction(&db, asset_id, "2025-01-03", 10.0, 50.0, 0.0).await;
 
     // Rebuild from day 3 (incremental, using day 2 snapshot as prev)
-    let prev_snap = nav::get_snapshot_at_or_before(&db, "2025-01-02").await.unwrap();
+    let prev_snap = portfolio_history_repo::find_at_or_before(&db, "2025-01-02")
+        .await
+        .unwrap();
     let start_d3 = NaiveDate::from_ymd_opt(2025, 1, 3).unwrap();
     nav::rebuild_portfolio_history(&db, start_d3, prev_snap.as_ref(), &mock)
         .await
@@ -452,23 +460,17 @@ async fn test_per_asset_history_multiple_assets() {
 /// Unit test for the pure process_day_transactions function (no DB).
 #[tokio::test]
 async fn test_process_day_transactions_pure() {
-    use rstock::db::entities::transaction;
-
     // Simulate first buy: 10 shares @ $50
-    let tx1 = transaction::Model {
-        id: 1,
+    let tx1 = Transaction {
         asset_id: 1,
-        tx_type: "buy".to_owned(),
         date: "2025-01-02".to_owned(),
         quantity: 10.0,
         price_cents: 5000,
         fees_cents: 0,
-        notes: None,
-        created_at: "2025-01-02T00:00:00".to_owned(),
     };
 
     let mut holdings: HashMap<i32, f64> = HashMap::new();
-    let txs: Vec<&transaction::Model> = vec![&tx1];
+    let txs: Vec<&Transaction> = vec![&tx1];
 
     let (os, nav_val) = nav::process_day_transactions(&txs, &mut holdings, 0.0, 100.0);
 
@@ -478,19 +480,15 @@ async fn test_process_day_transactions_pure() {
     assert_eq!(*holdings.get(&1).unwrap(), 10.0);
 
     // Simulate second buy at NAV=100
-    let tx2 = transaction::Model {
-        id: 2,
+    let tx2 = Transaction {
         asset_id: 1,
-        tx_type: "buy".to_owned(),
         date: "2025-01-03".to_owned(),
         quantity: 5.0,
         price_cents: 6000,
         fees_cents: 0,
-        notes: None,
-        created_at: "2025-01-03T00:00:00".to_owned(),
     };
 
-    let txs2: Vec<&transaction::Model> = vec![&tx2];
+    let txs2: Vec<&Transaction> = vec![&tx2];
     let (os2, nav_val2) = nav::process_day_transactions(&txs2, &mut holdings, os, nav_val);
 
     // Second buy: deposit=300, shares_issued=300/100=3, outstanding=5+3=8
