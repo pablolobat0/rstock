@@ -10,22 +10,31 @@ use crate::models::{Asset, AssetSnapshot, PortfolioSnapshot, Transaction};
 use crate::services::daily_prices;
 use crate::services::price::PriceFetcher;
 
+/// Fills price caches for all assets and returns a map of asset_id → latest asset price date.
 async fn fill_asset_prices(
     db: &DatabaseConnection,
     assets: &[Asset],
     start_date: &str,
     end_date: &str,
     price_fetcher: &dyn PriceFetcher,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<HashMap<i32, String>> {
+    let mut latest_dates: HashMap<i32, String> = HashMap::new();
     for asset in assets {
-        if let Err(e) =
-            daily_prices::fill_prices_for_range(db, asset, start_date, end_date, price_fetcher)
-                .await
+        match daily_prices::fill_prices_for_range(db, asset, start_date, end_date, price_fetcher)
+            .await
         {
-            eprintln!("Warning: failed to fill prices for {}: {}", asset.ticker, e);
+            Ok(Some(date)) => {
+                latest_dates.insert(asset.id, date);
+            }
+            Ok(None) => {
+                eprintln!("Warning: no price data available for {}", asset.ticker);
+            }
+            Err(e) => {
+                eprintln!("Warning: failed to fill prices for {}: {}", asset.ticker, e);
+            }
         }
     }
-    Ok(())
+    Ok(latest_dates)
 }
 
 pub fn process_day_transactions(
@@ -143,12 +152,12 @@ async fn store_daily_snapshot(
 pub async fn rebuild_portfolio_history(
     db: &DatabaseConnection,
     start_date: NaiveDate,
+    end_date: NaiveDate,
     prev_snapshot: Option<&PortfolioSnapshot>,
     price_fetcher: &dyn PriceFetcher,
 ) -> anyhow::Result<()> {
-    let today = chrono::Local::now().date_naive();
+    let end_str = end_date.format("%Y-%m-%d").to_string();
     let start_str = start_date.format("%Y-%m-%d").to_string();
-    let today_str = today.format("%Y-%m-%d").to_string();
 
     // Load all transactions
     let transactions = transaction_repo::find_all_ordered_by_date(db).await?;
@@ -161,7 +170,7 @@ pub async fn rebuild_portfolio_history(
     let needed_ids: HashSet<i32> = transactions.iter().map(|t| t.asset_id).collect();
     let assets = asset_repo::find_by_ids(db, needed_ids).await?;
 
-    // Initialize state from previous snapshot (or defaults for fresh portfolio)
+    // Initialize state from previous snapshot or defaults for fresh portfolio
     let mut is_fresh_portfolio = prev_snapshot.is_none();
     let mut outstanding_shares = prev_snapshot.map(|s| s.outstanding_shares).unwrap_or(0.0);
     let mut nav = prev_snapshot.map(|s| s.nav).unwrap_or(100.0);
@@ -177,19 +186,32 @@ pub async fn rebuild_portfolio_history(
     // Build transaction map for the rebuild range
     let mut tx_by_date: HashMap<String, Vec<&Transaction>> = HashMap::new();
     for tx in &transactions {
-        if tx.date >= start_str && tx.date <= today_str {
+        if tx.date >= start_str && tx.date <= end_str {
             tx_by_date.entry(tx.date.clone()).or_default().push(tx);
         }
     }
 
     let asset_map: HashMap<i32, &Asset> = assets.iter().map(|a| (a.id, a)).collect();
 
-    // Fill price caches
-    fill_asset_prices(db, &assets, &start_str, &today_str, price_fetcher).await?;
+    // Fill price caches and get latest API date per asset
+    let latest_api_dates =
+        fill_asset_prices(db, &assets, &start_str, &end_str, price_fetcher).await?;
+
+    // Effective end date = min(end_date, min of latest API dates for all assets)
+    let effective_end = assets
+        .iter()
+        .filter_map(|a| {
+            latest_api_dates
+                .get(&a.id)
+                .and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
+        })
+        .min()
+        .map(|d| d.min(end_date))
+        .unwrap_or(end_date);
 
     // Iterate each calendar day
     let mut current = start_date;
-    while current <= today {
+    while current <= effective_end {
         let date_str = current.format("%Y-%m-%d").to_string();
 
         // Process transactions for this day
@@ -224,8 +246,15 @@ pub async fn rebuild_portfolio_history(
         }
 
         // Store to both tables
-        store_daily_snapshot(db, &date_str, asset_value, outstanding_shares, nav, &asset_values)
-            .await?;
+        store_daily_snapshot(
+            db,
+            &date_str,
+            asset_value,
+            outstanding_shares,
+            nav,
+            &asset_values,
+        )
+        .await?;
 
         current += chrono::Duration::days(1);
     }

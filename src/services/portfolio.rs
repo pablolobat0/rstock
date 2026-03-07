@@ -1,20 +1,33 @@
 use anyhow::Context;
-use chrono::{Datelike, NaiveDate};
+use chrono::{Datelike, Duration, NaiveDate};
 use sea_orm::DatabaseConnection;
 use std::collections::HashMap;
 
 use crate::db::repos::{
-    asset_repo, portfolio_asset_history_repo, portfolio_history_repo, transaction_repo,
+    asset_repo, daily_price_repo, portfolio_asset_history_repo, portfolio_history_repo,
+    transaction_repo,
 };
 use crate::models::{AssetPosition, PortfolioResult, PortfolioSummary};
 use crate::services::nav;
 use crate::services::price::PriceFetcher;
 
 pub async fn get_portfolio(db: &DatabaseConnection) -> anyhow::Result<PortfolioResult> {
-    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    // Use the latest snapshot date (built by get_portfolio_summary)
+    let latest_snapshot = portfolio_history_repo::find_latest(db).await?;
+    let snapshot_date = match &latest_snapshot {
+        Some(s) => s.date.clone(),
+        None => {
+            return Ok(PortfolioResult {
+                rows: Vec::new(),
+                total_invested: 0.0,
+                total_current_value: 0.0,
+                total_gain_loss: 0.0,
+                total_gain_loss_pct: 0.0,
+            });
+        }
+    };
 
-    // Read today's asset snapshots (built by get_portfolio_summary)
-    let asset_snapshots = portfolio_asset_history_repo::find_by_date(db, &today).await?;
+    let asset_snapshots = portfolio_asset_history_repo::find_by_date(db, &snapshot_date).await?;
 
     if asset_snapshots.is_empty() {
         return Ok(PortfolioResult {
@@ -25,6 +38,10 @@ pub async fn get_portfolio(db: &DatabaseConnection) -> anyhow::Result<PortfolioR
             total_gain_loss_pct: 0.0,
         });
     }
+
+    let yesterday = (chrono::Local::now().date_naive() - chrono::Duration::days(1))
+        .format("%Y-%m-%d")
+        .to_string();
 
     // Load asset metadata
     let asset_ids: Vec<i32> = asset_snapshots.iter().map(|s| s.asset_id).collect();
@@ -53,7 +70,16 @@ pub async fn get_portfolio(db: &DatabaseConnection) -> anyhow::Result<PortfolioR
             0.0
         };
 
-        let current_value = snap.market_value;
+        // Get each asset's own latest price and its date
+        let (current_price, price_date) =
+            match daily_price_repo::find_price_and_date_at_or_before(db, snap.asset_id, &yesterday)
+                .await?
+            {
+                Some((price, date)) => (price, date),
+                None => (snap.closing_price, snap.date.clone()),
+            };
+
+        let current_value = snap.quantity * current_price;
         let gain_loss = current_value - total_cost;
         let gain_loss_pct = if total_cost != 0.0 {
             (gain_loss / total_cost) * 100.0
@@ -65,11 +91,11 @@ pub async fn get_portfolio(db: &DatabaseConnection) -> anyhow::Result<PortfolioR
             ticker: asset_model.ticker.clone(),
             name: asset_model.name.clone(),
             asset_type: asset_model.asset_type.clone(),
-
             currency: asset_model.currency.clone(),
             total_qty: snap.quantity,
             avg_cost,
-            current_price: snap.closing_price,
+            current_price,
+            price_date,
             total_invested: total_cost,
             current_value,
             gain_loss,
@@ -100,11 +126,12 @@ pub async fn get_portfolio_summary(
     price_fetcher: &dyn PriceFetcher,
 ) -> anyhow::Result<Option<PortfolioSummary>> {
     let today = chrono::Local::now().date_naive();
-    let today_str = today.format("%Y-%m-%d").to_string();
+    let yesterday = today - Duration::days(1);
+    let yesterday_str = yesterday.format("%Y-%m-%d").to_string();
 
     let latest_snapshot = portfolio_history_repo::find_latest(db).await?;
     match &latest_snapshot {
-        Some(snap) if snap.date == today_str => {
+        Some(snap) if snap.date >= yesterday_str => {
             // Already up to date, skip rebuild
         }
         Some(snap) => {
@@ -112,14 +139,15 @@ pub async fn get_portfolio_summary(
             let latest_date = NaiveDate::parse_from_str(&snap.date, "%Y-%m-%d")
                 .context("invalid latest snapshot date")?;
             let next_day = latest_date + chrono::Duration::days(1);
-            nav::rebuild_portfolio_history(db, next_day, Some(snap), price_fetcher).await?;
+            nav::rebuild_portfolio_history(db, next_day, yesterday, Some(snap), price_fetcher)
+                .await?;
         }
         None => {
             // No history at all, full rebuild from first transaction date
             if let Some(tx) = transaction_repo::find_earliest(db).await? {
                 let start = NaiveDate::parse_from_str(&tx.date, "%Y-%m-%d")
                     .context("invalid first transaction date")?;
-                nav::rebuild_portfolio_history(db, start, None, price_fetcher).await?;
+                nav::rebuild_portfolio_history(db, start, yesterday, None, price_fetcher).await?;
             }
         }
     }
@@ -129,14 +157,17 @@ pub async fn get_portfolio_summary(
         None => return Ok(None),
     };
     let current_nav = current_snapshot.nav;
+    let snapshot_date = current_snapshot.date.clone();
 
-    // Daily change: compare to yesterday's snapshot
-    let yesterday = (today - chrono::Duration::days(1))
+    // Daily change: compare to the day before the latest snapshot
+    let snap_date =
+        NaiveDate::parse_from_str(&snapshot_date, "%Y-%m-%d").context("invalid snapshot date")?;
+    let prev_day = (snap_date - chrono::Duration::days(1))
         .format("%Y-%m-%d")
         .to_string();
     let (daily_change, daily_change_pct) =
-        if let Some(prev) = portfolio_history_repo::find_at_or_before(db, &yesterday).await? {
-            if prev.date != current_snapshot.date && prev.total_value > 0.0 {
+        if let Some(prev) = portfolio_history_repo::find_at_or_before(db, &prev_day).await? {
+            if prev.total_value > 0.0 {
                 let change = current_snapshot.total_value - prev.total_value;
                 let change_pct = (change / prev.total_value) * 100.0;
                 (Some(change), Some(change_pct))
@@ -176,6 +207,7 @@ pub async fn get_portfolio_summary(
     Ok(Some(PortfolioSummary {
         total_value: current_snapshot.total_value,
         nav: current_nav,
+        snapshot_date,
         daily_change,
         daily_change_pct,
         inception_date,

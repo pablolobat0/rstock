@@ -38,7 +38,7 @@ async fn test_full_buy_rebuild_summary_flow() {
 
     // Trigger rebuild (simulating what get_portfolio_summary does)
     let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(&db, start, None, &mock)
+    nav::rebuild_portfolio_history(&db, start, NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(), None, &mock)
         .await
         .unwrap();
 
@@ -111,7 +111,7 @@ async fn test_incremental_rebuild_after_second_buy() {
 
     // Build initial history
     let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(&db, start, None, &mock)
+    nav::rebuild_portfolio_history(&db, start, NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(), None, &mock)
         .await
         .unwrap();
 
@@ -131,7 +131,7 @@ async fn test_incremental_rebuild_after_second_buy() {
         .await
         .unwrap();
     let start_d6 = NaiveDate::from_ymd_opt(2025, 1, 6).unwrap();
-    nav::rebuild_portfolio_history(&db, start_d6, prev_snap.as_ref(), &mock)
+    nav::rebuild_portfolio_history(&db, start_d6, NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(), prev_snap.as_ref(), &mock)
         .await
         .unwrap();
 

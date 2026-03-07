@@ -54,6 +54,7 @@ pub struct PortfolioResult {
 pub struct PortfolioSummary {
     pub total_value: f64,
     pub nav: f64,
+    pub snapshot_date: String,
     pub daily_change: Option<f64>,
     pub daily_change_pct: Option<f64>,
     pub inception_date: Option<String>,
@@ -79,6 +80,8 @@ pub struct PortfolioRow {
     pub avg_cost: String,
     #[tabled(rename = "Price")]
     pub current_price: String,
+    #[tabled(rename = "Price Date")]
+    pub price_date: String,
     #[tabled(rename = "Invested")]
     pub total_invested: String,
     #[tabled(rename = "Value")]

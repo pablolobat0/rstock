@@ -58,6 +58,7 @@ pub fn print_portfolio(result: &PortfolioResult, summary: Option<&PortfolioSumma
                     quantity: format_qty(r.total_qty),
                     avg_cost: format!("{:.2}", r.avg_cost),
                     current_price: format!("{:.2}", r.current_price),
+                    price_date: r.price_date.clone(),
                     total_invested: format!("{:.2}", r.total_invested),
                     current_value: format!("{:.2}", r.current_value),
                     gain_loss: color_value(r.gain_loss, gl_text),
@@ -88,6 +89,7 @@ pub fn print_portfolio(result: &PortfolioResult, summary: Option<&PortfolioSumma
 
     if let Some(summary) = summary {
         println!();
+        println!("As of:          {}", summary.snapshot_date);
         println!("Portfolio Value: {:.2}", summary.total_value);
         println!("NAV:            {:.2}", summary.nav);
 

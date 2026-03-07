@@ -14,7 +14,7 @@ async fn test_empty_portfolio() {
     let mock = common::MockPriceFetcher::new();
 
     let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(&db, start, None, &mock)
+    nav::rebuild_portfolio_history(&db, start, NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(), None, &mock)
         .await
         .unwrap();
 
@@ -36,7 +36,7 @@ async fn test_single_buy_initial_nav() {
     common::insert_daily_price(&db, asset_id, "2025-01-02", 50.0, false).await;
 
     let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(&db, start, None, &mock)
+    nav::rebuild_portfolio_history(&db, start, NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(), None, &mock)
         .await
         .unwrap();
 
@@ -66,7 +66,7 @@ async fn test_nav_reflects_price_change() {
     common::insert_daily_price(&db, asset_id, "2025-01-03", 100.0, false).await;
 
     let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(&db, start, None, &mock)
+    nav::rebuild_portfolio_history(&db, start, NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(), None, &mock)
         .await
         .unwrap();
 
@@ -111,7 +111,7 @@ async fn test_second_buy_no_nav_jump() {
     }
 
     let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(&db, start, None, &mock)
+    nav::rebuild_portfolio_history(&db, start, NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(), None, &mock)
         .await
         .unwrap();
 
@@ -152,7 +152,7 @@ async fn test_same_day_multiple_buys() {
     common::insert_daily_price(&db, asset_id, "2025-01-02", 50.0, false).await;
 
     let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(&db, start, None, &mock)
+    nav::rebuild_portfolio_history(&db, start, NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(), None, &mock)
         .await
         .unwrap();
 
@@ -182,7 +182,7 @@ async fn test_weekend_forward_fill() {
     // No prices for Sat/Sun -- forward-fill should kick in
 
     let start = NaiveDate::from_ymd_opt(2025, 1, 3).unwrap();
-    nav::rebuild_portfolio_history(&db, start, None, &mock)
+    nav::rebuild_portfolio_history(&db, start, NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(), None, &mock)
         .await
         .unwrap();
 
@@ -226,7 +226,7 @@ async fn test_rebuild_from_specific_date() {
 
     // Build full history
     let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(&db, start, None, &mock)
+    nav::rebuild_portfolio_history(&db, start, NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(), None, &mock)
         .await
         .unwrap();
 
@@ -239,7 +239,7 @@ async fn test_rebuild_from_specific_date() {
         .await
         .unwrap();
     let start_d4 = NaiveDate::from_ymd_opt(2025, 1, 4).unwrap();
-    nav::rebuild_portfolio_history(&db, start_d4, prev_snap.as_ref(), &mock)
+    nav::rebuild_portfolio_history(&db, start_d4, NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(), prev_snap.as_ref(), &mock)
         .await
         .unwrap();
 
@@ -288,7 +288,7 @@ async fn test_back_dated_buy() {
 
     // Build initial history
     let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(&db, start, None, &mock)
+    nav::rebuild_portfolio_history(&db, start, NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(), None, &mock)
         .await
         .unwrap();
 
@@ -305,7 +305,7 @@ async fn test_back_dated_buy() {
         .await
         .unwrap();
     let start_d3 = NaiveDate::from_ymd_opt(2025, 1, 3).unwrap();
-    nav::rebuild_portfolio_history(&db, start_d3, prev_snap.as_ref(), &mock)
+    nav::rebuild_portfolio_history(&db, start_d3, NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(), prev_snap.as_ref(), &mock)
         .await
         .unwrap();
 
@@ -339,7 +339,7 @@ async fn test_multiple_assets() {
     common::insert_daily_price(&db, asset_b, "2025-01-02", 100.0, false).await;
 
     let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(&db, start, None, &mock)
+    nav::rebuild_portfolio_history(&db, start, NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(), None, &mock)
         .await
         .unwrap();
 
@@ -370,7 +370,7 @@ async fn test_missing_price_for_asset() {
     // Deliberately NOT inserting any daily price
 
     let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(&db, start, None, &mock)
+    nav::rebuild_portfolio_history(&db, start, NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(), None, &mock)
         .await
         .unwrap();
 
@@ -400,7 +400,7 @@ async fn test_per_asset_history_created() {
     common::insert_daily_price(&db, asset_id, "2025-01-03", 55.0, false).await;
 
     let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(&db, start, None, &mock)
+    nav::rebuild_portfolio_history(&db, start, NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(), None, &mock)
         .await
         .unwrap();
 
@@ -435,7 +435,7 @@ async fn test_per_asset_history_multiple_assets() {
     common::insert_daily_price(&db, asset_b, "2025-01-02", 100.0, false).await;
 
     let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(&db, start, None, &mock)
+    nav::rebuild_portfolio_history(&db, start, NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(), None, &mock)
         .await
         .unwrap();
 
@@ -515,7 +515,7 @@ async fn test_lazy_rebuild_no_history_on_buy() {
 
     // Now trigger rebuild
     let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(&db, start, None, &mock)
+    nav::rebuild_portfolio_history(&db, start, NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(), None, &mock)
         .await
         .unwrap();
 

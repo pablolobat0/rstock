@@ -73,6 +73,7 @@ pub struct AssetPosition {
     pub total_qty: f64,
     pub avg_cost: f64,
     pub current_price: f64,
+    pub price_date: String,
     pub total_invested: f64,
     pub current_value: f64,
     pub gain_loss: f64,
