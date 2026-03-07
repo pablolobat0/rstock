@@ -54,6 +54,16 @@ pub async fn upsert(db: &DatabaseConnection, snapshot: &PortfolioSnapshot) -> an
     Ok(())
 }
 
+pub async fn find_between(db: &DatabaseConnection, start_date: &str, end_date: &str) -> anyhow::Result<Vec<PortfolioSnapshot>> {
+    let results = portfolio_history::Entity::find()
+        .filter(portfolio_history::Column::Date.gte(start_date))
+        .filter(portfolio_history::Column::Date.lte(end_date))
+        .order_by_asc(portfolio_history::Column::Date)
+        .all(db)
+        .await?;
+    Ok(results.into_iter().map(PortfolioSnapshot::from).collect())
+}
+
 pub async fn delete_from_date(db: &DatabaseConnection, date: &str) -> anyhow::Result<()> {
     portfolio_history::Entity::delete_many()
         .filter(portfolio_history::Column::Date.gte(date))

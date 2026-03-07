@@ -1,5 +1,7 @@
 use clap::{Parser, Subcommand, ValueEnum};
 
+use crate::models::AssetType;
+
 #[derive(Parser)]
 #[command(name = "rstock", about = "Personal investment portfolio manager")]
 pub struct Cli {
@@ -7,11 +9,26 @@ pub struct Cli {
     pub command: Commands,
 }
 
+#[derive(ValueEnum, Clone, Debug)]
+pub enum ChartPeriod {
+    Ytd,
+    #[value(name = "1y")]
+    OneYear,
+    #[value(name = "3y")]
+    ThreeYears,
+    #[value(name = "5y")]
+    FiveYears,
+    All,
+}
+
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Record a buy transaction, creates asset if it doesn't exist
     /// Show current portfolio overview
-    Get,
+    Get {
+        /// Time period for the NAV chart
+        #[arg(long, value_enum, default_value = "1y")]
+        period: ChartPeriod,
+    },
 
     /// Record a buy transaction, creates asset if it doesn't exist
     Buy {
@@ -55,21 +72,4 @@ pub enum Commands {
         #[arg(long)]
         notes: Option<String>,
     },
-}
-
-#[derive(ValueEnum, Clone, Debug)]
-pub enum AssetType {
-    Stock,
-    Fund,
-    Etf,
-}
-
-impl std::fmt::Display for AssetType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            AssetType::Stock => write!(f, "stock"),
-            AssetType::Fund => write!(f, "fund"),
-            AssetType::Etf => write!(f, "etf"),
-        }
-    }
 }

@@ -4,6 +4,8 @@ use yfinance_rs::core::conversions::money_to_f64;
 use yfinance_rs::history::HistoryBuilder;
 use yfinance_rs::YfClient;
 
+use crate::models::AssetType;
+
 #[async_trait::async_trait]
 pub trait PriceFetcher: Send + Sync {
     async fn get_historical_prices(
@@ -11,7 +13,7 @@ pub trait PriceFetcher: Send + Sync {
         ticker: &str,
         start: &str,
         end: &str,
-        asset_type: &str,
+        asset_type: &AssetType,
     ) -> anyhow::Result<Vec<(String, f64)>>;
 }
 
@@ -24,11 +26,13 @@ impl PriceFetcher for RealPriceFetcher {
         ticker: &str,
         start: &str,
         end: &str,
-        asset_type: &str,
+        asset_type: &AssetType,
     ) -> anyhow::Result<Vec<(String, f64)>> {
         match asset_type {
-            "fund" | "etf" => get_fund_historical_prices(ticker, start, end).await,
-            _ => get_stock_historical_prices(ticker, start, end).await,
+            AssetType::Fund | AssetType::Etf => {
+                get_fund_historical_prices(ticker, start, end).await
+            }
+            AssetType::Stock => get_stock_historical_prices(ticker, start, end).await,
         }
     }
 }

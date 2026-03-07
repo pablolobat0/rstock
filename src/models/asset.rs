@@ -1,9 +1,44 @@
+use std::fmt;
+use std::str::FromStr;
+
+use clap::ValueEnum;
+
 use crate::db::entities::asset;
+
+#[derive(ValueEnum, Clone, Debug, PartialEq, Eq)]
+pub enum AssetType {
+    Stock,
+    Fund,
+    Etf,
+}
+
+impl fmt::Display for AssetType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AssetType::Stock => write!(f, "stock"),
+            AssetType::Fund => write!(f, "fund"),
+            AssetType::Etf => write!(f, "etf"),
+        }
+    }
+}
+
+impl FromStr for AssetType {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "stock" => Ok(AssetType::Stock),
+            "fund" => Ok(AssetType::Fund),
+            "etf" => Ok(AssetType::Etf),
+            other => anyhow::bail!("unknown asset type: {other}"),
+        }
+    }
+}
 
 pub struct AssetInfo {
     pub ticker: String,
     pub name: String,
-    pub asset_type: String,
+    pub asset_type: AssetType,
     pub isin: Option<String>,
     pub currency: String,
 }
@@ -13,7 +48,7 @@ pub struct Asset {
     pub ticker: String,
     pub isin: Option<String>,
     pub name: String,
-    pub asset_type: String,
+    pub asset_type: AssetType,
     pub currency: String,
 }
 
@@ -24,7 +59,7 @@ impl From<asset::Model> for Asset {
             ticker: m.ticker,
             isin: m.isin,
             name: m.name,
-            asset_type: m.asset_type,
+            asset_type: m.asset_type.parse().unwrap_or(AssetType::Stock),
             currency: m.currency,
         }
     }
@@ -33,7 +68,7 @@ impl From<asset::Model> for Asset {
 pub struct AssetPosition {
     pub ticker: String,
     pub name: String,
-    pub asset_type: String,
+    pub asset_type: AssetType,
     pub currency: String,
     pub total_qty: f64,
     pub avg_cost: f64,

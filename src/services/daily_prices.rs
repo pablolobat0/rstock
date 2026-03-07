@@ -31,6 +31,7 @@ pub async fn fill_prices_for_range(
     let lookup = asset.isin.as_deref().unwrap_or(&asset.ticker);
     let api_prices = price_fetcher
         .get_historical_prices(lookup, start_date, end_date, &asset.asset_type)
+
         .await;
 
     let api_failed = api_prices.is_err();

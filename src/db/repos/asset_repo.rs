@@ -26,7 +26,7 @@ pub async fn create(db: &DatabaseConnection, info: &AssetInfo) -> anyhow::Result
         ticker: Set(info.ticker.clone()),
         isin: Set(info.isin.clone()),
         name: Set(info.name.clone()),
-        asset_type: Set(info.asset_type.clone()),
+        asset_type: Set(info.asset_type.to_string()),
         currency: Set(info.currency.clone()),
         created_at: Set(now),
         ..Default::default()

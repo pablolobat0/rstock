@@ -6,6 +6,7 @@ use migration::{Migrator, MigratorTrait};
 use sea_orm::{Database, DatabaseConnection, EntityTrait, Set};
 
 use rstock::db::entities::{asset, daily_asset_price, portfolio_asset_history, portfolio_history, transaction};
+use rstock::models::AssetType;
 use rstock::services::price::PriceFetcher;
 
 pub async fn setup_test_db() -> DatabaseConnection {
@@ -143,7 +144,7 @@ impl PriceFetcher for MockPriceFetcher {
         ticker: &str,
         _start: &str,
         _end: &str,
-        _asset_type: &str,
+        _asset_type: &AssetType,
     ) -> anyhow::Result<Vec<(String, f64)>> {
         Ok(self
             .historical_prices

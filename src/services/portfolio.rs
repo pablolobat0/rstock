@@ -65,6 +65,7 @@ pub async fn get_portfolio(db: &DatabaseConnection) -> anyhow::Result<PortfolioR
             ticker: asset_model.ticker.clone(),
             name: asset_model.name.clone(),
             asset_type: asset_model.asset_type.clone(),
+
             currency: asset_model.currency.clone(),
             total_qty: snap.quantity,
             avg_cost,
@@ -170,8 +171,7 @@ pub async fn get_portfolio_summary(
     let one_year_return = calc_return(db, current_nav, &one_year_date, false, None).await?;
     let three_year_return =
         calc_return(db, current_nav, &three_year_date, false, Some(3.0)).await?;
-    let five_year_return =
-        calc_return(db, current_nav, &five_year_date, false, Some(5.0)).await?;
+    let five_year_return = calc_return(db, current_nav, &five_year_date, false, Some(5.0)).await?;
 
     Ok(Some(PortfolioSummary {
         total_value: current_snapshot.total_value,
