@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use migration::{Migrator, MigratorTrait};
 use sea_orm::{Database, DatabaseConnection, EntityTrait, Set};
 
-use rstock::db::entities::{asset, daily_asset_price, portfolio_asset_history, portfolio_history, transaction};
+use rstock::db::entities::{asset, daily_asset_price, daily_exchange_rate, portfolio_asset_history, portfolio_history, transaction};
 use rstock::models::AssetType;
 use rstock::services::price::PriceFetcher;
 
@@ -125,14 +125,34 @@ pub async fn get_asset_snapshots(
         .expect("failed to query portfolio_asset_history")
 }
 
+pub async fn insert_exchange_rate(
+    db: &DatabaseConnection,
+    pair: &str,
+    date: &str,
+    rate: f64,
+) {
+    let record = daily_exchange_rate::ActiveModel {
+        pair: Set(pair.to_owned()),
+        date: Set(date.to_owned()),
+        rate: Set(rate),
+        ..Default::default()
+    };
+    daily_exchange_rate::Entity::insert(record)
+        .exec(db)
+        .await
+        .expect("failed to insert exchange rate");
+}
+
 pub struct MockPriceFetcher {
     pub historical_prices: HashMap<String, Vec<(String, f64)>>,
+    pub exchange_rates: HashMap<String, Vec<(String, f64)>>,
 }
 
 impl MockPriceFetcher {
     pub fn new() -> Self {
         Self {
             historical_prices: HashMap::new(),
+            exchange_rates: HashMap::new(),
         }
     }
 }
@@ -149,6 +169,19 @@ impl PriceFetcher for MockPriceFetcher {
         Ok(self
             .historical_prices
             .get(ticker)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    async fn get_historical_exchange_rates(
+        &self,
+        pair: &str,
+        _start: &str,
+        _end: &str,
+    ) -> anyhow::Result<Vec<(String, f64)>> {
+        Ok(self
+            .exchange_rates
+            .get(pair)
             .cloned()
             .unwrap_or_default())
     }

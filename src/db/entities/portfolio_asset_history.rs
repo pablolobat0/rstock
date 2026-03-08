@@ -10,6 +10,7 @@ pub struct Model {
     pub quantity: f64,
     pub closing_price: f64,
     pub market_value: f64,
+    pub exchange_rate: f64,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

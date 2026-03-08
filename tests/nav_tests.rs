@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use chrono::NaiveDate;
 use rstock::db::repos::portfolio_history_repo;
-use rstock::models::Transaction;
+use rstock::models::{Asset, AssetType, Transaction};
 use rstock::services::nav;
 
 /// No transactions -> rebuild returns Ok, no portfolio_history rows.
@@ -469,10 +469,21 @@ async fn test_process_day_transactions_pure() {
         fees_cents: 0,
     };
 
+    let asset = Asset {
+        id: 1,
+        ticker: "XFAKE1".to_owned(),
+        isin: None,
+        name: "Test".to_owned(),
+        asset_type: AssetType::Stock,
+        currency: "EUR".to_owned(),
+    };
+    let asset_map: HashMap<i32, &Asset> = [(1, &asset)].into_iter().collect();
+    let day_rates: HashMap<String, f64> = HashMap::new();
+
     let mut holdings: HashMap<i32, f64> = HashMap::new();
     let txs: Vec<&Transaction> = vec![&tx1];
 
-    let (os, nav_val) = nav::process_day_transactions(&txs, &mut holdings, 0.0, 100.0);
+    let (os, nav_val) = nav::process_day_transactions(&txs, &mut holdings, 0.0, 100.0, &asset_map, &day_rates);
 
     // First buy: deposit=500, NAV=100, shares=5
     assert!((os - 5.0).abs() < 0.01);
@@ -489,7 +500,7 @@ async fn test_process_day_transactions_pure() {
     };
 
     let txs2: Vec<&Transaction> = vec![&tx2];
-    let (os2, nav_val2) = nav::process_day_transactions(&txs2, &mut holdings, os, nav_val);
+    let (os2, nav_val2) = nav::process_day_transactions(&txs2, &mut holdings, os, nav_val, &asset_map, &day_rates);
 
     // Second buy: deposit=300, shares_issued=300/100=3, outstanding=5+3=8
     assert!((os2 - 8.0).abs() < 0.01);
@@ -527,4 +538,148 @@ async fn test_lazy_rebuild_no_history_on_buy() {
         .await
         .unwrap();
     assert!((snap.nav - 100.0).abs() < 0.01);
+}
+
+/// Buy a USD stock with USDEUR exchange rate. Verify NAV is computed in EUR.
+#[tokio::test]
+async fn test_single_usd_asset_nav() {
+    let db = common::setup_test_db().await;
+
+    let asset_id =
+        common::insert_asset(&db, "XFAKEUSD", "US Stock", "stock", None, "USD").await;
+    // Buy 10 shares @ $100 USD
+    common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 100.0, 0.0).await;
+
+    let mut mock = common::MockPriceFetcher::new();
+    mock.historical_prices.insert(
+        "XFAKEUSD".to_owned(),
+        vec![
+            ("2025-01-02".to_owned(), 100.0),
+            ("2025-01-03".to_owned(), 110.0),
+        ],
+    );
+    mock.exchange_rates.insert(
+        "USDEUR".to_owned(),
+        vec![
+            ("2025-01-02".to_owned(), 0.90),
+            ("2025-01-03".to_owned(), 0.92),
+        ],
+    );
+
+    let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
+    let end = NaiveDate::from_ymd_opt(2025, 1, 3).unwrap();
+    nav::rebuild_portfolio_history(&db, start, end, None, &mock)
+        .await
+        .unwrap();
+
+    // Day 1: deposit = 10 * 100 * 0.90 = 900 EUR, NAV = 100, shares = 9
+    let snap1 = common::get_portfolio_snapshot(&db, "2025-01-02").await.unwrap();
+    assert!((snap1.nav - 100.0).abs() < 0.01);
+    assert!((snap1.outstanding_shares - 9.0).abs() < 0.01);
+    // total_value = 10 * 100 * 0.90 = 900
+    assert!((snap1.total_value - 900.0).abs() < 0.01);
+
+    // Day 2: price goes to $110, rate to 0.92
+    // total_value = 10 * 110 * 0.92 = 1012
+    // NAV = 1012 / 9 = 112.44...
+    let snap2 = common::get_portfolio_snapshot(&db, "2025-01-03").await.unwrap();
+    assert!((snap2.total_value - 1012.0).abs() < 0.01);
+    assert!((snap2.nav - (1012.0 / 9.0)).abs() < 0.01);
+}
+
+/// Mixed EUR + USD portfolio. Verify deposits and valuations convert correctly.
+#[tokio::test]
+async fn test_mixed_currency_portfolio() {
+    let db = common::setup_test_db().await;
+
+    let eur_id =
+        common::insert_asset(&db, "XFAKEEUR", "EUR Fund", "fund", None, "EUR").await;
+    let usd_id =
+        common::insert_asset(&db, "XFAKEUSD", "USD Stock", "stock", None, "USD").await;
+
+    // Buy EUR fund: 10 shares @ 50 EUR
+    common::insert_transaction(&db, eur_id, "2025-01-02", 10.0, 50.0, 0.0).await;
+    // Buy USD stock: 5 shares @ $200 USD
+    common::insert_transaction(&db, usd_id, "2025-01-02", 5.0, 200.0, 0.0).await;
+
+    let mut mock = common::MockPriceFetcher::new();
+    mock.historical_prices.insert(
+        "XFAKEEUR".to_owned(),
+        vec![("2025-01-02".to_owned(), 50.0)],
+    );
+    mock.historical_prices.insert(
+        "XFAKEUSD".to_owned(),
+        vec![("2025-01-02".to_owned(), 200.0)],
+    );
+    mock.exchange_rates.insert(
+        "USDEUR".to_owned(),
+        vec![("2025-01-02".to_owned(), 0.90)],
+    );
+
+    let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
+    let end = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
+    nav::rebuild_portfolio_history(&db, start, end, None, &mock)
+        .await
+        .unwrap();
+
+    // EUR deposit: 10 * 50 = 500 EUR
+    // USD deposit: 5 * 200 * 0.90 = 900 EUR
+    // Total deposit: 1400 EUR, NAV = 100, shares = 14
+    // EUR value: 10 * 50 = 500
+    // USD value: 5 * 200 * 0.90 = 900
+    // Total value: 1400, NAV = 1400/14 = 100
+    let snap = common::get_portfolio_snapshot(&db, "2025-01-02").await.unwrap();
+    assert!((snap.total_value - 1400.0).abs() < 0.01);
+    assert!((snap.nav - 100.0).abs() < 0.01);
+    assert!((snap.outstanding_shares - 14.0).abs() < 0.01);
+
+    // Check per-asset snapshots
+    let asset_snaps = common::get_asset_snapshots(&db, "2025-01-02").await;
+    assert_eq!(asset_snaps.len(), 2);
+
+    let eur_snap = asset_snaps.iter().find(|s| s.asset_id == eur_id).unwrap();
+    assert!((eur_snap.market_value - 500.0).abs() < 0.01);
+    assert!((eur_snap.exchange_rate - 1.0).abs() < 0.01);
+
+    let usd_snap = asset_snaps.iter().find(|s| s.asset_id == usd_id).unwrap();
+    assert!((usd_snap.market_value - 900.0).abs() < 0.01);
+    assert!((usd_snap.exchange_rate - 0.90).abs() < 0.01);
+}
+
+/// EUR-only portfolio works identically to before (regression test).
+#[tokio::test]
+async fn test_eur_only_unchanged() {
+    let db = common::setup_test_db().await;
+
+    let asset_id =
+        common::insert_asset(&db, "XFAKE1", "EUR Stock", "stock", None, "EUR").await;
+    common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
+
+    let mut mock = common::MockPriceFetcher::new();
+    mock.historical_prices.insert(
+        "XFAKE1".to_owned(),
+        vec![
+            ("2025-01-02".to_owned(), 50.0),
+            ("2025-01-03".to_owned(), 55.0),
+        ],
+    );
+
+    let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
+    let end = NaiveDate::from_ymd_opt(2025, 1, 3).unwrap();
+    nav::rebuild_portfolio_history(&db, start, end, None, &mock)
+        .await
+        .unwrap();
+
+    let snap1 = common::get_portfolio_snapshot(&db, "2025-01-02").await.unwrap();
+    assert!((snap1.nav - 100.0).abs() < 0.01);
+    assert!((snap1.total_value - 500.0).abs() < 0.01);
+
+    let snap2 = common::get_portfolio_snapshot(&db, "2025-01-03").await.unwrap();
+    assert!((snap2.total_value - 550.0).abs() < 0.01);
+    assert!((snap2.nav - 110.0).abs() < 0.01);
+
+    // exchange_rate should be 1.0 for EUR assets
+    let asset_snaps = common::get_asset_snapshots(&db, "2025-01-02").await;
+    assert_eq!(asset_snaps.len(), 1);
+    assert!((asset_snaps[0].exchange_rate - 1.0).abs() < 1e-9);
 }

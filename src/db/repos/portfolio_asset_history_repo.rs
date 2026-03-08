@@ -23,6 +23,7 @@ pub async fn upsert(db: &DatabaseConnection, snapshot: &AssetSnapshot) -> anyhow
         active.quantity = Set(snapshot.quantity);
         active.closing_price = Set(snapshot.closing_price);
         active.market_value = Set(snapshot.market_value);
+        active.exchange_rate = Set(snapshot.exchange_rate);
         active.update(db).await?;
     } else {
         let record = portfolio_asset_history::ActiveModel {
@@ -31,6 +32,7 @@ pub async fn upsert(db: &DatabaseConnection, snapshot: &AssetSnapshot) -> anyhow
             quantity: Set(snapshot.quantity),
             closing_price: Set(snapshot.closing_price),
             market_value: Set(snapshot.market_value),
+            exchange_rate: Set(snapshot.exchange_rate),
             ..Default::default()
         };
         record.insert(db).await?;

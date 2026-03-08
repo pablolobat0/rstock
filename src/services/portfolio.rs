@@ -8,11 +8,11 @@ use crate::db::repos::{
     transaction_repo,
 };
 use crate::models::{AssetPosition, PortfolioResult, PortfolioSummary};
+use crate::services::exchange_rates::{self, BASE_CURRENCY};
 use crate::services::nav;
 use crate::services::price::PriceFetcher;
 
 pub async fn get_portfolio(db: &DatabaseConnection) -> anyhow::Result<PortfolioResult> {
-    // Use the latest snapshot date (built by get_portfolio_summary)
     let latest_snapshot = portfolio_history_repo::find_latest(db).await?;
     let snapshot_date = match &latest_snapshot {
         Some(s) => s.date.clone(),
@@ -43,7 +43,6 @@ pub async fn get_portfolio(db: &DatabaseConnection) -> anyhow::Result<PortfolioR
         .format("%Y-%m-%d")
         .to_string();
 
-    // Load asset metadata
     let asset_ids: Vec<i32> = asset_snapshots.iter().map(|s| s.asset_id).collect();
     let assets = asset_repo::find_by_ids(db, asset_ids).await?;
     let asset_map: HashMap<i32, _> = assets.iter().map(|a| (a.id, a)).collect();
@@ -56,16 +55,38 @@ pub async fn get_portfolio(db: &DatabaseConnection) -> anyhow::Result<PortfolioR
             None => continue,
         };
 
-        // Compute avg_cost from transactions
+        // Get the latest exchange rate for this asset's currency
+        let exchange_rate = if asset_model.currency != BASE_CURRENCY {
+            let pair = exchange_rates::currency_pair(&asset_model.currency);
+            exchange_rates::get_exchange_rate(db, &pair, &yesterday)
+                .await?
+                .unwrap_or(snap.exchange_rate)
+        } else {
+            1.0
+        };
+
+        // Compute avg_cost from transactions, converted to EUR
         let transactions = transaction_repo::find_by_asset_id(db, snap.asset_id).await?;
 
-        let total_cost: f64 = transactions
-            .iter()
-            .map(|t| t.quantity * (t.price_cents as f64 / 100.0) + (t.fees_cents as f64 / 100.0))
-            .sum();
+        let mut total_cost_eur = 0.0;
         let total_qty: f64 = transactions.iter().map(|t| t.quantity).sum();
+
+        for t in &transactions {
+            let tx_cost =
+                t.quantity * (t.price_cents as f64 / 100.0) + (t.fees_cents as f64 / 100.0);
+            if asset_model.currency != BASE_CURRENCY {
+                let pair = exchange_rates::currency_pair(&asset_model.currency);
+                let tx_rate = exchange_rates::get_exchange_rate(db, &pair, &t.date)
+                    .await?
+                    .unwrap_or(exchange_rate);
+                total_cost_eur += tx_cost * tx_rate;
+            } else {
+                total_cost_eur += tx_cost;
+            }
+        }
+
         let avg_cost = if total_qty > 0.0 {
-            total_cost / total_qty
+            total_cost_eur / total_qty
         } else {
             0.0
         };
@@ -79,10 +100,10 @@ pub async fn get_portfolio(db: &DatabaseConnection) -> anyhow::Result<PortfolioR
                 None => (snap.closing_price, snap.date.clone()),
             };
 
-        let current_value = snap.quantity * current_price;
-        let gain_loss = current_value - total_cost;
-        let gain_loss_pct = if total_cost != 0.0 {
-            (gain_loss / total_cost) * 100.0
+        let current_value = snap.quantity * current_price * exchange_rate;
+        let gain_loss = current_value - total_cost_eur;
+        let gain_loss_pct = if total_cost_eur != 0.0 {
+            (gain_loss / total_cost_eur) * 100.0
         } else {
             0.0
         };
@@ -96,7 +117,7 @@ pub async fn get_portfolio(db: &DatabaseConnection) -> anyhow::Result<PortfolioR
             avg_cost,
             current_price,
             price_date,
-            total_invested: total_cost,
+            total_invested: total_cost_eur,
             current_value,
             gain_loss,
             gain_loss_pct,
@@ -135,7 +156,6 @@ pub async fn get_portfolio_summary(
             // Already up to date, skip rebuild
         }
         Some(snap) => {
-            // Rebuild from day after latest
             let latest_date = NaiveDate::parse_from_str(&snap.date, "%Y-%m-%d")
                 .context("invalid latest snapshot date")?;
             let next_day = latest_date + chrono::Duration::days(1);
@@ -143,7 +163,6 @@ pub async fn get_portfolio_summary(
                 .await?;
         }
         None => {
-            // No history at all, full rebuild from first transaction date
             if let Some(tx) = transaction_repo::find_earliest(db).await? {
                 let start = NaiveDate::parse_from_str(&tx.date, "%Y-%m-%d")
                     .context("invalid first transaction date")?;
@@ -178,12 +197,10 @@ pub async fn get_portfolio_summary(
             (None, None)
         };
 
-    // Inception date
     let inception_date = portfolio_history_repo::find_earliest(db)
         .await?
         .map(|s| s.date);
 
-    // Calculate returns for each period
     let ytd_date = NaiveDate::from_ymd_opt(today.year(), 1, 1)
         .unwrap()
         .format("%Y-%m-%d")

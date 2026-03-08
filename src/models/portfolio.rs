@@ -29,6 +29,7 @@ pub struct AssetSnapshot {
     pub quantity: f64,
     pub closing_price: f64,
     pub market_value: f64,
+    pub exchange_rate: f64,
 }
 
 impl From<portfolio_asset_history::Model> for AssetSnapshot {
@@ -39,6 +40,7 @@ impl From<portfolio_asset_history::Model> for AssetSnapshot {
             quantity: m.quantity,
             closing_price: m.closing_price,
             market_value: m.market_value,
+            exchange_rate: m.exchange_rate,
         }
     }
 }

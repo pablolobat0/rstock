@@ -8,6 +8,7 @@ use crate::db::repos::{
 };
 use crate::models::{Asset, AssetSnapshot, PortfolioSnapshot, Transaction};
 use crate::services::daily_prices;
+use crate::services::exchange_rates::{self, BASE_CURRENCY};
 use crate::services::price::PriceFetcher;
 
 /// Fills price caches for all assets and returns a map of asset_id → latest asset price date.
@@ -37,11 +38,59 @@ async fn fill_asset_prices(
     Ok(latest_dates)
 }
 
+/// Fills exchange rate caches for all needed currency pairs.
+/// Returns a map of pair → latest API date.
+async fn fill_exchange_rates(
+    db: &DatabaseConnection,
+    pairs: &[String],
+    start_date: &str,
+    end_date: &str,
+    price_fetcher: &dyn PriceFetcher,
+) -> anyhow::Result<HashMap<String, String>> {
+    let mut latest_dates: HashMap<String, String> = HashMap::new();
+    for pair in pairs {
+        match exchange_rates::fill_rates_for_range(db, pair, start_date, end_date, price_fetcher)
+            .await
+        {
+            Ok(Some(date)) => {
+                latest_dates.insert(pair.clone(), date);
+            }
+            Ok(None) => {
+                eprintln!("Warning: no exchange rate data available for {}", pair);
+            }
+            Err(e) => {
+                eprintln!(
+                    "Warning: failed to fill exchange rates for {}: {}",
+                    pair, e
+                );
+            }
+        }
+    }
+    Ok(latest_dates)
+}
+
+/// Build a map of currency pair → exchange rate for a specific date.
+async fn get_day_rates(
+    db: &DatabaseConnection,
+    pairs: &[String],
+    date: &str,
+) -> anyhow::Result<HashMap<String, f64>> {
+    let mut rates = HashMap::new();
+    for pair in pairs {
+        if let Some(rate) = exchange_rates::get_exchange_rate(db, pair, date).await? {
+            rates.insert(pair.clone(), rate);
+        }
+    }
+    Ok(rates)
+}
+
 pub fn process_day_transactions(
     day_txs: &[&Transaction],
     holdings: &mut HashMap<i32, f64>,
     outstanding_shares: f64,
     nav: f64,
+    asset_map: &HashMap<i32, &Asset>,
+    day_rates: &HashMap<String, f64>,
 ) -> (f64, f64) {
     let mut os = outstanding_shares;
     let mut current_nav = nav;
@@ -50,12 +99,21 @@ pub fn process_day_transactions(
         let deposit =
             tx.quantity * (tx.price_cents as f64 / 100.0) + (tx.fees_cents as f64 / 100.0);
 
+        // Convert deposit to base currency
+        let rate = asset_map
+            .get(&tx.asset_id)
+            .filter(|a| a.currency != BASE_CURRENCY)
+            .and_then(|a| day_rates.get(&exchange_rates::currency_pair(&a.currency)))
+            .copied()
+            .unwrap_or(1.0);
+        let deposit_eur = deposit * rate;
+
         if os == 0.0 {
             current_nav = 100.0;
-            let shares_issued = deposit / 100.0;
+            let shares_issued = deposit_eur / 100.0;
             os = shares_issued;
         } else {
-            let shares_issued = deposit / current_nav;
+            let shares_issued = deposit_eur / current_nav;
             os += shares_issued;
         }
 
@@ -70,8 +128,8 @@ async fn compute_day_asset_values(
     holdings: &HashMap<i32, f64>,
     asset_map: &HashMap<i32, &Asset>,
     date: &str,
+    day_rates: &HashMap<String, f64>,
 ) -> anyhow::Result<(f64, Vec<AssetSnapshot>)> {
-    // Load existing portfolio_asset_history rows for this date to reuse if valid
     let existing_rows = portfolio_asset_history_repo::find_by_date(db, date).await?;
     let existing_map: HashMap<i32, AssetSnapshot> =
         existing_rows.into_iter().map(|r| (r.asset_id, r)).collect();
@@ -84,9 +142,18 @@ async fn compute_day_asset_values(
             continue;
         }
 
-        // Reuse existing row if quantity matches (asset was not invalidated)
+        let rate = asset_map
+            .get(&asset_id)
+            .filter(|a| a.currency != BASE_CURRENCY)
+            .and_then(|a| day_rates.get(&exchange_rates::currency_pair(&a.currency)))
+            .copied()
+            .unwrap_or(1.0);
+
+        // Reuse existing row if quantity and exchange rate match
         if let Some(existing) = existing_map.get(&asset_id) {
-            if (existing.quantity - qty).abs() < 1e-9 {
+            if (existing.quantity - qty).abs() < 1e-9
+                && (existing.exchange_rate - rate).abs() < 1e-9
+            {
                 total_asset_value += existing.market_value;
                 asset_values.push(AssetSnapshot {
                     date: existing.date.clone(),
@@ -94,17 +161,17 @@ async fn compute_day_asset_values(
                     quantity: existing.quantity,
                     closing_price: existing.closing_price,
                     market_value: existing.market_value,
+                    exchange_rate: existing.exchange_rate,
                 });
                 continue;
             }
         }
 
-        // No existing row or quantity mismatch — compute from daily_asset_prices
         if let Some(asset_model) = asset_map.get(&asset_id) {
             if let Some(closing_price) =
                 daily_prices::get_closing_price(db, asset_model, date).await?
             {
-                let market_value = qty * closing_price;
+                let market_value = qty * closing_price * rate;
                 total_asset_value += market_value;
                 asset_values.push(AssetSnapshot {
                     date: date.to_owned(),
@@ -112,6 +179,7 @@ async fn compute_day_asset_values(
                     quantity: qty,
                     closing_price,
                     market_value,
+                    exchange_rate: rate,
                 });
             }
         }
@@ -159,18 +227,25 @@ pub async fn rebuild_portfolio_history(
     let end_str = end_date.format("%Y-%m-%d").to_string();
     let start_str = start_date.format("%Y-%m-%d").to_string();
 
-    // Load all transactions
     let transactions = transaction_repo::find_all_ordered_by_date(db).await?;
 
     if transactions.is_empty() {
         return Ok(());
     }
 
-    // Collect needed asset IDs and load asset models
     let needed_ids: HashSet<i32> = transactions.iter().map(|t| t.asset_id).collect();
     let assets = asset_repo::find_by_ids(db, needed_ids).await?;
 
-    // Initialize state from previous snapshot or defaults for fresh portfolio
+    // Determine needed currency pairs
+    let needed_pairs: Vec<String> = assets
+        .iter()
+        .map(|a| &a.currency)
+        .filter(|c| c.as_str() != BASE_CURRENCY)
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .map(|c| exchange_rates::currency_pair(c))
+        .collect();
+
     let mut is_fresh_portfolio = prev_snapshot.is_none();
     let mut outstanding_shares = prev_snapshot.map(|s| s.outstanding_shares).unwrap_or(0.0);
     let mut nav = prev_snapshot.map(|s| s.nav).unwrap_or(100.0);
@@ -183,7 +258,6 @@ pub async fn rebuild_portfolio_history(
         }
     }
 
-    // Build transaction map for the rebuild range
     let mut tx_by_date: HashMap<String, Vec<&Transaction>> = HashMap::new();
     for tx in &transactions {
         if tx.date >= start_str && tx.date <= end_str {
@@ -193,20 +267,35 @@ pub async fn rebuild_portfolio_history(
 
     let asset_map: HashMap<i32, &Asset> = assets.iter().map(|a| (a.id, a)).collect();
 
-    // Fill price caches and get latest API date per asset
+    // Fill price caches and exchange rate caches
     let latest_api_dates =
         fill_asset_prices(db, &assets, &start_str, &end_str, price_fetcher).await?;
 
-    // Effective end date = min(end_date, min of latest API dates for all assets)
-    let effective_end = assets
+    let latest_rate_dates = if !needed_pairs.is_empty() {
+        fill_exchange_rates(db, &needed_pairs, &start_str, &end_str, price_fetcher).await?
+    } else {
+        HashMap::new()
+    };
+
+    // Effective end date = min(end_date, min of latest API dates for all assets, min of latest rate dates)
+    let min_asset_date = assets
         .iter()
         .filter_map(|a| {
             latest_api_dates
                 .get(&a.id)
                 .and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
         })
+        .min();
+
+    let min_rate_date = latest_rate_dates
+        .values()
+        .filter_map(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
+        .min();
+
+    let effective_end = [Some(end_date), min_asset_date, min_rate_date]
+        .into_iter()
+        .flatten()
         .min()
-        .map(|d| d.min(end_date))
         .unwrap_or(end_date);
 
     // Iterate each calendar day
@@ -214,10 +303,23 @@ pub async fn rebuild_portfolio_history(
     while current <= effective_end {
         let date_str = current.format("%Y-%m-%d").to_string();
 
+        // Build day's exchange rates
+        let day_rates = if !needed_pairs.is_empty() {
+            get_day_rates(db, &needed_pairs, &date_str).await?
+        } else {
+            HashMap::new()
+        };
+
         // Process transactions for this day
         if let Some(day_txs) = tx_by_date.get(&date_str) {
-            let (new_shares, new_nav) =
-                process_day_transactions(day_txs, &mut holdings, outstanding_shares, nav);
+            let (new_shares, new_nav) = process_day_transactions(
+                day_txs,
+                &mut holdings,
+                outstanding_shares,
+                nav,
+                &asset_map,
+                &day_rates,
+            );
             outstanding_shares = new_shares;
             nav = new_nav;
         }
@@ -236,16 +338,15 @@ pub async fn rebuild_portfolio_history(
             continue;
         }
 
-        // Compute EOD values (aggregate + per-asset)
+        // Compute EOD values (aggregate + per-asset) with currency conversion
         let (asset_value, asset_values) =
-            compute_day_asset_values(db, &holdings, &asset_map, &date_str).await?;
+            compute_day_asset_values(db, &holdings, &asset_map, &date_str, &day_rates).await?;
 
         let total_value = asset_value;
         if outstanding_shares > 0.0 {
             nav = total_value / outstanding_shares;
         }
 
-        // Store to both tables
         store_daily_snapshot(
             db,
             &date_str,

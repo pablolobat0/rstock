@@ -15,6 +15,13 @@ pub trait PriceFetcher: Send + Sync {
         end: &str,
         asset_type: &AssetType,
     ) -> anyhow::Result<Vec<(String, f64)>>;
+
+    async fn get_historical_exchange_rates(
+        &self,
+        pair: &str,
+        start: &str,
+        end: &str,
+    ) -> anyhow::Result<Vec<(String, f64)>>;
 }
 
 pub struct RealPriceFetcher;
@@ -34,6 +41,16 @@ impl PriceFetcher for RealPriceFetcher {
             }
             AssetType::Stock => get_stock_historical_prices(ticker, start, end).await,
         }
+    }
+
+    async fn get_historical_exchange_rates(
+        &self,
+        pair: &str,
+        start: &str,
+        end: &str,
+    ) -> anyhow::Result<Vec<(String, f64)>> {
+        let ticker = format!("{}=X", pair);
+        get_stock_historical_prices(&ticker, start, end).await
     }
 }
 
