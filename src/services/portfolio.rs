@@ -7,7 +7,7 @@ use crate::db::repos::{
     asset_repo, daily_price_repo, portfolio_asset_history_repo, portfolio_history_repo,
     transaction_repo,
 };
-use crate::models::{AssetPosition, PortfolioResult, PortfolioSummary};
+use crate::models::{cents_to_f64, AssetPosition, PortfolioResult, PortfolioSummary};
 use crate::services::exchange_rates::{self, BASE_CURRENCY};
 use crate::services::nav;
 use crate::services::price::PriceFetcher;
@@ -73,7 +73,7 @@ pub async fn get_portfolio(db: &DatabaseConnection) -> anyhow::Result<PortfolioR
 
         for t in &transactions {
             let tx_cost =
-                t.quantity * (t.price_cents as f64 / 100.0) + (t.fees_cents as f64 / 100.0);
+                t.quantity * cents_to_f64(t.price_cents) + cents_to_f64(t.fees_cents);
             if asset_model.currency != BASE_CURRENCY {
                 let pair = exchange_rates::currency_pair(&asset_model.currency);
                 let tx_rate = exchange_rates::get_exchange_rate(db, &pair, &t.date)

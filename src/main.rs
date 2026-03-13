@@ -73,6 +73,11 @@ async fn main() -> anyhow::Result<()> {
             currency,
             notes,
         } => {
+            let today = chrono::Local::now().date_naive();
+            if date > today {
+                anyhow::bail!("Date cannot be in the future: {}", date);
+            }
+
             let asset = AssetInfo {
                 ticker,
                 name,
@@ -81,7 +86,7 @@ async fn main() -> anyhow::Result<()> {
                 currency,
             };
             let order = BuyOrder {
-                date,
+                date: date.format("%Y-%m-%d").to_string(),
                 quantity,
                 price,
                 fees,

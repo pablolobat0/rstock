@@ -3,9 +3,9 @@
 ## Bugs / Code Quality
 
 - [ ] Fix silent asset_type defaulting — `src/models/asset.rs:62` uses `unwrap_or(AssetType::Stock)` for invalid types; should log a warning or return an error
-- [ ] Add date validation on `buy` — currently accepts any string; should parse with chrono at CLI level
+- [x] Add date validation on `buy` — currently accepts any string; should parse with chrono at CLI level
 - [ ] Prevent duplicate transactions — nothing stops recording the exact same buy twice
-- [ ] Extract cents<->float helper — `price_cents as f64 / 100.0` is scattered across services
+- [x] Extract cents<->float helper — `price_cents as f64 / 100.0` is scattered across services
 
 ## New Commands
 
@@ -31,11 +31,11 @@
 - [ ] Risk metrics — volatility, Sharpe ratio, max drawdown
 - [ ] Sector/country allocation breakdown
 - [ ] Rebalancing alerts — target allocation vs. current weights
-- [ ] Multi-currency support + forex conversion (currently all treated as same currency)
+- [x] Multi-currency support + forex conversion (currently all treated as same currency)
 
 ## Display Improvements
 
-- [ ] Color the NAV chart — green above 100.0 (inception), red below
+- [x] Color portfolio table rows — green for gaining assets, red for losing
 - [ ] `--dry-run` flag for buy — show what would be recorded without committing
 - [ ] Interactive TUI mode (ratatui) — navigate assets, drill into history
 - [ ] Sparkline per asset in the portfolio table

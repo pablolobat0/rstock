@@ -1,11 +1,11 @@
 use sea_orm::*;
 
 use crate::db::entities::transaction;
-use crate::models::{BuyOrder, Transaction};
+use crate::models::{f64_to_cents, BuyOrder, Transaction};
 
 pub async fn insert_buy(db: &DatabaseConnection, asset_id: i32, order: &BuyOrder) -> anyhow::Result<()> {
-    let price_cents = (order.price * 100.0).round() as i64;
-    let fees_cents = (order.fees * 100.0).round() as i64;
+    let price_cents = f64_to_cents(order.price);
+    let fees_cents = f64_to_cents(order.fees);
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
     let tx = transaction::ActiveModel {

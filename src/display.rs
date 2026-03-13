@@ -1,4 +1,7 @@
 use colored::Colorize;
+use tabled::settings::object::Cell;
+use tabled::settings::style::{HorizontalLine, VerticalLine};
+use tabled::settings::{Color, Style};
 use tabled::Table;
 use textplots::{Chart, Plot, Shape};
 
@@ -61,13 +64,32 @@ pub fn print_portfolio(result: &PortfolioResult, summary: Option<&PortfolioSumma
                     price_date: r.price_date.clone(),
                     total_invested: format!("{:.2}", r.total_invested),
                     current_value: format!("{:.2}", r.current_value),
-                    gain_loss: color_value(r.gain_loss, gl_text),
-                    gain_loss_pct: color_value(r.gain_loss_pct, gl_pct_text),
+                    gain_loss: gl_text,
+                    gain_loss_pct: gl_pct_text,
                     weight,
                 }
             })
             .collect();
-        println!("{}", Table::new(&display_rows));
+
+        let mut table = Table::new(&display_rows);
+        table.with(
+            Style::modern()
+                .horizontals([(1, HorizontalLine::inherit(Style::modern()).horizontal('═'))])
+                .verticals([(1, VerticalLine::inherit(Style::modern()))])
+                .remove_horizontal()
+                .remove_vertical(),
+        );
+        for (i, r) in result.rows.iter().enumerate() {
+            let color = if r.gain_loss >= 0.0 {
+                Color::FG_GREEN
+            } else {
+                Color::FG_RED
+            };
+            // G/L = column 10, G/L % = column 11
+            table.modify(Cell::new(i + 1, 10), color.clone());
+            table.modify(Cell::new(i + 1, 11), color);
+        }
+        println!("{}", table);
 
         let sign = if result.total_gain_loss >= 0.0 {
             "+"

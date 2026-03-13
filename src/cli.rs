@@ -1,3 +1,4 @@
+use chrono::NaiveDate;
 use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::models::AssetType;
@@ -50,7 +51,7 @@ pub enum Commands {
 
         /// Purchase date (YYYY-MM-DD)
         #[arg(long)]
-        date: String,
+        date: NaiveDate,
 
         /// Number of shares/units
         #[arg(long)]

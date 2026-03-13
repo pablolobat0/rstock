@@ -6,7 +6,7 @@ use sea_orm::DatabaseConnection;
 use crate::db::repos::{
     asset_repo, portfolio_asset_history_repo, portfolio_history_repo, transaction_repo,
 };
-use crate::models::{Asset, AssetSnapshot, PortfolioSnapshot, Transaction};
+use crate::models::{cents_to_f64, Asset, AssetSnapshot, PortfolioSnapshot, Transaction};
 use crate::services::daily_prices;
 use crate::services::exchange_rates::{self, BASE_CURRENCY};
 use crate::services::price::PriceFetcher;
@@ -97,7 +97,7 @@ pub fn process_day_transactions(
 
     for tx in day_txs {
         let deposit =
-            tx.quantity * (tx.price_cents as f64 / 100.0) + (tx.fees_cents as f64 / 100.0);
+            tx.quantity * cents_to_f64(tx.price_cents) + cents_to_f64(tx.fees_cents);
 
         // Convert deposit to base currency
         let rate = asset_map
