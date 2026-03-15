@@ -1,3 +1,6 @@
+use std::fmt;
+use std::str::FromStr;
+
 use crate::db::entities::transaction;
 
 pub fn f64_to_cents(val: f64) -> i64 {
@@ -6,6 +9,33 @@ pub fn f64_to_cents(val: f64) -> i64 {
 
 pub fn cents_to_f64(cents: i64) -> f64 {
     cents as f64 / 100.0
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TxType {
+    Buy,
+    Sell,
+}
+
+impl fmt::Display for TxType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TxType::Buy => write!(f, "buy"),
+            TxType::Sell => write!(f, "sell"),
+        }
+    }
+}
+
+impl FromStr for TxType {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "buy" => Ok(TxType::Buy),
+            "sell" => Ok(TxType::Sell),
+            other => anyhow::bail!("unknown transaction type: {other}"),
+        }
+    }
 }
 
 pub struct BuyOrder {
@@ -26,18 +56,36 @@ pub struct SellOrder {
 
 pub struct Transaction {
     pub asset_id: i32,
-    pub tx_type: String,
+    pub tx_type: TxType,
     pub date: String,
     pub quantity: f64,
     pub price_cents: i64,
     pub fees_cents: i64,
 }
 
+impl Transaction {
+    pub fn is_buy(&self) -> bool {
+        self.tx_type == TxType::Buy
+    }
+
+    pub fn is_sell(&self) -> bool {
+        self.tx_type == TxType::Sell
+    }
+
+    pub fn signed_quantity(&self) -> f64 {
+        if self.is_sell() {
+            -self.quantity
+        } else {
+            self.quantity
+        }
+    }
+}
+
 impl From<transaction::Model> for Transaction {
     fn from(m: transaction::Model) -> Self {
         Self {
             asset_id: m.asset_id,
-            tx_type: m.tx_type,
+            tx_type: m.tx_type.parse().expect("invalid tx_type in DB"),
             date: m.date,
             quantity: m.quantity,
             price_cents: m.price_cents,

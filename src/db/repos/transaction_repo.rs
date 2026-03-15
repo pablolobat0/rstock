@@ -1,7 +1,7 @@
 use sea_orm::*;
 
 use crate::db::entities::transaction;
-use crate::models::{f64_to_cents, BuyOrder, SellOrder, Transaction};
+use crate::models::{f64_to_cents, BuyOrder, SellOrder, Transaction, TxType};
 
 pub async fn insert_buy(db: &DatabaseConnection, asset_id: i32, order: &BuyOrder) -> anyhow::Result<()> {
     let price_cents = f64_to_cents(order.price);
@@ -10,7 +10,7 @@ pub async fn insert_buy(db: &DatabaseConnection, asset_id: i32, order: &BuyOrder
 
     let tx = transaction::ActiveModel {
         asset_id: Set(asset_id),
-        tx_type: Set("buy".to_owned()),
+        tx_type: Set(TxType::Buy.to_string()),
         date: Set(order.date.clone()),
         quantity: Set(order.quantity),
         price_cents: Set(price_cents),
@@ -46,7 +46,7 @@ pub async fn insert_sell(db: &DatabaseConnection, asset_id: i32, order: &SellOrd
 
     let tx = transaction::ActiveModel {
         asset_id: Set(asset_id),
-        tx_type: Set("sell".to_owned()),
+        tx_type: Set(TxType::Sell.to_string()),
         date: Set(order.date.clone()),
         quantity: Set(order.quantity),
         price_cents: Set(price_cents),

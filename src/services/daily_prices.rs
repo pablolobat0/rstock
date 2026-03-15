@@ -2,6 +2,7 @@ use anyhow::Context;
 use chrono::NaiveDate;
 use sea_orm::DatabaseConnection;
 
+use crate::constants::{format_date, DATE_FORMAT};
 use crate::db::repos::daily_price_repo;
 use crate::models::Asset;
 use crate::services::price::PriceFetcher;
@@ -52,16 +53,16 @@ pub async fn fill_prices_for_range(
     };
 
     // Only fill up to the last date the API returned data for
-    let start = NaiveDate::parse_from_str(start_date, "%Y-%m-%d").context("invalid start date")?;
+    let start = NaiveDate::parse_from_str(start_date, DATE_FORMAT).context("invalid start date")?;
     let fill_end =
-        NaiveDate::parse_from_str(&last_api_date, "%Y-%m-%d").context("invalid last API date")?;
+        NaiveDate::parse_from_str(&last_api_date, DATE_FORMAT).context("invalid last API date")?;
 
     let mut last_known_price =
         daily_price_repo::find_price_before(db, asset.id, start_date).await?;
 
     let mut current = start;
     while current <= fill_end {
-        let date_str = current.format("%Y-%m-%d").to_string();
+        let date_str = format_date(current);
 
         if let Some(&api_price) = price_map.get(&date_str) {
             daily_price_repo::upsert(db, asset.id, &date_str, api_price, false).await?;

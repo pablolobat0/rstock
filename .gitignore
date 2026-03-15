@@ -1,1 +1,17 @@
 /target
+
+# Database
+*.db
+*.db-journal
+*.sqlite
+
+# Environment
+.env
+
+# Editor/IDE
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+.DS_Store

@@ -59,7 +59,7 @@ impl From<asset::Model> for Asset {
             ticker: m.ticker,
             isin: m.isin,
             name: m.name,
-            asset_type: m.asset_type.parse().unwrap_or(AssetType::Stock),
+            asset_type: m.asset_type.parse().expect("invalid asset_type in DB"),
             currency: m.currency,
         }
     }

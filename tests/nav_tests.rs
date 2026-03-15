@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use chrono::NaiveDate;
 use rstock::db::repos::portfolio_history_repo;
-use rstock::models::{Asset, AssetType, Transaction};
+use rstock::models::{Asset, AssetType, Transaction, TxType};
 use rstock::services::nav;
 
 /// No transactions -> rebuild returns Ok, no portfolio_history rows.
@@ -463,7 +463,7 @@ async fn test_process_day_transactions_pure() {
     // Simulate first buy: 10 shares @ $50
     let tx1 = Transaction {
         asset_id: 1,
-        tx_type: "buy".to_owned(),
+        tx_type: TxType::Buy,
         date: "2025-01-02".to_owned(),
         quantity: 10.0,
         price_cents: 5000,
@@ -494,7 +494,7 @@ async fn test_process_day_transactions_pure() {
     // Simulate second buy at NAV=100
     let tx2 = Transaction {
         asset_id: 1,
-        tx_type: "buy".to_owned(),
+        tx_type: TxType::Buy,
         date: "2025-01-03".to_owned(),
         quantity: 5.0,
         price_cents: 6000,
@@ -854,7 +854,7 @@ async fn test_process_day_transactions_sell_pure() {
     // First: buy 10 @ $50
     let buy_tx = Transaction {
         asset_id: 1,
-        tx_type: "buy".to_owned(),
+        tx_type: TxType::Buy,
         date: "2025-01-02".to_owned(),
         quantity: 10.0,
         price_cents: 5000,
@@ -871,7 +871,7 @@ async fn test_process_day_transactions_sell_pure() {
     // Now sell 5 @ $50 at NAV=100
     let sell_tx = Transaction {
         asset_id: 1,
-        tx_type: "sell".to_owned(),
+        tx_type: TxType::Sell,
         date: "2025-01-03".to_owned(),
         quantity: 5.0,
         price_cents: 5000,

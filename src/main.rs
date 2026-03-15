@@ -1,4 +1,5 @@
 mod cli;
+mod constants;
 mod db;
 mod display;
 mod models;
@@ -8,6 +9,7 @@ use anyhow::Context;
 use chrono::{Datelike, NaiveDate};
 use clap::Parser;
 use cli::{ChartPeriod, Cli, Commands};
+use constants::{format_date, DATE_FORMAT, FIVE_YEAR_DAYS, ONE_YEAR_DAYS, THREE_YEAR_DAYS};
 use models::{AssetInfo, BuyOrder, SellOrder};
 use services::price::RealPriceFetcher;
 
@@ -28,27 +30,28 @@ async fn main() -> anyhow::Result<()> {
 
             // NAV chart
             let today = chrono::Local::now().date_naive();
-            let today_str = today.format("%Y-%m-%d").to_string();
+            let today_str = format_date(today);
 
             let (start_date, period_label) = match period {
                 ChartPeriod::Ytd => {
-                    let d = NaiveDate::from_ymd_opt(today.year(), 1, 1).unwrap();
+                    let d = NaiveDate::from_ymd_opt(today.year(), 1, 1)
+                        .expect("Jan 1 is always valid");
                     (d, "YTD")
                 }
                 ChartPeriod::OneYear => {
-                    (today - chrono::Duration::days(365), "1Y")
+                    (today - chrono::Duration::days(ONE_YEAR_DAYS), "1Y")
                 }
                 ChartPeriod::ThreeYears => {
-                    (today - chrono::Duration::days(1095), "3Y")
+                    (today - chrono::Duration::days(THREE_YEAR_DAYS), "3Y")
                 }
                 ChartPeriod::FiveYears => {
-                    (today - chrono::Duration::days(1825), "5Y")
+                    (today - chrono::Duration::days(FIVE_YEAR_DAYS), "5Y")
                 }
                 ChartPeriod::All => {
                     let earliest = portfolio_history_repo::find_earliest(&db).await?;
                     match earliest {
                         Some(s) => {
-                            let d = NaiveDate::parse_from_str(&s.date, "%Y-%m-%d")
+                            let d = NaiveDate::parse_from_str(&s.date, DATE_FORMAT)
                                 .context("invalid inception date")?;
                             (d, "All")
                         }
@@ -57,7 +60,7 @@ async fn main() -> anyhow::Result<()> {
                 }
             };
 
-            let start_str = start_date.format("%Y-%m-%d").to_string();
+            let start_str = format_date(start_date);
             let snapshots = portfolio_history_repo::find_between(&db, &start_str, &today_str).await?;
             display::print_nav_chart(&snapshots, period_label);
         }
@@ -86,7 +89,7 @@ async fn main() -> anyhow::Result<()> {
                 currency,
             };
             let order = BuyOrder {
-                date: date.format("%Y-%m-%d").to_string(),
+                date: format_date(date),
                 quantity,
                 price,
                 fees,
@@ -108,7 +111,7 @@ async fn main() -> anyhow::Result<()> {
             }
 
             let order = SellOrder {
-                date: date.format("%Y-%m-%d").to_string(),
+                date: format_date(date),
                 quantity,
                 price,
                 fees,

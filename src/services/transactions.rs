@@ -1,5 +1,6 @@
 use sea_orm::DatabaseConnection;
 
+use crate::constants::FLOAT_EPSILON;
 use crate::db::repos::{
     asset_repo, portfolio_asset_history_repo, portfolio_history_repo, transaction_repo,
 };
@@ -51,16 +52,10 @@ pub async fn sell(
     let net_qty: f64 = transactions
         .iter()
         .filter(|t| t.date <= order.date)
-        .map(|t| {
-            if t.tx_type == "sell" {
-                -t.quantity
-            } else {
-                t.quantity
-            }
-        })
+        .map(|t| t.signed_quantity())
         .sum();
 
-    if order.quantity > net_qty + 1e-9 {
+    if order.quantity > net_qty + FLOAT_EPSILON {
         anyhow::bail!(
             "Insufficient holdings: you have {:.4} units of {} but tried to sell {:.4}",
             net_qty,

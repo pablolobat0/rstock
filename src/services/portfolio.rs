@@ -3,12 +3,15 @@ use chrono::{Datelike, Duration, NaiveDate};
 use sea_orm::DatabaseConnection;
 use std::collections::HashMap;
 
+use crate::constants::{
+    format_date, BASE_CURRENCY, DATE_FORMAT, FIVE_YEAR_DAYS, ONE_YEAR_DAYS, THREE_YEAR_DAYS,
+};
 use crate::db::repos::{
     asset_repo, daily_price_repo, portfolio_asset_history_repo, portfolio_history_repo,
     transaction_repo,
 };
 use crate::models::{cents_to_f64, AssetPosition, PortfolioResult, PortfolioSummary};
-use crate::services::exchange_rates::{self, BASE_CURRENCY};
+use crate::services::exchange_rates;
 use crate::services::metrics;
 use crate::services::nav;
 use crate::services::price::PriceFetcher;
@@ -40,9 +43,7 @@ pub async fn get_portfolio(db: &DatabaseConnection) -> anyhow::Result<PortfolioR
         });
     }
 
-    let yesterday = (chrono::Local::now().date_naive() - chrono::Duration::days(1))
-        .format("%Y-%m-%d")
-        .to_string();
+    let yesterday = format_date(chrono::Local::now().date_naive() - chrono::Duration::days(1));
 
     let asset_ids: Vec<i32> = asset_snapshots.iter().map(|s| s.asset_id).collect();
     let assets = asset_repo::find_by_ids(db, asset_ids).await?;
@@ -77,17 +78,12 @@ pub async fn get_portfolio(db: &DatabaseConnection) -> anyhow::Result<PortfolioR
         let mut total_buy_cost_eur = 0.0;
         let total_buy_qty: f64 = transactions
             .iter()
-            .filter(|t| t.tx_type != "sell")
+            .filter(|t| t.is_buy())
             .map(|t| t.quantity)
             .sum();
-        let total_sell_qty: f64 = transactions
-            .iter()
-            .filter(|t| t.tx_type == "sell")
-            .map(|t| t.quantity)
-            .sum();
-        let net_qty = total_buy_qty - total_sell_qty;
+        let net_qty: f64 = transactions.iter().map(|t| t.signed_quantity()).sum();
 
-        for t in transactions.iter().filter(|t| t.tx_type != "sell") {
+        for t in transactions.iter().filter(|t| t.is_buy()) {
             let tx_cost =
                 t.quantity * cents_to_f64(t.price_cents) + cents_to_f64(t.fees_cents);
             if asset_model.currency != BASE_CURRENCY {
@@ -159,21 +155,18 @@ pub async fn get_portfolio(db: &DatabaseConnection) -> anyhow::Result<PortfolioR
     })
 }
 
-pub async fn get_portfolio_summary(
+async fn trigger_rebuild_if_needed(
     db: &DatabaseConnection,
     price_fetcher: &dyn PriceFetcher,
-) -> anyhow::Result<Option<PortfolioSummary>> {
-    let today = chrono::Local::now().date_naive();
-    let yesterday = today - Duration::days(1);
-    let yesterday_str = yesterday.format("%Y-%m-%d").to_string();
+) -> anyhow::Result<()> {
+    let yesterday = chrono::Local::now().date_naive() - Duration::days(1);
+    let yesterday_str = format_date(yesterday);
 
     let latest_snapshot = portfolio_history_repo::find_latest(db).await?;
     match &latest_snapshot {
-        Some(snap) if snap.date >= yesterday_str => {
-            // Already up to date, skip rebuild
-        }
+        Some(snap) if snap.date >= yesterday_str => {}
         Some(snap) => {
-            let latest_date = NaiveDate::parse_from_str(&snap.date, "%Y-%m-%d")
+            let latest_date = NaiveDate::parse_from_str(&snap.date, DATE_FORMAT)
                 .context("invalid latest snapshot date")?;
             let next_day = latest_date + chrono::Duration::days(1);
             nav::rebuild_portfolio_history(db, next_day, yesterday, Some(snap), price_fetcher)
@@ -181,12 +174,32 @@ pub async fn get_portfolio_summary(
         }
         None => {
             if let Some(tx) = transaction_repo::find_earliest(db).await? {
-                let start = NaiveDate::parse_from_str(&tx.date, "%Y-%m-%d")
+                let start = NaiveDate::parse_from_str(&tx.date, DATE_FORMAT)
                     .context("invalid first transaction date")?;
                 nav::rebuild_portfolio_history(db, start, yesterday, None, price_fetcher).await?;
             }
         }
     }
+    Ok(())
+}
+
+fn compute_period_returns_dates(today: NaiveDate) -> (String, String, String, String) {
+    let ytd = format_date(
+        NaiveDate::from_ymd_opt(today.year(), 1, 1).expect("Jan 1 is always valid"),
+    );
+    let one_year = format_date(today - chrono::Duration::days(ONE_YEAR_DAYS));
+    let three_year = format_date(today - chrono::Duration::days(THREE_YEAR_DAYS));
+    let five_year = format_date(today - chrono::Duration::days(FIVE_YEAR_DAYS));
+    (ytd, one_year, three_year, five_year)
+}
+
+pub async fn get_portfolio_summary(
+    db: &DatabaseConnection,
+    price_fetcher: &dyn PriceFetcher,
+) -> anyhow::Result<Option<PortfolioSummary>> {
+    let today = chrono::Local::now().date_naive();
+
+    trigger_rebuild_if_needed(db, price_fetcher).await?;
 
     let current_snapshot = match portfolio_history_repo::find_latest(db).await? {
         Some(s) => s,
@@ -197,10 +210,8 @@ pub async fn get_portfolio_summary(
 
     // Daily change: compare to the day before the latest snapshot
     let snap_date =
-        NaiveDate::parse_from_str(&snapshot_date, "%Y-%m-%d").context("invalid snapshot date")?;
-    let prev_day = (snap_date - chrono::Duration::days(1))
-        .format("%Y-%m-%d")
-        .to_string();
+        NaiveDate::parse_from_str(&snapshot_date, DATE_FORMAT).context("invalid snapshot date")?;
+    let prev_day = format_date(snap_date - chrono::Duration::days(1));
     let (daily_change, daily_change_pct) =
         if let Some(prev) = portfolio_history_repo::find_at_or_before(db, &prev_day).await? {
             if prev.total_value > 0.0 {
@@ -218,19 +229,8 @@ pub async fn get_portfolio_summary(
         .await?
         .map(|s| s.date);
 
-    let ytd_date = NaiveDate::from_ymd_opt(today.year(), 1, 1)
-        .unwrap()
-        .format("%Y-%m-%d")
-        .to_string();
-    let one_year_date = (today - chrono::Duration::days(365))
-        .format("%Y-%m-%d")
-        .to_string();
-    let three_year_date = (today - chrono::Duration::days(1095))
-        .format("%Y-%m-%d")
-        .to_string();
-    let five_year_date = (today - chrono::Duration::days(1825))
-        .format("%Y-%m-%d")
-        .to_string();
+    let (ytd_date, one_year_date, three_year_date, five_year_date) =
+        compute_period_returns_dates(today);
 
     let ytd_return = calc_return(db, current_nav, &ytd_date, true, None).await?;
     let one_year_return = calc_return(db, current_nav, &one_year_date, false, None).await?;

@@ -4,6 +4,7 @@ use yfinance_rs::core::conversions::money_to_f64;
 use yfinance_rs::history::HistoryBuilder;
 use yfinance_rs::YfClient;
 
+use crate::constants::DATE_FORMAT;
 use crate::models::AssetType;
 
 #[async_trait::async_trait]
@@ -127,16 +128,20 @@ async fn get_stock_historical_prices(
     start: &str,
     end: &str,
 ) -> anyhow::Result<Vec<(String, f64)>> {
-    let start_date = NaiveDate::parse_from_str(start, "%Y-%m-%d")
+    let start_date = NaiveDate::parse_from_str(start, DATE_FORMAT)
         .context("invalid start date")?;
-    let end_date = NaiveDate::parse_from_str(end, "%Y-%m-%d")
+    let end_date = NaiveDate::parse_from_str(end, DATE_FORMAT)
         .context("invalid end date")?;
 
     let start_dt = Utc.from_utc_datetime(
-        &start_date.and_hms_opt(0, 0, 0).unwrap(),
+        &start_date
+            .and_hms_opt(0, 0, 0)
+            .expect("valid HMS constant"),
     );
     let end_dt = Utc.from_utc_datetime(
-        &end_date.and_hms_opt(23, 59, 59).unwrap(),
+        &end_date
+            .and_hms_opt(23, 59, 59)
+            .expect("valid HMS constant"),
     );
 
     let client = YfClient::default();
@@ -149,7 +154,7 @@ async fn get_stock_historical_prices(
     let results: Vec<(String, f64)> = candles
         .iter()
         .map(|candle| {
-            let date_str = candle.ts.format("%Y-%m-%d").to_string();
+            let date_str = candle.ts.format(DATE_FORMAT).to_string();
             let price = money_to_f64(&candle.close);
             (date_str, price)
         })

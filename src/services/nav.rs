@@ -3,12 +3,13 @@ use std::collections::{HashMap, HashSet};
 use chrono::NaiveDate;
 use sea_orm::DatabaseConnection;
 
+use crate::constants::{format_date, BASE_CURRENCY, DATE_FORMAT, FLOAT_EPSILON, INITIAL_NAV};
 use crate::db::repos::{
     asset_repo, portfolio_asset_history_repo, portfolio_history_repo, transaction_repo,
 };
 use crate::models::{cents_to_f64, Asset, AssetSnapshot, PortfolioSnapshot, Transaction};
 use crate::services::daily_prices;
-use crate::services::exchange_rates::{self, BASE_CURRENCY};
+use crate::services::exchange_rates;
 use crate::services::price::PriceFetcher;
 
 /// Fills price caches for all assets and returns a map of asset_id → latest asset price date.
@@ -104,7 +105,7 @@ pub fn process_day_transactions(
             .copied()
             .unwrap_or(1.0);
 
-        if tx.tx_type == "sell" {
+        if tx.is_sell() {
             // Sell = withdrawal: proceeds = qty * price - fees
             let withdrawal =
                 tx.quantity * cents_to_f64(tx.price_cents) - cents_to_f64(tx.fees_cents);
@@ -126,8 +127,8 @@ pub fn process_day_transactions(
             let deposit_eur = deposit * rate;
 
             if os == 0.0 {
-                current_nav = 100.0;
-                let shares_issued = deposit_eur / 100.0;
+                current_nav = INITIAL_NAV;
+                let shares_issued = deposit_eur / INITIAL_NAV;
                 os = shares_issued;
             } else {
                 let shares_issued = deposit_eur / current_nav;
@@ -169,8 +170,8 @@ async fn compute_day_asset_values(
 
         // Reuse existing row if quantity and exchange rate match
         if let Some(existing) = existing_map.get(&asset_id) {
-            if (existing.quantity - qty).abs() < 1e-9
-                && (existing.exchange_rate - rate).abs() < 1e-9
+            if (existing.quantity - qty).abs() < FLOAT_EPSILON
+                && (existing.exchange_rate - rate).abs() < FLOAT_EPSILON
             {
                 total_asset_value += existing.market_value;
                 asset_values.push(AssetSnapshot {
@@ -242,8 +243,8 @@ pub async fn rebuild_portfolio_history(
     prev_snapshot: Option<&PortfolioSnapshot>,
     price_fetcher: &dyn PriceFetcher,
 ) -> anyhow::Result<()> {
-    let end_str = end_date.format("%Y-%m-%d").to_string();
-    let start_str = start_date.format("%Y-%m-%d").to_string();
+    let end_str = format_date(end_date);
+    let start_str = format_date(start_date);
 
     let transactions = transaction_repo::find_all_ordered_by_date(db).await?;
 
@@ -266,7 +267,7 @@ pub async fn rebuild_portfolio_history(
 
     let mut is_fresh_portfolio = prev_snapshot.is_none();
     let mut outstanding_shares = prev_snapshot.map(|s| s.outstanding_shares).unwrap_or(0.0);
-    let mut nav = prev_snapshot.map(|s| s.nav).unwrap_or(100.0);
+    let mut nav = prev_snapshot.map(|s| s.nav).unwrap_or(INITIAL_NAV);
 
     let mut holdings: HashMap<i32, f64> = HashMap::new();
     if let Some(snap) = prev_snapshot {
@@ -301,13 +302,13 @@ pub async fn rebuild_portfolio_history(
         .filter_map(|a| {
             latest_api_dates
                 .get(&a.id)
-                .and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
+                .and_then(|d| NaiveDate::parse_from_str(d, DATE_FORMAT).ok())
         })
         .min();
 
     let min_rate_date = latest_rate_dates
         .values()
-        .filter_map(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
+        .filter_map(|d| NaiveDate::parse_from_str(d, DATE_FORMAT).ok())
         .min();
 
     let effective_end = [Some(end_date), min_asset_date, min_rate_date]
@@ -319,7 +320,7 @@ pub async fn rebuild_portfolio_history(
     // Iterate each calendar day
     let mut current = start_date;
     while current <= effective_end {
-        let date_str = current.format("%Y-%m-%d").to_string();
+        let date_str = format_date(current);
 
         // Build day's exchange rates
         let day_rates = if !needed_pairs.is_empty() {
@@ -344,10 +345,8 @@ pub async fn rebuild_portfolio_history(
 
         // First-ever transaction day: store a seed snapshot for (day - 1) with NAV=100
         if is_fresh_portfolio && outstanding_shares > 0.0 {
-            let seed_date = (current - chrono::Duration::days(1))
-                .format("%Y-%m-%d")
-                .to_string();
-            store_daily_snapshot(db, &seed_date, 0.0, 0.0, 100.0, &[]).await?;
+            let seed_date = format_date(current - chrono::Duration::days(1));
+            store_daily_snapshot(db, &seed_date, 0.0, 0.0, INITIAL_NAV, &[]).await?;
             is_fresh_portfolio = false;
         }
 

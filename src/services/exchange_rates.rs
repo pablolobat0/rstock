@@ -2,10 +2,9 @@ use anyhow::Context;
 use chrono::NaiveDate;
 use sea_orm::DatabaseConnection;
 
+use crate::constants::{format_date, BASE_CURRENCY, DATE_FORMAT};
 use crate::db::repos::exchange_rate_repo;
 use crate::services::price::PriceFetcher;
-
-pub const BASE_CURRENCY: &str = "EUR";
 
 pub fn currency_pair(from: &str) -> String {
     format!("{}{}", from, BASE_CURRENCY)
@@ -49,15 +48,15 @@ pub async fn fill_rates_for_range(
         None => return Ok(None),
     };
 
-    let start = NaiveDate::parse_from_str(start_date, "%Y-%m-%d").context("invalid start date")?;
+    let start = NaiveDate::parse_from_str(start_date, DATE_FORMAT).context("invalid start date")?;
     let fill_end =
-        NaiveDate::parse_from_str(&last_api_date, "%Y-%m-%d").context("invalid last API date")?;
+        NaiveDate::parse_from_str(&last_api_date, DATE_FORMAT).context("invalid last API date")?;
 
     let mut last_known_rate = exchange_rate_repo::find_rate_before(db, pair, start_date).await?;
 
     let mut current = start;
     while current <= fill_end {
-        let date_str = current.format("%Y-%m-%d").to_string();
+        let date_str = format_date(current);
 
         if let Some(&api_rate) = rate_map.get(&date_str) {
             exchange_rate_repo::upsert(db, pair, &date_str, api_rate).await?;
