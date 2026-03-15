@@ -50,7 +50,7 @@ impl PriceFetcher for RealPriceFetcher {
         start: &str,
         end: &str,
     ) -> anyhow::Result<Vec<(String, f64)>> {
-        let ticker = format!("{}=X", pair);
+        let ticker = format!("{pair}=X");
         get_stock_historical_prices(&ticker, start, end).await
     }
 }
@@ -63,7 +63,10 @@ fn resolve_scripts_dir() -> anyhow::Result<std::path::PathBuf> {
         if path.is_dir() {
             return Ok(path);
         }
-        bail!("RSTOCK_SCRIPTS_DIR is set but not a valid directory: {}", path.display());
+        bail!(
+            "RSTOCK_SCRIPTS_DIR is set but not a valid directory: {}",
+            path.display()
+        );
     }
 
     // Walk up from the executable looking for a scripts/ folder
@@ -128,16 +131,11 @@ async fn get_stock_historical_prices(
     start: &str,
     end: &str,
 ) -> anyhow::Result<Vec<(String, f64)>> {
-    let start_date = NaiveDate::parse_from_str(start, DATE_FORMAT)
-        .context("invalid start date")?;
-    let end_date = NaiveDate::parse_from_str(end, DATE_FORMAT)
-        .context("invalid end date")?;
+    let start_date = NaiveDate::parse_from_str(start, DATE_FORMAT).context("invalid start date")?;
+    let end_date = NaiveDate::parse_from_str(end, DATE_FORMAT).context("invalid end date")?;
 
-    let start_dt = Utc.from_utc_datetime(
-        &start_date
-            .and_hms_opt(0, 0, 0)
-            .expect("valid HMS constant"),
-    );
+    let start_dt =
+        Utc.from_utc_datetime(&start_date.and_hms_opt(0, 0, 0).expect("valid HMS constant"));
     let end_dt = Utc.from_utc_datetime(
         &end_date
             .and_hms_opt(23, 59, 59)

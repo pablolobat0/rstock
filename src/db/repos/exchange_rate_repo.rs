@@ -1,4 +1,6 @@
-use sea_orm::*;
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Set,
+};
 
 use crate::db::entities::daily_exchange_rate;
 
@@ -43,11 +45,7 @@ pub async fn find_rate_before(
     Ok(result.map(|r| r.rate))
 }
 
-pub async fn exists(
-    db: &DatabaseConnection,
-    pair: &str,
-    date: &str,
-) -> anyhow::Result<bool> {
+pub async fn exists(db: &DatabaseConnection, pair: &str, date: &str) -> anyhow::Result<bool> {
     let result = daily_exchange_rate::Entity::find()
         .filter(daily_exchange_rate::Column::Pair.eq(pair))
         .filter(daily_exchange_rate::Column::Date.eq(date))

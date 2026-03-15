@@ -4,13 +4,9 @@ use crate::constants::FLOAT_EPSILON;
 use crate::db::repos::{
     asset_repo, portfolio_asset_history_repo, portfolio_history_repo, transaction_repo,
 };
-use crate::models::{AssetInfo, BuyOrder, SellOrder};
+use crate::models::{AssetInfo, BuyOrder, SellOrder, Transaction};
 
-pub async fn buy(
-    db: &DatabaseConnection,
-    asset: AssetInfo,
-    order: BuyOrder,
-) -> anyhow::Result<()> {
+pub async fn buy(db: &DatabaseConnection, asset: AssetInfo, order: BuyOrder) -> anyhow::Result<()> {
     let total = order.quantity * order.price + order.fees;
     let summary = format!(
         "Bought {} units of {} ({}) at {:.2} {} on {}. Total: {:.2} {}",
@@ -33,26 +29,22 @@ pub async fn buy(
     portfolio_history_repo::delete_from_date(db, &order_date).await?;
     portfolio_asset_history_repo::delete_from_date_for_asset(db, &order_date, asset_id).await?;
 
-    println!("{}", summary);
+    println!("{summary}");
 
     Ok(())
 }
 
-pub async fn sell(
-    db: &DatabaseConnection,
-    ticker: String,
-    order: SellOrder,
-) -> anyhow::Result<()> {
+pub async fn sell(db: &DatabaseConnection, ticker: String, order: SellOrder) -> anyhow::Result<()> {
     let asset = asset_repo::find_by_ticker(db, &ticker)
         .await?
-        .ok_or_else(|| anyhow::anyhow!("Asset with ticker '{}' not found", ticker))?;
+        .ok_or_else(|| anyhow::anyhow!("Asset with ticker '{ticker}' not found"))?;
 
     // Validate holdings at the sell date
     let transactions = transaction_repo::find_by_asset_id(db, asset.id).await?;
     let net_qty: f64 = transactions
         .iter()
         .filter(|t| t.date <= order.date)
-        .map(|t| t.signed_quantity())
+        .map(Transaction::signed_quantity)
         .sum();
 
     if order.quantity > net_qty + FLOAT_EPSILON {
@@ -77,7 +69,7 @@ pub async fn sell(
     portfolio_history_repo::delete_from_date(db, &order_date).await?;
     portfolio_asset_history_repo::delete_from_date_for_asset(db, &order_date, asset.id).await?;
 
-    println!("{}", summary);
+    println!("{summary}");
 
     Ok(())
 }

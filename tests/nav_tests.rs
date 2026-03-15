@@ -14,9 +14,15 @@ async fn test_empty_portfolio() {
     let mock = common::MockPriceFetcher::new();
 
     let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(&db, start, NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(), None, &mock)
-        .await
-        .unwrap();
+    nav::rebuild_portfolio_history(
+        &db,
+        start,
+        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
+        None,
+        &mock,
+    )
+    .await
+    .unwrap();
 
     let snapshots = common::get_all_snapshots(&db).await;
     assert!(snapshots.is_empty());
@@ -28,17 +34,22 @@ async fn test_single_buy_initial_nav() {
     let db = common::setup_test_db().await;
     let mock = common::MockPriceFetcher::new();
 
-    let asset_id =
-        common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
+    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
     // Buy 10 shares at $50 = $500 deposit, 0 fees
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
     // EOD price is $50
     common::insert_daily_price(&db, asset_id, "2025-01-02", 50.0, false).await;
 
     let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(&db, start, NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(), None, &mock)
-        .await
-        .unwrap();
+    nav::rebuild_portfolio_history(
+        &db,
+        start,
+        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
+        None,
+        &mock,
+    )
+    .await
+    .unwrap();
 
     let snap = common::get_portfolio_snapshot(&db, "2025-01-02")
         .await
@@ -59,16 +70,21 @@ async fn test_nav_reflects_price_change() {
     let db = common::setup_test_db().await;
     let mock = common::MockPriceFetcher::new();
 
-    let asset_id =
-        common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
+    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
     common::insert_daily_price(&db, asset_id, "2025-01-02", 50.0, false).await;
     common::insert_daily_price(&db, asset_id, "2025-01-03", 100.0, false).await;
 
     let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(&db, start, NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(), None, &mock)
-        .await
-        .unwrap();
+    nav::rebuild_portfolio_history(
+        &db,
+        start,
+        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
+        None,
+        &mock,
+    )
+    .await
+    .unwrap();
 
     let snap_d1 = common::get_portfolio_snapshot(&db, "2025-01-02")
         .await
@@ -92,8 +108,7 @@ async fn test_second_buy_no_nav_jump() {
     let db = common::setup_test_db().await;
     let mock = common::MockPriceFetcher::new();
 
-    let asset_id =
-        common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
+    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
     // Day 1: buy 10 @ $50
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
     // Day 5: buy 10 @ $60
@@ -111,9 +126,15 @@ async fn test_second_buy_no_nav_jump() {
     }
 
     let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(&db, start, NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(), None, &mock)
-        .await
-        .unwrap();
+    nav::rebuild_portfolio_history(
+        &db,
+        start,
+        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
+        None,
+        &mock,
+    )
+    .await
+    .unwrap();
 
     let snap_d4 = common::get_portfolio_snapshot(&db, "2025-01-05")
         .await
@@ -144,17 +165,22 @@ async fn test_same_day_multiple_buys() {
     let db = common::setup_test_db().await;
     let mock = common::MockPriceFetcher::new();
 
-    let asset_id =
-        common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
+    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
     // Two buys on same day
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
     common::insert_transaction(&db, asset_id, "2025-01-02", 5.0, 50.0, 0.0).await;
     common::insert_daily_price(&db, asset_id, "2025-01-02", 50.0, false).await;
 
     let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(&db, start, NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(), None, &mock)
-        .await
-        .unwrap();
+    nav::rebuild_portfolio_history(
+        &db,
+        start,
+        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
+        None,
+        &mock,
+    )
+    .await
+    .unwrap();
 
     let snap = common::get_portfolio_snapshot(&db, "2025-01-02")
         .await
@@ -174,17 +200,22 @@ async fn test_weekend_forward_fill() {
     let db = common::setup_test_db().await;
     let mock = common::MockPriceFetcher::new();
 
-    let asset_id =
-        common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
+    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
     // 2025-01-03 is a Friday
     common::insert_transaction(&db, asset_id, "2025-01-03", 10.0, 50.0, 0.0).await;
     common::insert_daily_price(&db, asset_id, "2025-01-03", 50.0, false).await;
     // No prices for Sat/Sun -- forward-fill should kick in
 
     let start = NaiveDate::from_ymd_opt(2025, 1, 3).unwrap();
-    nav::rebuild_portfolio_history(&db, start, NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(), None, &mock)
-        .await
-        .unwrap();
+    nav::rebuild_portfolio_history(
+        &db,
+        start,
+        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
+        None,
+        &mock,
+    )
+    .await
+    .unwrap();
 
     let snap_fri = common::get_portfolio_snapshot(&db, "2025-01-03")
         .await
@@ -212,8 +243,7 @@ async fn test_rebuild_from_specific_date() {
     let db = common::setup_test_db().await;
     let mock = common::MockPriceFetcher::new();
 
-    let asset_id =
-        common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
+    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
     for (date, price) in [
         ("2025-01-02", 50.0),
@@ -226,9 +256,15 @@ async fn test_rebuild_from_specific_date() {
 
     // Build full history
     let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(&db, start, NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(), None, &mock)
-        .await
-        .unwrap();
+    nav::rebuild_portfolio_history(
+        &db,
+        start,
+        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
+        None,
+        &mock,
+    )
+    .await
+    .unwrap();
 
     let snap_d2_before = common::get_portfolio_snapshot(&db, "2025-01-02")
         .await
@@ -239,9 +275,15 @@ async fn test_rebuild_from_specific_date() {
         .await
         .unwrap();
     let start_d4 = NaiveDate::from_ymd_opt(2025, 1, 4).unwrap();
-    nav::rebuild_portfolio_history(&db, start_d4, NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(), prev_snap.as_ref(), &mock)
-        .await
-        .unwrap();
+    nav::rebuild_portfolio_history(
+        &db,
+        start_d4,
+        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
+        prev_snap.as_ref(),
+        &mock,
+    )
+    .await
+    .unwrap();
 
     let snap_d2_after = common::get_portfolio_snapshot(&db, "2025-01-02")
         .await
@@ -276,8 +318,7 @@ async fn test_back_dated_buy() {
     let db = common::setup_test_db().await;
     let mock = common::MockPriceFetcher::new();
 
-    let asset_id =
-        common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
+    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
 
     // Prices for 5 days (all at 50)
@@ -288,9 +329,15 @@ async fn test_back_dated_buy() {
 
     // Build initial history
     let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(&db, start, NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(), None, &mock)
-        .await
-        .unwrap();
+    nav::rebuild_portfolio_history(
+        &db,
+        start,
+        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
+        None,
+        &mock,
+    )
+    .await
+    .unwrap();
 
     let snap_d5_before = common::get_portfolio_snapshot(&db, "2025-01-05")
         .await
@@ -305,9 +352,15 @@ async fn test_back_dated_buy() {
         .await
         .unwrap();
     let start_d3 = NaiveDate::from_ymd_opt(2025, 1, 3).unwrap();
-    nav::rebuild_portfolio_history(&db, start_d3, NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(), prev_snap.as_ref(), &mock)
-        .await
-        .unwrap();
+    nav::rebuild_portfolio_history(
+        &db,
+        start_d3,
+        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
+        prev_snap.as_ref(),
+        &mock,
+    )
+    .await
+    .unwrap();
 
     let snap_d5_after = common::get_portfolio_snapshot(&db, "2025-01-05")
         .await
@@ -326,10 +379,8 @@ async fn test_multiple_assets() {
     let db = common::setup_test_db().await;
     let mock = common::MockPriceFetcher::new();
 
-    let asset_a =
-        common::insert_asset(&db, "XFAKE1", "Asset A", "stock", None, "EUR").await;
-    let asset_b =
-        common::insert_asset(&db, "XFAKE2", "Asset B", "stock", None, "EUR").await;
+    let asset_a = common::insert_asset(&db, "XFAKE1", "Asset A", "stock", None, "EUR").await;
+    let asset_b = common::insert_asset(&db, "XFAKE2", "Asset B", "stock", None, "EUR").await;
 
     // Buy 10 of A @ $50 and 5 of B @ $100
     common::insert_transaction(&db, asset_a, "2025-01-02", 10.0, 50.0, 0.0).await;
@@ -339,9 +390,15 @@ async fn test_multiple_assets() {
     common::insert_daily_price(&db, asset_b, "2025-01-02", 100.0, false).await;
 
     let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(&db, start, NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(), None, &mock)
-        .await
-        .unwrap();
+    nav::rebuild_portfolio_history(
+        &db,
+        start,
+        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
+        None,
+        &mock,
+    )
+    .await
+    .unwrap();
 
     let snap = common::get_portfolio_snapshot(&db, "2025-01-02")
         .await
@@ -364,15 +421,20 @@ async fn test_missing_price_for_asset() {
     let db = common::setup_test_db().await;
     let mock = common::MockPriceFetcher::new();
 
-    let asset_id =
-        common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
+    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
     // Deliberately NOT inserting any daily price
 
     let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(&db, start, NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(), None, &mock)
-        .await
-        .unwrap();
+    nav::rebuild_portfolio_history(
+        &db,
+        start,
+        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
+        None,
+        &mock,
+    )
+    .await
+    .unwrap();
 
     let snap = common::get_portfolio_snapshot(&db, "2025-01-02")
         .await
@@ -381,7 +443,7 @@ async fn test_missing_price_for_asset() {
     // No price -> asset_value = 0, but outstanding_shares still set from deposit
     assert_eq!(snap.asset_value, 0.0);
     assert_eq!(snap.outstanding_shares, 5.0); // 500/100
-    // NAV = 0/5 = 0
+                                              // NAV = 0/5 = 0
     assert_eq!(snap.nav, 0.0);
 }
 
@@ -393,16 +455,21 @@ async fn test_per_asset_history_created() {
     let db = common::setup_test_db().await;
     let mock = common::MockPriceFetcher::new();
 
-    let asset_id =
-        common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
+    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
     common::insert_daily_price(&db, asset_id, "2025-01-02", 50.0, false).await;
     common::insert_daily_price(&db, asset_id, "2025-01-03", 55.0, false).await;
 
     let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(&db, start, NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(), None, &mock)
-        .await
-        .unwrap();
+    nav::rebuild_portfolio_history(
+        &db,
+        start,
+        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
+        None,
+        &mock,
+    )
+    .await
+    .unwrap();
 
     let asset_snaps_d1 = common::get_asset_snapshots(&db, "2025-01-02").await;
     assert_eq!(asset_snaps_d1.len(), 1);
@@ -423,10 +490,8 @@ async fn test_per_asset_history_multiple_assets() {
     let db = common::setup_test_db().await;
     let mock = common::MockPriceFetcher::new();
 
-    let asset_a =
-        common::insert_asset(&db, "XFAKE1", "Asset A", "stock", None, "EUR").await;
-    let asset_b =
-        common::insert_asset(&db, "XFAKE2", "Asset B", "stock", None, "EUR").await;
+    let asset_a = common::insert_asset(&db, "XFAKE1", "Asset A", "stock", None, "EUR").await;
+    let asset_b = common::insert_asset(&db, "XFAKE2", "Asset B", "stock", None, "EUR").await;
 
     common::insert_transaction(&db, asset_a, "2025-01-02", 10.0, 50.0, 0.0).await;
     common::insert_transaction(&db, asset_b, "2025-01-02", 5.0, 100.0, 0.0).await;
@@ -435,9 +500,15 @@ async fn test_per_asset_history_multiple_assets() {
     common::insert_daily_price(&db, asset_b, "2025-01-02", 100.0, false).await;
 
     let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(&db, start, NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(), None, &mock)
-        .await
-        .unwrap();
+    nav::rebuild_portfolio_history(
+        &db,
+        start,
+        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
+        None,
+        &mock,
+    )
+    .await
+    .unwrap();
 
     let asset_snaps = common::get_asset_snapshots(&db, "2025-01-02").await;
     assert_eq!(asset_snaps.len(), 2);
@@ -484,7 +555,8 @@ async fn test_process_day_transactions_pure() {
     let mut holdings: HashMap<i32, f64> = HashMap::new();
     let txs: Vec<&Transaction> = vec![&tx1];
 
-    let (os, nav_val) = nav::process_day_transactions(&txs, &mut holdings, 0.0, 100.0, &asset_map, &day_rates);
+    let (os, nav_val) =
+        nav::process_day_transactions(&txs, &mut holdings, 0.0, 100.0, &asset_map, &day_rates);
 
     // First buy: deposit=500, NAV=100, shares=5
     assert!((os - 5.0).abs() < 0.01);
@@ -502,7 +574,8 @@ async fn test_process_day_transactions_pure() {
     };
 
     let txs2: Vec<&Transaction> = vec![&tx2];
-    let (os2, nav_val2) = nav::process_day_transactions(&txs2, &mut holdings, os, nav_val, &asset_map, &day_rates);
+    let (os2, nav_val2) =
+        nav::process_day_transactions(&txs2, &mut holdings, os, nav_val, &asset_map, &day_rates);
 
     // Second buy: deposit=300, shares_issued=300/100=3, outstanding=5+3=8
     assert!((os2 - 8.0).abs() < 0.01);
@@ -517,8 +590,7 @@ async fn test_lazy_rebuild_no_history_on_buy() {
     let db = common::setup_test_db().await;
     let mock = common::MockPriceFetcher::new();
 
-    let asset_id =
-        common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
+    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
     common::insert_daily_price(&db, asset_id, "2025-01-02", 50.0, false).await;
 
@@ -528,9 +600,15 @@ async fn test_lazy_rebuild_no_history_on_buy() {
 
     // Now trigger rebuild
     let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(&db, start, NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(), None, &mock)
-        .await
-        .unwrap();
+    nav::rebuild_portfolio_history(
+        &db,
+        start,
+        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
+        None,
+        &mock,
+    )
+    .await
+    .unwrap();
 
     // portfolio_history should now have rows
     let snapshots = common::get_all_snapshots(&db).await;
@@ -547,8 +625,7 @@ async fn test_lazy_rebuild_no_history_on_buy() {
 async fn test_single_usd_asset_nav() {
     let db = common::setup_test_db().await;
 
-    let asset_id =
-        common::insert_asset(&db, "XFAKEUSD", "US Stock", "stock", None, "USD").await;
+    let asset_id = common::insert_asset(&db, "XFAKEUSD", "US Stock", "stock", None, "USD").await;
     // Buy 10 shares @ $100 USD
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 100.0, 0.0).await;
 
@@ -575,7 +652,9 @@ async fn test_single_usd_asset_nav() {
         .unwrap();
 
     // Day 1: deposit = 10 * 100 * 0.90 = 900 EUR, NAV = 100, shares = 9
-    let snap1 = common::get_portfolio_snapshot(&db, "2025-01-02").await.unwrap();
+    let snap1 = common::get_portfolio_snapshot(&db, "2025-01-02")
+        .await
+        .unwrap();
     assert!((snap1.nav - 100.0).abs() < 0.01);
     assert!((snap1.outstanding_shares - 9.0).abs() < 0.01);
     // total_value = 10 * 100 * 0.90 = 900
@@ -584,7 +663,9 @@ async fn test_single_usd_asset_nav() {
     // Day 2: price goes to $110, rate to 0.92
     // total_value = 10 * 110 * 0.92 = 1012
     // NAV = 1012 / 9 = 112.44...
-    let snap2 = common::get_portfolio_snapshot(&db, "2025-01-03").await.unwrap();
+    let snap2 = common::get_portfolio_snapshot(&db, "2025-01-03")
+        .await
+        .unwrap();
     assert!((snap2.total_value - 1012.0).abs() < 0.01);
     assert!((snap2.nav - (1012.0 / 9.0)).abs() < 0.01);
 }
@@ -594,10 +675,8 @@ async fn test_single_usd_asset_nav() {
 async fn test_mixed_currency_portfolio() {
     let db = common::setup_test_db().await;
 
-    let eur_id =
-        common::insert_asset(&db, "XFAKEEUR", "EUR Fund", "fund", None, "EUR").await;
-    let usd_id =
-        common::insert_asset(&db, "XFAKEUSD", "USD Stock", "stock", None, "USD").await;
+    let eur_id = common::insert_asset(&db, "XFAKEEUR", "EUR Fund", "fund", None, "EUR").await;
+    let usd_id = common::insert_asset(&db, "XFAKEUSD", "USD Stock", "stock", None, "USD").await;
 
     // Buy EUR fund: 10 shares @ 50 EUR
     common::insert_transaction(&db, eur_id, "2025-01-02", 10.0, 50.0, 0.0).await;
@@ -605,18 +684,14 @@ async fn test_mixed_currency_portfolio() {
     common::insert_transaction(&db, usd_id, "2025-01-02", 5.0, 200.0, 0.0).await;
 
     let mut mock = common::MockPriceFetcher::new();
-    mock.historical_prices.insert(
-        "XFAKEEUR".to_owned(),
-        vec![("2025-01-02".to_owned(), 50.0)],
-    );
+    mock.historical_prices
+        .insert("XFAKEEUR".to_owned(), vec![("2025-01-02".to_owned(), 50.0)]);
     mock.historical_prices.insert(
         "XFAKEUSD".to_owned(),
         vec![("2025-01-02".to_owned(), 200.0)],
     );
-    mock.exchange_rates.insert(
-        "USDEUR".to_owned(),
-        vec![("2025-01-02".to_owned(), 0.90)],
-    );
+    mock.exchange_rates
+        .insert("USDEUR".to_owned(), vec![("2025-01-02".to_owned(), 0.90)]);
 
     let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
     let end = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
@@ -630,7 +705,9 @@ async fn test_mixed_currency_portfolio() {
     // EUR value: 10 * 50 = 500
     // USD value: 5 * 200 * 0.90 = 900
     // Total value: 1400, NAV = 1400/14 = 100
-    let snap = common::get_portfolio_snapshot(&db, "2025-01-02").await.unwrap();
+    let snap = common::get_portfolio_snapshot(&db, "2025-01-02")
+        .await
+        .unwrap();
     assert!((snap.total_value - 1400.0).abs() < 0.01);
     assert!((snap.nav - 100.0).abs() < 0.01);
     assert!((snap.outstanding_shares - 14.0).abs() < 0.01);
@@ -653,8 +730,7 @@ async fn test_mixed_currency_portfolio() {
 async fn test_eur_only_unchanged() {
     let db = common::setup_test_db().await;
 
-    let asset_id =
-        common::insert_asset(&db, "XFAKE1", "EUR Stock", "stock", None, "EUR").await;
+    let asset_id = common::insert_asset(&db, "XFAKE1", "EUR Stock", "stock", None, "EUR").await;
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
 
     let mut mock = common::MockPriceFetcher::new();
@@ -672,11 +748,15 @@ async fn test_eur_only_unchanged() {
         .await
         .unwrap();
 
-    let snap1 = common::get_portfolio_snapshot(&db, "2025-01-02").await.unwrap();
+    let snap1 = common::get_portfolio_snapshot(&db, "2025-01-02")
+        .await
+        .unwrap();
     assert!((snap1.nav - 100.0).abs() < 0.01);
     assert!((snap1.total_value - 500.0).abs() < 0.01);
 
-    let snap2 = common::get_portfolio_snapshot(&db, "2025-01-03").await.unwrap();
+    let snap2 = common::get_portfolio_snapshot(&db, "2025-01-03")
+        .await
+        .unwrap();
     assert!((snap2.total_value - 550.0).abs() < 0.01);
     assert!((snap2.nav - 110.0).abs() < 0.01);
 
@@ -694,8 +774,7 @@ async fn test_sell_reduces_holdings() {
     let db = common::setup_test_db().await;
     let mock = common::MockPriceFetcher::new();
 
-    let asset_id =
-        common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
+    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
     common::insert_sell_transaction(&db, asset_id, "2025-01-03", 5.0, 50.0, 0.0).await;
 
@@ -703,9 +782,15 @@ async fn test_sell_reduces_holdings() {
     common::insert_daily_price(&db, asset_id, "2025-01-03", 50.0, false).await;
 
     let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(&db, start, NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(), None, &mock)
-        .await
-        .unwrap();
+    nav::rebuild_portfolio_history(
+        &db,
+        start,
+        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
+        None,
+        &mock,
+    )
+    .await
+    .unwrap();
 
     let asset_snaps = common::get_asset_snapshots(&db, "2025-01-03").await;
     assert_eq!(asset_snaps.len(), 1);
@@ -719,8 +804,7 @@ async fn test_sell_nav_unchanged_at_fair_value() {
     let db = common::setup_test_db().await;
     let mock = common::MockPriceFetcher::new();
 
-    let asset_id =
-        common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
+    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
     common::insert_sell_transaction(&db, asset_id, "2025-01-03", 5.0, 50.0, 0.0).await;
 
@@ -728,12 +812,22 @@ async fn test_sell_nav_unchanged_at_fair_value() {
     common::insert_daily_price(&db, asset_id, "2025-01-03", 50.0, false).await;
 
     let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(&db, start, NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(), None, &mock)
+    nav::rebuild_portfolio_history(
+        &db,
+        start,
+        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
+        None,
+        &mock,
+    )
+    .await
+    .unwrap();
+
+    let snap_d1 = common::get_portfolio_snapshot(&db, "2025-01-02")
         .await
         .unwrap();
-
-    let snap_d1 = common::get_portfolio_snapshot(&db, "2025-01-02").await.unwrap();
-    let snap_d2 = common::get_portfolio_snapshot(&db, "2025-01-03").await.unwrap();
+    let snap_d2 = common::get_portfolio_snapshot(&db, "2025-01-03")
+        .await
+        .unwrap();
 
     // Day 1: 10 * 50 = 500, os = 5, NAV = 100
     assert!((snap_d1.nav - 100.0).abs() < 0.01);
@@ -752,8 +846,7 @@ async fn test_sell_preserves_nav_after_gain() {
     let db = common::setup_test_db().await;
     let mock = common::MockPriceFetcher::new();
 
-    let asset_id =
-        common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
+    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
     common::insert_sell_transaction(&db, asset_id, "2025-01-04", 5.0, 100.0, 0.0).await;
 
@@ -762,12 +855,22 @@ async fn test_sell_preserves_nav_after_gain() {
     common::insert_daily_price(&db, asset_id, "2025-01-04", 100.0, false).await;
 
     let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(&db, start, NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(), None, &mock)
+    nav::rebuild_portfolio_history(
+        &db,
+        start,
+        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
+        None,
+        &mock,
+    )
+    .await
+    .unwrap();
+
+    let snap_d2 = common::get_portfolio_snapshot(&db, "2025-01-03")
         .await
         .unwrap();
-
-    let snap_d2 = common::get_portfolio_snapshot(&db, "2025-01-03").await.unwrap();
-    let snap_d3 = common::get_portfolio_snapshot(&db, "2025-01-04").await.unwrap();
+    let snap_d3 = common::get_portfolio_snapshot(&db, "2025-01-04")
+        .await
+        .unwrap();
 
     // Day 2: NAV = 200 (price doubled)
     assert!((snap_d2.nav - 200.0).abs() < 0.01);
@@ -785,8 +888,7 @@ async fn test_sell_with_fees() {
     let db = common::setup_test_db().await;
     let mock = common::MockPriceFetcher::new();
 
-    let asset_id =
-        common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
+    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
     // Sell 5 @ $50 with $10 fees -> proceeds = 250 - 10 = 240
     common::insert_sell_transaction(&db, asset_id, "2025-01-03", 5.0, 50.0, 10.0).await;
@@ -795,11 +897,19 @@ async fn test_sell_with_fees() {
     common::insert_daily_price(&db, asset_id, "2025-01-03", 50.0, false).await;
 
     let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(&db, start, NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(), None, &mock)
+    nav::rebuild_portfolio_history(
+        &db,
+        start,
+        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
+        None,
+        &mock,
+    )
+    .await
+    .unwrap();
+
+    let snap = common::get_portfolio_snapshot(&db, "2025-01-03")
         .await
         .unwrap();
-
-    let snap = common::get_portfolio_snapshot(&db, "2025-01-03").await.unwrap();
 
     // Day 1: os = 5, NAV = 100
     // Day 2: withdrawal = 250 - 10 = 240, redeemed = 240/100 = 2.4
@@ -816,8 +926,7 @@ async fn test_full_liquidation() {
     let db = common::setup_test_db().await;
     let mock = common::MockPriceFetcher::new();
 
-    let asset_id =
-        common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
+    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
     common::insert_sell_transaction(&db, asset_id, "2025-01-03", 10.0, 50.0, 0.0).await;
 
@@ -825,11 +934,19 @@ async fn test_full_liquidation() {
     common::insert_daily_price(&db, asset_id, "2025-01-03", 50.0, false).await;
 
     let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(&db, start, NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(), None, &mock)
+    nav::rebuild_portfolio_history(
+        &db,
+        start,
+        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
+        None,
+        &mock,
+    )
+    .await
+    .unwrap();
+
+    let snap = common::get_portfolio_snapshot(&db, "2025-01-03")
         .await
         .unwrap();
-
-    let snap = common::get_portfolio_snapshot(&db, "2025-01-03").await.unwrap();
 
     // Full sell: withdrawal = 500, redeemed = 500/100 = 5, os = 0
     // Holdings = 0, asset_value = 0
@@ -863,7 +980,12 @@ async fn test_process_day_transactions_sell_pure() {
 
     let mut holdings: HashMap<i32, f64> = HashMap::new();
     let (os, nav_val) = nav::process_day_transactions(
-        &vec![&buy_tx], &mut holdings, 0.0, 100.0, &asset_map, &day_rates,
+        &vec![&buy_tx],
+        &mut holdings,
+        0.0,
+        100.0,
+        &asset_map,
+        &day_rates,
     );
     assert!((os - 5.0).abs() < 0.01);
     assert_eq!(*holdings.get(&1).unwrap(), 10.0);
@@ -879,7 +1001,12 @@ async fn test_process_day_transactions_sell_pure() {
     };
 
     let (os2, nav_val2) = nav::process_day_transactions(
-        &vec![&sell_tx], &mut holdings, os, nav_val, &asset_map, &day_rates,
+        &vec![&sell_tx],
+        &mut holdings,
+        os,
+        nav_val,
+        &asset_map,
+        &day_rates,
     );
 
     // withdrawal = 5*50 = 250, redeemed = 250/100 = 2.5, os = 5-2.5 = 2.5
@@ -894,8 +1021,7 @@ async fn test_sell_redeems_shares() {
     let db = common::setup_test_db().await;
     let mock = common::MockPriceFetcher::new();
 
-    let asset_id =
-        common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
+    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
     // Buy 10 @ $50 = deposit 500, os = 5 (500/100)
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
     // Price goes to 80 on day 3
@@ -909,15 +1035,25 @@ async fn test_sell_redeems_shares() {
     common::insert_daily_price(&db, asset_id, "2025-01-04", 80.0, false).await;
 
     let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(&db, start, NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(), None, &mock)
+    nav::rebuild_portfolio_history(
+        &db,
+        start,
+        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
+        None,
+        &mock,
+    )
+    .await
+    .unwrap();
+
+    let snap_d3 = common::get_portfolio_snapshot(&db, "2025-01-03")
         .await
         .unwrap();
-
-    let snap_d3 = common::get_portfolio_snapshot(&db, "2025-01-03").await.unwrap();
     assert!((snap_d3.nav - 160.0).abs() < 0.01);
     assert!((snap_d3.outstanding_shares - 5.0).abs() < 0.01);
 
-    let snap_d4 = common::get_portfolio_snapshot(&db, "2025-01-04").await.unwrap();
+    let snap_d4 = common::get_portfolio_snapshot(&db, "2025-01-04")
+        .await
+        .unwrap();
     // os = 5 - 1.5 = 3.5, holdings = 7, value = 7*80 = 560
     // NAV = 560/3.5 = 160 (preserved!)
     assert!((snap_d4.outstanding_shares - 3.5).abs() < 0.01);

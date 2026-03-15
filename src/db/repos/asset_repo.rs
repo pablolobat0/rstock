@@ -1,9 +1,12 @@
-use sea_orm::*;
+use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 
 use crate::db::entities::asset;
 use crate::models::{Asset, AssetInfo};
 
-pub async fn find_by_ticker(db: &DatabaseConnection, ticker: &str) -> anyhow::Result<Option<Asset>> {
+pub async fn find_by_ticker(
+    db: &DatabaseConnection,
+    ticker: &str,
+) -> anyhow::Result<Option<Asset>> {
     let result = asset::Entity::find()
         .filter(asset::Column::Ticker.eq(ticker))
         .one(db)
@@ -11,7 +14,10 @@ pub async fn find_by_ticker(db: &DatabaseConnection, ticker: &str) -> anyhow::Re
     Ok(result.map(Asset::from))
 }
 
-pub async fn find_by_ids(db: &DatabaseConnection, ids: impl IntoIterator<Item = i32>) -> anyhow::Result<Vec<Asset>> {
+pub async fn find_by_ids(
+    db: &DatabaseConnection,
+    ids: impl IntoIterator<Item = i32>,
+) -> anyhow::Result<Vec<Asset>> {
     let ids: Vec<i32> = ids.into_iter().collect();
     let results = asset::Entity::find()
         .filter(asset::Column::Id.is_in(ids))

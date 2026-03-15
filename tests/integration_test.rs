@@ -12,8 +12,7 @@ async fn test_full_buy_rebuild_summary_flow() {
     let db = common::setup_test_db().await;
     let mock = common::MockPriceFetcher::new();
 
-    let asset_id =
-        common::insert_asset(&db, "XFAKE1", "Fake Corp", "stock", None, "EUR").await;
+    let asset_id = common::insert_asset(&db, "XFAKE1", "Fake Corp", "stock", None, "EUR").await;
 
     // Buy 1: 10 shares @ 150 on Jan 2 with 5 fees
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 150.0, 5.0).await;
@@ -22,7 +21,10 @@ async fn test_full_buy_rebuild_summary_flow() {
 
     // After inserting transactions (no rebuild), portfolio_history should be empty
     let snapshots = common::get_all_snapshots(&db).await;
-    assert!(snapshots.is_empty(), "buy should not create portfolio_history rows");
+    assert!(
+        snapshots.is_empty(),
+        "buy should not create portfolio_history rows"
+    );
 
     // Daily prices
     for (date, price) in [
@@ -38,9 +40,15 @@ async fn test_full_buy_rebuild_summary_flow() {
 
     // Trigger rebuild (simulating what get_portfolio_summary does)
     let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(&db, start, NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(), None, &mock)
-        .await
-        .unwrap();
+    nav::rebuild_portfolio_history(
+        &db,
+        start,
+        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
+        None,
+        &mock,
+    )
+    .await
+    .unwrap();
 
     // Day 1 (Jan 2): deposit = 10*150 + 5 = 1505, NAV=100, shares=15.05
     // EOD: 10*150=1500, NAV = 1500/15.05 ~ 99.67
@@ -92,8 +100,7 @@ async fn test_incremental_rebuild_after_second_buy() {
     let db = common::setup_test_db().await;
     let mock = common::MockPriceFetcher::new();
 
-    let asset_id =
-        common::insert_asset(&db, "XFAKE1", "Fake Corp", "stock", None, "EUR").await;
+    let asset_id = common::insert_asset(&db, "XFAKE1", "Fake Corp", "stock", None, "EUR").await;
 
     // Initial buy: 20 shares @ 100
     common::insert_transaction(&db, asset_id, "2025-01-02", 20.0, 100.0, 0.0).await;
@@ -111,9 +118,15 @@ async fn test_incremental_rebuild_after_second_buy() {
 
     // Build initial history
     let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(&db, start, NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(), None, &mock)
-        .await
-        .unwrap();
+    nav::rebuild_portfolio_history(
+        &db,
+        start,
+        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
+        None,
+        &mock,
+    )
+    .await
+    .unwrap();
 
     let snap_d5_before = common::get_portfolio_snapshot(&db, "2025-01-06")
         .await
@@ -131,9 +144,15 @@ async fn test_incremental_rebuild_after_second_buy() {
         .await
         .unwrap();
     let start_d6 = NaiveDate::from_ymd_opt(2025, 1, 6).unwrap();
-    nav::rebuild_portfolio_history(&db, start_d6, NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(), prev_snap.as_ref(), &mock)
-        .await
-        .unwrap();
+    nav::rebuild_portfolio_history(
+        &db,
+        start_d6,
+        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
+        prev_snap.as_ref(),
+        &mock,
+    )
+    .await
+    .unwrap();
 
     let snap_d5_after = common::get_portfolio_snapshot(&db, "2025-01-06")
         .await

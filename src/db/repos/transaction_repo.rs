@@ -1,9 +1,15 @@
-use sea_orm::*;
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Set,
+};
 
 use crate::db::entities::transaction;
 use crate::models::{f64_to_cents, BuyOrder, SellOrder, Transaction, TxType};
 
-pub async fn insert_buy(db: &DatabaseConnection, asset_id: i32, order: &BuyOrder) -> anyhow::Result<()> {
+pub async fn insert_buy(
+    db: &DatabaseConnection,
+    asset_id: i32,
+    order: &BuyOrder,
+) -> anyhow::Result<()> {
     let price_cents = f64_to_cents(order.price);
     let fees_cents = f64_to_cents(order.fees);
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
@@ -31,7 +37,10 @@ pub async fn find_all_ordered_by_date(db: &DatabaseConnection) -> anyhow::Result
     Ok(results.into_iter().map(Transaction::from).collect())
 }
 
-pub async fn find_by_asset_id(db: &DatabaseConnection, asset_id: i32) -> anyhow::Result<Vec<Transaction>> {
+pub async fn find_by_asset_id(
+    db: &DatabaseConnection,
+    asset_id: i32,
+) -> anyhow::Result<Vec<Transaction>> {
     let results = transaction::Entity::find()
         .filter(transaction::Column::AssetId.eq(asset_id))
         .all(db)
@@ -39,7 +48,11 @@ pub async fn find_by_asset_id(db: &DatabaseConnection, asset_id: i32) -> anyhow:
     Ok(results.into_iter().map(Transaction::from).collect())
 }
 
-pub async fn insert_sell(db: &DatabaseConnection, asset_id: i32, order: &SellOrder) -> anyhow::Result<()> {
+pub async fn insert_sell(
+    db: &DatabaseConnection,
+    asset_id: i32,
+    order: &SellOrder,
+) -> anyhow::Result<()> {
     let price_cents = f64_to_cents(order.price);
     let fees_cents = f64_to_cents(order.fees);
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();

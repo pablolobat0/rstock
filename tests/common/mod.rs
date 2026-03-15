@@ -5,7 +5,10 @@ use std::collections::HashMap;
 use migration::{Migrator, MigratorTrait};
 use sea_orm::{Database, DatabaseConnection, EntityTrait, Set};
 
-use rstock::db::entities::{asset, daily_asset_price, daily_exchange_rate, portfolio_asset_history, portfolio_history, transaction};
+use rstock::db::entities::{
+    asset, daily_asset_price, daily_exchange_rate, portfolio_asset_history, portfolio_history,
+    transaction,
+};
 use rstock::models::AssetType;
 use rstock::services::price::PriceFetcher;
 
@@ -117,8 +120,8 @@ pub async fn get_portfolio_snapshot(
     db: &DatabaseConnection,
     date: &str,
 ) -> Option<portfolio_history::Model> {
-    use sea_orm::QueryFilter;
     use sea_orm::ColumnTrait;
+    use sea_orm::QueryFilter;
     portfolio_history::Entity::find()
         .filter(portfolio_history::Column::Date.eq(date))
         .one(db)
@@ -139,8 +142,8 @@ pub async fn get_asset_snapshots(
     db: &DatabaseConnection,
     date: &str,
 ) -> Vec<portfolio_asset_history::Model> {
-    use sea_orm::QueryFilter;
     use sea_orm::ColumnTrait;
+    use sea_orm::QueryFilter;
     use sea_orm::QueryOrder;
     portfolio_asset_history::Entity::find()
         .filter(portfolio_asset_history::Column::Date.eq(date))
@@ -150,12 +153,7 @@ pub async fn get_asset_snapshots(
         .expect("failed to query portfolio_asset_history")
 }
 
-pub async fn insert_exchange_rate(
-    db: &DatabaseConnection,
-    pair: &str,
-    date: &str,
-    rate: f64,
-) {
+pub async fn insert_exchange_rate(db: &DatabaseConnection, pair: &str, date: &str, rate: f64) {
     let record = daily_exchange_rate::ActiveModel {
         pair: Set(pair.to_owned()),
         date: Set(date.to_owned()),
@@ -204,10 +202,6 @@ impl PriceFetcher for MockPriceFetcher {
         _start: &str,
         _end: &str,
     ) -> anyhow::Result<Vec<(String, f64)>> {
-        Ok(self
-            .exchange_rates
-            .get(pair)
-            .cloned()
-            .unwrap_or_default())
+        Ok(self.exchange_rates.get(pair).cloned().unwrap_or_default())
     }
 }

@@ -1,9 +1,12 @@
-use sea_orm::*;
+use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 
 use crate::db::entities::portfolio_asset_history;
 use crate::models::AssetSnapshot;
 
-pub async fn find_by_date(db: &DatabaseConnection, date: &str) -> anyhow::Result<Vec<AssetSnapshot>> {
+pub async fn find_by_date(
+    db: &DatabaseConnection,
+    date: &str,
+) -> anyhow::Result<Vec<AssetSnapshot>> {
     let results = portfolio_asset_history::Entity::find()
         .filter(portfolio_asset_history::Column::Date.eq(date))
         .all(db)
@@ -41,7 +44,11 @@ pub async fn upsert(db: &DatabaseConnection, snapshot: &AssetSnapshot) -> anyhow
     Ok(())
 }
 
-pub async fn delete_from_date_for_asset(db: &DatabaseConnection, date: &str, asset_id: i32) -> anyhow::Result<()> {
+pub async fn delete_from_date_for_asset(
+    db: &DatabaseConnection,
+    date: &str,
+    asset_id: i32,
+) -> anyhow::Result<()> {
     portfolio_asset_history::Entity::delete_many()
         .filter(portfolio_asset_history::Column::Date.gte(date))
         .filter(portfolio_asset_history::Column::AssetId.eq(asset_id))

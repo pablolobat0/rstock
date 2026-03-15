@@ -1,8 +1,14 @@
-use sea_orm::*;
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Set,
+};
 
 use crate::db::entities::daily_asset_price;
 
-pub async fn find_price(db: &DatabaseConnection, asset_id: i32, date: &str) -> anyhow::Result<Option<f64>> {
+pub async fn find_price(
+    db: &DatabaseConnection,
+    asset_id: i32,
+    date: &str,
+) -> anyhow::Result<Option<f64>> {
     let result = daily_asset_price::Entity::find()
         .filter(daily_asset_price::Column::AssetId.eq(asset_id))
         .filter(daily_asset_price::Column::Date.eq(date))
@@ -12,7 +18,11 @@ pub async fn find_price(db: &DatabaseConnection, asset_id: i32, date: &str) -> a
     Ok(result.map(|r| r.closing_price))
 }
 
-pub async fn find_price_at_or_before(db: &DatabaseConnection, asset_id: i32, date: &str) -> anyhow::Result<Option<f64>> {
+pub async fn find_price_at_or_before(
+    db: &DatabaseConnection,
+    asset_id: i32,
+    date: &str,
+) -> anyhow::Result<Option<f64>> {
     let result = daily_asset_price::Entity::find()
         .filter(daily_asset_price::Column::AssetId.eq(asset_id))
         .filter(daily_asset_price::Column::Date.lte(date))
@@ -23,7 +33,11 @@ pub async fn find_price_at_or_before(db: &DatabaseConnection, asset_id: i32, dat
     Ok(result.map(|r| r.closing_price))
 }
 
-pub async fn find_price_and_date_at_or_before(db: &DatabaseConnection, asset_id: i32, date: &str) -> anyhow::Result<Option<(f64, String)>> {
+pub async fn find_price_and_date_at_or_before(
+    db: &DatabaseConnection,
+    asset_id: i32,
+    date: &str,
+) -> anyhow::Result<Option<(f64, String)>> {
     let result = daily_asset_price::Entity::find()
         .filter(daily_asset_price::Column::AssetId.eq(asset_id))
         .filter(daily_asset_price::Column::Date.lte(date))
@@ -34,7 +48,11 @@ pub async fn find_price_and_date_at_or_before(db: &DatabaseConnection, asset_id:
     Ok(result.map(|r| (r.closing_price, r.date)))
 }
 
-pub async fn find_price_before(db: &DatabaseConnection, asset_id: i32, date: &str) -> anyhow::Result<Option<f64>> {
+pub async fn find_price_before(
+    db: &DatabaseConnection,
+    asset_id: i32,
+    date: &str,
+) -> anyhow::Result<Option<f64>> {
     let result = daily_asset_price::Entity::find()
         .filter(daily_asset_price::Column::AssetId.eq(asset_id))
         .filter(daily_asset_price::Column::Date.lt(date))
@@ -74,7 +92,13 @@ pub async fn exists(db: &DatabaseConnection, asset_id: i32, date: &str) -> anyho
     Ok(result.is_some())
 }
 
-pub async fn upsert(db: &DatabaseConnection, asset_id: i32, date: &str, price: f64, is_api_failure: bool) -> anyhow::Result<()> {
+pub async fn upsert(
+    db: &DatabaseConnection,
+    asset_id: i32,
+    date: &str,
+    price: f64,
+    is_api_failure: bool,
+) -> anyhow::Result<()> {
     let existing = daily_asset_price::Entity::find()
         .filter(daily_asset_price::Column::AssetId.eq(asset_id))
         .filter(daily_asset_price::Column::Date.eq(date))

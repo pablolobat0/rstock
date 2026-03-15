@@ -11,11 +11,11 @@ fn format_qty(qty: f64) -> String {
     if qty.fract() == 0.0 {
         format!("{}", qty as i64)
     } else {
-        format!("{:.4}", qty)
+        format!("{qty:.4}")
     }
 }
 
-fn color_value(value: f64, formatted: String) -> String {
+fn color_value(value: f64, formatted: &str) -> String {
     if value >= 0.0 {
         formatted.green().to_string()
     } else {
@@ -27,13 +27,14 @@ fn format_return(r: Option<f64>) -> String {
     match r {
         Some(v) => {
             let sign = if v >= 0.0 { "+" } else { "" };
-            let text = format!("{}{:.2}%", sign, v);
-            color_value(v, text)
+            let text = format!("{sign}{v:.2}%");
+            color_value(v, &text)
         }
         None => "N/A".to_string(),
     }
 }
 
+#[allow(clippy::too_many_lines)]
 pub fn print_portfolio(result: &PortfolioResult, summary: Option<&PortfolioSummary>) {
     if result.rows.is_empty() {
         println!("No positions found.");
@@ -89,7 +90,7 @@ pub fn print_portfolio(result: &PortfolioResult, summary: Option<&PortfolioSumma
             table.modify(Cell::new(i + 1, 10), color.clone());
             table.modify(Cell::new(i + 1, 11), color);
         }
-        println!("{}", table);
+        println!("{table}");
 
         let sign = if result.total_gain_loss >= 0.0 {
             "+"
@@ -105,7 +106,7 @@ pub fn print_portfolio(result: &PortfolioResult, summary: Option<&PortfolioSumma
             "Invested: {:.2}  Value: {:.2}  G/L: {}",
             result.total_invested,
             result.total_current_value,
-            color_value(result.total_gain_loss, gl_text),
+            color_value(result.total_gain_loss, &gl_text),
         );
     }
 
@@ -115,16 +116,14 @@ pub fn print_portfolio(result: &PortfolioResult, summary: Option<&PortfolioSumma
         println!("Portfolio Value: {:.2}", summary.total_value);
         println!("NAV:            {:.2}", summary.nav);
 
-        if let (Some(change), Some(change_pct)) =
-            (summary.daily_change, summary.daily_change_pct)
-        {
+        if let (Some(change), Some(change_pct)) = (summary.daily_change, summary.daily_change_pct) {
             let sign = if change >= 0.0 { "+" } else { "" };
-            let text = format!("{}{:.2} ({}{:.2}%)", sign, change, sign, change_pct);
-            println!("Daily:          {}", color_value(change, text));
+            let text = format!("{sign}{change:.2} ({sign}{change_pct:.2}%)");
+            println!("Daily:          {}", color_value(change, &text));
         }
 
         if let Some(ref inception) = summary.inception_date {
-            println!("Inception:      {}", inception);
+            println!("Inception:      {inception}");
         }
 
         println!(
@@ -137,17 +136,17 @@ pub fn print_portfolio(result: &PortfolioResult, summary: Option<&PortfolioSumma
 
         if summary.beta.is_some() || summary.sharpe_ratio.is_some() {
             let beta_str = match summary.beta {
-                Some(b) => format!("{:.2}", b),
+                Some(b) => format!("{b:.2}"),
                 None => "N/A".to_string(),
             };
             let sharpe_str = match summary.sharpe_ratio {
                 Some(s) => {
-                    let text = format!("{:.2}", s);
-                    color_value(s, text)
+                    let text = format!("{s:.2}");
+                    color_value(s, &text)
                 }
                 None => "N/A".to_string(),
             };
-            println!("Beta: {}  Sharpe: {}", beta_str, sharpe_str);
+            println!("Beta: {beta_str}  Sharpe: {sharpe_str}");
         }
     }
 }
@@ -170,9 +169,9 @@ pub fn print_nav_chart(snapshots: &[PortfolioSnapshot], period_label: &str) {
 
     let xmax = (snapshots.len() - 1) as f32;
 
-    println!("\nNAV — {}", period_label);
+    println!("\nNAV — {period_label}");
     Chart::new(180, 60, 0.0, xmax)
         .lineplot(&Shape::Lines(&points))
         .display();
-    println!("  {}  →  {}", first_date, last_date);
+    println!("  {first_date}  →  {last_date}");
 }

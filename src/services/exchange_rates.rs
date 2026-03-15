@@ -7,7 +7,7 @@ use crate::db::repos::exchange_rate_repo;
 use crate::services::price::PriceFetcher;
 
 pub fn currency_pair(from: &str) -> String {
-    format!("{}{}", from, BASE_CURRENCY)
+    format!("{from}{BASE_CURRENCY}")
 }
 
 pub async fn get_exchange_rate(
@@ -35,10 +35,7 @@ pub async fn fill_rates_for_range(
     let rate_map: std::collections::HashMap<String, f64> = match rates {
         Ok(rates) => rates.into_iter().collect(),
         Err(e) => {
-            eprintln!(
-                "Warning: failed to fetch exchange rates for {}: {}",
-                pair, e
-            );
+            eprintln!("Warning: failed to fetch exchange rates for {pair}: {e}");
             return Ok(None);
         }
     };

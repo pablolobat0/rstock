@@ -43,6 +43,7 @@ pub struct AssetInfo {
     pub currency: String,
 }
 
+#[allow(clippy::struct_field_names)]
 pub struct Asset {
     pub id: i32,
     pub ticker: String,

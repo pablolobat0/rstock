@@ -1,4 +1,6 @@
-use sea_orm::*;
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Set,
+};
 
 use crate::db::entities::portfolio_history;
 use crate::models::PortfolioSnapshot;
@@ -19,7 +21,10 @@ pub async fn find_earliest(db: &DatabaseConnection) -> anyhow::Result<Option<Por
     Ok(result.map(PortfolioSnapshot::from))
 }
 
-pub async fn find_at_or_before(db: &DatabaseConnection, date: &str) -> anyhow::Result<Option<PortfolioSnapshot>> {
+pub async fn find_at_or_before(
+    db: &DatabaseConnection,
+    date: &str,
+) -> anyhow::Result<Option<PortfolioSnapshot>> {
     let result = portfolio_history::Entity::find()
         .filter(portfolio_history::Column::Date.lte(date))
         .order_by_desc(portfolio_history::Column::Date)
@@ -54,7 +59,11 @@ pub async fn upsert(db: &DatabaseConnection, snapshot: &PortfolioSnapshot) -> an
     Ok(())
 }
 
-pub async fn find_between(db: &DatabaseConnection, start_date: &str, end_date: &str) -> anyhow::Result<Vec<PortfolioSnapshot>> {
+pub async fn find_between(
+    db: &DatabaseConnection,
+    start_date: &str,
+    end_date: &str,
+) -> anyhow::Result<Vec<PortfolioSnapshot>> {
     let results = portfolio_history::Entity::find()
         .filter(portfolio_history::Column::Date.gte(start_date))
         .filter(portfolio_history::Column::Date.lte(end_date))

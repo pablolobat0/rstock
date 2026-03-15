@@ -12,7 +12,7 @@ use crate::services::daily_prices;
 use crate::services::exchange_rates;
 use crate::services::price::PriceFetcher;
 
-/// Fills price caches for all assets and returns a map of asset_id → latest asset price date.
+/// Fills price caches for all assets and returns a map of `asset_id` → latest asset price date.
 async fn fill_asset_prices(
     db: &DatabaseConnection,
     assets: &[Asset],
@@ -57,13 +57,10 @@ async fn fill_exchange_rates(
                 latest_dates.insert(pair.clone(), date);
             }
             Ok(None) => {
-                eprintln!("Warning: no exchange rate data available for {}", pair);
+                eprintln!("Warning: no exchange rate data available for {pair}");
             }
             Err(e) => {
-                eprintln!(
-                    "Warning: failed to fill exchange rates for {}: {}",
-                    pair, e
-                );
+                eprintln!("Warning: failed to fill exchange rates for {pair}: {e}");
             }
         }
     }
@@ -85,6 +82,7 @@ async fn get_day_rates(
     Ok(rates)
 }
 
+#[allow(clippy::implicit_hasher)]
 pub fn process_day_transactions(
     day_txs: &[&Transaction],
     holdings: &mut HashMap<i32, f64>,
@@ -122,8 +120,7 @@ pub fn process_day_transactions(
             *holdings.entry(tx.asset_id).or_insert(0.0) -= tx.quantity;
         } else {
             // Buy = deposit: cost = qty * price + fees
-            let deposit =
-                tx.quantity * cents_to_f64(tx.price_cents) + cents_to_f64(tx.fees_cents);
+            let deposit = tx.quantity * cents_to_f64(tx.price_cents) + cents_to_f64(tx.fees_cents);
             let deposit_eur = deposit * rate;
 
             if os == 0.0 {
@@ -236,6 +233,7 @@ async fn store_daily_snapshot(
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 pub async fn rebuild_portfolio_history(
     db: &DatabaseConnection,
     start_date: NaiveDate,
@@ -266,8 +264,8 @@ pub async fn rebuild_portfolio_history(
         .collect();
 
     let mut is_fresh_portfolio = prev_snapshot.is_none();
-    let mut outstanding_shares = prev_snapshot.map(|s| s.outstanding_shares).unwrap_or(0.0);
-    let mut nav = prev_snapshot.map(|s| s.nav).unwrap_or(INITIAL_NAV);
+    let mut outstanding_shares = prev_snapshot.map_or(0.0, |s| s.outstanding_shares);
+    let mut nav = prev_snapshot.map_or(INITIAL_NAV, |s| s.nav);
 
     let mut holdings: HashMap<i32, f64> = HashMap::new();
     if let Some(snap) = prev_snapshot {
@@ -290,10 +288,10 @@ pub async fn rebuild_portfolio_history(
     let latest_api_dates =
         fill_asset_prices(db, &assets, &start_str, &end_str, price_fetcher).await?;
 
-    let latest_rate_dates = if !needed_pairs.is_empty() {
-        fill_exchange_rates(db, &needed_pairs, &start_str, &end_str, price_fetcher).await?
-    } else {
+    let latest_rate_dates = if needed_pairs.is_empty() {
         HashMap::new()
+    } else {
+        fill_exchange_rates(db, &needed_pairs, &start_str, &end_str, price_fetcher).await?
     };
 
     // Effective end date = min(end_date, min of latest API dates for all assets, min of latest rate dates)
@@ -323,10 +321,10 @@ pub async fn rebuild_portfolio_history(
         let date_str = format_date(current);
 
         // Build day's exchange rates
-        let day_rates = if !needed_pairs.is_empty() {
-            get_day_rates(db, &needed_pairs, &date_str).await?
-        } else {
+        let day_rates = if needed_pairs.is_empty() {
             HashMap::new()
+        } else {
+            get_day_rates(db, &needed_pairs, &date_str).await?
         };
 
         // Process transactions for this day

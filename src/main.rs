@@ -34,19 +34,13 @@ async fn main() -> anyhow::Result<()> {
 
             let (start_date, period_label) = match period {
                 ChartPeriod::Ytd => {
-                    let d = NaiveDate::from_ymd_opt(today.year(), 1, 1)
-                        .expect("Jan 1 is always valid");
+                    let d =
+                        NaiveDate::from_ymd_opt(today.year(), 1, 1).expect("Jan 1 is always valid");
                     (d, "YTD")
                 }
-                ChartPeriod::OneYear => {
-                    (today - chrono::Duration::days(ONE_YEAR_DAYS), "1Y")
-                }
-                ChartPeriod::ThreeYears => {
-                    (today - chrono::Duration::days(THREE_YEAR_DAYS), "3Y")
-                }
-                ChartPeriod::FiveYears => {
-                    (today - chrono::Duration::days(FIVE_YEAR_DAYS), "5Y")
-                }
+                ChartPeriod::OneYear => (today - chrono::Duration::days(ONE_YEAR_DAYS), "1Y"),
+                ChartPeriod::ThreeYears => (today - chrono::Duration::days(THREE_YEAR_DAYS), "3Y"),
+                ChartPeriod::FiveYears => (today - chrono::Duration::days(FIVE_YEAR_DAYS), "5Y"),
                 ChartPeriod::All => {
                     let earliest = portfolio_history_repo::find_earliest(&db).await?;
                     match earliest {
@@ -61,7 +55,8 @@ async fn main() -> anyhow::Result<()> {
             };
 
             let start_str = format_date(start_date);
-            let snapshots = portfolio_history_repo::find_between(&db, &start_str, &today_str).await?;
+            let snapshots =
+                portfolio_history_repo::find_between(&db, &start_str, &today_str).await?;
             display::print_nav_chart(&snapshots, period_label);
         }
         Commands::Buy {
@@ -78,7 +73,7 @@ async fn main() -> anyhow::Result<()> {
         } => {
             let today = chrono::Local::now().date_naive();
             if date > today {
-                anyhow::bail!("Date cannot be in the future: {}", date);
+                anyhow::bail!("Date cannot be in the future: {date}");
             }
 
             let asset = AssetInfo {
@@ -107,7 +102,7 @@ async fn main() -> anyhow::Result<()> {
         } => {
             let today = chrono::Local::now().date_naive();
             if date > today {
-                anyhow::bail!("Date cannot be in the future: {}", date);
+                anyhow::bail!("Date cannot be in the future: {date}");
             }
 
             let order = SellOrder {

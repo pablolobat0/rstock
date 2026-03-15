@@ -10,12 +10,13 @@ use crate::db::repos::{
     asset_repo, daily_price_repo, portfolio_asset_history_repo, portfolio_history_repo,
     transaction_repo,
 };
-use crate::models::{cents_to_f64, AssetPosition, PortfolioResult, PortfolioSummary};
+use crate::models::{cents_to_f64, AssetPosition, PortfolioResult, PortfolioSummary, Transaction};
 use crate::services::exchange_rates;
 use crate::services::metrics;
 use crate::services::nav;
 use crate::services::price::PriceFetcher;
 
+#[allow(clippy::too_many_lines)]
 pub async fn get_portfolio(db: &DatabaseConnection) -> anyhow::Result<PortfolioResult> {
     let latest_snapshot = portfolio_history_repo::find_latest(db).await?;
     let snapshot_date = match &latest_snapshot {
@@ -52,9 +53,8 @@ pub async fn get_portfolio(db: &DatabaseConnection) -> anyhow::Result<PortfolioR
     let mut rows: Vec<AssetPosition> = Vec::new();
 
     for snap in &asset_snapshots {
-        let asset_model = match asset_map.get(&snap.asset_id) {
-            Some(a) => a,
-            None => continue,
+        let Some(asset_model) = asset_map.get(&snap.asset_id) else {
+            continue;
         };
 
         // Skip benchmark asset from portfolio display
@@ -63,13 +63,13 @@ pub async fn get_portfolio(db: &DatabaseConnection) -> anyhow::Result<PortfolioR
         }
 
         // Get the latest exchange rate for this asset's currency
-        let exchange_rate = if asset_model.currency != BASE_CURRENCY {
+        let exchange_rate = if asset_model.currency == BASE_CURRENCY {
+            1.0
+        } else {
             let pair = exchange_rates::currency_pair(&asset_model.currency);
             exchange_rates::get_exchange_rate(db, &pair, &yesterday)
                 .await?
                 .unwrap_or(snap.exchange_rate)
-        } else {
-            1.0
         };
 
         // Compute avg_cost from buy transactions only, converted to EUR
@@ -81,19 +81,18 @@ pub async fn get_portfolio(db: &DatabaseConnection) -> anyhow::Result<PortfolioR
             .filter(|t| t.is_buy())
             .map(|t| t.quantity)
             .sum();
-        let net_qty: f64 = transactions.iter().map(|t| t.signed_quantity()).sum();
+        let net_qty: f64 = transactions.iter().map(Transaction::signed_quantity).sum();
 
         for t in transactions.iter().filter(|t| t.is_buy()) {
-            let tx_cost =
-                t.quantity * cents_to_f64(t.price_cents) + cents_to_f64(t.fees_cents);
-            if asset_model.currency != BASE_CURRENCY {
+            let tx_cost = t.quantity * cents_to_f64(t.price_cents) + cents_to_f64(t.fees_cents);
+            if asset_model.currency == BASE_CURRENCY {
+                total_buy_cost_eur += tx_cost;
+            } else {
                 let pair = exchange_rates::currency_pair(&asset_model.currency);
                 let tx_rate = exchange_rates::get_exchange_rate(db, &pair, &t.date)
                     .await?
                     .unwrap_or(exchange_rate);
                 total_buy_cost_eur += tx_cost * tx_rate;
-            } else {
-                total_buy_cost_eur += tx_cost;
             }
         }
 
@@ -115,10 +114,10 @@ pub async fn get_portfolio(db: &DatabaseConnection) -> anyhow::Result<PortfolioR
         let current_value = snap.quantity * current_price * exchange_rate;
         let total_invested_for_asset = net_qty * avg_cost;
         let gain_loss = current_value - total_invested_for_asset;
-        let gain_loss_pct = if total_invested_for_asset != 0.0 {
-            (gain_loss / total_invested_for_asset) * 100.0
-        } else {
+        let gain_loss_pct = if total_invested_for_asset == 0.0 {
             0.0
+        } else {
+            (gain_loss / total_invested_for_asset) * 100.0
         };
 
         rows.push(AssetPosition {
@@ -140,10 +139,10 @@ pub async fn get_portfolio(db: &DatabaseConnection) -> anyhow::Result<PortfolioR
     let total_current_value: f64 = rows.iter().map(|r| r.current_value).sum();
     let total_invested: f64 = rows.iter().map(|r| r.total_invested).sum();
     let total_gain_loss = total_current_value - total_invested;
-    let total_gain_loss_pct = if total_invested != 0.0 {
-        (total_gain_loss / total_invested) * 100.0
-    } else {
+    let total_gain_loss_pct = if total_invested == 0.0 {
         0.0
+    } else {
+        (total_gain_loss / total_invested) * 100.0
     };
 
     Ok(PortfolioResult {
@@ -184,9 +183,8 @@ async fn trigger_rebuild_if_needed(
 }
 
 fn compute_period_returns_dates(today: NaiveDate) -> (String, String, String, String) {
-    let ytd = format_date(
-        NaiveDate::from_ymd_opt(today.year(), 1, 1).expect("Jan 1 is always valid"),
-    );
+    let ytd =
+        format_date(NaiveDate::from_ymd_opt(today.year(), 1, 1).expect("Jan 1 is always valid"));
     let one_year = format_date(today - chrono::Duration::days(ONE_YEAR_DAYS));
     let three_year = format_date(today - chrono::Duration::days(THREE_YEAR_DAYS));
     let five_year = format_date(today - chrono::Duration::days(FIVE_YEAR_DAYS));
@@ -201,9 +199,8 @@ pub async fn get_portfolio_summary(
 
     trigger_rebuild_if_needed(db, price_fetcher).await?;
 
-    let current_snapshot = match portfolio_history_repo::find_latest(db).await? {
-        Some(s) => s,
-        None => return Ok(None),
+    let Some(current_snapshot) = portfolio_history_repo::find_latest(db).await? else {
+        return Ok(None);
     };
     let current_nav = current_snapshot.nav;
     let snapshot_date = current_snapshot.date.clone();

@@ -52,8 +52,7 @@ pub async fn compute_risk_metrics(
         .collect();
 
     // Align dates and compute daily log returns for both series
-    let (portfolio_returns, benchmark_returns) =
-        align_returns(&nav_snapshots, &benchmark_map);
+    let (portfolio_returns, benchmark_returns) = align_returns(&nav_snapshots, &benchmark_map);
 
     if portfolio_returns.len() < MIN_DATA_POINTS {
         return Ok(None);
