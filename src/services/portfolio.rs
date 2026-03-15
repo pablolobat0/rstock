@@ -26,6 +26,7 @@ pub async fn get_portfolio(db: &DatabaseConnection) -> anyhow::Result<PortfolioR
                 rows: Vec::new(),
                 total_invested: 0.0,
                 total_current_value: 0.0,
+                total_dividends: 0.0,
                 total_gain_loss: 0.0,
                 total_gain_loss_pct: 0.0,
             });
@@ -39,6 +40,7 @@ pub async fn get_portfolio(db: &DatabaseConnection) -> anyhow::Result<PortfolioR
             rows: Vec::new(),
             total_invested: 0.0,
             total_current_value: 0.0,
+            total_dividends: 0.0,
             total_gain_loss: 0.0,
             total_gain_loss_pct: 0.0,
         });
@@ -102,6 +104,22 @@ pub async fn get_portfolio(db: &DatabaseConnection) -> anyhow::Result<PortfolioR
             0.0
         };
 
+        // Sum dividends received for this asset, converted to EUR
+        let mut dividends_received = 0.0;
+        for t in transactions.iter().filter(|t| t.is_dividend()) {
+            let div_amount =
+                t.quantity * cents_to_f64(t.price_cents) - cents_to_f64(t.fees_cents);
+            if asset_model.currency == BASE_CURRENCY {
+                dividends_received += div_amount;
+            } else {
+                let pair = exchange_rates::currency_pair(&asset_model.currency);
+                let tx_rate = exchange_rates::get_exchange_rate(db, &pair, &t.date)
+                    .await?
+                    .unwrap_or(exchange_rate);
+                dividends_received += div_amount * tx_rate;
+            }
+        }
+
         // Get each asset's own latest price and its date
         let (current_price, price_date) =
             match daily_price_repo::find_price_and_date_at_or_before(db, snap.asset_id, &yesterday)
@@ -113,7 +131,7 @@ pub async fn get_portfolio(db: &DatabaseConnection) -> anyhow::Result<PortfolioR
 
         let current_value = snap.quantity * current_price * exchange_rate;
         let total_invested_for_asset = net_qty * avg_cost;
-        let gain_loss = current_value - total_invested_for_asset;
+        let gain_loss = current_value + dividends_received - total_invested_for_asset;
         let gain_loss_pct = if total_invested_for_asset == 0.0 {
             0.0
         } else {
@@ -131,6 +149,7 @@ pub async fn get_portfolio(db: &DatabaseConnection) -> anyhow::Result<PortfolioR
             price_date,
             total_invested: total_invested_for_asset,
             current_value,
+            dividends_received,
             gain_loss,
             gain_loss_pct,
         });
@@ -138,7 +157,8 @@ pub async fn get_portfolio(db: &DatabaseConnection) -> anyhow::Result<PortfolioR
 
     let total_current_value: f64 = rows.iter().map(|r| r.current_value).sum();
     let total_invested: f64 = rows.iter().map(|r| r.total_invested).sum();
-    let total_gain_loss = total_current_value - total_invested;
+    let total_dividends: f64 = rows.iter().map(|r| r.dividends_received).sum();
+    let total_gain_loss = total_current_value + total_dividends - total_invested;
     let total_gain_loss_pct = if total_invested == 0.0 {
         0.0
     } else {
@@ -149,6 +169,7 @@ pub async fn get_portfolio(db: &DatabaseConnection) -> anyhow::Result<PortfolioR
         rows,
         total_invested,
         total_current_value,
+        total_dividends,
         total_gain_loss,
         total_gain_loss_pct,
     })

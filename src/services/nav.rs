@@ -82,6 +82,7 @@ async fn get_day_rates(
     Ok(rates)
 }
 
+/// Returns `(outstanding_shares, nav, dividend_income_eur)`.
 #[allow(clippy::implicit_hasher)]
 pub fn process_day_transactions(
     day_txs: &[&Transaction],
@@ -90,9 +91,10 @@ pub fn process_day_transactions(
     nav: f64,
     asset_map: &HashMap<i32, &Asset>,
     day_rates: &HashMap<String, f64>,
-) -> (f64, f64) {
+) -> (f64, f64, f64) {
     let mut os = outstanding_shares;
     let mut current_nav = nav;
+    let mut dividend_income = 0.0;
 
     for tx in day_txs {
         // Convert to base currency
@@ -103,7 +105,12 @@ pub fn process_day_transactions(
             .copied()
             .unwrap_or(1.0);
 
-        if tx.is_sell() {
+        if tx.is_dividend() {
+            // Dividend = income: accumulate as cash, no holdings or shares change
+            let amount =
+                tx.quantity * cents_to_f64(tx.price_cents) - cents_to_f64(tx.fees_cents);
+            dividend_income += amount * rate;
+        } else if tx.is_sell() {
             // Sell = withdrawal: proceeds = qty * price - fees
             let withdrawal =
                 tx.quantity * cents_to_f64(tx.price_cents) - cents_to_f64(tx.fees_cents);
@@ -136,7 +143,7 @@ pub fn process_day_transactions(
         }
     }
 
-    (os, current_nav)
+    (os, current_nav, dividend_income)
 }
 
 async fn compute_day_asset_values(
@@ -208,12 +215,11 @@ async fn store_daily_snapshot(
     db: &DatabaseConnection,
     date: &str,
     asset_value: f64,
+    total_value: f64,
     outstanding_shares: f64,
     nav: f64,
     asset_values: &[AssetSnapshot],
 ) -> anyhow::Result<()> {
-    let total_value = asset_value;
-
     portfolio_history_repo::upsert(
         db,
         &PortfolioSnapshot {
@@ -266,6 +272,8 @@ pub async fn rebuild_portfolio_history(
     let mut is_fresh_portfolio = prev_snapshot.is_none();
     let mut outstanding_shares = prev_snapshot.map_or(0.0, |s| s.outstanding_shares);
     let mut nav = prev_snapshot.map_or(INITIAL_NAV, |s| s.nav);
+    // Accumulated cash from dividends: recovered from total_value - asset_value
+    let mut accumulated_cash = prev_snapshot.map_or(0.0, |s| s.total_value - s.asset_value);
 
     let mut holdings: HashMap<i32, f64> = HashMap::new();
     if let Some(snap) = prev_snapshot {
@@ -329,7 +337,7 @@ pub async fn rebuild_portfolio_history(
 
         // Process transactions for this day
         if let Some(day_txs) = tx_by_date.get(&date_str) {
-            let (new_shares, new_nav) = process_day_transactions(
+            let (new_shares, new_nav, dividend_income) = process_day_transactions(
                 day_txs,
                 &mut holdings,
                 outstanding_shares,
@@ -339,12 +347,13 @@ pub async fn rebuild_portfolio_history(
             );
             outstanding_shares = new_shares;
             nav = new_nav;
+            accumulated_cash += dividend_income;
         }
 
         // First-ever transaction day: store a seed snapshot for (day - 1) with NAV=100
         if is_fresh_portfolio && outstanding_shares > 0.0 {
             let seed_date = format_date(current - chrono::Duration::days(1));
-            store_daily_snapshot(db, &seed_date, 0.0, 0.0, INITIAL_NAV, &[]).await?;
+            store_daily_snapshot(db, &seed_date, 0.0, 0.0, 0.0, INITIAL_NAV, &[]).await?;
             is_fresh_portfolio = false;
         }
 
@@ -357,7 +366,7 @@ pub async fn rebuild_portfolio_history(
         let (asset_value, asset_values) =
             compute_day_asset_values(db, &holdings, &asset_map, &date_str, &day_rates).await?;
 
-        let total_value = asset_value;
+        let total_value = asset_value + accumulated_cash;
         if outstanding_shares > 0.0 {
             nav = total_value / outstanding_shares;
         }
@@ -366,6 +375,7 @@ pub async fn rebuild_portfolio_history(
             db,
             &date_str,
             asset_value,
+            total_value,
             outstanding_shares,
             nav,
             &asset_values,

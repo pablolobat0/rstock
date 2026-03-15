@@ -74,6 +74,29 @@ pub enum Commands {
         notes: Option<String>,
     },
 
+    /// Record a dividend payment for an existing asset
+    Dividend {
+        /// Ticker symbol (asset must already exist)
+        #[arg(long)]
+        ticker: String,
+
+        /// Ex-dividend date (YYYY-MM-DD)
+        #[arg(long)]
+        date: NaiveDate,
+
+        /// Total dividend amount received
+        #[arg(long)]
+        amount: f64,
+
+        /// Withholding tax or fees
+        #[arg(long, default_value = "0")]
+        fees: f64,
+
+        /// Optional notes
+        #[arg(long)]
+        notes: Option<String>,
+    },
+
     /// Record a sell transaction for an existing asset
     Sell {
         /// Ticker symbol (asset must already exist)

@@ -11,7 +11,7 @@
 
 - [ ] `list` — show all assets and/or transactions (with filters: by ticker, date range, type)
 - [ ] `delete` — remove a transaction by ID (with confirmation prompt)
-- [ ] `sell` — record a sell transaction (tx_type="sell", reduce quantity, track realized gains)
+- [x] `sell` — record a sell transaction (tx_type="sell", reduce quantity, track realized gains)
 - [ ] `get --ticker MSFT` — show single-asset detail view with individual price chart
 - [ ] `update` — fetch and cache latest prices without displaying portfolio
 - [ ] `export` — dump portfolio/transactions to CSV or JSON
@@ -19,19 +19,21 @@
 
 ## New Transaction Types
 
-- [ ] Sell transactions — schema already has `tx_type` field (hardcoded to "buy"); add CLI command + service logic
-- [ ] Dividends — new tx_type, option for reinvest vs. cash
+- [x] Sell transactions — schema already has `tx_type` field (hardcoded to "buy"); add CLI command + service logic
+- [x] Dividends — new tx_type, cash income tracked in NAV (reinvest via separate buy)
 - [ ] Stock splits — adjust quantity and cost basis for affected asset
 
 ## Portfolio Features
 
 - [ ] Realized vs. unrealized gains — requires FIFO/LIFO lot tracking
 - [ ] Tax lot tracking — cost basis per lot for tax reporting
-- [ ] Benchmark comparison — compare portfolio NAV against S&P 500, MSCI World, etc.
-- [ ] Risk metrics — volatility, Sharpe ratio, max drawdown
+- [ ] Benchmark comparison chart — overlay portfolio NAV against benchmark (ACWI) on same chart
+- [x] Risk metrics — beta and Sharpe ratio (trailing 1Y, vs ACWI benchmark)
+- [ ] Max drawdown metric
 - [ ] Sector/country allocation breakdown
 - [ ] Rebalancing alerts — target allocation vs. current weights
-- [x] Multi-currency support + forex conversion (currently all treated as same currency)
+- [x] Multi-currency support + forex conversion (exchange rate service, daily rate caching, integrated into NAV + portfolio)
+- [ ] XIRR / money-weighted return — complements time-weighted NAV return
 
 ## Display Improvements
 

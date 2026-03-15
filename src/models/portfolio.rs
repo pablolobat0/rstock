@@ -49,6 +49,7 @@ pub struct PortfolioResult {
     pub rows: Vec<AssetPosition>,
     pub total_invested: f64,
     pub total_current_value: f64,
+    pub total_dividends: f64,
     pub total_gain_loss: f64,
     pub total_gain_loss_pct: f64,
 }
@@ -90,6 +91,8 @@ pub struct PortfolioRow {
     pub total_invested: String,
     #[tabled(rename = "Value")]
     pub current_value: String,
+    #[tabled(rename = "Divs")]
+    pub dividends: String,
     #[tabled(rename = "G/L")]
     pub gain_loss: String,
     #[tabled(rename = "G/L %")]

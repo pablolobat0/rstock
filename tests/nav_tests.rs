@@ -555,7 +555,7 @@ async fn test_process_day_transactions_pure() {
     let mut holdings: HashMap<i32, f64> = HashMap::new();
     let txs: Vec<&Transaction> = vec![&tx1];
 
-    let (os, nav_val) =
+    let (os, nav_val, _div) =
         nav::process_day_transactions(&txs, &mut holdings, 0.0, 100.0, &asset_map, &day_rates);
 
     // First buy: deposit=500, NAV=100, shares=5
@@ -574,7 +574,7 @@ async fn test_process_day_transactions_pure() {
     };
 
     let txs2: Vec<&Transaction> = vec![&tx2];
-    let (os2, nav_val2) =
+    let (os2, nav_val2, _div2) =
         nav::process_day_transactions(&txs2, &mut holdings, os, nav_val, &asset_map, &day_rates);
 
     // Second buy: deposit=300, shares_issued=300/100=3, outstanding=5+3=8
@@ -979,7 +979,7 @@ async fn test_process_day_transactions_sell_pure() {
     };
 
     let mut holdings: HashMap<i32, f64> = HashMap::new();
-    let (os, nav_val) = nav::process_day_transactions(
+    let (os, nav_val, _div) = nav::process_day_transactions(
         &vec![&buy_tx],
         &mut holdings,
         0.0,
@@ -1000,7 +1000,7 @@ async fn test_process_day_transactions_sell_pure() {
         fees_cents: 0,
     };
 
-    let (os2, nav_val2) = nav::process_day_transactions(
+    let (os2, nav_val2, _div2) = nav::process_day_transactions(
         &vec![&sell_tx],
         &mut holdings,
         os,

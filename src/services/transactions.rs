@@ -4,7 +4,7 @@ use crate::constants::FLOAT_EPSILON;
 use crate::db::repos::{
     asset_repo, portfolio_asset_history_repo, portfolio_history_repo, transaction_repo,
 };
-use crate::models::{AssetInfo, BuyOrder, SellOrder, Transaction};
+use crate::models::{AssetInfo, BuyOrder, DividendOrder, SellOrder, Transaction};
 
 pub async fn buy(db: &DatabaseConnection, asset: AssetInfo, order: BuyOrder) -> anyhow::Result<()> {
     let total = order.quantity * order.price + order.fees;
@@ -66,6 +66,45 @@ pub async fn sell(db: &DatabaseConnection, ticker: String, order: SellOrder) -> 
     transaction_repo::insert_sell(db, asset.id, &order).await?;
 
     // Invalidate snapshots from the sell date
+    portfolio_history_repo::delete_from_date(db, &order_date).await?;
+    portfolio_asset_history_repo::delete_from_date_for_asset(db, &order_date, asset.id).await?;
+
+    println!("{summary}");
+
+    Ok(())
+}
+
+pub async fn dividend(
+    db: &DatabaseConnection,
+    ticker: String,
+    order: DividendOrder,
+) -> anyhow::Result<()> {
+    let asset = asset_repo::find_by_ticker(db, &ticker)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("Asset with ticker '{ticker}' not found"))?;
+
+    // Validate holdings at dividend date
+    let transactions = transaction_repo::find_by_asset_id(db, asset.id).await?;
+    let net_qty: f64 = transactions
+        .iter()
+        .filter(|t| t.date <= order.date)
+        .map(Transaction::signed_quantity)
+        .sum();
+
+    if net_qty <= FLOAT_EPSILON {
+        anyhow::bail!("No holdings of {} at date {}", ticker, order.date);
+    }
+
+    let net_amount = order.amount - order.fees;
+    let summary = format!(
+        "Dividend for {} ({}): {:.2} (fees: {:.2}, net: {:.2}) on {}",
+        asset.name, ticker, order.amount, order.fees, net_amount, order.date
+    );
+
+    let order_date = order.date.clone();
+    transaction_repo::insert_dividend(db, asset.id, &order).await?;
+
+    // Invalidate snapshots from the dividend date
     portfolio_history_repo::delete_from_date(db, &order_date).await?;
     portfolio_asset_history_repo::delete_from_date_for_asset(db, &order_date, asset.id).await?;
 

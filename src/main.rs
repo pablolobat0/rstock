@@ -10,7 +10,7 @@ use chrono::{Datelike, NaiveDate};
 use clap::Parser;
 use cli::{ChartPeriod, Cli, Commands};
 use constants::{format_date, DATE_FORMAT, FIVE_YEAR_DAYS, ONE_YEAR_DAYS, THREE_YEAR_DAYS};
-use models::{AssetInfo, BuyOrder, SellOrder};
+use models::{AssetInfo, BuyOrder, DividendOrder, SellOrder};
 use services::price::RealPriceFetcher;
 
 use crate::db::repos::portfolio_history_repo;
@@ -91,6 +91,26 @@ async fn main() -> anyhow::Result<()> {
                 notes,
             };
             services::transactions::buy(&db, asset, order).await?;
+        }
+        Commands::Dividend {
+            ticker,
+            date,
+            amount,
+            fees,
+            notes,
+        } => {
+            let today = chrono::Local::now().date_naive();
+            if date > today {
+                anyhow::bail!("Date cannot be in the future: {date}");
+            }
+
+            let order = DividendOrder {
+                date: format_date(date),
+                amount,
+                fees,
+                notes,
+            };
+            services::transactions::dividend(&db, ticker, order).await?;
         }
         Commands::Sell {
             ticker,

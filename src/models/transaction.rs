@@ -15,6 +15,7 @@ pub fn cents_to_f64(cents: i64) -> f64 {
 pub enum TxType {
     Buy,
     Sell,
+    Dividend,
 }
 
 impl fmt::Display for TxType {
@@ -22,6 +23,7 @@ impl fmt::Display for TxType {
         match self {
             TxType::Buy => write!(f, "buy"),
             TxType::Sell => write!(f, "sell"),
+            TxType::Dividend => write!(f, "dividend"),
         }
     }
 }
@@ -33,6 +35,7 @@ impl FromStr for TxType {
         match s {
             "buy" => Ok(TxType::Buy),
             "sell" => Ok(TxType::Sell),
+            "dividend" => Ok(TxType::Dividend),
             other => anyhow::bail!("unknown transaction type: {other}"),
         }
     }
@@ -50,6 +53,13 @@ pub struct SellOrder {
     pub date: String,
     pub quantity: f64,
     pub price: f64,
+    pub fees: f64,
+    pub notes: Option<String>,
+}
+
+pub struct DividendOrder {
+    pub date: String,
+    pub amount: f64,
     pub fees: f64,
     pub notes: Option<String>,
 }
@@ -72,11 +82,15 @@ impl Transaction {
         self.tx_type == TxType::Sell
     }
 
+    pub fn is_dividend(&self) -> bool {
+        self.tx_type == TxType::Dividend
+    }
+
     pub fn signed_quantity(&self) -> f64 {
-        if self.is_sell() {
-            -self.quantity
-        } else {
-            self.quantity
+        match self.tx_type {
+            TxType::Buy => self.quantity,
+            TxType::Sell => -self.quantity,
+            TxType::Dividend => 0.0,
         }
     }
 }

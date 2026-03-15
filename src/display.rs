@@ -54,6 +54,12 @@ pub fn print_portfolio(result: &PortfolioResult, summary: Option<&PortfolioSumma
                 let gl_text = format!("{}{:.2}", sign, r.gain_loss);
                 let gl_pct_text = format!("{}{:.2}%", sign, r.gain_loss_pct);
 
+                let divs_text = if r.dividends_received > 0.0 {
+                    format!("{:.2}", r.dividends_received)
+                } else {
+                    String::new()
+                };
+
                 PortfolioRow {
                     ticker: r.ticker.clone(),
                     name: r.name.clone(),
@@ -65,6 +71,7 @@ pub fn print_portfolio(result: &PortfolioResult, summary: Option<&PortfolioSumma
                     price_date: r.price_date.clone(),
                     total_invested: format!("{:.2}", r.total_invested),
                     current_value: format!("{:.2}", r.current_value),
+                    dividends: divs_text,
                     gain_loss: gl_text,
                     gain_loss_pct: gl_pct_text,
                     weight,
@@ -86,9 +93,9 @@ pub fn print_portfolio(result: &PortfolioResult, summary: Option<&PortfolioSumma
             } else {
                 Color::FG_RED
             };
-            // G/L = column 10, G/L % = column 11
-            table.modify(Cell::new(i + 1, 10), color.clone());
-            table.modify(Cell::new(i + 1, 11), color);
+            // G/L = column 11, G/L % = column 12 (after Divs column)
+            table.modify(Cell::new(i + 1, 11), color.clone());
+            table.modify(Cell::new(i + 1, 12), color);
         }
         println!("{table}");
 
@@ -102,12 +109,18 @@ pub fn print_portfolio(result: &PortfolioResult, summary: Option<&PortfolioSumma
             sign, result.total_gain_loss, sign, result.total_gain_loss_pct
         );
         println!();
-        println!(
-            "Invested: {:.2}  Value: {:.2}  G/L: {}",
-            result.total_invested,
-            result.total_current_value,
-            color_value(result.total_gain_loss, &gl_text),
+        let mut totals = format!(
+            "Invested: {:.2}  Value: {:.2}",
+            result.total_invested, result.total_current_value,
         );
+        if result.total_dividends > 0.0 {
+            totals.push_str(&format!("  Divs: {:.2}", result.total_dividends));
+        }
+        totals.push_str(&format!(
+            "  G/L: {}",
+            color_value(result.total_gain_loss, &gl_text)
+        ));
+        println!("{totals}");
     }
 
     if let Some(summary) = summary {

@@ -96,6 +96,30 @@ pub async fn insert_sell_transaction(
         .expect("failed to insert sell transaction");
 }
 
+pub async fn insert_dividend_transaction(
+    db: &DatabaseConnection,
+    asset_id: i32,
+    date: &str,
+    amount: f64,
+    fees: f64,
+) {
+    let record = transaction::ActiveModel {
+        asset_id: Set(asset_id),
+        tx_type: Set("dividend".to_owned()),
+        date: Set(date.to_owned()),
+        quantity: Set(1.0),
+        price_cents: Set((amount * 100.0) as i64),
+        fees_cents: Set((fees * 100.0) as i64),
+        notes: Set(None),
+        created_at: Set(format!("{date}T00:00:00")),
+        ..Default::default()
+    };
+    transaction::Entity::insert(record)
+        .exec(db)
+        .await
+        .expect("failed to insert dividend transaction");
+}
+
 pub async fn insert_daily_price(
     db: &DatabaseConnection,
     asset_id: i32,
