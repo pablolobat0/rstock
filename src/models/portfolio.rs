@@ -64,6 +64,8 @@ pub struct PortfolioSummary {
     pub one_year_return: Option<f64>,
     pub three_year_return: Option<f64>,
     pub five_year_return: Option<f64>,
+    pub beta: Option<f64>,
+    pub sharpe_ratio: Option<f64>,
 }
 
 #[derive(Tabled)]

@@ -9,6 +9,7 @@ use crate::db::repos::{
 };
 use crate::models::{cents_to_f64, AssetPosition, PortfolioResult, PortfolioSummary};
 use crate::services::exchange_rates::{self, BASE_CURRENCY};
+use crate::services::metrics;
 use crate::services::nav;
 use crate::services::price::PriceFetcher;
 
@@ -55,6 +56,11 @@ pub async fn get_portfolio(db: &DatabaseConnection) -> anyhow::Result<PortfolioR
             None => continue,
         };
 
+        // Skip benchmark asset from portfolio display
+        if metrics::is_benchmark_ticker(&asset_model.ticker) {
+            continue;
+        }
+
         // Get the latest exchange rate for this asset's currency
         let exchange_rate = if asset_model.currency != BASE_CURRENCY {
             let pair = exchange_rates::currency_pair(&asset_model.currency);
@@ -65,13 +71,23 @@ pub async fn get_portfolio(db: &DatabaseConnection) -> anyhow::Result<PortfolioR
             1.0
         };
 
-        // Compute avg_cost from transactions, converted to EUR
+        // Compute avg_cost from buy transactions only, converted to EUR
         let transactions = transaction_repo::find_by_asset_id(db, snap.asset_id).await?;
 
-        let mut total_cost_eur = 0.0;
-        let total_qty: f64 = transactions.iter().map(|t| t.quantity).sum();
+        let mut total_buy_cost_eur = 0.0;
+        let total_buy_qty: f64 = transactions
+            .iter()
+            .filter(|t| t.tx_type != "sell")
+            .map(|t| t.quantity)
+            .sum();
+        let total_sell_qty: f64 = transactions
+            .iter()
+            .filter(|t| t.tx_type == "sell")
+            .map(|t| t.quantity)
+            .sum();
+        let net_qty = total_buy_qty - total_sell_qty;
 
-        for t in &transactions {
+        for t in transactions.iter().filter(|t| t.tx_type != "sell") {
             let tx_cost =
                 t.quantity * cents_to_f64(t.price_cents) + cents_to_f64(t.fees_cents);
             if asset_model.currency != BASE_CURRENCY {
@@ -79,14 +95,14 @@ pub async fn get_portfolio(db: &DatabaseConnection) -> anyhow::Result<PortfolioR
                 let tx_rate = exchange_rates::get_exchange_rate(db, &pair, &t.date)
                     .await?
                     .unwrap_or(exchange_rate);
-                total_cost_eur += tx_cost * tx_rate;
+                total_buy_cost_eur += tx_cost * tx_rate;
             } else {
-                total_cost_eur += tx_cost;
+                total_buy_cost_eur += tx_cost;
             }
         }
 
-        let avg_cost = if total_qty > 0.0 {
-            total_cost_eur / total_qty
+        let avg_cost = if total_buy_qty > 0.0 {
+            total_buy_cost_eur / total_buy_qty
         } else {
             0.0
         };
@@ -101,9 +117,10 @@ pub async fn get_portfolio(db: &DatabaseConnection) -> anyhow::Result<PortfolioR
             };
 
         let current_value = snap.quantity * current_price * exchange_rate;
-        let gain_loss = current_value - total_cost_eur;
-        let gain_loss_pct = if total_cost_eur != 0.0 {
-            (gain_loss / total_cost_eur) * 100.0
+        let total_invested_for_asset = net_qty * avg_cost;
+        let gain_loss = current_value - total_invested_for_asset;
+        let gain_loss_pct = if total_invested_for_asset != 0.0 {
+            (gain_loss / total_invested_for_asset) * 100.0
         } else {
             0.0
         };
@@ -117,7 +134,7 @@ pub async fn get_portfolio(db: &DatabaseConnection) -> anyhow::Result<PortfolioR
             avg_cost,
             current_price,
             price_date,
-            total_invested: total_cost_eur,
+            total_invested: total_invested_for_asset,
             current_value,
             gain_loss,
             gain_loss_pct,
@@ -221,6 +238,11 @@ pub async fn get_portfolio_summary(
         calc_return(db, current_nav, &three_year_date, false, Some(3.0)).await?;
     let five_year_return = calc_return(db, current_nav, &five_year_date, false, Some(5.0)).await?;
 
+    let (beta, sharpe_ratio) = match metrics::compute_risk_metrics(db, price_fetcher).await? {
+        Some((b, s)) => (Some(b), Some(s)),
+        None => (None, None),
+    };
+
     Ok(Some(PortfolioSummary {
         total_value: current_snapshot.total_value,
         nav: current_nav,
@@ -232,6 +254,8 @@ pub async fn get_portfolio_summary(
         one_year_return,
         three_year_return,
         five_year_return,
+        beta,
+        sharpe_ratio,
     }))
 }
 

@@ -134,6 +134,21 @@ pub fn print_portfolio(result: &PortfolioResult, summary: Option<&PortfolioSumma
             format_return(summary.three_year_return),
             format_return(summary.five_year_return),
         );
+
+        if summary.beta.is_some() || summary.sharpe_ratio.is_some() {
+            let beta_str = match summary.beta {
+                Some(b) => format!("{:.2}", b),
+                None => "N/A".to_string(),
+            };
+            let sharpe_str = match summary.sharpe_ratio {
+                Some(s) => {
+                    let text = format!("{:.2}", s);
+                    color_value(s, text)
+                }
+                None => "N/A".to_string(),
+            };
+            println!("Beta: {}  Sharpe: {}", beta_str, sharpe_str);
+        }
     }
 }
 

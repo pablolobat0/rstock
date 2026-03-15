@@ -45,6 +45,26 @@ pub async fn find_price_before(db: &DatabaseConnection, asset_id: i32, date: &st
     Ok(result.map(|r| r.closing_price))
 }
 
+pub async fn find_prices_between(
+    db: &DatabaseConnection,
+    asset_id: i32,
+    start_date: &str,
+    end_date: &str,
+) -> anyhow::Result<Vec<(String, f64)>> {
+    let results = daily_asset_price::Entity::find()
+        .filter(daily_asset_price::Column::AssetId.eq(asset_id))
+        .filter(daily_asset_price::Column::Date.gte(start_date))
+        .filter(daily_asset_price::Column::Date.lte(end_date))
+        .filter(daily_asset_price::Column::IsApiFailure.eq(false))
+        .order_by_asc(daily_asset_price::Column::Date)
+        .all(db)
+        .await?;
+    Ok(results
+        .into_iter()
+        .map(|r| (r.date, r.closing_price))
+        .collect())
+}
+
 pub async fn exists(db: &DatabaseConnection, asset_id: i32, date: &str) -> anyhow::Result<bool> {
     let result = daily_asset_price::Entity::find()
         .filter(daily_asset_price::Column::AssetId.eq(asset_id))
