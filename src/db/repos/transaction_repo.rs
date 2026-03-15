@@ -1,7 +1,7 @@
 use sea_orm::*;
 
 use crate::db::entities::transaction;
-use crate::models::{f64_to_cents, BuyOrder, Transaction};
+use crate::models::{f64_to_cents, BuyOrder, SellOrder, Transaction};
 
 pub async fn insert_buy(db: &DatabaseConnection, asset_id: i32, order: &BuyOrder) -> anyhow::Result<()> {
     let price_cents = f64_to_cents(order.price);
@@ -37,6 +37,26 @@ pub async fn find_by_asset_id(db: &DatabaseConnection, asset_id: i32) -> anyhow:
         .all(db)
         .await?;
     Ok(results.into_iter().map(Transaction::from).collect())
+}
+
+pub async fn insert_sell(db: &DatabaseConnection, asset_id: i32, order: &SellOrder) -> anyhow::Result<()> {
+    let price_cents = f64_to_cents(order.price);
+    let fees_cents = f64_to_cents(order.fees);
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+
+    let tx = transaction::ActiveModel {
+        asset_id: Set(asset_id),
+        tx_type: Set("sell".to_owned()),
+        date: Set(order.date.clone()),
+        quantity: Set(order.quantity),
+        price_cents: Set(price_cents),
+        fees_cents: Set(fees_cents),
+        notes: Set(order.notes.clone()),
+        created_at: Set(now),
+        ..Default::default()
+    };
+    tx.insert(db).await?;
+    Ok(())
 }
 
 pub async fn find_earliest(db: &DatabaseConnection) -> anyhow::Result<Option<Transaction>> {

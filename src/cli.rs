@@ -73,4 +73,31 @@ pub enum Commands {
         #[arg(long)]
         notes: Option<String>,
     },
+
+    /// Record a sell transaction for an existing asset
+    Sell {
+        /// Ticker symbol (asset must already exist)
+        #[arg(long)]
+        ticker: String,
+
+        /// Sale date (YYYY-MM-DD)
+        #[arg(long)]
+        date: NaiveDate,
+
+        /// Number of shares/units to sell
+        #[arg(long)]
+        quantity: f64,
+
+        /// Sale price per unit (e.g. 150.25)
+        #[arg(long)]
+        price: f64,
+
+        /// Commission/fees
+        #[arg(long, default_value = "0")]
+        fees: f64,
+
+        /// Optional notes
+        #[arg(long)]
+        notes: Option<String>,
+    },
 }

@@ -16,8 +16,17 @@ pub struct BuyOrder {
     pub notes: Option<String>,
 }
 
+pub struct SellOrder {
+    pub date: String,
+    pub quantity: f64,
+    pub price: f64,
+    pub fees: f64,
+    pub notes: Option<String>,
+}
+
 pub struct Transaction {
     pub asset_id: i32,
+    pub tx_type: String,
     pub date: String,
     pub quantity: f64,
     pub price_cents: i64,
@@ -28,6 +37,7 @@ impl From<transaction::Model> for Transaction {
     fn from(m: transaction::Model) -> Self {
         Self {
             asset_id: m.asset_id,
+            tx_type: m.tx_type,
             date: m.date,
             quantity: m.quantity,
             price_cents: m.price_cents,

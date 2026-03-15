@@ -463,6 +463,7 @@ async fn test_process_day_transactions_pure() {
     // Simulate first buy: 10 shares @ $50
     let tx1 = Transaction {
         asset_id: 1,
+        tx_type: "buy".to_owned(),
         date: "2025-01-02".to_owned(),
         quantity: 10.0,
         price_cents: 5000,
@@ -493,6 +494,7 @@ async fn test_process_day_transactions_pure() {
     // Simulate second buy at NAV=100
     let tx2 = Transaction {
         asset_id: 1,
+        tx_type: "buy".to_owned(),
         date: "2025-01-03".to_owned(),
         quantity: 5.0,
         price_cents: 6000,
@@ -682,4 +684,243 @@ async fn test_eur_only_unchanged() {
     let asset_snaps = common::get_asset_snapshots(&db, "2025-01-02").await;
     assert_eq!(asset_snaps.len(), 1);
     assert!((asset_snaps[0].exchange_rate - 1.0).abs() < 1e-9);
+}
+
+// ========== SELL TESTS ==========
+
+/// Buy 10 shares, sell 5 -> asset snapshot shows quantity=5.
+#[tokio::test]
+async fn test_sell_reduces_holdings() {
+    let db = common::setup_test_db().await;
+    let mock = common::MockPriceFetcher::new();
+
+    let asset_id =
+        common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
+    common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
+    common::insert_sell_transaction(&db, asset_id, "2025-01-03", 5.0, 50.0, 0.0).await;
+
+    common::insert_daily_price(&db, asset_id, "2025-01-02", 50.0, false).await;
+    common::insert_daily_price(&db, asset_id, "2025-01-03", 50.0, false).await;
+
+    let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
+    nav::rebuild_portfolio_history(&db, start, NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(), None, &mock)
+        .await
+        .unwrap();
+
+    let asset_snaps = common::get_asset_snapshots(&db, "2025-01-03").await;
+    assert_eq!(asset_snaps.len(), 1);
+    assert!((asset_snaps[0].quantity - 5.0).abs() < 0.01);
+    assert!((asset_snaps[0].market_value - 250.0).abs() < 0.01);
+}
+
+/// Buy 10 @ $50, sell 5 @ $50 (flat price). NAV should stay at 100.
+#[tokio::test]
+async fn test_sell_nav_unchanged_at_fair_value() {
+    let db = common::setup_test_db().await;
+    let mock = common::MockPriceFetcher::new();
+
+    let asset_id =
+        common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
+    common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
+    common::insert_sell_transaction(&db, asset_id, "2025-01-03", 5.0, 50.0, 0.0).await;
+
+    common::insert_daily_price(&db, asset_id, "2025-01-02", 50.0, false).await;
+    common::insert_daily_price(&db, asset_id, "2025-01-03", 50.0, false).await;
+
+    let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
+    nav::rebuild_portfolio_history(&db, start, NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(), None, &mock)
+        .await
+        .unwrap();
+
+    let snap_d1 = common::get_portfolio_snapshot(&db, "2025-01-02").await.unwrap();
+    let snap_d2 = common::get_portfolio_snapshot(&db, "2025-01-03").await.unwrap();
+
+    // Day 1: 10 * 50 = 500, os = 5, NAV = 100
+    assert!((snap_d1.nav - 100.0).abs() < 0.01);
+
+    // Day 2: sell 5 @ 50 = withdrawal 250, shares_redeemed = 250/100 = 2.5
+    // os = 5 - 2.5 = 2.5, holdings = 5, value = 5*50 = 250
+    // NAV = 250 / 2.5 = 100 (unchanged!)
+    assert!((snap_d2.nav - 100.0).abs() < 0.01);
+    assert!((snap_d2.outstanding_shares - 2.5).abs() < 0.01);
+    assert!((snap_d2.asset_value - 250.0).abs() < 0.01);
+}
+
+/// Buy 10 @ $50, price rises to $100, sell 5. NAV should stay at ~200.
+#[tokio::test]
+async fn test_sell_preserves_nav_after_gain() {
+    let db = common::setup_test_db().await;
+    let mock = common::MockPriceFetcher::new();
+
+    let asset_id =
+        common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
+    common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
+    common::insert_sell_transaction(&db, asset_id, "2025-01-04", 5.0, 100.0, 0.0).await;
+
+    common::insert_daily_price(&db, asset_id, "2025-01-02", 50.0, false).await;
+    common::insert_daily_price(&db, asset_id, "2025-01-03", 100.0, false).await;
+    common::insert_daily_price(&db, asset_id, "2025-01-04", 100.0, false).await;
+
+    let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
+    nav::rebuild_portfolio_history(&db, start, NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(), None, &mock)
+        .await
+        .unwrap();
+
+    let snap_d2 = common::get_portfolio_snapshot(&db, "2025-01-03").await.unwrap();
+    let snap_d3 = common::get_portfolio_snapshot(&db, "2025-01-04").await.unwrap();
+
+    // Day 2: NAV = 200 (price doubled)
+    assert!((snap_d2.nav - 200.0).abs() < 0.01);
+
+    // Day 3: sell 5 @ 100 = withdrawal 500, redeemed = 500/200 = 2.5
+    // os = 5 - 2.5 = 2.5, holdings = 5, value = 5*100 = 500
+    // NAV = 500/2.5 = 200 (preserved!)
+    assert!((snap_d3.nav - 200.0).abs() < 0.01);
+    assert!((snap_d3.outstanding_shares - 2.5).abs() < 0.01);
+}
+
+/// Sell with fees -> fewer shares redeemed (fees reduce proceeds).
+#[tokio::test]
+async fn test_sell_with_fees() {
+    let db = common::setup_test_db().await;
+    let mock = common::MockPriceFetcher::new();
+
+    let asset_id =
+        common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
+    common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
+    // Sell 5 @ $50 with $10 fees -> proceeds = 250 - 10 = 240
+    common::insert_sell_transaction(&db, asset_id, "2025-01-03", 5.0, 50.0, 10.0).await;
+
+    common::insert_daily_price(&db, asset_id, "2025-01-02", 50.0, false).await;
+    common::insert_daily_price(&db, asset_id, "2025-01-03", 50.0, false).await;
+
+    let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
+    nav::rebuild_portfolio_history(&db, start, NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(), None, &mock)
+        .await
+        .unwrap();
+
+    let snap = common::get_portfolio_snapshot(&db, "2025-01-03").await.unwrap();
+
+    // Day 1: os = 5, NAV = 100
+    // Day 2: withdrawal = 250 - 10 = 240, redeemed = 240/100 = 2.4
+    // os = 5 - 2.4 = 2.6, holdings = 5, value = 5*50 = 250
+    // NAV = 250/2.6 = 96.15... (slightly lower due to fees eating into portfolio)
+    assert!((snap.outstanding_shares - 2.6).abs() < 0.01);
+    assert!((snap.asset_value - 250.0).abs() < 0.01);
+    assert!((snap.nav - (250.0 / 2.6)).abs() < 0.01);
+}
+
+/// Full liquidation: sell entire position.
+#[tokio::test]
+async fn test_full_liquidation() {
+    let db = common::setup_test_db().await;
+    let mock = common::MockPriceFetcher::new();
+
+    let asset_id =
+        common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
+    common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
+    common::insert_sell_transaction(&db, asset_id, "2025-01-03", 10.0, 50.0, 0.0).await;
+
+    common::insert_daily_price(&db, asset_id, "2025-01-02", 50.0, false).await;
+    common::insert_daily_price(&db, asset_id, "2025-01-03", 50.0, false).await;
+
+    let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
+    nav::rebuild_portfolio_history(&db, start, NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(), None, &mock)
+        .await
+        .unwrap();
+
+    let snap = common::get_portfolio_snapshot(&db, "2025-01-03").await.unwrap();
+
+    // Full sell: withdrawal = 500, redeemed = 500/100 = 5, os = 0
+    // Holdings = 0, asset_value = 0
+    assert!((snap.outstanding_shares).abs() < 0.01);
+    assert!((snap.asset_value).abs() < 0.01);
+}
+
+/// Unit test: process_day_transactions with a sell.
+#[tokio::test]
+async fn test_process_day_transactions_sell_pure() {
+    let asset = Asset {
+        id: 1,
+        ticker: "XFAKE1".to_owned(),
+        isin: None,
+        name: "Test".to_owned(),
+        asset_type: AssetType::Stock,
+        currency: "EUR".to_owned(),
+    };
+    let asset_map: HashMap<i32, &Asset> = [(1, &asset)].into_iter().collect();
+    let day_rates: HashMap<String, f64> = HashMap::new();
+
+    // First: buy 10 @ $50
+    let buy_tx = Transaction {
+        asset_id: 1,
+        tx_type: "buy".to_owned(),
+        date: "2025-01-02".to_owned(),
+        quantity: 10.0,
+        price_cents: 5000,
+        fees_cents: 0,
+    };
+
+    let mut holdings: HashMap<i32, f64> = HashMap::new();
+    let (os, nav_val) = nav::process_day_transactions(
+        &vec![&buy_tx], &mut holdings, 0.0, 100.0, &asset_map, &day_rates,
+    );
+    assert!((os - 5.0).abs() < 0.01);
+    assert_eq!(*holdings.get(&1).unwrap(), 10.0);
+
+    // Now sell 5 @ $50 at NAV=100
+    let sell_tx = Transaction {
+        asset_id: 1,
+        tx_type: "sell".to_owned(),
+        date: "2025-01-03".to_owned(),
+        quantity: 5.0,
+        price_cents: 5000,
+        fees_cents: 0,
+    };
+
+    let (os2, nav_val2) = nav::process_day_transactions(
+        &vec![&sell_tx], &mut holdings, os, nav_val, &asset_map, &day_rates,
+    );
+
+    // withdrawal = 5*50 = 250, redeemed = 250/100 = 2.5, os = 5-2.5 = 2.5
+    assert!((os2 - 2.5).abs() < 0.01);
+    assert!((nav_val2 - 100.0).abs() < 0.01);
+    assert_eq!(*holdings.get(&1).unwrap(), 5.0);
+}
+
+/// Sell redeems shares correctly: verify outstanding_shares math.
+#[tokio::test]
+async fn test_sell_redeems_shares() {
+    let db = common::setup_test_db().await;
+    let mock = common::MockPriceFetcher::new();
+
+    let asset_id =
+        common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
+    // Buy 10 @ $50 = deposit 500, os = 5 (500/100)
+    common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
+    // Price goes to 80 on day 3
+    // NAV on day 3 = 10*80/5 = 160
+    // Sell 3 @ $80 on day 4: withdrawal = 240, redeemed = 240/160 = 1.5
+    // os = 5 - 1.5 = 3.5
+    common::insert_sell_transaction(&db, asset_id, "2025-01-04", 3.0, 80.0, 0.0).await;
+
+    common::insert_daily_price(&db, asset_id, "2025-01-02", 50.0, false).await;
+    common::insert_daily_price(&db, asset_id, "2025-01-03", 80.0, false).await;
+    common::insert_daily_price(&db, asset_id, "2025-01-04", 80.0, false).await;
+
+    let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
+    nav::rebuild_portfolio_history(&db, start, NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(), None, &mock)
+        .await
+        .unwrap();
+
+    let snap_d3 = common::get_portfolio_snapshot(&db, "2025-01-03").await.unwrap();
+    assert!((snap_d3.nav - 160.0).abs() < 0.01);
+    assert!((snap_d3.outstanding_shares - 5.0).abs() < 0.01);
+
+    let snap_d4 = common::get_portfolio_snapshot(&db, "2025-01-04").await.unwrap();
+    // os = 5 - 1.5 = 3.5, holdings = 7, value = 7*80 = 560
+    // NAV = 560/3.5 = 160 (preserved!)
+    assert!((snap_d4.outstanding_shares - 3.5).abs() < 0.01);
+    assert!((snap_d4.nav - 160.0).abs() < 0.01);
+    assert!((snap_d4.asset_value - 560.0).abs() < 0.01);
 }

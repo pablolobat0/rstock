@@ -96,28 +96,46 @@ pub fn process_day_transactions(
     let mut current_nav = nav;
 
     for tx in day_txs {
-        let deposit =
-            tx.quantity * cents_to_f64(tx.price_cents) + cents_to_f64(tx.fees_cents);
-
-        // Convert deposit to base currency
+        // Convert to base currency
         let rate = asset_map
             .get(&tx.asset_id)
             .filter(|a| a.currency != BASE_CURRENCY)
             .and_then(|a| day_rates.get(&exchange_rates::currency_pair(&a.currency)))
             .copied()
             .unwrap_or(1.0);
-        let deposit_eur = deposit * rate;
 
-        if os == 0.0 {
-            current_nav = 100.0;
-            let shares_issued = deposit_eur / 100.0;
-            os = shares_issued;
+        if tx.tx_type == "sell" {
+            // Sell = withdrawal: proceeds = qty * price - fees
+            let withdrawal =
+                tx.quantity * cents_to_f64(tx.price_cents) - cents_to_f64(tx.fees_cents);
+            let withdrawal_eur = withdrawal * rate;
+
+            if os > 0.0 && current_nav > 0.0 {
+                let shares_redeemed = withdrawal_eur / current_nav;
+                os -= shares_redeemed;
+                if os < 0.0 {
+                    os = 0.0;
+                }
+            }
+
+            *holdings.entry(tx.asset_id).or_insert(0.0) -= tx.quantity;
         } else {
-            let shares_issued = deposit_eur / current_nav;
-            os += shares_issued;
-        }
+            // Buy = deposit: cost = qty * price + fees
+            let deposit =
+                tx.quantity * cents_to_f64(tx.price_cents) + cents_to_f64(tx.fees_cents);
+            let deposit_eur = deposit * rate;
 
-        *holdings.entry(tx.asset_id).or_insert(0.0) += tx.quantity;
+            if os == 0.0 {
+                current_nav = 100.0;
+                let shares_issued = deposit_eur / 100.0;
+                os = shares_issued;
+            } else {
+                let shares_issued = deposit_eur / current_nav;
+                os += shares_issued;
+            }
+
+            *holdings.entry(tx.asset_id).or_insert(0.0) += tx.quantity;
+        }
     }
 
     (os, current_nav)
@@ -333,7 +351,7 @@ pub async fn rebuild_portfolio_history(
             is_fresh_portfolio = false;
         }
 
-        if outstanding_shares == 0.0 {
+        if outstanding_shares == 0.0 && is_fresh_portfolio {
             current += chrono::Duration::days(1);
             continue;
         }

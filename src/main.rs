@@ -8,7 +8,7 @@ use anyhow::Context;
 use chrono::{Datelike, NaiveDate};
 use clap::Parser;
 use cli::{ChartPeriod, Cli, Commands};
-use models::{AssetInfo, BuyOrder};
+use models::{AssetInfo, BuyOrder, SellOrder};
 use services::price::RealPriceFetcher;
 
 use crate::db::repos::portfolio_history_repo;
@@ -93,6 +93,28 @@ async fn main() -> anyhow::Result<()> {
                 notes,
             };
             services::transactions::buy(&db, asset, order).await?;
+        }
+        Commands::Sell {
+            ticker,
+            date,
+            quantity,
+            price,
+            fees,
+            notes,
+        } => {
+            let today = chrono::Local::now().date_naive();
+            if date > today {
+                anyhow::bail!("Date cannot be in the future: {}", date);
+            }
+
+            let order = SellOrder {
+                date: date.format("%Y-%m-%d").to_string(),
+                quantity,
+                price,
+                fees,
+                notes,
+            };
+            services::transactions::sell(&db, ticker, order).await?;
         }
     }
 
