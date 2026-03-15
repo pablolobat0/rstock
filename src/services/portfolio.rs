@@ -256,10 +256,15 @@ pub async fn get_portfolio_summary(
         calc_return(db, current_nav, &three_year_date, false, Some(3.0)).await?;
     let five_year_return = calc_return(db, current_nav, &five_year_date, false, Some(5.0)).await?;
 
-    let (beta, sharpe_ratio) = match metrics::compute_risk_metrics(db, price_fetcher).await? {
-        Some((b, s)) => (Some(b), Some(s)),
-        None => (None, None),
-    };
+    let ytd_metrics =
+        metrics::compute_period_metrics(db, &ytd_date, &snapshot_date, price_fetcher).await?;
+    let one_year_metrics =
+        metrics::compute_period_metrics(db, &one_year_date, &snapshot_date, price_fetcher).await?;
+    let three_year_metrics =
+        metrics::compute_period_metrics(db, &three_year_date, &snapshot_date, price_fetcher)
+            .await?;
+    let five_year_metrics =
+        metrics::compute_period_metrics(db, &five_year_date, &snapshot_date, price_fetcher).await?;
 
     Ok(Some(PortfolioSummary {
         total_value: current_snapshot.total_value,
@@ -272,8 +277,10 @@ pub async fn get_portfolio_summary(
         one_year_return,
         three_year_return,
         five_year_return,
-        beta,
-        sharpe_ratio,
+        ytd_metrics,
+        one_year_metrics,
+        three_year_metrics,
+        five_year_metrics,
     }))
 }
 

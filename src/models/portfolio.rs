@@ -54,6 +54,13 @@ pub struct PortfolioResult {
     pub total_gain_loss_pct: f64,
 }
 
+pub struct PeriodMetrics {
+    pub volatility: Option<f64>,
+    pub max_drawdown: Option<f64>,
+    pub beta: Option<f64>,
+    pub sharpe: Option<f64>,
+}
+
 pub struct PortfolioSummary {
     pub total_value: f64,
     pub nav: f64,
@@ -65,8 +72,10 @@ pub struct PortfolioSummary {
     pub one_year_return: Option<f64>,
     pub three_year_return: Option<f64>,
     pub five_year_return: Option<f64>,
-    pub beta: Option<f64>,
-    pub sharpe_ratio: Option<f64>,
+    pub ytd_metrics: Option<PeriodMetrics>,
+    pub one_year_metrics: Option<PeriodMetrics>,
+    pub three_year_metrics: Option<PeriodMetrics>,
+    pub five_year_metrics: Option<PeriodMetrics>,
 }
 
 #[derive(Tabled)]

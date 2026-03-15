@@ -5,7 +5,9 @@ use tabled::settings::{Color, Style};
 use tabled::Table;
 use textplots::{Chart, Plot, Shape};
 
-use crate::models::{PortfolioResult, PortfolioRow, PortfolioSnapshot, PortfolioSummary};
+use crate::models::{
+    PeriodMetrics, PortfolioResult, PortfolioRow, PortfolioSnapshot, PortfolioSummary,
+};
 
 fn format_qty(qty: f64) -> String {
     if qty.fract() == 0.0 {
@@ -32,6 +34,91 @@ fn format_return(r: Option<f64>) -> String {
         }
         None => "N/A".to_string(),
     }
+}
+
+fn format_pct(v: Option<f64>) -> String {
+    match v {
+        Some(val) => format!("{val:.2}%"),
+        None => "N/A".to_string(),
+    }
+}
+
+fn format_drawdown(v: Option<f64>) -> String {
+    match v {
+        Some(val) => {
+            let text = format!("{val:.2}%");
+            text.red().to_string()
+        }
+        None => "N/A".to_string(),
+    }
+}
+
+fn format_metric(v: Option<f64>) -> String {
+    match v {
+        Some(val) => {
+            let text = format!("{val:.2}");
+            color_value(val, &text)
+        }
+        None => "N/A".to_string(),
+    }
+}
+
+fn format_plain(v: Option<f64>) -> String {
+    match v {
+        Some(val) => format!("{val:.2}"),
+        None => "N/A".to_string(),
+    }
+}
+
+fn print_metrics_table(periods: &[(&str, Option<f64>, &Option<PeriodMetrics>)]) {
+    let col_width = 12;
+    let label_width = 15;
+
+    // Header
+    print!("{:label_width$}", "");
+    for (name, _, _) in periods {
+        print!("{name:>col_width$}");
+    }
+    println!();
+
+    // Return
+    print!("{:<label_width$}", "Return:");
+    for (_, ret, _) in periods {
+        print!("{:>col_width$}", format_return(*ret));
+    }
+    println!();
+
+    // Volatility
+    print!("{:<label_width$}", "Volatility:");
+    for (_, _, metrics) in periods {
+        let val = metrics.as_ref().and_then(|m| m.volatility);
+        print!("{:>col_width$}", format_pct(val));
+    }
+    println!();
+
+    // Max Drawdown
+    print!("{:<label_width$}", "Max Drawdown:");
+    for (_, _, metrics) in periods {
+        let val = metrics.as_ref().and_then(|m| m.max_drawdown);
+        print!("{:>col_width$}", format_drawdown(val));
+    }
+    println!();
+
+    // Sharpe
+    print!("{:<label_width$}", "Sharpe:");
+    for (_, _, metrics) in periods {
+        let val = metrics.as_ref().and_then(|m| m.sharpe);
+        print!("{:>col_width$}", format_metric(val));
+    }
+    println!();
+
+    // Beta
+    print!("{:<label_width$}", "Beta:");
+    for (_, _, metrics) in periods {
+        let val = metrics.as_ref().and_then(|m| m.beta);
+        print!("{:>col_width$}", format_plain(val));
+    }
+    println!();
 }
 
 #[allow(clippy::too_many_lines)]
@@ -139,28 +226,14 @@ pub fn print_portfolio(result: &PortfolioResult, summary: Option<&PortfolioSumma
             println!("Inception:      {inception}");
         }
 
-        println!(
-            "YTD: {}  1Y: {}  3Y(CAGR): {}  5Y(CAGR): {}",
-            format_return(summary.ytd_return),
-            format_return(summary.one_year_return),
-            format_return(summary.three_year_return),
-            format_return(summary.five_year_return),
-        );
+        let periods = [
+            ("YTD", summary.ytd_return, &summary.ytd_metrics),
+            ("1Y", summary.one_year_return, &summary.one_year_metrics),
+            ("3Y(CAGR)", summary.three_year_return, &summary.three_year_metrics),
+            ("5Y(CAGR)", summary.five_year_return, &summary.five_year_metrics),
+        ];
 
-        if summary.beta.is_some() || summary.sharpe_ratio.is_some() {
-            let beta_str = match summary.beta {
-                Some(b) => format!("{b:.2}"),
-                None => "N/A".to_string(),
-            };
-            let sharpe_str = match summary.sharpe_ratio {
-                Some(s) => {
-                    let text = format!("{s:.2}");
-                    color_value(s, &text)
-                }
-                None => "N/A".to_string(),
-            };
-            println!("Beta: {beta_str}  Sharpe: {sharpe_str}");
-        }
+        print_metrics_table(&periods);
     }
 }
 

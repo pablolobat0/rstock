@@ -2,11 +2,11 @@ use sea_orm::DatabaseConnection;
 use std::collections::HashMap;
 
 use crate::constants::{
-    format_date, ANNUAL_RISK_FREE_RATE, BENCHMARK_CURRENCY, BENCHMARK_NAME, BENCHMARK_TICKER,
-    MIN_DATA_POINTS, ONE_YEAR_DAYS, TRADING_DAYS_PER_YEAR, ZERO_RETURN_THRESHOLD,
+    ANNUAL_RISK_FREE_RATE, BENCHMARK_CURRENCY, BENCHMARK_NAME, BENCHMARK_TICKER, MIN_DATA_POINTS,
+    TRADING_DAYS_PER_YEAR, ZERO_RETURN_THRESHOLD,
 };
 use crate::db::repos::{asset_repo, daily_price_repo, portfolio_history_repo};
-use crate::models::{AssetInfo, AssetType, PortfolioSnapshot};
+use crate::models::{AssetInfo, AssetType, PeriodMetrics, PortfolioSnapshot};
 use crate::services::daily_prices;
 use crate::services::price::PriceFetcher;
 
@@ -14,44 +14,87 @@ pub fn is_benchmark_ticker(ticker: &str) -> bool {
     ticker == BENCHMARK_TICKER
 }
 
-pub async fn compute_risk_metrics(
+/// Computes annualized volatility from a slice of daily NAV snapshots.
+/// Returns `None` if fewer than 2 snapshots.
+pub fn compute_volatility(snapshots: &[PortfolioSnapshot]) -> Option<f64> {
+    if snapshots.len() < 2 {
+        return None;
+    }
+
+    let returns: Vec<f64> = snapshots
+        .windows(2)
+        .filter_map(|w| {
+            if w[0].nav > 0.0 {
+                Some((w[1].nav / w[0].nav).ln())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    if returns.len() < 2 {
+        return None;
+    }
+
+    let n = returns.len() as f64;
+    let mean = returns.iter().sum::<f64>() / n;
+    let var = returns.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / (n - 1.0);
+    let std = var.sqrt();
+
+    Some(std * TRADING_DAYS_PER_YEAR.sqrt() * 100.0)
+}
+
+/// Computes max drawdown from a slice of daily NAV snapshots.
+/// Returns the worst peak-to-trough decline as a negative percentage.
+/// Returns `None` if fewer than 2 snapshots.
+pub fn compute_max_drawdown(snapshots: &[PortfolioSnapshot]) -> Option<f64> {
+    if snapshots.len() < 2 {
+        return None;
+    }
+
+    let mut peak = snapshots[0].nav;
+    let mut max_dd = 0.0_f64;
+
+    for snap in &snapshots[1..] {
+        if snap.nav > peak {
+            peak = snap.nav;
+        }
+        if peak > 0.0 {
+            let dd = (snap.nav - peak) / peak * 100.0;
+            if dd < max_dd {
+                max_dd = dd;
+            }
+        }
+    }
+
+    Some(max_dd)
+}
+
+/// Computes beta and Sharpe ratio for a given date range.
+/// Returns `None` if insufficient aligned data points.
+pub async fn compute_beta_sharpe_for_period(
     db: &DatabaseConnection,
+    start_date: &str,
+    end_date: &str,
     price_fetcher: &dyn PriceFetcher,
 ) -> anyhow::Result<Option<(f64, f64)>> {
-    let today = chrono::Local::now().date_naive();
-    let yesterday = today - chrono::Duration::days(1);
-    let one_year_ago = today - chrono::Duration::days(ONE_YEAR_DAYS);
-
-    let yesterday_str = format_date(yesterday);
-    let one_year_ago_str = format_date(one_year_ago);
-
-    // Ensure benchmark asset exists and prices are cached
     let benchmark_asset_id =
-        ensure_benchmark_prices(db, &one_year_ago_str, &yesterday_str, price_fetcher).await?;
+        ensure_benchmark_prices(db, start_date, end_date, price_fetcher).await?;
 
-    // Get portfolio NAV snapshots for the trailing 1Y
-    let nav_snapshots =
-        portfolio_history_repo::find_between(db, &one_year_ago_str, &yesterday_str).await?;
+    let nav_snapshots = portfolio_history_repo::find_between(db, start_date, end_date).await?;
     if nav_snapshots.len() < MIN_DATA_POINTS {
         return Ok(None);
     }
 
-    // Get benchmark prices for the same period
-    let benchmark_prices = daily_price_repo::find_prices_between(
-        db,
-        benchmark_asset_id,
-        &one_year_ago_str,
-        &yesterday_str,
-    )
-    .await?;
+    let benchmark_prices =
+        daily_price_repo::find_prices_between(db, benchmark_asset_id, start_date, end_date)
+            .await?;
 
-    // Build a date->price map for the benchmark
     let benchmark_map: HashMap<&str, f64> = benchmark_prices
         .iter()
         .map(|(d, p)| (d.as_str(), *p))
         .collect();
 
-    // Align dates and compute daily log returns for both series
     let (portfolio_returns, benchmark_returns) = align_returns(&nav_snapshots, &benchmark_map);
 
     if portfolio_returns.len() < MIN_DATA_POINTS {
@@ -62,6 +105,44 @@ pub async fn compute_risk_metrics(
     let beta = compute_beta(&portfolio_returns, &benchmark_returns);
 
     Ok(Some((beta, sharpe)))
+}
+
+/// Computes all period metrics (volatility, max drawdown, beta, Sharpe) for a date range.
+/// Returns `None` if the portfolio didn't exist at the start of the period.
+pub async fn compute_period_metrics(
+    db: &DatabaseConnection,
+    start_date: &str,
+    end_date: &str,
+    price_fetcher: &dyn PriceFetcher,
+) -> anyhow::Result<Option<PeriodMetrics>> {
+    // If no snapshot exists at or before start_date, the period predates the portfolio
+    if portfolio_history_repo::find_at_or_before(db, start_date)
+        .await?
+        .is_none()
+    {
+        return Ok(None);
+    }
+
+    let snapshots = portfolio_history_repo::find_between(db, start_date, end_date).await?;
+    if snapshots.len() < 2 {
+        return Ok(None);
+    }
+
+    let volatility = compute_volatility(&snapshots);
+    let max_drawdown = compute_max_drawdown(&snapshots);
+
+    let (beta, sharpe) =
+        match compute_beta_sharpe_for_period(db, start_date, end_date, price_fetcher).await? {
+            Some((b, s)) => (Some(b), Some(s)),
+            None => (None, None),
+        };
+
+    Ok(Some(PeriodMetrics {
+        volatility,
+        max_drawdown,
+        beta,
+        sharpe,
+    }))
 }
 
 /// Aligns portfolio NAV snapshots with benchmark prices, computing daily log returns
