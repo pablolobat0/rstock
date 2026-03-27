@@ -20,6 +20,14 @@ pub async fn find_by_ids(db: &DatabaseConnection, ids: impl IntoIterator<Item = 
     Ok(results.into_iter().map(Asset::from).collect())
 }
 
+pub async fn find_all(db: &DatabaseConnection) -> anyhow::Result<Vec<Asset>> {
+    let results = asset::Entity::find()
+        .order_by_asc(asset::Column::Ticker)
+        .all(db)
+        .await?;
+    Ok(results.into_iter().map(Asset::from).collect())
+}
+
 pub async fn create(db: &DatabaseConnection, info: &AssetInfo) -> anyhow::Result<i32> {
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let new_asset = asset::ActiveModel {

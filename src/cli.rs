@@ -74,6 +74,16 @@ pub enum Commands {
         notes: Option<String>,
     },
 
+    /// List all assets in the portfolio
+    List {},
+
+    /// Export transactions to a CSV file
+    Export {
+        /// Output file path (e.g. transactions.csv)
+        #[arg(long, short)]
+        output: String,
+    },
+
     /// Record a sell transaction for an existing asset
     Sell {
         /// Ticker symbol (asset must already exist)

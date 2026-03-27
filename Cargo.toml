@@ -18,6 +18,7 @@ tabled = "0.17"
 textplots = "0.8"
 colored = "3"
 yfinance-rs = "0.7"
+csv = "1"
 
 [dev-dependencies]
 async-trait = "0.1"
