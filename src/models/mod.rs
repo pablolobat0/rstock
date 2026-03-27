@@ -2,7 +2,7 @@ mod asset;
 mod portfolio;
 mod transaction;
 
-pub use asset::{Asset, AssetInfo, AssetPosition, AssetType};
+pub use asset::{Asset, AssetInfo, AssetPosition, AssetRow, AssetType};
 pub use portfolio::{
     AssetSnapshot, PeriodMetrics, PortfolioResult, PortfolioRow, PortfolioSnapshot,
     PortfolioSummary,

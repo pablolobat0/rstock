@@ -13,7 +13,7 @@ use constants::{format_date, DATE_FORMAT, FIVE_YEAR_DAYS, ONE_YEAR_DAYS, THREE_Y
 use models::{AssetInfo, BuyOrder, DividendOrder, SellOrder};
 use services::price::RealPriceFetcher;
 
-use crate::db::repos::portfolio_history_repo;
+use crate::db::repos::{asset_repo, portfolio_history_repo};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -111,6 +111,14 @@ async fn main() -> anyhow::Result<()> {
                 notes,
             };
             services::transactions::dividend(&db, ticker, order).await?;
+        }
+        Commands::List {} => {
+            let assets = asset_repo::find_all(&db).await?;
+            display::print_asset_list(&assets);
+        }
+        Commands::Export { output } => {
+            let count = services::export::export_transactions_csv(&db, &output).await?;
+            println!("Exported {} transactions to {}", count, output);
         }
         Commands::Sell {
             ticker,

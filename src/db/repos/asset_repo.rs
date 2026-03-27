@@ -1,4 +1,4 @@
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
+use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Set};
 
 use crate::db::entities::asset;
 use crate::models::{Asset, AssetInfo};
@@ -21,6 +21,14 @@ pub async fn find_by_ids(
     let ids: Vec<i32> = ids.into_iter().collect();
     let results = asset::Entity::find()
         .filter(asset::Column::Id.is_in(ids))
+        .all(db)
+        .await?;
+    Ok(results.into_iter().map(Asset::from).collect())
+}
+
+pub async fn find_all(db: &DatabaseConnection) -> anyhow::Result<Vec<Asset>> {
+    let results = asset::Entity::find()
+        .order_by_asc(asset::Column::Ticker)
         .all(db)
         .await?;
     Ok(results.into_iter().map(Asset::from).collect())

@@ -6,7 +6,8 @@ use tabled::Table;
 use textplots::{Chart, Plot, Shape};
 
 use crate::models::{
-    PeriodMetrics, PortfolioResult, PortfolioRow, PortfolioSnapshot, PortfolioSummary,
+    Asset, AssetRow, PeriodMetrics, PortfolioResult, PortfolioRow, PortfolioSnapshot,
+    PortfolioSummary,
 };
 
 fn format_qty(qty: f64) -> String {
@@ -235,6 +236,35 @@ pub fn print_portfolio(result: &PortfolioResult, summary: Option<&PortfolioSumma
 
         print_metrics_table(&periods);
     }
+}
+
+pub fn print_asset_list(assets: &[Asset]) {
+    if assets.is_empty() {
+        println!("No assets found.");
+        return;
+    }
+
+    let rows: Vec<AssetRow> = assets
+        .iter()
+        .map(|a| AssetRow {
+            ticker: a.ticker.clone(),
+            name: a.name.clone(),
+            asset_type: a.asset_type.to_string(),
+            currency: a.currency.clone(),
+            isin: a.isin.clone().unwrap_or_default(),
+        })
+        .collect();
+
+    let mut table = Table::new(&rows);
+    table.with(
+        Style::modern()
+            .horizontals([(1, HorizontalLine::inherit(Style::modern()).horizontal('═'))])
+            .verticals([(1, VerticalLine::inherit(Style::modern()))])
+            .remove_horizontal()
+            .remove_vertical(),
+    );
+    println!("{}", table);
+    println!("\nTotal: {} assets", assets.len());
 }
 
 pub fn print_nav_chart(snapshots: &[PortfolioSnapshot], period_label: &str) {
