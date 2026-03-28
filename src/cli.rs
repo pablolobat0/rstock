@@ -107,6 +107,9 @@ pub enum Commands {
         output: String,
     },
 
+    /// Show portfolio holdings breakdown (stocks directly, funds/ETFs with underlying positions)
+    Holdings {},
+
     /// Record a stock split or reverse split for an existing asset
     Split {
         /// Ticker symbol (asset must already exist)

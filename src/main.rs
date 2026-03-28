@@ -4,6 +4,7 @@ mod db;
 mod display;
 mod models;
 mod services;
+mod utils;
 
 use anyhow::Context;
 use chrono::{Datelike, NaiveDate};
@@ -112,6 +113,10 @@ async fn main() -> anyhow::Result<()> {
                 notes,
             };
             services::transactions::dividend(&db, ticker, order).await?;
+        }
+        Commands::Holdings {} => {
+            let result = services::holdings::get_holdings(&db).await?;
+            display::print_holdings(&result);
         }
         Commands::List {} => {
             let assets = asset_repo::find_all(&db).await?;
