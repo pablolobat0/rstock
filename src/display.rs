@@ -1,3 +1,5 @@
+use std::fmt::Write;
+
 use colored::Colorize;
 use tabled::settings::object::Cell;
 use tabled::settings::style::{HorizontalLine, VerticalLine};
@@ -6,8 +8,8 @@ use tabled::Table;
 use textplots::{Chart, Plot, Shape};
 
 use crate::models::{
-    Asset, AssetRow, PeriodMetrics, PortfolioResult, PortfolioRow, PortfolioSnapshot,
-    PortfolioSummary,
+    Asset, AssetRow, DirectHoldingRow, FundHoldingRow, HoldingsResult, PeriodMetrics,
+    PortfolioResult, PortfolioRow, PortfolioSnapshot, PortfolioSummary,
 };
 
 fn format_qty(qty: f64) -> String {
@@ -202,12 +204,13 @@ pub fn print_portfolio(result: &PortfolioResult, summary: Option<&PortfolioSumma
             result.total_invested, result.total_current_value,
         );
         if result.total_dividends > 0.0 {
-            totals.push_str(&format!("  Divs: {:.2}", result.total_dividends));
+            let _ = write!(totals, "  Divs: {:.2}", result.total_dividends);
         }
-        totals.push_str(&format!(
+        let _ = write!(
+            totals,
             "  G/L: {}",
             color_value(result.total_gain_loss, &gl_text)
-        ));
+        );
         println!("{totals}");
     }
 
@@ -230,8 +233,16 @@ pub fn print_portfolio(result: &PortfolioResult, summary: Option<&PortfolioSumma
         let periods = [
             ("YTD", summary.ytd_return, &summary.ytd_metrics),
             ("1Y", summary.one_year_return, &summary.one_year_metrics),
-            ("3Y(CAGR)", summary.three_year_return, &summary.three_year_metrics),
-            ("5Y(CAGR)", summary.five_year_return, &summary.five_year_metrics),
+            (
+                "3Y(CAGR)",
+                summary.three_year_return,
+                &summary.three_year_metrics,
+            ),
+            (
+                "5Y(CAGR)",
+                summary.five_year_return,
+                &summary.five_year_metrics,
+            ),
         ];
 
         print_metrics_table(&periods);
@@ -263,7 +274,7 @@ pub fn print_asset_list(assets: &[Asset]) {
             .remove_horizontal()
             .remove_vertical(),
     );
-    println!("{}", table);
+    println!("{table}");
     println!("\nTotal: {} assets", assets.len());
 }
 
@@ -290,4 +301,82 @@ pub fn print_nav_chart(snapshots: &[PortfolioSnapshot], period_label: &str) {
         .lineplot(&Shape::Lines(&points))
         .display();
     println!("  {first_date}  →  {last_date}");
+}
+
+pub fn print_holdings(result: &HoldingsResult) {
+    if result.stocks.is_empty() && result.funds.is_empty() {
+        println!("No positions found.");
+        return;
+    }
+
+    // Section 1: Directly held stocks
+    if !result.stocks.is_empty() {
+        println!("{}", "Stocks".bold());
+        println!();
+
+        let rows: Vec<DirectHoldingRow> = result
+            .stocks
+            .iter()
+            .map(|s| DirectHoldingRow {
+                ticker: s.ticker.clone(),
+                name: s.name.clone(),
+                current_value: format!("{:.2}", s.current_value),
+                portfolio_weight: format!("{:.1}%", s.portfolio_weight),
+            })
+            .collect();
+
+        let mut table = Table::new(&rows);
+        table.with(
+            Style::modern()
+                .horizontals([(1, HorizontalLine::inherit(Style::modern()).horizontal('═'))])
+                .verticals([(1, VerticalLine::inherit(Style::modern()))])
+                .remove_horizontal()
+                .remove_vertical(),
+        );
+        println!("{table}");
+        println!();
+    }
+
+    // Section 2: Each fund/ETF with its underlying holdings
+    for fund in &result.funds {
+        let header = format!(
+            "{} ({}) — {:.1}% of portfolio, €{:.2}",
+            fund.name, fund.ticker, fund.portfolio_weight, fund.current_value
+        );
+        println!("{}", header.bold());
+        println!();
+
+        if let Some(ref err) = fund.error {
+            println!("  Could not fetch holdings: {err}");
+        } else if fund.holdings.is_empty() {
+            println!("  No holdings data available.");
+        } else {
+            let rows: Vec<FundHoldingRow> = fund
+                .holdings
+                .iter()
+                .map(|h| {
+                    let effective = fund.portfolio_weight * h.weighting / 100.0;
+                    FundHoldingRow {
+                        ticker: h.ticker.clone(),
+                        name: h.name.clone(),
+                        fund_weight: format!("{:.2}%", h.weighting),
+                        effective_weight: format!("{effective:.2}%"),
+                    }
+                })
+                .collect();
+
+            let mut table = Table::new(&rows);
+            table.with(
+                Style::modern()
+                    .horizontals([(1, HorizontalLine::inherit(Style::modern()).horizontal('═'))])
+                    .verticals([(1, VerticalLine::inherit(Style::modern()))])
+                    .remove_horizontal()
+                    .remove_vertical(),
+            );
+            println!("{table}");
+        }
+        println!();
+    }
+
+    println!("Total portfolio value: {:.2}", result.total_portfolio_value);
 }

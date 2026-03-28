@@ -109,3 +109,60 @@ pub struct PortfolioRow {
     #[tabled(rename = "Weight")]
     pub weight: String,
 }
+
+// --- Holdings report models ---
+
+pub struct FundHolding {
+    pub ticker: String,
+    pub name: String,
+    /// Weight within the fund (0–100 percentage)
+    pub weighting: f64,
+}
+
+pub struct DirectHolding {
+    pub ticker: String,
+    pub name: String,
+    /// Weight in the total portfolio (0–100 percentage)
+    pub portfolio_weight: f64,
+    pub current_value: f64,
+}
+
+pub struct FundWithHoldings {
+    pub ticker: String,
+    pub name: String,
+    /// Weight of this fund in the total portfolio (0–100 percentage)
+    pub portfolio_weight: f64,
+    pub current_value: f64,
+    pub holdings: Vec<FundHolding>,
+    pub error: Option<String>,
+}
+
+pub struct HoldingsResult {
+    pub stocks: Vec<DirectHolding>,
+    pub funds: Vec<FundWithHoldings>,
+    pub total_portfolio_value: f64,
+}
+
+#[derive(Tabled)]
+pub struct DirectHoldingRow {
+    #[tabled(rename = "Ticker")]
+    pub ticker: String,
+    #[tabled(rename = "Name")]
+    pub name: String,
+    #[tabled(rename = "Value")]
+    pub current_value: String,
+    #[tabled(rename = "Weight")]
+    pub portfolio_weight: String,
+}
+
+#[derive(Tabled)]
+pub struct FundHoldingRow {
+    #[tabled(rename = "Ticker")]
+    pub ticker: String,
+    #[tabled(rename = "Name")]
+    pub name: String,
+    #[tabled(rename = "Fund Weight")]
+    pub fund_weight: String,
+    #[tabled(rename = "Portfolio Weight")]
+    pub effective_weight: String,
+}

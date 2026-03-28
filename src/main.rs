@@ -4,6 +4,7 @@ mod db;
 mod display;
 mod models;
 mod services;
+mod utils;
 
 use anyhow::Context;
 use chrono::{Datelike, NaiveDate};
@@ -16,6 +17,7 @@ use services::price::RealPriceFetcher;
 use crate::db::repos::{asset_repo, portfolio_history_repo};
 
 #[tokio::main]
+#[allow(clippy::too_many_lines)]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let db = db::connect().await?;
@@ -112,13 +114,17 @@ async fn main() -> anyhow::Result<()> {
             };
             services::transactions::dividend(&db, ticker, order).await?;
         }
+        Commands::Holdings {} => {
+            let result = services::holdings::get_holdings(&db).await?;
+            display::print_holdings(&result);
+        }
         Commands::List {} => {
             let assets = asset_repo::find_all(&db).await?;
             display::print_asset_list(&assets);
         }
         Commands::Export { output } => {
             let count = services::export::export_transactions_csv(&db, &output).await?;
-            println!("Exported {} transactions to {}", count, output);
+            println!("Exported {count} transactions to {output}");
         }
         Commands::Sell {
             ticker,

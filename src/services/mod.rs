@@ -1,6 +1,7 @@
 pub mod daily_prices;
 pub mod exchange_rates;
 pub mod export;
+pub mod holdings;
 pub mod metrics;
 pub mod nav;
 pub mod portfolio;

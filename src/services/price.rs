@@ -6,6 +6,7 @@ use yfinance_rs::YfClient;
 
 use crate::constants::DATE_FORMAT;
 use crate::models::AssetType;
+use crate::utils::resolve_scripts_dir;
 
 #[async_trait::async_trait]
 pub trait PriceFetcher: Send + Sync {
@@ -53,34 +54,6 @@ impl PriceFetcher for RealPriceFetcher {
         let ticker = format!("{pair}=X");
         get_stock_historical_prices(&ticker, start, end).await
     }
-}
-
-// --- Scripts directory resolution ---
-
-fn resolve_scripts_dir() -> anyhow::Result<std::path::PathBuf> {
-    if let Ok(dir) = std::env::var("RSTOCK_SCRIPTS_DIR") {
-        let path = std::path::PathBuf::from(dir);
-        if path.is_dir() {
-            return Ok(path);
-        }
-        bail!(
-            "RSTOCK_SCRIPTS_DIR is set but not a valid directory: {}",
-            path.display()
-        );
-    }
-
-    // Walk up from the executable looking for a scripts/ folder
-    let exe = std::env::current_exe().context("cannot determine executable path")?;
-    let mut dir = exe.parent();
-    while let Some(d) = dir {
-        let candidate = d.join("scripts");
-        if candidate.is_dir() {
-            return Ok(candidate);
-        }
-        dir = d.parent();
-    }
-
-    bail!("could not find scripts/ directory (set RSTOCK_SCRIPTS_DIR to override)")
 }
 
 // --- Fund/ETF via Python scripts ---

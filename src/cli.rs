@@ -107,6 +107,9 @@ pub enum Commands {
         output: String,
     },
 
+    /// Show portfolio holdings breakdown (stocks directly, funds/ETFs with underlying positions)
+    Holdings {},
+
     /// Record a sell transaction for an existing asset
     Sell {
         /// Ticker symbol (asset must already exist)

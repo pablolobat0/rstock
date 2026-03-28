@@ -85,6 +85,7 @@ pub struct AssetPosition {
     pub ticker: String,
     pub name: String,
     pub asset_type: AssetType,
+    pub isin: Option<String>,
     pub currency: String,
     pub total_qty: f64,
     pub avg_cost: f64,
