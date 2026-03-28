@@ -107,6 +107,25 @@ pub enum Commands {
         output: String,
     },
 
+    /// Record a stock split or reverse split for an existing asset
+    Split {
+        /// Ticker symbol (asset must already exist)
+        #[arg(long)]
+        ticker: String,
+
+        /// Split date (YYYY-MM-DD)
+        #[arg(long)]
+        date: NaiveDate,
+
+        /// Split ratio: new shares per old share (e.g. 2 for 2:1 split, 0.25 for 1:4 reverse split)
+        #[arg(long)]
+        ratio: f64,
+
+        /// Optional notes
+        #[arg(long)]
+        notes: Option<String>,
+    },
+
     /// Record a sell transaction for an existing asset
     Sell {
         /// Ticker symbol (asset must already exist)

@@ -1060,3 +1060,190 @@ async fn test_sell_redeems_shares() {
     assert!((snap_d4.nav - 160.0).abs() < 0.01);
     assert!((snap_d4.asset_value - 560.0).abs() < 0.01);
 }
+
+/// 2:1 forward split doubles holdings, NAV stays the same.
+#[tokio::test]
+async fn test_forward_split_doubles_holdings() {
+    let db = common::setup_test_db().await;
+    let mock = common::MockPriceFetcher::new();
+
+    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
+    // Buy 10 shares at $100 on day 1
+    common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 100.0, 0.0).await;
+    common::insert_daily_price(&db, asset_id, "2025-01-02", 100.0, false).await;
+
+    // 2:1 split on day 2, price halves to $50 (adjusted)
+    common::insert_split_transaction(&db, asset_id, "2025-01-03", 2.0).await;
+    common::insert_daily_price(&db, asset_id, "2025-01-03", 50.0, false).await;
+
+    let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
+    nav::rebuild_portfolio_history(
+        &db,
+        start,
+        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
+        None,
+        &mock,
+    )
+    .await
+    .unwrap();
+
+    // Day 1: 10 shares * $100 = $1000, NAV=100, os=10
+    let snap_d1 = common::get_portfolio_snapshot(&db, "2025-01-02")
+        .await
+        .unwrap();
+    assert!((snap_d1.outstanding_shares - 10.0).abs() < 0.01);
+    assert!((snap_d1.nav - 100.0).abs() < 0.01);
+    assert!((snap_d1.asset_value - 1000.0).abs() < 0.01);
+
+    // Day 2: 20 shares * $50 = $1000, NAV unchanged, os unchanged
+    let snap_d2 = common::get_portfolio_snapshot(&db, "2025-01-03")
+        .await
+        .unwrap();
+    assert!((snap_d2.outstanding_shares - 10.0).abs() < 0.01);
+    assert!((snap_d2.nav - 100.0).abs() < 0.01);
+    assert!((snap_d2.asset_value - 1000.0).abs() < 0.01);
+
+    // Verify asset snapshot shows 20 shares
+    let asset_snaps = common::get_asset_snapshots(&db, "2025-01-03").await;
+    assert_eq!(asset_snaps.len(), 1);
+    assert!((asset_snaps[0].quantity - 20.0).abs() < 0.01);
+}
+
+/// 1:4 reverse split quarters holdings, NAV stays the same.
+#[tokio::test]
+async fn test_reverse_split_quarters_holdings() {
+    let db = common::setup_test_db().await;
+    let mock = common::MockPriceFetcher::new();
+
+    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
+    // Buy 100 shares at $10
+    common::insert_transaction(&db, asset_id, "2025-01-02", 100.0, 10.0, 0.0).await;
+    common::insert_daily_price(&db, asset_id, "2025-01-02", 10.0, false).await;
+
+    // 1:4 reverse split on day 2, price quadruples to $40
+    common::insert_split_transaction(&db, asset_id, "2025-01-03", 0.25).await;
+    common::insert_daily_price(&db, asset_id, "2025-01-03", 40.0, false).await;
+
+    let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
+    nav::rebuild_portfolio_history(
+        &db,
+        start,
+        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
+        None,
+        &mock,
+    )
+    .await
+    .unwrap();
+
+    // Day 1: 100 * $10 = $1000
+    let snap_d1 = common::get_portfolio_snapshot(&db, "2025-01-02")
+        .await
+        .unwrap();
+    assert!((snap_d1.asset_value - 1000.0).abs() < 0.01);
+
+    // Day 2: 25 * $40 = $1000, NAV unchanged
+    let snap_d2 = common::get_portfolio_snapshot(&db, "2025-01-03")
+        .await
+        .unwrap();
+    assert!((snap_d2.outstanding_shares - snap_d1.outstanding_shares).abs() < 0.01);
+    assert!((snap_d2.nav - 100.0).abs() < 0.01);
+    assert!((snap_d2.asset_value - 1000.0).abs() < 0.01);
+
+    let asset_snaps = common::get_asset_snapshots(&db, "2025-01-03").await;
+    assert!((asset_snaps[0].quantity - 25.0).abs() < 0.01);
+}
+
+/// Split mid-history: buy, price rises, split, verify NAV continuity.
+#[tokio::test]
+async fn test_split_mid_history_nav_continuity() {
+    let db = common::setup_test_db().await;
+    let mock = common::MockPriceFetcher::new();
+
+    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
+    // Buy 10 shares at $50
+    common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
+    common::insert_daily_price(&db, asset_id, "2025-01-02", 50.0, false).await;
+
+    // Price rises to $80 on day 2
+    common::insert_daily_price(&db, asset_id, "2025-01-03", 80.0, false).await;
+
+    // 2:1 split on day 3, adjusted price = $40
+    common::insert_split_transaction(&db, asset_id, "2025-01-06", 2.0).await;
+    common::insert_daily_price(&db, asset_id, "2025-01-06", 40.0, false).await;
+
+    // Price continues to $45 on day 4
+    common::insert_daily_price(&db, asset_id, "2025-01-07", 45.0, false).await;
+
+    let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
+    nav::rebuild_portfolio_history(
+        &db,
+        start,
+        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
+        None,
+        &mock,
+    )
+    .await
+    .unwrap();
+
+    // Day 1: 10 * $50 = $500, NAV=100, os=5
+    let snap_d1 = common::get_portfolio_snapshot(&db, "2025-01-02")
+        .await
+        .unwrap();
+    assert!((snap_d1.nav - 100.0).abs() < 0.01);
+
+    // Day 2: 10 * $80 = $800, NAV = 800/5 = 160
+    let snap_d2 = common::get_portfolio_snapshot(&db, "2025-01-03")
+        .await
+        .unwrap();
+    assert!((snap_d2.nav - 160.0).abs() < 0.01);
+
+    // Day 3 (split): 20 * $40 = $800, NAV = 800/5 = 160 (unchanged)
+    let snap_d3 = common::get_portfolio_snapshot(&db, "2025-01-06")
+        .await
+        .unwrap();
+    assert!((snap_d3.nav - 160.0).abs() < 0.01);
+    assert!((snap_d3.outstanding_shares - 5.0).abs() < 0.01);
+
+    // Day 4: 20 * $45 = $900, NAV = 900/5 = 180
+    let snap_d4 = common::get_portfolio_snapshot(&db, "2025-01-07")
+        .await
+        .unwrap();
+    assert!((snap_d4.nav - 180.0).abs() < 0.01);
+}
+
+/// Unit test: process_day_transactions with a split (no DB).
+#[tokio::test]
+async fn test_process_day_transactions_split_pure() {
+    let split_tx = Transaction {
+        asset_id: 1,
+        tx_type: TxType::Split,
+        date: "2025-01-03".to_owned(),
+        quantity: 2.0,
+        price_cents: 0,
+        fees_cents: 0,
+    };
+
+    let asset = Asset {
+        id: 1,
+        ticker: "XFAKE1".to_owned(),
+        isin: None,
+        name: "Test".to_owned(),
+        asset_type: AssetType::Stock,
+        currency: "EUR".to_owned(),
+    };
+    let asset_map: HashMap<i32, &Asset> = [(1, &asset)].into_iter().collect();
+    let day_rates: HashMap<String, f64> = HashMap::new();
+
+    let mut holdings: HashMap<i32, f64> = [(1, 10.0)].into_iter().collect();
+    let txs: Vec<&Transaction> = vec![&split_tx];
+
+    let (os, nav_val, div) =
+        nav::process_day_transactions(&txs, &mut holdings, 5.0, 100.0, &asset_map, &day_rates);
+
+    // Split should not change outstanding_shares, nav, or dividends
+    assert!((os - 5.0).abs() < 0.01);
+    assert!((nav_val - 100.0).abs() < 0.01);
+    assert!((div - 0.0).abs() < 0.01);
+    // Holdings should be doubled
+    assert_eq!(*holdings.get(&1).unwrap(), 20.0);
+}

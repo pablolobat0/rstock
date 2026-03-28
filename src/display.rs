@@ -1,3 +1,5 @@
+use std::fmt::Write;
+
 use colored::Colorize;
 use tabled::settings::object::Cell;
 use tabled::settings::style::{HorizontalLine, VerticalLine};
@@ -202,12 +204,13 @@ pub fn print_portfolio(result: &PortfolioResult, summary: Option<&PortfolioSumma
             result.total_invested, result.total_current_value,
         );
         if result.total_dividends > 0.0 {
-            totals.push_str(&format!("  Divs: {:.2}", result.total_dividends));
+            let _ = write!(totals, "  Divs: {:.2}", result.total_dividends);
         }
-        totals.push_str(&format!(
+        let _ = write!(
+            totals,
             "  G/L: {}",
             color_value(result.total_gain_loss, &gl_text)
-        ));
+        );
         println!("{totals}");
     }
 
@@ -230,8 +233,16 @@ pub fn print_portfolio(result: &PortfolioResult, summary: Option<&PortfolioSumma
         let periods = [
             ("YTD", summary.ytd_return, &summary.ytd_metrics),
             ("1Y", summary.one_year_return, &summary.one_year_metrics),
-            ("3Y(CAGR)", summary.three_year_return, &summary.three_year_metrics),
-            ("5Y(CAGR)", summary.five_year_return, &summary.five_year_metrics),
+            (
+                "3Y(CAGR)",
+                summary.three_year_return,
+                &summary.three_year_metrics,
+            ),
+            (
+                "5Y(CAGR)",
+                summary.five_year_return,
+                &summary.five_year_metrics,
+            ),
         ];
 
         print_metrics_table(&periods);
@@ -263,7 +274,7 @@ pub fn print_asset_list(assets: &[Asset]) {
             .remove_horizontal()
             .remove_vertical(),
     );
-    println!("{}", table);
+    println!("{table}");
     println!("\nTotal: {} assets", assets.len());
 }
 

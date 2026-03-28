@@ -123,3 +123,11 @@ pub async fn upsert(
 
     Ok(())
 }
+
+pub async fn delete_all_for_asset(db: &DatabaseConnection, asset_id: i32) -> anyhow::Result<()> {
+    daily_asset_price::Entity::delete_many()
+        .filter(daily_asset_price::Column::AssetId.eq(asset_id))
+        .exec(db)
+        .await?;
+    Ok(())
+}

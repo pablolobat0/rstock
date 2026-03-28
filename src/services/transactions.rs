@@ -2,9 +2,10 @@ use sea_orm::DatabaseConnection;
 
 use crate::constants::FLOAT_EPSILON;
 use crate::db::repos::{
-    asset_repo, portfolio_asset_history_repo, portfolio_history_repo, transaction_repo,
+    asset_repo, daily_price_repo, portfolio_asset_history_repo, portfolio_history_repo,
+    transaction_repo,
 };
-use crate::models::{AssetInfo, BuyOrder, DividendOrder, SellOrder, Transaction};
+use crate::models::{AssetInfo, BuyOrder, DividendOrder, SellOrder, SplitOrder, Transaction};
 
 pub async fn buy(db: &DatabaseConnection, asset: AssetInfo, order: BuyOrder) -> anyhow::Result<()> {
     let total = order.quantity * order.price + order.fees;
@@ -39,13 +40,13 @@ pub async fn sell(db: &DatabaseConnection, ticker: String, order: SellOrder) -> 
         .await?
         .ok_or_else(|| anyhow::anyhow!("Asset with ticker '{ticker}' not found"))?;
 
-    // Validate holdings at the sell date
+    // Validate holdings at the sell date (accounts for splits)
     let transactions = transaction_repo::find_by_asset_id(db, asset.id).await?;
-    let net_qty: f64 = transactions
-        .iter()
+    let filtered_transactions: Vec<_> = transactions
+        .into_iter()
         .filter(|t| t.date <= order.date)
-        .map(Transaction::signed_quantity)
-        .sum();
+        .collect();
+    let net_qty = Transaction::compute_holdings(&filtered_transactions);
 
     if order.quantity > net_qty + FLOAT_EPSILON {
         anyhow::bail!(
@@ -83,13 +84,13 @@ pub async fn dividend(
         .await?
         .ok_or_else(|| anyhow::anyhow!("Asset with ticker '{ticker}' not found"))?;
 
-    // Validate holdings at dividend date
+    // Validate holdings at dividend date (accounts for splits)
     let transactions = transaction_repo::find_by_asset_id(db, asset.id).await?;
-    let net_qty: f64 = transactions
-        .iter()
+    let filtered_transactions: Vec<_> = transactions
+        .into_iter()
         .filter(|t| t.date <= order.date)
-        .map(Transaction::signed_quantity)
-        .sum();
+        .collect();
+    let net_qty = Transaction::compute_holdings(&filtered_transactions);
 
     if net_qty <= FLOAT_EPSILON {
         anyhow::bail!("No holdings of {} at date {}", ticker, order.date);
@@ -107,6 +108,56 @@ pub async fn dividend(
     // Invalidate snapshots from the dividend date
     portfolio_history_repo::delete_from_date(db, &order_date).await?;
     portfolio_asset_history_repo::delete_from_date_for_asset(db, &order_date, asset.id).await?;
+
+    println!("{summary}");
+
+    Ok(())
+}
+
+pub async fn split(
+    db: &DatabaseConnection,
+    ticker: String,
+    order: SplitOrder,
+) -> anyhow::Result<()> {
+    let asset = asset_repo::find_by_ticker(db, &ticker)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("Asset with ticker '{ticker}' not found"))?;
+
+    if order.ratio <= 0.0 {
+        anyhow::bail!("Split ratio must be positive, got {}", order.ratio);
+    }
+
+    // Validate holdings at split date (accounts for prior splits)
+    let transactions = transaction_repo::find_by_asset_id(db, asset.id).await?;
+    let earliest_date = transactions
+        .first()
+        .map_or_else(|| order.date.clone(), |t| t.date.clone());
+    let filtered_transactions: Vec<_> = transactions
+        .into_iter()
+        .filter(|t| t.date <= order.date)
+        .collect();
+    let net_qty = Transaction::compute_holdings(&filtered_transactions);
+
+    if net_qty <= FLOAT_EPSILON {
+        anyhow::bail!("No holdings of {} at date {}", ticker, order.date);
+    }
+
+    let post_split_qty = net_qty * order.ratio;
+    let summary = format!(
+        "Split {} ({}): ratio {}, holdings {:.4} -> {:.4} on {}",
+        asset.name, ticker, order.ratio, net_qty, post_split_qty, order.date
+    );
+
+    transaction_repo::insert_split(db, asset.id, &order).await?;
+
+    // Price providers retroactively adjust all historical prices after a split,
+    // so the entire price cache for this asset is stale.
+    daily_price_repo::delete_all_for_asset(db, asset.id).await?;
+
+    // Invalidate portfolio snapshots from the asset's first transaction,
+    // since adjusted prices affect the entire history for this asset.
+    portfolio_history_repo::delete_from_date(db, &earliest_date).await?;
+    portfolio_asset_history_repo::delete_from_date_for_asset(db, &earliest_date, asset.id).await?;
 
     println!("{summary}");
 

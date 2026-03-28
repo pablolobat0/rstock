@@ -16,6 +16,7 @@ pub enum TxType {
     Buy,
     Sell,
     Dividend,
+    Split,
 }
 
 impl fmt::Display for TxType {
@@ -24,6 +25,7 @@ impl fmt::Display for TxType {
             TxType::Buy => write!(f, "buy"),
             TxType::Sell => write!(f, "sell"),
             TxType::Dividend => write!(f, "dividend"),
+            TxType::Split => write!(f, "split"),
         }
     }
 }
@@ -36,6 +38,7 @@ impl FromStr for TxType {
             "buy" => Ok(TxType::Buy),
             "sell" => Ok(TxType::Sell),
             "dividend" => Ok(TxType::Dividend),
+            "split" => Ok(TxType::Split),
             other => anyhow::bail!("unknown transaction type: {other}"),
         }
     }
@@ -64,6 +67,12 @@ pub struct DividendOrder {
     pub notes: Option<String>,
 }
 
+pub struct SplitOrder {
+    pub date: String,
+    pub ratio: f64,
+    pub notes: Option<String>,
+}
+
 pub struct Transaction {
     pub asset_id: i32,
     pub tx_type: TxType,
@@ -86,12 +95,30 @@ impl Transaction {
         self.tx_type == TxType::Dividend
     }
 
+    pub fn is_split(&self) -> bool {
+        self.tx_type == TxType::Split
+    }
+
     pub fn signed_quantity(&self) -> f64 {
         match self.tx_type {
             TxType::Buy => self.quantity,
             TxType::Sell => -self.quantity,
-            TxType::Dividend => 0.0,
+            TxType::Dividend | TxType::Split => 0.0,
         }
+    }
+
+    /// Compute net holdings from a chronologically-ordered slice of transactions,
+    /// accounting for splits (which multiply holdings by their ratio).
+    pub fn compute_holdings(transactions: &[Transaction]) -> f64 {
+        let mut holdings = 0.0;
+        for tx in transactions {
+            if tx.is_split() {
+                holdings *= tx.quantity;
+            } else {
+                holdings += tx.signed_quantity();
+            }
+        }
+        holdings
     }
 }
 

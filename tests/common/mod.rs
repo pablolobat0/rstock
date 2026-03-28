@@ -120,6 +120,29 @@ pub async fn insert_dividend_transaction(
         .expect("failed to insert dividend transaction");
 }
 
+pub async fn insert_split_transaction(
+    db: &DatabaseConnection,
+    asset_id: i32,
+    date: &str,
+    ratio: f64,
+) {
+    let record = transaction::ActiveModel {
+        asset_id: Set(asset_id),
+        tx_type: Set("split".to_owned()),
+        date: Set(date.to_owned()),
+        quantity: Set(ratio),
+        price_cents: Set(0),
+        fees_cents: Set(0),
+        notes: Set(None),
+        created_at: Set(format!("{date}T00:00:00")),
+        ..Default::default()
+    };
+    transaction::Entity::insert(record)
+        .exec(db)
+        .await
+        .expect("failed to insert split transaction");
+}
+
 pub async fn insert_daily_price(
     db: &DatabaseConnection,
     asset_id: i32,

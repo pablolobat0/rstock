@@ -8,5 +8,5 @@ pub use portfolio::{
     PortfolioSummary,
 };
 pub use transaction::{
-    cents_to_f64, f64_to_cents, BuyOrder, DividendOrder, SellOrder, Transaction, TxType,
+    cents_to_f64, f64_to_cents, BuyOrder, DividendOrder, SellOrder, SplitOrder, Transaction, TxType,
 };

@@ -87,8 +87,7 @@ pub async fn compute_beta_sharpe_for_period(
     }
 
     let benchmark_prices =
-        daily_price_repo::find_prices_between(db, benchmark_asset_id, start_date, end_date)
-            .await?;
+        daily_price_repo::find_prices_between(db, benchmark_asset_id, start_date, end_date).await?;
 
     let benchmark_map: HashMap<&str, f64> = benchmark_prices
         .iter()

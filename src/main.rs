@@ -10,12 +10,13 @@ use chrono::{Datelike, NaiveDate};
 use clap::Parser;
 use cli::{ChartPeriod, Cli, Commands};
 use constants::{format_date, DATE_FORMAT, FIVE_YEAR_DAYS, ONE_YEAR_DAYS, THREE_YEAR_DAYS};
-use models::{AssetInfo, BuyOrder, DividendOrder, SellOrder};
+use models::{AssetInfo, BuyOrder, DividendOrder, SellOrder, SplitOrder};
 use services::price::RealPriceFetcher;
 
 use crate::db::repos::{asset_repo, portfolio_history_repo};
 
 #[tokio::main]
+#[allow(clippy::too_many_lines)]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let db = db::connect().await?;
@@ -118,7 +119,25 @@ async fn main() -> anyhow::Result<()> {
         }
         Commands::Export { output } => {
             let count = services::export::export_transactions_csv(&db, &output).await?;
-            println!("Exported {} transactions to {}", count, output);
+            println!("Exported {count} transactions to {output}");
+        }
+        Commands::Split {
+            ticker,
+            date,
+            ratio,
+            notes,
+        } => {
+            let today = chrono::Local::now().date_naive();
+            if date > today {
+                anyhow::bail!("Date cannot be in the future: {date}");
+            }
+
+            let order = SplitOrder {
+                date: format_date(date),
+                ratio,
+                notes,
+            };
+            services::transactions::split(&db, ticker, order).await?;
         }
         Commands::Sell {
             ticker,

@@ -105,10 +105,11 @@ pub fn process_day_transactions(
             .copied()
             .unwrap_or(1.0);
 
-        if tx.is_dividend() {
+        if tx.is_split() {
+            *holdings.entry(tx.asset_id).or_insert(0.0) *= tx.quantity;
+        } else if tx.is_dividend() {
             // Dividend = income: accumulate as cash, no holdings or shares change
-            let amount =
-                tx.quantity * cents_to_f64(tx.price_cents) - cents_to_f64(tx.fees_cents);
+            let amount = tx.quantity * cents_to_f64(tx.price_cents) - cents_to_f64(tx.fees_cents);
             dividend_income += amount * rate;
         } else if tx.is_sell() {
             // Sell = withdrawal: proceeds = qty * price - fees

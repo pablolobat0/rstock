@@ -3,7 +3,9 @@ use sea_orm::{
 };
 
 use crate::db::entities::transaction;
-use crate::models::{f64_to_cents, BuyOrder, DividendOrder, SellOrder, Transaction, TxType};
+use crate::models::{
+    f64_to_cents, BuyOrder, DividendOrder, SellOrder, SplitOrder, Transaction, TxType,
+};
 
 pub async fn insert_buy(
     db: &DatabaseConnection,
@@ -88,6 +90,28 @@ pub async fn insert_dividend(
         quantity: Set(1.0),
         price_cents: Set(amount_cents),
         fees_cents: Set(fees_cents),
+        notes: Set(order.notes.clone()),
+        created_at: Set(now),
+        ..Default::default()
+    };
+    tx.insert(db).await?;
+    Ok(())
+}
+
+pub async fn insert_split(
+    db: &DatabaseConnection,
+    asset_id: i32,
+    order: &SplitOrder,
+) -> anyhow::Result<()> {
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+
+    let tx = transaction::ActiveModel {
+        asset_id: Set(asset_id),
+        tx_type: Set(TxType::Split.to_string()),
+        date: Set(order.date.clone()),
+        quantity: Set(order.ratio),
+        price_cents: Set(0),
+        fees_cents: Set(0),
         notes: Set(order.notes.clone()),
         created_at: Set(now),
         ..Default::default()
