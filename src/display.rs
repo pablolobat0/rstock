@@ -1,3 +1,5 @@
+use std::fmt::Write;
+
 use colored::Colorize;
 use tabled::settings::object::Cell;
 use tabled::settings::style::{HorizontalLine, VerticalLine};
@@ -5,9 +7,11 @@ use tabled::settings::{Color, Style};
 use tabled::Table;
 use textplots::{Chart, Plot, Shape};
 
+use tabled::builder::Builder;
+
 use crate::models::{
-    Asset, AssetRow, PeriodMetrics, PortfolioResult, PortfolioRow, PortfolioSnapshot,
-    PortfolioSummary,
+    Asset, AssetRow, CorrelationMatrix, PeriodMetrics, PortfolioResult, PortfolioRow,
+    PortfolioSnapshot, PortfolioSummary,
 };
 
 fn format_qty(qty: f64) -> String {
@@ -202,12 +206,13 @@ pub fn print_portfolio(result: &PortfolioResult, summary: Option<&PortfolioSumma
             result.total_invested, result.total_current_value,
         );
         if result.total_dividends > 0.0 {
-            totals.push_str(&format!("  Divs: {:.2}", result.total_dividends));
+            let _ = write!(totals, "  Divs: {:.2}", result.total_dividends);
         }
-        totals.push_str(&format!(
+        let _ = write!(
+            totals,
             "  G/L: {}",
             color_value(result.total_gain_loss, &gl_text)
-        ));
+        );
         println!("{totals}");
     }
 
@@ -230,8 +235,16 @@ pub fn print_portfolio(result: &PortfolioResult, summary: Option<&PortfolioSumma
         let periods = [
             ("YTD", summary.ytd_return, &summary.ytd_metrics),
             ("1Y", summary.one_year_return, &summary.one_year_metrics),
-            ("3Y(CAGR)", summary.three_year_return, &summary.three_year_metrics),
-            ("5Y(CAGR)", summary.five_year_return, &summary.five_year_metrics),
+            (
+                "3Y(CAGR)",
+                summary.three_year_return,
+                &summary.three_year_metrics,
+            ),
+            (
+                "5Y(CAGR)",
+                summary.five_year_return,
+                &summary.five_year_metrics,
+            ),
         ];
 
         print_metrics_table(&periods);
@@ -263,8 +276,73 @@ pub fn print_asset_list(assets: &[Asset]) {
             .remove_horizontal()
             .remove_vertical(),
     );
-    println!("{}", table);
+    println!("{table}");
     println!("\nTotal: {} assets", assets.len());
+}
+
+pub fn print_correlation_matrix(matrix: &CorrelationMatrix, period_label: &str) {
+    if matrix.labels.is_empty() {
+        println!("No assets found for correlation analysis.");
+        return;
+    }
+
+    println!("\nCorrelation Matrix — {period_label}\n");
+
+    let n = matrix.labels.len();
+
+    // Build table with Builder for dynamic columns
+    let mut builder = Builder::default();
+
+    // Header row: empty cell + all tickers
+    let mut header = vec![String::new()];
+    header.extend(matrix.labels.iter().cloned());
+    builder.push_record(header);
+
+    // Data rows
+    for i in 0..n {
+        let mut row = vec![matrix.labels[i].clone()];
+        for j in 0..n {
+            let cell = match matrix.matrix[i][j] {
+                Some(v) => format!("{v:.2}"),
+                None => "N/A".to_string(),
+            };
+            row.push(cell);
+        }
+        builder.push_record(row);
+    }
+
+    let mut table = builder.build();
+    table.with(
+        Style::modern()
+            .horizontals([(1, HorizontalLine::inherit(Style::modern()).horizontal('═'))])
+            .verticals([(1, VerticalLine::inherit(Style::modern()))])
+            .remove_horizontal()
+            .remove_vertical(),
+    );
+
+    // Apply color coding per cell
+    for i in 0..n {
+        for j in 0..n {
+            let color = match matrix.matrix[i][j] {
+                None => Color::FG_BRIGHT_BLACK,
+                Some(_) if i == j => Color::FG_WHITE,
+                Some(v) if v.abs() > 0.7 => Color::FG_GREEN,
+                Some(v) if v.abs() >= 0.3 => Color::FG_YELLOW,
+                Some(_) => Color::FG_RED,
+            };
+            // +1 for header row, +1 for label column
+            table.modify(Cell::new(i + 1, j + 1), color);
+        }
+    }
+
+    println!("{table}");
+
+    if !matrix.warnings.is_empty() {
+        println!(
+            "\nNote: insufficient data for {period_label}: {}",
+            matrix.warnings.join(", ")
+        );
+    }
 }
 
 pub fn print_nav_chart(snapshots: &[PortfolioSnapshot], period_label: &str) {

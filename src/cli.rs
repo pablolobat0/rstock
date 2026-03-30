@@ -11,6 +11,25 @@ pub struct Cli {
 }
 
 #[derive(ValueEnum, Clone, Debug)]
+pub enum CorrelationPeriod {
+    #[value(name = "30d")]
+    ThirtyDays,
+    #[value(name = "6m")]
+    SixMonths,
+    #[value(name = "1y")]
+    OneYear,
+    #[value(name = "3y")]
+    ThreeYears,
+    #[value(name = "5y")]
+    FiveYears,
+}
+
+#[derive(ValueEnum, Clone, Debug)]
+pub enum AnalysisTarget {
+    Portfolio,
+}
+
+#[derive(ValueEnum, Clone, Debug)]
 pub enum ChartPeriod {
     Ytd,
     #[value(name = "1y")]
@@ -105,6 +124,17 @@ pub enum Commands {
         /// Output file path (e.g. transactions.csv)
         #[arg(long, short)]
         output: String,
+    },
+
+    /// Analyze portfolio or asset correlations
+    Analyze {
+        /// What to analyze
+        #[arg(value_enum)]
+        target: AnalysisTarget,
+
+        /// Time period for correlation calculation
+        #[arg(long, value_enum, default_value = "1y")]
+        period: CorrelationPeriod,
     },
 
     /// Record a sell transaction for an existing asset

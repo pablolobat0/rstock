@@ -8,14 +8,18 @@ mod services;
 use anyhow::Context;
 use chrono::{Datelike, NaiveDate};
 use clap::Parser;
-use cli::{ChartPeriod, Cli, Commands};
-use constants::{format_date, DATE_FORMAT, FIVE_YEAR_DAYS, ONE_YEAR_DAYS, THREE_YEAR_DAYS};
+use cli::{AnalysisTarget, ChartPeriod, Cli, Commands, CorrelationPeriod};
+use constants::{
+    format_date, DATE_FORMAT, FIVE_YEAR_DAYS, ONE_YEAR_DAYS, SIX_MONTH_DAYS, THIRTY_DAYS,
+    THREE_YEAR_DAYS,
+};
 use models::{AssetInfo, BuyOrder, DividendOrder, SellOrder};
 use services::price::RealPriceFetcher;
 
 use crate::db::repos::{asset_repo, portfolio_history_repo};
 
 #[tokio::main]
+#[allow(clippy::too_many_lines)]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let db = db::connect().await?;
@@ -118,8 +122,40 @@ async fn main() -> anyhow::Result<()> {
         }
         Commands::Export { output } => {
             let count = services::export::export_transactions_csv(&db, &output).await?;
-            println!("Exported {} transactions to {}", count, output);
+            println!("Exported {count} transactions to {output}");
         }
+        Commands::Analyze { target, period } => match target {
+            AnalysisTarget::Portfolio => {
+                let today = chrono::Local::now().date_naive();
+                let today_str = format_date(today);
+
+                let (start_date, period_label) = match period {
+                    CorrelationPeriod::ThirtyDays => {
+                        (today - chrono::Duration::days(THIRTY_DAYS), "30D")
+                    }
+                    CorrelationPeriod::SixMonths => {
+                        (today - chrono::Duration::days(SIX_MONTH_DAYS), "6M")
+                    }
+                    CorrelationPeriod::OneYear => {
+                        (today - chrono::Duration::days(ONE_YEAR_DAYS), "1Y")
+                    }
+                    CorrelationPeriod::ThreeYears => {
+                        (today - chrono::Duration::days(THREE_YEAR_DAYS), "3Y")
+                    }
+                    CorrelationPeriod::FiveYears => {
+                        (today - chrono::Duration::days(FIVE_YEAR_DAYS), "5Y")
+                    }
+                };
+
+                let start_str = format_date(start_date);
+                let matrix = services::metrics::compute_correlation_matrix(
+                    &db, &start_str, &today_str, &fetcher,
+                )
+                .await?;
+
+                display::print_correlation_matrix(&matrix, period_label);
+            }
+        },
         Commands::Sell {
             ticker,
             date,
