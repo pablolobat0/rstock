@@ -6,17 +6,23 @@ A CLI portfolio tracker with NAV unitization, price fetching, and ASCII charts.
 
 ## Overview
 
-rstock tracks your investment portfolio from the terminal. It records buy transactions, fetches live prices from Yahoo Finance and Morningstar, computes daily portfolio NAV using unitization (the same method used by mutual funds), and renders performance charts directly in your terminal.
+rstock tracks your investment portfolio from the terminal. It records buy/sell transactions, dividends, and stock splits, fetches live prices from Yahoo Finance and Morningstar, computes daily portfolio NAV using unitization (the same method used by mutual funds), and renders performance charts directly in your terminal.
 
 ## Features
 
-- **Transaction recording** — Log stock, ETF, and fund purchases with full metadata (fees, currency, notes, ISIN)
+- **Transaction recording** — Log buys, sells, dividends, and stock splits for stocks, ETFs, and funds
 - **NAV unitization** — Daily portfolio valuation using unit-based accounting (first deposit = NAV 100, subsequent deposits issue shares at previous day's NAV)
 - **Multi-source price fetching** — Stocks via Yahoo Finance (`yfinance-rs`), funds/ETFs via Morningstar (`mstarpy`)
 - **Price caching** — Historical prices stored in SQLite with forward-fill for weekends/holidays
-- **Performance tracking** — YTD, 1Y, 3Y, 5Y, and all-time returns
+- **Multi-currency support** — All portfolio values converted to EUR base currency with cached FX rates
+- **Performance tracking** — YTD, 1Y, 3Y, 5Y, and all-time returns with per-period volatility, max drawdown, beta, and Sharpe ratio
 - **ASCII NAV chart** — Terminal-rendered portfolio performance chart via `textplots`
-- **Colored portfolio table** — Per-asset breakdown with gain/loss highlighting
+- **Colored portfolio table** — Per-asset breakdown with gain/loss highlighting and dividend tracking
+- **Correlation analysis** — Portfolio asset correlation matrix over configurable periods
+- **Stock monitoring** — Watchlist with momentum indicators (RSI, SMA, MACD), fundamentals, and sector comparison
+- **Holdings look-through** — Fund/ETF underlying position breakdown via Morningstar
+- **Export** — Dump transactions to CSV
+- **Asset listing** — View all tracked assets at a glance
 
 ## Prerequisites
 
@@ -61,7 +67,25 @@ All `buy` flags:
 | `--isin`     | No       |         | ISIN code (used for fund/ETF lookups)|
 | `--fees`     | No       | `0`     | Commission/fees                      |
 | `--currency` | No       | `EUR`   | Currency                             |
-| `--notes`    | No       |         | Optional notes                       |
+
+### Record a sell transaction
+
+```bash
+rstock sell --ticker MSFT --date 2026-03-01 --quantity 0.5 --price 400
+```
+
+### Record a dividend
+
+```bash
+rstock dividend --ticker MSFT --date 2026-03-15 --amount 25.50 --fees 3.80
+```
+
+### Record a stock split
+
+```bash
+rstock split --ticker MSFT --date 2026-03-20 --ratio 2    # 2:1 split
+rstock split --ticker MSFT --date 2026-03-20 --ratio 0.25  # 1:4 reverse split
+```
 
 ### View portfolio
 
@@ -71,42 +95,85 @@ rstock get --period ytd   # YTD chart
 rstock get --period 5y    # 5-year chart
 ```
 
-Chart periods: `ytd`, `1y` (default), `3y`, `5y`, `all`.
+Chart periods: `1m`, `3m`, `6m`, `ytd`, `1y` (default), `3y`, `5y`, `all`.
+
+### List assets and export
+
+```bash
+rstock list                          # Show all portfolio assets
+rstock export --output txns.csv      # Export transactions to CSV
+```
+
+### Holdings look-through
+
+```bash
+rstock holdings    # Stocks directly, funds/ETFs with underlying positions
+```
+
+### Analyze correlations
+
+```bash
+rstock analyze portfolio              # 1Y asset correlation matrix (default)
+rstock analyze portfolio --period 30d # 30-day correlations
+```
+
+Periods: `30d`, `6m`, `1y` (default), `3y`, `5y`.
+
+### Monitor stocks
+
+```bash
+rstock monitor add --ticker AAPL --sector-etf XLK
+rstock monitor list
+rstock monitor view AAPL                  # 1Y analysis (default)
+rstock monitor view AAPL --period 6m      # 6-month analysis
+rstock monitor remove --ticker AAPL
+```
 
 ## Architecture
 
 ```
 src/
-├── cli.rs              # Clap CLI definition
+├── cli.rs              # Clap CLI definition (get, buy, sell, dividend, split, list, export, holdings, analyze, monitor)
 ├── main.rs             # Entry point, command dispatch
-├── display.rs          # Terminal output: portfolio table, NAV chart
+├── constants.rs        # Centralized constants (dates, currency, metrics, thresholds)
+├── display.rs          # Terminal output: tables, charts, reports
+├── utils.rs            # Utility functions (scripts directory resolution)
+├── lib.rs              # Public module exports
 ├── models/
 │   ├── asset.rs        # AssetType enum, AssetInfo, Asset, AssetPosition
-│   ├── portfolio.rs    # PortfolioSnapshot, PortfolioSummary, PortfolioResult
-│   └── transaction.rs  # BuyOrder, Transaction
+│   ├── portfolio.rs    # PortfolioSnapshot, PortfolioSummary, CorrelationMatrix, holdings models
+│   ├── transaction.rs  # BuyOrder, SellOrder, DividendOrder, SplitOrder, TxType, Transaction
+│   └── monitor.rs      # StockInfo, MomentumIndicators, RelationshipMetrics, MonitorReport
 ├── services/
-│   ├── transactions.rs # Record purchases, invalidate snapshots
+│   ├── transactions.rs # Buy/sell/dividend/split recording + snapshot invalidation
 │   ├── portfolio.rs    # Portfolio summary and per-asset positions
 │   ├── nav.rs          # NAV unitization engine
 │   ├── daily_prices.rs # Price caching with forward-fill
-│   └── price.rs        # PriceFetcher trait + Real/Mock implementations
+│   ├── exchange_rates.rs # FX rate caching (EUR base)
+│   ├── price.rs        # PriceFetcher trait + Real/Mock implementations
+│   ├── metrics.rs      # Beta, Sharpe, volatility, drawdown, correlation matrix
+│   ├── holdings.rs     # Fund/ETF look-through holdings
+│   ├── monitor.rs      # Stock analysis with momentum indicators
+│   └── export.rs       # Transaction CSV export
 ├── db/
 │   ├── mod.rs          # SQLite connection + auto-migration
-│   ├── entities/       # SeaORM generated entities
-│   └── repos/          # Repository layer
+│   ├── entities/       # SeaORM generated entities (8 tables)
+│   └── repos/          # Repository layer (one per entity)
 scripts/
 ├── get_fund_price.py          # Latest fund/ETF NAV (mstarpy)
-└── get_fund_price_history.py  # Historical fund/ETF NAV (mstarpy)
-migration/src/                 # SeaORM migrations
+├── get_fund_price_history.py  # Historical fund/ETF NAV (mstarpy)
+└── get_fund_holdings.py       # Fund/ETF underlying holdings (mstarpy)
+migration/src/                 # SeaORM migrations (5 migrations)
+tests/                         # Integration tests + common test utilities
 ```
 
 ### Data flow
 
-1. `cli.rs` parses commands
+1. `cli.rs` parses commands via clap derive macros
 2. `main.rs` dispatches to service functions
 3. Services fetch prices via `PriceFetcher` trait and cache in `daily_asset_prices`
 4. NAV engine computes daily snapshots using unitization
-5. `display.rs` renders tables and charts to the terminal
+5. `display.rs` renders tables, charts, and reports to the terminal
 
 ### Key design decisions
 
@@ -115,6 +182,7 @@ migration/src/                 # SeaORM migrations
 - **NAV unitization** — First deposit sets NAV = 100.0; subsequent deposits issue shares at previous day's EOD NAV
 - **Incremental rebuild** — Portfolio history rebuilds only from the last known snapshot
 - **Effective end date** — Snapshots are never built for today; the end date is further limited by the slowest data source (handles fund NAV reporting delays)
+- **Centralized constants** — All magic numbers live in `src/constants.rs`
 
 ## Database
 

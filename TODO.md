@@ -9,19 +9,22 @@
 
 ## New Commands
 
-- [ ] `list` — show all assets and/or transactions (with filters: by ticker, date range, type)
+- [x] `list` — show all assets in the portfolio
 - [ ] `delete` — remove a transaction by ID (with confirmation prompt)
 - [x] `sell` — record a sell transaction (tx_type="sell", reduce quantity, track realized gains)
 - [ ] `get --ticker MSFT` — show single-asset detail view with individual price chart
 - [ ] `update` — fetch and cache latest prices without displaying portfolio
-- [ ] `export` — dump portfolio/transactions to CSV or JSON
+- [x] `export` — dump transactions to CSV
 - [ ] `import` — bulk import transactions from broker CSV exports
+- [x] `holdings` — fund/ETF look-through with underlying positions
+- [x] `analyze` — portfolio correlation matrix over configurable periods
+- [x] `monitor` — stock watchlist with momentum indicators, fundamentals, and sector comparison
 
 ## New Transaction Types
 
 - [x] Sell transactions — schema already has `tx_type` field (hardcoded to "buy"); add CLI command + service logic
 - [x] Dividends — new tx_type, cash income tracked in NAV (reinvest via separate buy)
-- [ ] Stock splits — adjust quantity and cost basis for affected asset
+- [x] Stock splits — adjust quantity and cost basis for affected asset
 
 ## Portfolio Features
 
@@ -29,7 +32,8 @@
 - [ ] Tax lot tracking — cost basis per lot for tax reporting
 - [ ] Benchmark comparison chart — overlay portfolio NAV against benchmark (ACWI) on same chart
 - [x] Risk metrics — beta and Sharpe ratio (trailing 1Y, vs ACWI benchmark)
-- [ ] Max drawdown metric
+- [x] Max drawdown metric — per-period max drawdown in portfolio summary
+- [x] Per-period volatility — annualized volatility for YTD, 1Y, 3Y, 5Y
 - [ ] Sector/country allocation breakdown
 - [ ] Rebalancing alerts — target allocation vs. current weights
 - [x] Multi-currency support + forex conversion (exchange rate service, daily rate caching, integrated into NAV + portfolio)

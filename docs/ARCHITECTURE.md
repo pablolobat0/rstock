@@ -19,8 +19,11 @@
             │  Services   │ │ Models │ │   Display   │
             │  nav.rs     │ │        │ │ display.rs  │
             │  portfolio  │ │ asset  │ │  (tables,   │
-            │  prices     │ │ tx     │ │   charts)   │
-            │  metrics    │ │ port.  │ │             │
+            │  prices     │ │ tx     │ │   charts,   │
+            │  metrics    │ │ port.  │ │   reports)  │
+            │  holdings   │ │ monitor│ │             │
+            │  monitor    │ │        │ │             │
+            │  export     │ │        │ │             │
             └──────┬──────┘ └────────┘ └─────────────┘
                    │
          ┌─────────┴─────────┐
@@ -42,10 +45,17 @@
 
 ### CLI Layer (`cli.rs`, `main.rs`)
 
-`cli.rs` defines three subcommands using clap 4.5 derive macros:
-- **`get`** — Display portfolio with optional `--period` (ytd, 1y, 3y, 5y, all)
-- **`buy`** — Record a purchase (ticker, name, type, date, quantity, price, optional: isin, fees, currency, notes)
-- **`sell`** — Record a sale (ticker, date, quantity, price, optional: fees, notes)
+`cli.rs` defines ten subcommands using clap 4.5 derive macros:
+- **`get`** — Display portfolio with optional `--period` (1m, 3m, 6m, ytd, 1y, 3y, 5y, all)
+- **`buy`** — Record a purchase (ticker, name, type, date, quantity, price, optional: isin, fees, currency)
+- **`sell`** — Record a sale (ticker, date, quantity, price, optional: fees)
+- **`dividend`** — Record a dividend payment (ticker, date, amount, optional: fees)
+- **`split`** — Record a stock split or reverse split (ticker, date, ratio)
+- **`list`** — Show all assets in the portfolio
+- **`export`** — Export transactions to CSV (--output path)
+- **`holdings`** — Show portfolio holdings breakdown (stocks directly, funds/ETFs with underlying positions)
+- **`analyze`** — Portfolio correlation matrix with configurable period (30d, 6m, 1y, 3y, 5y)
+- **`monitor`** — Subcommand group: add/remove/list/view stocks in a watchlist with momentum indicators
 
 `main.rs` dispatches commands to service functions. It also handles chart period date-range calculation and date validation (rejects future dates).
 
@@ -57,7 +67,7 @@ All business logic lives here. Key modules:
 
 **`portfolio.rs`** — `get_portfolio()` builds the current position table (per-asset quantity, avg cost, gain/loss). `get_portfolio_summary()` triggers NAV rebuild if stale, then computes return metrics (YTD simple return, annualized CAGR for 1Y/3Y/5Y).
 
-**`transactions.rs`** — `buy()` records a purchase and invalidates snapshots from the buy date forward. `sell()` validates holdings (cannot sell more than owned), records the sale, and invalidates snapshots.
+**`transactions.rs`** — `buy()` records a purchase and invalidates snapshots from the buy date forward. `sell()` validates holdings (cannot sell more than owned), records the sale, and invalidates snapshots. `dividend()` records a dividend payment. `split()` records a stock split, adjusting quantity via the split ratio.
 
 **`daily_prices.rs`** — `fill_prices_for_range()` fetches prices from the API, caches them, and forward-fills gaps for weekends/holidays. Never fills beyond the last API date. `get_closing_price()` is the main lookup function.
 
@@ -65,15 +75,24 @@ All business logic lives here. Key modules:
 
 **`price.rs`** — Defines the `PriceFetcher` async trait with two methods: `get_historical_prices()` and `get_historical_exchange_rates()`. `RealPriceFetcher` implements it using `yfinance-rs` for stocks and `uv run scripts/get_fund_price_history.py` for funds/ETFs.
 
-**`metrics.rs`** — `compute_risk_metrics()` calculates portfolio beta and Sharpe ratio against the MSCI ACWI benchmark. Uses daily log returns, 252 trading days/year, 3% annual risk-free rate. Requires at least 20 data points.
+**`metrics.rs`** — `compute_risk_metrics()` calculates per-period volatility, max drawdown, beta, and Sharpe ratio against the MSCI ACWI benchmark. `compute_correlation_matrix()` builds an N×N asset correlation matrix from daily returns. Uses daily log returns, 252 trading days/year, 3% annual risk-free rate. Requires at least 20 data points.
+
+**`holdings.rs`** — `get_holdings()` builds a look-through report: stocks are listed directly, while funds/ETFs have their underlying positions fetched via `scripts/get_fund_holdings.py`.
+
+**`monitor.rs`** — `generate_monitor_report()` fetches price history for a stock and its sector ETF, computes momentum indicators (RSI-14, SMA-50/200, MACD), fundamentals, and relative strength metrics.
+
+**`export.rs`** — `export_transactions_csv()` dumps all transactions to a CSV file.
 
 ### Display Layer (`display.rs`)
 
 Pure output formatting with no business logic:
-- `print_portfolio_table()` — Renders per-asset table using `tabled` with green/red coloring via `colored`
-- `print_portfolio_summary()` — Renders NAV, daily change, period returns, beta, Sharpe
+- `print_portfolio()` — Renders per-asset table and summary (NAV, returns, risk metrics) using `tabled` with green/red coloring via `colored`
 - `print_nav_chart()` — ASCII NAV chart via `textplots`
-- Helper functions: `format_qty()`, `color_value()`, `format_return()`
+- `print_asset_list()` — Lists all tracked assets
+- `print_correlation_matrix()` — Renders N×N correlation matrix with color-coded values
+- `print_holdings()` — Renders fund/ETF look-through report with underlying positions
+- `print_monitor_report()` — Renders stock analysis with fundamentals, momentum indicators, and sector comparison charts
+- `print_watchlist()` — Lists monitored stocks
 
 ### Model Layer (`models/`)
 
@@ -86,28 +105,46 @@ Domain structs organized by concept:
 - `AssetPosition` — Display-ready holding with current price, gain/loss, avg cost
 
 **`transaction.rs`**:
-- `BuyOrder`, `SellOrder` — Input structs for recording transactions
-- `Transaction` — DB-backed struct with `price_cents` and `fees_cents` (i64)
+- `TxType` enum — Buy, Sell, Dividend, Split (with `Display`/`FromStr` for DB serialization)
+- `BuyOrder`, `SellOrder`, `DividendOrder`, `SplitOrder` — Input structs for recording transactions
+- `Transaction` — DB-backed struct with `price_cents` and `fees_cents` (i64), includes `compute_holdings()` for net position calculation accounting for splits
 - `f64_to_cents()` / `cents_to_f64()` — Conversion helpers for monetary precision
 
 **`portfolio.rs`**:
 - `PortfolioSnapshot` — Daily NAV snapshot (date, asset_value, total_value, outstanding_shares, nav)
 - `AssetSnapshot` — Per-asset daily position (quantity, closing_price, market_value, exchange_rate)
-- `PortfolioResult` — Query result with asset rows and aggregated totals
-- `PortfolioSummary` — Statistics (nav, daily change, period returns, beta, sharpe)
+- `PortfolioResult` — Query result with asset rows and aggregated totals (including total_dividends)
+- `PortfolioSummary` — Statistics (nav, daily change, period returns, per-period PeriodMetrics)
+- `PeriodMetrics` — Per-period volatility, max drawdown, beta, and Sharpe ratio
 - `PortfolioRow` — Display struct with `tabled::Tabled` derive
+- `CorrelationMatrix` — N×N asset correlation matrix with labels and warnings
+- `HoldingsResult`, `DirectHolding`, `FundWithHoldings`, `FundHolding` — Look-through holdings models
+
+**`monitor.rs`**:
+- `StockInfo` — Fundamentals (price, P/E, EPS, dividend yield, market cap, sector, etc.)
+- `MomentumIndicators` — RSI-14, SMA-50/200, MACD with signal interpretations
+- `RelationshipMetrics` — Relative strength, beta vs sector, correlation
+- `MonitorReport` — Combined report with stock/sector momentum and price series
 
 ### DB Layer (`db/`)
 
 **`mod.rs`** — `connect()` creates the SQLite connection at `~/.rstock/rstock.db`, auto-creates parent directories, and runs pending migrations via `sea_orm_migration::MigratorTrait::up()`.
 
-**`entities/`** — SeaORM-generated model structs for each table. Each entity defines `Model`, `ActiveModel`, `Column`, and `Relation` types.
+**`entities/`** — SeaORM-generated model structs for each table (8 entities: asset, transaction, daily_asset_price, portfolio_history, portfolio_asset_history, daily_exchange_rate, watchlist). Each entity defines `Model`, `ActiveModel`, `Column`, and `Relation` types.
 
-**`repos/`** — Repository pattern with one module per entity. All functions are `async` and take `&DatabaseConnection` as first parameter. Standard function naming: `find_*`, `find_by_*`, `find_*_between`, `find_at_or_before`, `upsert`, `insert_*`, `delete_*`.
+**`repos/`** — Repository pattern with one module per entity (including `watchlist_repo`). All functions are `async` and take `&DatabaseConnection` as first parameter. Standard function naming: `find_*`, `find_by_*`, `find_*_between`, `find_at_or_before`, `upsert`, `insert_*`, `delete_*`.
+
+### Constants (`constants.rs`)
+
+Centralized constants: `BASE_CURRENCY`, `INITIAL_NAV`, period durations, benchmark configuration (`ACWI`), risk-free rate, trading days, momentum indicator parameters (RSI, SMA, MACD), and floating-point thresholds.
+
+### Utilities (`utils.rs`)
+
+`resolve_scripts_dir()` locates the Python scripts directory (checks `RSTOCK_SCRIPTS_DIR` env var, then walks up from executable).
 
 ## Database Schema
 
-Seven tables across four migrations:
+Eight tables across five migrations:
 
 ### Core Tables (Migration 1)
 
@@ -127,12 +164,11 @@ Seven tables across four migrations:
 |--------|------|-------|
 | id | i32 PK | Auto-increment |
 | asset_id | i32 FK | References assets.id |
-| tx_type | String | "buy" or "sell" |
+| tx_type | String | "buy", "sell", "dividend", or "split" |
 | date | String | YYYY-MM-DD |
 | quantity | f64 | Number of shares/units |
 | price_cents | i64 | Price per unit in cents |
 | fees_cents | i64 | Commission in cents |
-| notes | String? | Optional |
 | created_at | String | ISO timestamp |
 
 ### Price Cache (Migration 2)
@@ -179,6 +215,16 @@ Seven tables across four migrations:
 | date | String | YYYY-MM-DD |
 | rate | f64 | Conversion rate |
 
+### Watchlist (Migration 5)
+
+**`watchlist`** — Monitored stocks for analysis
+| Column | Type | Notes |
+|--------|------|-------|
+| id | i32 PK | Auto-increment |
+| ticker | String | UNIQUE |
+| sector_etf_ticker | String | Sector ETF for comparison |
+| created_at | String | ISO timestamp |
+
 ### Relationships
 
 ```
@@ -187,7 +233,7 @@ assets 1──* daily_asset_prices
 assets 1──* portfolio_asset_history
 ```
 
-`portfolio_history` and `daily_exchange_rates` are standalone (no foreign keys to assets).
+`portfolio_history`, `daily_exchange_rates`, and `watchlist` are standalone (no foreign keys to assets).
 
 ## NAV Unitization Algorithm
 
@@ -288,4 +334,76 @@ main.rs
         ├─> Validate: net holdings >= sell quantity at sell date
         ├─> transaction_repo::insert_sell() (store with cents conversion)
         └─> portfolio_history_repo::delete_from_date() (invalidate snapshots)
+```
+
+### `dividend`
+
+```
+main.rs
+  └─> transactions::dividend()
+        ├─> asset_repo::find_by_ticker() (must exist)
+        ├─> transaction_repo::insert_dividend()
+        └─> portfolio_history_repo::delete_from_date() (invalidate snapshots)
+```
+
+### `split`
+
+```
+main.rs
+  └─> transactions::split()
+        ├─> asset_repo::find_by_ticker() (must exist)
+        ├─> transaction_repo::insert_split()
+        └─> portfolio_history_repo::delete_from_date() (invalidate snapshots)
+```
+
+### `list`
+
+```
+main.rs
+  └─> asset_repo::find_all()
+  └─> display::print_asset_list()
+```
+
+### `export`
+
+```
+main.rs
+  └─> export::export_transactions_csv()
+        ├─> transaction_repo::find_all() (load all txs with asset info)
+        └─> Write CSV file
+```
+
+### `holdings`
+
+```
+main.rs
+  └─> holdings::get_holdings()
+        ├─> portfolio::get_portfolio() (current positions)
+        ├─> For stocks: list directly
+        └─> For funds/ETFs: run scripts/get_fund_holdings.py (mstarpy)
+  └─> display::print_holdings()
+```
+
+### `analyze portfolio`
+
+```
+main.rs
+  └─> metrics::compute_correlation_matrix()
+        ├─> portfolio_asset_history_repo (load daily returns per asset)
+        ├─> Compute pairwise Pearson correlations
+        └─> Return N×N matrix
+  └─> display::print_correlation_matrix()
+```
+
+### `monitor view`
+
+```
+main.rs
+  └─> watchlist_repo::find_by_ticker() (must be in watchlist)
+  └─> monitor::generate_monitor_report()
+        ├─> fetcher.get_historical_prices() (stock + sector ETF)
+        ├─> Compute momentum indicators (RSI, SMA, MACD)
+        ├─> Fetch fundamentals via yfinance-rs
+        └─> Compute relative strength and correlation
+  └─> display::print_monitor_report()
 ```

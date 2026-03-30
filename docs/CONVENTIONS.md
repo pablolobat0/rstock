@@ -31,10 +31,13 @@
 
 **Service functions** use verb-first naming:
 - `get_portfolio()`, `get_portfolio_summary()`
-- `buy()`, `sell()`
+- `buy()`, `sell()`, `dividend()`, `split()`
 - `rebuild_portfolio_history()`
 - `fill_prices_for_range()`, `get_closing_price()`
-- `compute_risk_metrics()`
+- `compute_risk_metrics()`, `compute_correlation_matrix()`
+- `get_holdings()`
+- `generate_monitor_report()`
+- `export_transactions_csv()`
 
 ### Types
 
@@ -42,9 +45,9 @@ Three categories of model structs:
 
 | Category | Examples | Purpose |
 |----------|----------|---------|
-| Input structs | `AssetInfo`, `BuyOrder`, `SellOrder` | Data from CLI/caller, pre-persistence |
+| Input structs | `AssetInfo`, `BuyOrder`, `SellOrder`, `DividendOrder`, `SplitOrder` | Data from CLI/caller, pre-persistence |
 | DB-backed structs | `Asset`, `Transaction` | Domain objects with id, converted from entity::Model |
-| Display structs | `AssetPosition`, `PortfolioRow`, `PortfolioResult` | Computed values ready for rendering |
+| Display structs | `AssetPosition`, `PortfolioRow`, `PortfolioResult`, `CorrelationMatrix`, `HoldingsResult`, `MonitorReport` | Computed values ready for rendering |
 
 ### General
 
@@ -90,6 +93,9 @@ All test utilities are in `tests/common/mod.rs`:
 | `tests/integration_test.rs` | End-to-end scenarios combining buys, price changes, and portfolio queries |
 | `tests/daily_price_tests.rs` | Price caching and forward-fill logic |
 | `tests/portfolio_summary_tests.rs` | Portfolio computation and return calculations |
+| `tests/dividend_tests.rs` | Dividend recording and NAV cash accumulation |
+| `tests/correlation_tests.rs` | Portfolio asset correlation matrix computation |
+| `tests/monitor_tests.rs` | Momentum indicators and monitor report generation |
 
 ## How To: Add a New CLI Command
 
