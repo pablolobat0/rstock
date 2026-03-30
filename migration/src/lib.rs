@@ -4,6 +4,7 @@ mod m20220101_000001_create_table;
 mod m20250224_000001_add_price_history;
 mod m20250225_000001_portfolio_asset_history;
 mod m20250308_000001_add_exchange_rates;
+mod m20260330_000001_create_watchlist;
 
 pub struct Migrator;
 
@@ -15,6 +16,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20250224_000001_add_price_history::Migration),
             Box::new(m20250225_000001_portfolio_asset_history::Migration),
             Box::new(m20250308_000001_add_exchange_rates::Migration),
+            Box::new(m20260330_000001_create_watchlist::Migration),
         ]
     }
 }

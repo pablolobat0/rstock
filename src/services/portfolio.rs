@@ -107,8 +107,7 @@ pub async fn get_portfolio(db: &DatabaseConnection) -> anyhow::Result<PortfolioR
         // Sum dividends received for this asset, converted to EUR
         let mut dividends_received = 0.0;
         for t in transactions.iter().filter(|t| t.is_dividend()) {
-            let div_amount =
-                t.quantity * cents_to_f64(t.price_cents) - cents_to_f64(t.fees_cents);
+            let div_amount = t.quantity * cents_to_f64(t.price_cents) - cents_to_f64(t.fees_cents);
             if asset_model.currency == BASE_CURRENCY {
                 dividends_received += div_amount;
             } else {

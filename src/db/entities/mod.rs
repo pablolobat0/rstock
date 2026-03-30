@@ -4,3 +4,4 @@ pub mod daily_exchange_rate;
 pub mod portfolio_asset_history;
 pub mod portfolio_history;
 pub mod transaction;
+pub mod watchlist;

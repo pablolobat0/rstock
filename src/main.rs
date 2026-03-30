@@ -8,14 +8,18 @@ mod services;
 use anyhow::Context;
 use chrono::{Datelike, NaiveDate};
 use clap::Parser;
-use cli::{ChartPeriod, Cli, Commands};
-use constants::{format_date, DATE_FORMAT, FIVE_YEAR_DAYS, ONE_YEAR_DAYS, THREE_YEAR_DAYS};
+use cli::{ChartPeriod, Cli, Commands, MonitorCommands};
+use constants::{
+    format_date, DATE_FORMAT, FIVE_YEAR_DAYS, ONE_MONTH_DAYS, ONE_YEAR_DAYS, SIX_MONTH_DAYS,
+    THREE_MONTH_DAYS, THREE_YEAR_DAYS,
+};
 use models::{AssetInfo, BuyOrder, DividendOrder, SellOrder};
 use services::price::RealPriceFetcher;
 
-use crate::db::repos::{asset_repo, portfolio_history_repo};
+use crate::db::repos::{asset_repo, portfolio_history_repo, watchlist_repo};
 
 #[tokio::main]
+#[allow(clippy::too_many_lines)]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let db = db::connect().await?;
@@ -33,6 +37,11 @@ async fn main() -> anyhow::Result<()> {
             let today_str = format_date(today);
 
             let (start_date, period_label) = match period {
+                ChartPeriod::OneMonth => (today - chrono::Duration::days(ONE_MONTH_DAYS), "1M"),
+                ChartPeriod::ThreeMonths => {
+                    (today - chrono::Duration::days(THREE_MONTH_DAYS), "3M")
+                }
+                ChartPeriod::SixMonths => (today - chrono::Duration::days(SIX_MONTH_DAYS), "6M"),
                 ChartPeriod::Ytd => {
                     let d =
                         NaiveDate::from_ymd_opt(today.year(), 1, 1).expect("Jan 1 is always valid");
@@ -118,7 +127,7 @@ async fn main() -> anyhow::Result<()> {
         }
         Commands::Export { output } => {
             let count = services::export::export_transactions_csv(&db, &output).await?;
-            println!("Exported {} transactions to {}", count, output);
+            println!("Exported {count} transactions to {output}");
         }
         Commands::Sell {
             ticker,
@@ -142,6 +151,63 @@ async fn main() -> anyhow::Result<()> {
             };
             services::transactions::sell(&db, ticker, order).await?;
         }
+        Commands::Monitor(args) => match args.command {
+            MonitorCommands::Add { ticker, sector_etf } => {
+                if watchlist_repo::find_by_ticker(&db, &ticker)
+                    .await?
+                    .is_some()
+                {
+                    anyhow::bail!("{ticker} is already in the watchlist");
+                }
+                watchlist_repo::insert(&db, &ticker, &sector_etf).await?;
+                println!("Added {ticker} with sector ETF {sector_etf} to watchlist.");
+            }
+            MonitorCommands::Remove { ticker } => {
+                if watchlist_repo::delete_by_ticker(&db, &ticker).await? {
+                    println!("Removed {ticker} from watchlist.");
+                } else {
+                    anyhow::bail!("{ticker} is not in the watchlist");
+                }
+            }
+            MonitorCommands::List {} => {
+                let items = watchlist_repo::find_all(&db).await?;
+                display::print_watchlist(&items);
+            }
+            MonitorCommands::View { ticker, period } => {
+                let item = watchlist_repo::find_by_ticker(&db, &ticker)
+                    .await?
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "{ticker} is not in the watchlist. Add it first with: rstock monitor add --ticker {ticker} --sector-etf <ETF>"
+                        )
+                    })?;
+
+                let today = chrono::Local::now().date_naive();
+                let period_days = match period {
+                    ChartPeriod::OneMonth => ONE_MONTH_DAYS,
+                    ChartPeriod::ThreeMonths => THREE_MONTH_DAYS,
+                    ChartPeriod::SixMonths => SIX_MONTH_DAYS,
+                    ChartPeriod::Ytd => {
+                        let jan1 = NaiveDate::from_ymd_opt(today.year(), 1, 1)
+                            .expect("Jan 1 is always valid");
+                        (today - jan1).num_days()
+                    }
+                    ChartPeriod::OneYear => ONE_YEAR_DAYS,
+                    ChartPeriod::ThreeYears => THREE_YEAR_DAYS,
+                    ChartPeriod::FiveYears | ChartPeriod::All => FIVE_YEAR_DAYS,
+                };
+
+                let report = services::monitor::generate_monitor_report(
+                    &ticker,
+                    &item.sector_etf_ticker,
+                    period_days,
+                    period.label(),
+                    &fetcher,
+                )
+                .await?;
+                display::print_monitor_report(&report);
+            }
+        },
     }
 
     Ok(())

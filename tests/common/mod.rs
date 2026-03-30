@@ -9,6 +9,7 @@ use rstock::db::entities::{
     asset, daily_asset_price, daily_exchange_rate, portfolio_asset_history, portfolio_history,
     transaction,
 };
+use rstock::models::monitor::StockInfo;
 use rstock::models::AssetType;
 use rstock::services::price::PriceFetcher;
 
@@ -193,6 +194,7 @@ pub async fn insert_exchange_rate(db: &DatabaseConnection, pair: &str, date: &st
 pub struct MockPriceFetcher {
     pub historical_prices: HashMap<String, Vec<(String, f64)>>,
     pub exchange_rates: HashMap<String, Vec<(String, f64)>>,
+    pub stock_info: HashMap<String, StockInfo>,
 }
 
 impl MockPriceFetcher {
@@ -200,6 +202,7 @@ impl MockPriceFetcher {
         Self {
             historical_prices: HashMap::new(),
             exchange_rates: HashMap::new(),
+            stock_info: HashMap::new(),
         }
     }
 }
@@ -227,5 +230,12 @@ impl PriceFetcher for MockPriceFetcher {
         _end: &str,
     ) -> anyhow::Result<Vec<(String, f64)>> {
         Ok(self.exchange_rates.get(pair).cloned().unwrap_or_default())
+    }
+
+    async fn get_stock_info(&self, ticker: &str) -> anyhow::Result<StockInfo> {
+        self.stock_info
+            .get(ticker)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("no mock stock info for {ticker}"))
     }
 }

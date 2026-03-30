@@ -2,9 +2,12 @@ use anyhow::{bail, Context};
 use chrono::{NaiveDate, TimeZone, Utc};
 use yfinance_rs::core::conversions::money_to_f64;
 use yfinance_rs::history::HistoryBuilder;
+use yfinance_rs::profile::{self, Profile};
+use yfinance_rs::ticker::Ticker;
 use yfinance_rs::YfClient;
 
 use crate::constants::DATE_FORMAT;
+use crate::models::monitor::StockInfo;
 use crate::models::AssetType;
 
 #[async_trait::async_trait]
@@ -23,6 +26,8 @@ pub trait PriceFetcher: Send + Sync {
         start: &str,
         end: &str,
     ) -> anyhow::Result<Vec<(String, f64)>>;
+
+    async fn get_stock_info(&self, ticker: &str) -> anyhow::Result<StockInfo>;
 }
 
 pub struct RealPriceFetcher;
@@ -52,6 +57,10 @@ impl PriceFetcher for RealPriceFetcher {
     ) -> anyhow::Result<Vec<(String, f64)>> {
         let ticker = format!("{pair}=X");
         get_stock_historical_prices(&ticker, start, end).await
+    }
+
+    async fn get_stock_info(&self, ticker: &str) -> anyhow::Result<StockInfo> {
+        fetch_stock_info(ticker).await
     }
 }
 
@@ -159,4 +168,57 @@ async fn get_stock_historical_prices(
         .collect();
 
     Ok(results)
+}
+
+async fn fetch_stock_info(ticker: &str) -> anyhow::Result<StockInfo> {
+    let client = YfClient::default();
+    let t = Ticker::new(&client, ticker);
+    let info = t
+        .info()
+        .await
+        .context(format!("failed to fetch info for {ticker}"))?;
+
+    let current_price = info.last.as_ref().map(money_to_f64);
+    let previous_close = info.previous_close.as_ref().map(money_to_f64);
+
+    let day_range = match (&info.day_range_low, &info.day_range_high) {
+        (Some(lo), Some(hi)) => Some((money_to_f64(lo), money_to_f64(hi))),
+        _ => None,
+    };
+
+    let fifty_two_week_range = match (&info.fifty_two_week_low, &info.fifty_two_week_high) {
+        (Some(lo), Some(hi)) => Some((money_to_f64(lo), money_to_f64(hi))),
+        _ => None,
+    };
+
+    let market_cap = info.market_cap.as_ref().map(money_to_f64);
+    let eps_ttm = info.eps_ttm.as_ref().map(money_to_f64);
+
+    let profile_result = profile::load_profile(&client, ticker).await.ok();
+    let (sector, industry, name_from_profile) = match &profile_result {
+        Some(Profile::Company(c)) => (c.sector.clone(), c.industry.clone(), Some(c.name.clone())),
+        Some(Profile::Fund(f)) => (None, None, Some(f.name.clone())),
+        None => (None, None, None),
+    };
+
+    let name = info.name.clone().or(name_from_profile);
+    let currency = info.currency.as_ref().map(std::string::ToString::to_string);
+
+    Ok(StockInfo {
+        ticker: ticker.to_owned(),
+        name,
+        currency,
+        current_price,
+        previous_close,
+        day_range,
+        fifty_two_week_range,
+        volume: info.volume,
+        avg_volume: info.average_volume,
+        market_cap,
+        pe_ttm: info.pe_ttm,
+        eps_ttm,
+        dividend_yield: info.dividend_yield,
+        sector,
+        industry,
+    })
 }
