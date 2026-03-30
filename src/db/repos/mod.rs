@@ -4,3 +4,4 @@ pub mod exchange_rate_repo;
 pub mod portfolio_asset_history_repo;
 pub mod portfolio_history_repo;
 pub mod transaction_repo;
+pub mod watchlist_repo;

@@ -1,5 +1,5 @@
 use chrono::NaiveDate;
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::models::AssetType;
 
@@ -31,6 +31,12 @@ pub enum AnalysisTarget {
 
 #[derive(ValueEnum, Clone, Debug)]
 pub enum ChartPeriod {
+    #[value(name = "1m")]
+    OneMonth,
+    #[value(name = "3m")]
+    ThreeMonths,
+    #[value(name = "6m")]
+    SixMonths,
     Ytd,
     #[value(name = "1y")]
     OneYear,
@@ -39,6 +45,21 @@ pub enum ChartPeriod {
     #[value(name = "5y")]
     FiveYears,
     All,
+}
+
+impl ChartPeriod {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::OneMonth => "1M",
+            Self::ThreeMonths => "3M",
+            Self::SixMonths => "6M",
+            Self::Ytd => "YTD",
+            Self::OneYear => "1Y",
+            Self::ThreeYears => "3Y",
+            Self::FiveYears => "5Y",
+            Self::All => "All",
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -159,6 +180,9 @@ pub enum Commands {
         period: CorrelationPeriod,
     },
 
+    /// Monitor a stock: fundamentals, momentum, and sector comparison
+    Monitor(MonitorArgs),
+
     /// Record a sell transaction for an existing asset
     Sell {
         /// Ticker symbol (asset must already exist)
@@ -184,5 +208,45 @@ pub enum Commands {
         /// Optional notes
         #[arg(long)]
         notes: Option<String>,
+    },
+}
+
+#[derive(Args)]
+pub struct MonitorArgs {
+    #[command(subcommand)]
+    pub command: MonitorCommands,
+}
+
+#[derive(Subcommand)]
+pub enum MonitorCommands {
+    /// Add a stock to the watchlist with its sector ETF
+    Add {
+        /// Ticker symbol
+        #[arg(long)]
+        ticker: String,
+
+        /// Sector ETF ticker to compare against
+        #[arg(long)]
+        sector_etf: String,
+    },
+
+    /// Remove a stock from the watchlist
+    Remove {
+        /// Ticker symbol
+        #[arg(long)]
+        ticker: String,
+    },
+
+    /// List all monitored stocks
+    List {},
+
+    /// View analysis for a monitored stock
+    View {
+        /// Ticker symbol (must be in watchlist)
+        ticker: String,
+
+        /// Time period for analysis
+        #[arg(long, value_enum, default_value = "1y")]
+        period: ChartPeriod,
     },
 }

@@ -3,6 +3,7 @@ pub mod exchange_rates;
 pub mod export;
 pub mod holdings;
 pub mod metrics;
+pub mod monitor;
 pub mod nav;
 pub mod portfolio;
 pub mod price;
