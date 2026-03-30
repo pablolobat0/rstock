@@ -78,6 +78,15 @@ pub struct PortfolioSummary {
     pub five_year_metrics: Option<PeriodMetrics>,
 }
 
+pub struct CorrelationMatrix {
+    /// Ticker labels in order (assets + reference index)
+    pub labels: Vec<String>,
+    /// N×N matrix of Option<f64>; None = insufficient data
+    pub matrix: Vec<Vec<Option<f64>>>,
+    /// Tickers with insufficient data for the requested period
+    pub warnings: Vec<String>,
+}
+
 #[derive(Tabled)]
 pub struct PortfolioRow {
     #[tabled(rename = "Ticker")]

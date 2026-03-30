@@ -31,6 +31,22 @@ pub async fn find_rate_at_or_before(
     Ok(result.map(|r| r.rate))
 }
 
+pub async fn find_rates_between(
+    db: &DatabaseConnection,
+    pair: &str,
+    start_date: &str,
+    end_date: &str,
+) -> anyhow::Result<Vec<(String, f64)>> {
+    let results = daily_exchange_rate::Entity::find()
+        .filter(daily_exchange_rate::Column::Pair.eq(pair))
+        .filter(daily_exchange_rate::Column::Date.gte(start_date))
+        .filter(daily_exchange_rate::Column::Date.lte(end_date))
+        .order_by_asc(daily_exchange_rate::Column::Date)
+        .all(db)
+        .await?;
+    Ok(results.into_iter().map(|r| (r.date, r.rate)).collect())
+}
+
 pub async fn find_rate_before(
     db: &DatabaseConnection,
     pair: &str,

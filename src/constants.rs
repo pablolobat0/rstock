@@ -14,6 +14,8 @@ pub const BASE_CURRENCY: &str = "EUR";
 pub const INITIAL_NAV: f64 = 100.0;
 
 // --- Periods (days) ---
+pub const THIRTY_DAYS: i64 = 30;
+pub const SIX_MONTH_DAYS: i64 = 182;
 pub const ONE_YEAR_DAYS: i64 = 365;
 pub const THREE_YEAR_DAYS: i64 = 1095;
 pub const FIVE_YEAR_DAYS: i64 = 1825;

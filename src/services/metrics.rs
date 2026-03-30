@@ -2,12 +2,19 @@ use sea_orm::DatabaseConnection;
 use std::collections::HashMap;
 
 use crate::constants::{
-    ANNUAL_RISK_FREE_RATE, BENCHMARK_CURRENCY, BENCHMARK_NAME, BENCHMARK_TICKER, MIN_DATA_POINTS,
-    TRADING_DAYS_PER_YEAR, ZERO_RETURN_THRESHOLD,
+    ANNUAL_RISK_FREE_RATE, BASE_CURRENCY, BENCHMARK_CURRENCY, BENCHMARK_NAME, BENCHMARK_TICKER,
+    MIN_DATA_POINTS, TRADING_DAYS_PER_YEAR, ZERO_RETURN_THRESHOLD,
 };
-use crate::db::repos::{asset_repo, daily_price_repo, portfolio_history_repo};
-use crate::models::{AssetInfo, AssetType, PeriodMetrics, PortfolioSnapshot};
+use crate::db::repos::{
+    asset_repo, daily_price_repo, exchange_rate_repo, portfolio_asset_history_repo,
+    portfolio_history_repo,
+};
+use crate::models::{
+    Asset, AssetInfo, AssetType, CorrelationMatrix, PeriodMetrics, PortfolioSnapshot,
+};
 use crate::services::daily_prices;
+use crate::services::exchange_rates;
+use crate::services::portfolio;
 use crate::services::price::PriceFetcher;
 
 pub fn is_benchmark_ticker(ticker: &str) -> bool {
@@ -223,6 +230,169 @@ fn compute_beta(portfolio_returns: &[f64], benchmark_returns: &[f64]) -> f64 {
     }
 }
 
+/// Computes correlation matrix between all held assets and the reference index.
+pub async fn compute_correlation_matrix(
+    db: &DatabaseConnection,
+    start_date: &str,
+    end_date: &str,
+    price_fetcher: &dyn PriceFetcher,
+) -> anyhow::Result<CorrelationMatrix> {
+    // 0. Ensure portfolio history is up to date
+    portfolio::trigger_rebuild_if_needed(db, price_fetcher).await?;
+
+    // 1. Get held assets from latest portfolio snapshot
+    let latest = portfolio_history_repo::find_latest(db).await?;
+    let held_assets = match &latest {
+        Some(snap) => portfolio_asset_history_repo::find_by_date(db, &snap.date).await?,
+        None => vec![],
+    };
+
+    let asset_ids: Vec<i32> = held_assets.iter().map(|s| s.asset_id).collect();
+    let assets = asset_repo::find_by_ids(db, asset_ids.into_iter()).await?;
+
+    // 2. Ensure benchmark prices exist
+    let benchmark_asset_id =
+        ensure_benchmark_prices(db, start_date, end_date, price_fetcher).await?;
+    let benchmark_asset = Asset {
+        id: benchmark_asset_id,
+        ticker: BENCHMARK_TICKER.to_owned(),
+        isin: None,
+        name: BENCHMARK_NAME.to_owned(),
+        asset_type: AssetType::Stock,
+        currency: BENCHMARK_CURRENCY.to_owned(),
+    };
+
+    // 3. Build list: held assets + benchmark
+    let mut all_assets: Vec<&Asset> = assets.iter().collect();
+    all_assets.push(&benchmark_asset);
+
+    // 4. For each asset: ensure prices + FX, fetch price series, convert to EUR returns
+    let mut return_series: Vec<(String, HashMap<String, f64>)> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
+
+    for asset in &all_assets {
+        // Ensure prices are cached
+        daily_prices::fill_prices_for_range(db, asset, start_date, end_date, price_fetcher).await?;
+
+        // Ensure FX rates for non-EUR assets
+        let fx_pair = if asset.currency == BASE_CURRENCY {
+            None
+        } else {
+            let pair = exchange_rates::currency_pair(&asset.currency);
+            exchange_rates::fill_rates_for_range(db, &pair, start_date, end_date, price_fetcher)
+                .await?;
+            Some(pair)
+        };
+
+        // Fetch price series
+        let prices =
+            daily_price_repo::find_prices_between(db, asset.id, start_date, end_date).await?;
+
+        // Convert to EUR
+        let eur_prices = if let Some(ref pair) = fx_pair {
+            let rates =
+                exchange_rate_repo::find_rates_between(db, pair, start_date, end_date).await?;
+            let rate_map: HashMap<&str, f64> =
+                rates.iter().map(|(d, r)| (d.as_str(), *r)).collect();
+
+            prices
+                .iter()
+                .filter_map(|(date, price)| {
+                    rate_map
+                        .get(date.as_str())
+                        .map(|rate| (date.clone(), price * rate))
+                })
+                .collect::<Vec<_>>()
+        } else {
+            prices
+        };
+
+        let returns = compute_log_returns(&eur_prices);
+        if returns.len() < MIN_DATA_POINTS {
+            warnings.push(asset.ticker.clone());
+        }
+        return_series.push((asset.ticker.clone(), returns));
+    }
+
+    // 5. Build N×N correlation matrix
+    let n = return_series.len();
+    let labels: Vec<String> = return_series.iter().map(|(t, _)| t.clone()).collect();
+    let mut matrix = vec![vec![None; n]; n];
+
+    for i in 0..n {
+        matrix[i][i] = Some(1.0); // diagonal
+        for j in (i + 1)..n {
+            let (aligned_a, aligned_b) =
+                align_return_series(&return_series[i].1, &return_series[j].1);
+            if aligned_a.len() >= MIN_DATA_POINTS {
+                let corr = pearson_correlation(&aligned_a, &aligned_b);
+                matrix[i][j] = Some(corr);
+                matrix[j][i] = Some(corr);
+            }
+        }
+    }
+
+    Ok(CorrelationMatrix {
+        labels,
+        matrix,
+        warnings,
+    })
+}
+
+/// Computes Pearson correlation coefficient between two aligned return series.
+fn pearson_correlation(x: &[f64], y: &[f64]) -> f64 {
+    let n = x.len() as f64;
+    let mean_x = x.iter().sum::<f64>() / n;
+    let mean_y = y.iter().sum::<f64>() / n;
+
+    let cov: f64 = x
+        .iter()
+        .zip(y.iter())
+        .map(|(xi, yi)| (xi - mean_x) * (yi - mean_y))
+        .sum::<f64>()
+        / (n - 1.0);
+
+    let std_x = (x.iter().map(|xi| (xi - mean_x).powi(2)).sum::<f64>() / (n - 1.0)).sqrt();
+    let std_y = (y.iter().map(|yi| (yi - mean_y).powi(2)).sum::<f64>() / (n - 1.0)).sqrt();
+
+    if std_x > 0.0 && std_y > 0.0 {
+        cov / (std_x * std_y)
+    } else {
+        0.0
+    }
+}
+
+/// Computes daily log returns from a sorted price series.
+fn compute_log_returns(prices: &[(String, f64)]) -> HashMap<String, f64> {
+    let mut returns = HashMap::new();
+    for window in prices.windows(2) {
+        if window[0].1 > 0.0 {
+            let ret = (window[1].1 / window[0].1).ln();
+            returns.insert(window[1].0.clone(), ret);
+        }
+    }
+    returns
+}
+
+/// Aligns two return series by date intersection, filtering out zero-return days.
+fn align_return_series(a: &HashMap<String, f64>, b: &HashMap<String, f64>) -> (Vec<f64>, Vec<f64>) {
+    let mut aligned_a = Vec::new();
+    let mut aligned_b = Vec::new();
+
+    for (date, &ret_a) in a {
+        if let Some(&ret_b) = b.get(date) {
+            // Skip days where both returns are essentially zero (forward-filled)
+            if ret_a.abs() < ZERO_RETURN_THRESHOLD && ret_b.abs() < ZERO_RETURN_THRESHOLD {
+                continue;
+            }
+            aligned_a.push(ret_a);
+            aligned_b.push(ret_b);
+        }
+    }
+
+    (aligned_a, aligned_b)
+}
+
 async fn ensure_benchmark_prices(
     db: &DatabaseConnection,
     start_date: &str,
@@ -239,7 +409,7 @@ async fn ensure_benchmark_prices(
 
     let asset_id = asset_repo::get_or_create(db, &info).await?;
 
-    let asset = crate::models::Asset {
+    let asset = Asset {
         id: asset_id,
         ticker: BENCHMARK_TICKER.to_owned(),
         isin: None,

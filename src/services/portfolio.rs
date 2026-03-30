@@ -175,7 +175,7 @@ pub async fn get_portfolio(db: &DatabaseConnection) -> anyhow::Result<PortfolioR
     })
 }
 
-async fn trigger_rebuild_if_needed(
+pub async fn trigger_rebuild_if_needed(
     db: &DatabaseConnection,
     price_fetcher: &dyn PriceFetcher,
 ) -> anyhow::Result<()> {
