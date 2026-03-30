@@ -49,7 +49,6 @@ pub struct BuyOrder {
     pub quantity: f64,
     pub price: f64,
     pub fees: f64,
-    pub notes: Option<String>,
 }
 
 pub struct SellOrder {
@@ -57,20 +56,17 @@ pub struct SellOrder {
     pub quantity: f64,
     pub price: f64,
     pub fees: f64,
-    pub notes: Option<String>,
 }
 
 pub struct DividendOrder {
     pub date: String,
     pub amount: f64,
     pub fees: f64,
-    pub notes: Option<String>,
 }
 
 pub struct SplitOrder {
     pub date: String,
     pub ratio: f64,
-    pub notes: Option<String>,
 }
 
 pub struct Transaction {

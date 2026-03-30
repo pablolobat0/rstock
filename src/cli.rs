@@ -108,10 +108,6 @@ pub enum Commands {
         /// Currency
         #[arg(long, default_value = "EUR")]
         currency: String,
-
-        /// Optional notes
-        #[arg(long)]
-        notes: Option<String>,
     },
 
     /// Record a dividend payment for an existing asset
@@ -131,10 +127,6 @@ pub enum Commands {
         /// Withholding tax or fees
         #[arg(long, default_value = "0")]
         fees: f64,
-
-        /// Optional notes
-        #[arg(long)]
-        notes: Option<String>,
     },
 
     /// List all assets in the portfolio
@@ -163,10 +155,6 @@ pub enum Commands {
         /// Split ratio: new shares per old share (e.g. 2 for 2:1 split, 0.25 for 1:4 reverse split)
         #[arg(long)]
         ratio: f64,
-
-        /// Optional notes
-        #[arg(long)]
-        notes: Option<String>,
     },
 
     /// Analyze portfolio or asset correlations
@@ -204,10 +192,6 @@ pub enum Commands {
         /// Commission/fees
         #[arg(long, default_value = "0")]
         fees: f64,
-
-        /// Optional notes
-        #[arg(long)]
-        notes: Option<String>,
     },
 }
 

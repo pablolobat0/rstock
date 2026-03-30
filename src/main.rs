@@ -79,7 +79,6 @@ async fn main() -> anyhow::Result<()> {
             price,
             fees,
             currency,
-            notes,
         } => {
             let today = chrono::Local::now().date_naive();
             if date > today {
@@ -98,7 +97,6 @@ async fn main() -> anyhow::Result<()> {
                 quantity,
                 price,
                 fees,
-                notes,
             };
             services::transactions::buy(&db, asset, order).await?;
         }
@@ -107,7 +105,6 @@ async fn main() -> anyhow::Result<()> {
             date,
             amount,
             fees,
-            notes,
         } => {
             let today = chrono::Local::now().date_naive();
             if date > today {
@@ -118,7 +115,6 @@ async fn main() -> anyhow::Result<()> {
                 date: format_date(date),
                 amount,
                 fees,
-                notes,
             };
             services::transactions::dividend(&db, ticker, order).await?;
         }
@@ -138,7 +134,6 @@ async fn main() -> anyhow::Result<()> {
             ticker,
             date,
             ratio,
-            notes,
         } => {
             let today = chrono::Local::now().date_naive();
             if date > today {
@@ -148,7 +143,6 @@ async fn main() -> anyhow::Result<()> {
             let order = SplitOrder {
                 date: format_date(date),
                 ratio,
-                notes,
             };
             services::transactions::split(&db, ticker, order).await?;
         }
@@ -190,7 +184,6 @@ async fn main() -> anyhow::Result<()> {
             quantity,
             price,
             fees,
-            notes,
         } => {
             let today = chrono::Local::now().date_naive();
             if date > today {
@@ -202,7 +195,6 @@ async fn main() -> anyhow::Result<()> {
                 quantity,
                 price,
                 fees,
-                notes,
             };
             services::transactions::sell(&db, ticker, order).await?;
         }

@@ -62,7 +62,7 @@ pub async fn insert_transaction(
         quantity: Set(quantity),
         price_cents: Set((price * 100.0) as i64),
         fees_cents: Set((fees * 100.0) as i64),
-        notes: Set(None),
+
         created_at: Set(format!("{}T00:00:00", date)),
         ..Default::default()
     };
@@ -87,7 +87,7 @@ pub async fn insert_sell_transaction(
         quantity: Set(quantity),
         price_cents: Set((price * 100.0) as i64),
         fees_cents: Set((fees * 100.0) as i64),
-        notes: Set(None),
+
         created_at: Set(format!("{}T00:00:00", date)),
         ..Default::default()
     };
@@ -111,7 +111,7 @@ pub async fn insert_dividend_transaction(
         quantity: Set(1.0),
         price_cents: Set((amount * 100.0) as i64),
         fees_cents: Set((fees * 100.0) as i64),
-        notes: Set(None),
+
         created_at: Set(format!("{date}T00:00:00")),
         ..Default::default()
     };
@@ -134,7 +134,7 @@ pub async fn insert_split_transaction(
         quantity: Set(ratio),
         price_cents: Set(0),
         fees_cents: Set(0),
-        notes: Set(None),
+
         created_at: Set(format!("{date}T00:00:00")),
         ..Default::default()
     };

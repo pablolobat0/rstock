@@ -23,7 +23,6 @@ pub async fn insert_buy(
         quantity: Set(order.quantity),
         price_cents: Set(price_cents),
         fees_cents: Set(fees_cents),
-        notes: Set(order.notes.clone()),
         created_at: Set(now),
         ..Default::default()
     };
@@ -66,7 +65,6 @@ pub async fn insert_sell(
         quantity: Set(order.quantity),
         price_cents: Set(price_cents),
         fees_cents: Set(fees_cents),
-        notes: Set(order.notes.clone()),
         created_at: Set(now),
         ..Default::default()
     };
@@ -90,7 +88,6 @@ pub async fn insert_dividend(
         quantity: Set(1.0),
         price_cents: Set(amount_cents),
         fees_cents: Set(fees_cents),
-        notes: Set(order.notes.clone()),
         created_at: Set(now),
         ..Default::default()
     };
@@ -112,7 +109,6 @@ pub async fn insert_split(
         quantity: Set(order.ratio),
         price_cents: Set(0),
         fees_cents: Set(0),
-        notes: Set(order.notes.clone()),
         created_at: Set(now),
         ..Default::default()
     };

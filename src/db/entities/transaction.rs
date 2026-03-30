@@ -11,7 +11,6 @@ pub struct Model {
     pub quantity: f64,
     pub price_cents: i64,
     pub fees_cents: i64,
-    pub notes: Option<String>,
     pub created_at: String,
 }
 
