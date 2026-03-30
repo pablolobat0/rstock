@@ -4,7 +4,15 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use crate::models::AssetType;
 
 #[derive(Parser)]
-#[command(name = "rstock", about = "Personal investment portfolio manager")]
+#[command(
+    name = "rstock",
+    version,
+    about = "Personal investment portfolio manager",
+    long_about = "Personal investment portfolio manager.\n\n\
+        Track purchases, sales, dividends, and splits. View portfolio \
+        performance, analyze correlations, and monitor individual stocks.",
+    after_help = "Use 'rstock <command> --help' for more information about a specific command."
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
@@ -64,25 +72,25 @@ impl ChartPeriod {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Show current portfolio overview
+    /// Show portfolio overview with NAV chart and key metrics
     Get {
         /// Time period for the NAV chart
-        #[arg(long, value_enum, default_value = "1y")]
+        #[arg(short, long, value_enum, default_value = "1y")]
         period: ChartPeriod,
     },
 
     /// Record a buy transaction, creates asset if it doesn't exist
     Buy {
         /// Ticker symbol
-        #[arg(long)]
+        #[arg(short, long)]
         ticker: String,
 
         /// Full name of the asset
-        #[arg(long)]
+        #[arg(short, long)]
         name: String,
 
         /// Asset type
-        #[arg(long = "type", value_enum)]
+        #[arg(short = 'T', long = "type", value_enum)]
         asset_type: AssetType,
 
         /// ISIN code
@@ -90,49 +98,49 @@ pub enum Commands {
         isin: Option<String>,
 
         /// Purchase date (YYYY-MM-DD)
-        #[arg(long)]
+        #[arg(short, long)]
         date: NaiveDate,
 
         /// Number of shares/units
-        #[arg(long)]
+        #[arg(short, long)]
         quantity: f64,
 
         /// Price per unit (e.g. 150.25)
-        #[arg(long)]
+        #[arg(short, long)]
         price: f64,
 
-        /// Commission/fees
-        #[arg(long, default_value = "0")]
+        /// Broker commission and fees
+        #[arg(short, long, default_value = "0")]
         fees: f64,
 
-        /// Currency
-        #[arg(long, default_value = "EUR")]
+        /// Transaction currency code
+        #[arg(short, long, default_value = "EUR")]
         currency: String,
     },
 
     /// Record a dividend payment for an existing asset
     Dividend {
         /// Ticker symbol (asset must already exist)
-        #[arg(long)]
+        #[arg(short, long)]
         ticker: String,
 
         /// Ex-dividend date (YYYY-MM-DD)
-        #[arg(long)]
+        #[arg(short, long)]
         date: NaiveDate,
 
         /// Total dividend amount received
-        #[arg(long)]
+        #[arg(short, long)]
         amount: f64,
 
         /// Withholding tax or fees
-        #[arg(long, default_value = "0")]
+        #[arg(short, long, default_value = "0")]
         fees: f64,
     },
 
-    /// List all assets in the portfolio
+    /// List all assets in the portfolio with type and ISIN
     List {},
 
-    /// Export transactions to a CSV file
+    /// Export all transactions to a CSV file
     Export {
         /// Output file path (e.g. transactions.csv)
         #[arg(long, short)]
@@ -145,26 +153,26 @@ pub enum Commands {
     /// Record a stock split or reverse split for an existing asset
     Split {
         /// Ticker symbol (asset must already exist)
-        #[arg(long)]
+        #[arg(short, long)]
         ticker: String,
 
         /// Split date (YYYY-MM-DD)
-        #[arg(long)]
+        #[arg(short, long)]
         date: NaiveDate,
 
         /// Split ratio: new shares per old share (e.g. 2 for 2:1 split, 0.25 for 1:4 reverse split)
-        #[arg(long)]
+        #[arg(short, long)]
         ratio: f64,
     },
 
-    /// Analyze portfolio or asset correlations
+    /// Analyze portfolio correlations across holdings
     Analyze {
         /// What to analyze
         #[arg(value_enum)]
         target: AnalysisTarget,
 
         /// Time period for correlation calculation
-        #[arg(long, value_enum, default_value = "1y")]
+        #[arg(short, long, value_enum, default_value = "1y")]
         period: CorrelationPeriod,
     },
 
@@ -174,23 +182,23 @@ pub enum Commands {
     /// Record a sell transaction for an existing asset
     Sell {
         /// Ticker symbol (asset must already exist)
-        #[arg(long)]
+        #[arg(short, long)]
         ticker: String,
 
         /// Sale date (YYYY-MM-DD)
-        #[arg(long)]
+        #[arg(short, long)]
         date: NaiveDate,
 
         /// Number of shares/units to sell
-        #[arg(long)]
+        #[arg(short, long)]
         quantity: f64,
 
         /// Sale price per unit (e.g. 150.25)
-        #[arg(long)]
+        #[arg(short, long)]
         price: f64,
 
-        /// Commission/fees
-        #[arg(long, default_value = "0")]
+        /// Broker commission and fees
+        #[arg(short, long, default_value = "0")]
         fees: f64,
     },
 }
@@ -206,18 +214,18 @@ pub enum MonitorCommands {
     /// Add a stock to the watchlist with its sector ETF
     Add {
         /// Ticker symbol
-        #[arg(long)]
+        #[arg(short, long)]
         ticker: String,
 
         /// Sector ETF ticker to compare against
-        #[arg(long)]
+        #[arg(short, long)]
         sector_etf: String,
     },
 
     /// Remove a stock from the watchlist
     Remove {
         /// Ticker symbol
-        #[arg(long)]
+        #[arg(short, long)]
         ticker: String,
     },
 
@@ -230,7 +238,7 @@ pub enum MonitorCommands {
         ticker: String,
 
         /// Time period for analysis
-        #[arg(long, value_enum, default_value = "1y")]
+        #[arg(short, long, value_enum, default_value = "1y")]
         period: ChartPeriod,
     },
 }

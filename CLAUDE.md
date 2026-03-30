@@ -4,6 +4,16 @@ Rust CLI portfolio tracker with NAV unitization, multi-currency support, and ASC
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for system design and [docs/CONVENTIONS.md](docs/CONVENTIONS.md) for code patterns.
 
+## Workflow
+
+Follow these steps in order for every code change:
+
+1. **Plan** — Understand the task, read relevant code, and outline the approach before writing anything.
+2. **Implement** — Write the code changes.
+3. **Format and lint** — Run `cargo fmt` and `cargo clippy -- -D warnings`. Fix all issues before proceeding.
+4. **Test** — Run `cargo test`. Add or update tests as needed. All tests must pass.
+5. **Update documentation** — Update any affected `.md` files (CLAUDE.md, README.md, docs/ARCHITECTURE.md, docs/CONVENTIONS.md, TODO.md) to reflect the changes.
+
 ## Build, Test, Run
 
 ```bash
@@ -21,19 +31,19 @@ Run commands:
 
 ```bash
 cargo run -- get                         # Portfolio summary + 1Y NAV chart
-cargo run -- get --period ytd            # YTD chart (also: 1m, 3m, 6m, 3y, 5y, all)
-cargo run -- buy --ticker MSFT --name "Microsoft" --type stock --date 2026-02-26 --quantity 1 --price 390
-cargo run -- sell --ticker MSFT --date 2026-03-01 --quantity 0.5 --price 400
-cargo run -- dividend --ticker MSFT --date 2026-03-15 --amount 25.50
-cargo run -- split --ticker MSFT --date 2026-03-20 --ratio 2
+cargo run -- get -p ytd                  # YTD chart (also: 1m, 3m, 6m, 3y, 5y, all)
+cargo run -- buy -t MSFT -n "Microsoft" -T stock -d 2026-02-26 -q 1 -p 390
+cargo run -- sell -t MSFT -d 2026-03-01 -q 0.5 -p 400
+cargo run -- dividend -t MSFT -d 2026-03-15 -a 25.50
+cargo run -- split -t MSFT -d 2026-03-20 -r 2
 cargo run -- list                        # Show all assets
-cargo run -- export --output txns.csv    # Export transactions to CSV
+cargo run -- export -o txns.csv          # Export transactions to CSV
 cargo run -- holdings                    # Fund/ETF look-through
 cargo run -- analyze portfolio           # Correlation matrix (default 1y)
-cargo run -- monitor add --ticker AAPL --sector-etf XLK
+cargo run -- monitor add -t AAPL -s XLK
 cargo run -- monitor view AAPL           # Momentum + sector analysis
 cargo run -- monitor list                # Show watchlist
-cargo run -- monitor remove --ticker AAPL
+cargo run -- monitor remove -t AAPL
 ```
 
 Migrations:
