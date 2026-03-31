@@ -33,40 +33,9 @@ fn color_value(value: f64, formatted: &str) -> String {
     }
 }
 
-fn format_return(r: Option<f64>) -> String {
-    match r {
-        Some(v) => {
-            let sign = if v >= 0.0 { "+" } else { "" };
-            let text = format!("{sign}{v:.2}%");
-            color_value(v, &text)
-        }
-        None => "N/A".to_string(),
-    }
-}
-
 fn format_pct(v: Option<f64>) -> String {
     match v {
         Some(val) => format!("{val:.2}%"),
-        None => "N/A".to_string(),
-    }
-}
-
-fn format_drawdown(v: Option<f64>) -> String {
-    match v {
-        Some(val) => {
-            let text = format!("{val:.2}%");
-            text.red().to_string()
-        }
-        None => "N/A".to_string(),
-    }
-}
-
-fn format_metric(v: Option<f64>) -> String {
-    match v {
-        Some(val) => {
-            let text = format!("{val:.2}");
-            color_value(val, &text)
-        }
         None => "N/A".to_string(),
     }
 }
@@ -78,55 +47,103 @@ fn format_plain(v: Option<f64>) -> String {
     }
 }
 
+fn format_return_plain(r: Option<f64>) -> String {
+    match r {
+        Some(v) => {
+            let sign = if v >= 0.0 { "+" } else { "" };
+            format!("{sign}{v:.2}%")
+        }
+        None => "N/A".to_string(),
+    }
+}
+
+fn color_for_value(v: f64) -> Color {
+    if v >= 0.0 {
+        Color::FG_GREEN
+    } else {
+        Color::FG_RED
+    }
+}
+
 fn print_metrics_table(periods: &[(&str, Option<f64>, &Option<PeriodMetrics>)]) {
-    let col_width = 12;
-    let label_width = 15;
+    let mut builder = Builder::default();
 
-    // Header
-    print!("{:label_width$}", "");
-    for (name, _, _) in periods {
-        print!("{name:>col_width$}");
-    }
-    println!();
+    // Header row
+    let mut header = vec![String::new()];
+    header.extend(periods.iter().map(|(name, _, _)| name.to_string()));
+    builder.push_record(header);
 
-    // Return
-    print!("{:<label_width$}", "Return:");
-    for (_, ret, _) in periods {
-        print!("{:>col_width$}", format_return(*ret));
-    }
-    println!();
+    // Return (row 1)
+    let mut row = vec!["Return".to_string()];
+    row.extend(periods.iter().map(|(_, ret, _)| format_return_plain(*ret)));
+    builder.push_record(row);
 
-    // Volatility
-    print!("{:<label_width$}", "Volatility:");
-    for (_, _, metrics) in periods {
-        let val = metrics.as_ref().and_then(|m| m.volatility);
-        print!("{:>col_width$}", format_pct(val));
-    }
-    println!();
+    // Volatility (row 2)
+    let mut row = vec!["Volatility".to_string()];
+    row.extend(
+        periods
+            .iter()
+            .map(|(_, _, m)| format_pct(m.as_ref().and_then(|m| m.volatility))),
+    );
+    builder.push_record(row);
 
-    // Max Drawdown
-    print!("{:<label_width$}", "Max Drawdown:");
-    for (_, _, metrics) in periods {
-        let val = metrics.as_ref().and_then(|m| m.max_drawdown);
-        print!("{:>col_width$}", format_drawdown(val));
-    }
-    println!();
+    // Max Drawdown (row 3)
+    let mut row = vec!["Max Drawdown".to_string()];
+    row.extend(
+        periods
+            .iter()
+            .map(|(_, _, m)| format_pct(m.as_ref().and_then(|m| m.max_drawdown))),
+    );
+    builder.push_record(row);
 
-    // Sharpe
-    print!("{:<label_width$}", "Sharpe:");
-    for (_, _, metrics) in periods {
-        let val = metrics.as_ref().and_then(|m| m.sharpe);
-        print!("{:>col_width$}", format_metric(val));
-    }
-    println!();
+    // Sharpe (row 4)
+    let mut row = vec!["Sharpe".to_string()];
+    row.extend(
+        periods
+            .iter()
+            .map(|(_, _, m)| format_plain(m.as_ref().and_then(|m| m.sharpe))),
+    );
+    builder.push_record(row);
 
-    // Beta
-    print!("{:<label_width$}", "Beta:");
-    for (_, _, metrics) in periods {
-        let val = metrics.as_ref().and_then(|m| m.beta);
-        print!("{:>col_width$}", format_plain(val));
+    // Beta (row 5)
+    let mut row = vec!["Beta".to_string()];
+    row.extend(
+        periods
+            .iter()
+            .map(|(_, _, m)| format_plain(m.as_ref().and_then(|m| m.beta))),
+    );
+    builder.push_record(row);
+
+    let mut table = builder.build();
+    table.with(
+        Style::modern()
+            .horizontals([(1, HorizontalLine::inherit(Style::modern()).horizontal('═'))])
+            .verticals([(1, VerticalLine::inherit(Style::modern()))])
+            .remove_horizontal()
+            .remove_vertical(),
+    );
+
+    // Apply colors after building so ANSI codes don't break alignment
+    for (col, (_, ret, metrics)) in periods.iter().enumerate() {
+        let col = col + 1; // offset for label column
+
+        // Return
+        if let Some(v) = ret {
+            table.modify(Cell::new(1, col), color_for_value(*v));
+        }
+
+        // Max Drawdown — always red
+        if metrics.as_ref().and_then(|m| m.max_drawdown).is_some() {
+            table.modify(Cell::new(3, col), Color::FG_RED);
+        }
+
+        // Sharpe
+        if let Some(v) = metrics.as_ref().and_then(|m| m.sharpe) {
+            table.modify(Cell::new(4, col), color_for_value(v));
+        }
     }
-    println!();
+
+    println!("{table}");
 }
 
 #[allow(clippy::too_many_lines)]

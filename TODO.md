@@ -5,6 +5,7 @@
 - [ ] Fix silent asset_type defaulting — `src/models/asset.rs:62` uses `unwrap_or(AssetType::Stock)` for invalid types; should log a warning or return an error
 - [x] Add date validation on `buy` — currently accepts any string; should parse with chrono at CLI level
 - [ ] Prevent duplicate transactions — nothing stops recording the exact same buy twice
+- [ ] Reject buy/sell with quantity <= 0 — currently accepts zero-quantity transactions
 - [x] Extract cents<->float helper — `price_cents as f64 / 100.0` is scattered across services
 
 ## New Commands
@@ -53,6 +54,15 @@
 - [ ] Add structured logging (`tracing` crate) — replace `eprintln!()` warnings
 - [ ] Config file (`~/.rstock/config.toml`) — default currency, DB path, chart period, etc.
 - [ ] Database backup/restore command
+
+## External Dependencies
+
+- [ ] Test and fix ETF/mutual fund price fetching — Morningstar API returns HTTP 202 instead of data; mstarpy may need updating or alternative data source
+
+## Monitor Improvements
+
+- [ ] Add color to monitor performance graph — distinguish stock vs sector ETF lines with color
+- [ ] Redesign monitor display layout — improve readability and visual presentation
 
 ## Test Gaps
 
