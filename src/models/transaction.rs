@@ -1,14 +1,15 @@
 use std::fmt;
 use std::str::FromStr;
 
+use crate::constants::MONETARY_MULTIPLIER;
 use crate::db::entities::transaction;
 
 pub fn f64_to_cents(val: f64) -> i64 {
-    (val * 100.0).round() as i64
+    (val * MONETARY_MULTIPLIER).round() as i64
 }
 
 pub fn cents_to_f64(cents: i64) -> f64 {
-    cents as f64 / 100.0
+    cents as f64 / MONETARY_MULTIPLIER
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -137,19 +138,19 @@ mod tests {
 
     #[test]
     fn test_cents_roundtrip() {
-        assert_eq!(f64_to_cents(150.25), 15025);
-        assert_eq!(cents_to_f64(15025), 150.25);
+        assert_eq!(f64_to_cents(150.25), 1_502_500);
+        assert_eq!(cents_to_f64(1_502_500), 150.25);
     }
 
     #[test]
     fn test_f64_to_cents_rounds() {
-        assert_eq!(f64_to_cents(1.006), 101);
+        assert_eq!(f64_to_cents(1.0006), 10_006);
         assert_eq!(f64_to_cents(0.0), 0);
-        assert_eq!(f64_to_cents(99.999), 10000);
+        assert_eq!(f64_to_cents(0.137), 1_370);
     }
 
     #[test]
     fn test_cents_to_f64_negative() {
-        assert_eq!(cents_to_f64(-500), -5.0);
+        assert_eq!(cents_to_f64(-50_000), -5.0);
     }
 }

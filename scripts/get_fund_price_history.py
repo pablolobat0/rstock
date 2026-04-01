@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["mstarpy"]
+# dependencies = ["mstarpy>=9.0.3", "python-dotenv>=1.0"]
 # ///
 """Fetch historical NAV for a fund/ETF via mstarpy and output JSON to stdout."""
 
@@ -9,6 +9,9 @@ import sys
 from datetime import datetime
 
 import mstarpy
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
 def main():
@@ -35,7 +38,7 @@ def main():
 
         result = []
         for entry in history:
-            result.append({"date": entry["date"], "price": float(entry["nav"])})
+            result.append({"date": entry["date"], "price": float(entry["totalReturn"])})
 
         print(json.dumps(result))
     except Exception as e:

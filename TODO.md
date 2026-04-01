@@ -58,6 +58,8 @@
 ## External Dependencies
 
 - [ ] Test and fix ETF/mutual fund price fetching — Morningstar API returns HTTP 202 instead of data; mstarpy may need updating or alternative data source
+- [ ] Change mstarpy version pin from `==9.0.3` to `>=9.0.3` once confirmed stable
+- [ ] Check mstarpy browser config — verify if mstarpy needs browser/session configuration for Morningstar API access
 
 ## Monitor Improvements
 

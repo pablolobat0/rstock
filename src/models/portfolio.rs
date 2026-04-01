@@ -122,7 +122,6 @@ pub struct PortfolioRow {
 // --- Holdings report models ---
 
 pub struct FundHolding {
-    pub ticker: String,
     pub name: String,
     /// Weight within the fund (0–100 percentage)
     pub weighting: f64,
@@ -166,8 +165,6 @@ pub struct DirectHoldingRow {
 
 #[derive(Tabled)]
 pub struct FundHoldingRow {
-    #[tabled(rename = "Ticker")]
-    pub ticker: String,
     #[tabled(rename = "Name")]
     pub name: String,
     #[tabled(rename = "Fund Weight")]

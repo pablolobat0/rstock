@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["mstarpy"]
+# dependencies = ["mstarpy>=9.0.3", "python-dotenv>=1.0"]
 # ///
 """Fetch top holdings for a fund/ETF via mstarpy and output JSON to stdout."""
 
@@ -8,6 +8,9 @@ import json
 import sys
 
 import mstarpy
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
 def main():
@@ -24,19 +27,12 @@ def main():
         fund = mstarpy.Funds(identifier)
         holdings = fund.holdings()
 
-        if not holdings:
+        if holdings.empty:
             print(json.dumps([]))
             return
 
-        result = []
-        for h in holdings:
-            result.append(
-                {
-                    "ticker": h.get("ticker", ""),
-                    "name": h.get("securityName", ""),
-                    "weighting": float(h.get("weighting", 0)),
-                }
-            )
+        top = holdings[["securityName", "weighting"]].head(30)
+        result = top.to_dict(orient="records")
 
         print(json.dumps(result))
     except Exception as e:

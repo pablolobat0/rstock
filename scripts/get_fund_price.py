@@ -1,12 +1,16 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["mstarpy"]
+# dependencies = ["mstarpy>=9.0.3", "python-dotenv>=1.0"]
 # ///
 """Fetch the last NAV for a fund/ETF via mstarpy and output JSON to stdout."""
 
 import json
 import sys
 from datetime import datetime, timedelta
+
+from dotenv import load_dotenv
+
+load_dotenv()
 
 import mstarpy
 
@@ -20,6 +24,8 @@ def main():
 
     try:
         fund = mstarpy.Funds(identifier)
+        print(fund.name)
+        print(fund.isin)
         end_date = datetime.now()
         start_date = end_date - timedelta(days=10)
         history = fund.nav(start_date=start_date, end_date=end_date)
@@ -29,7 +35,7 @@ def main():
             sys.exit(1)
 
         last_entry = history[-1]
-        price = float(last_entry["nav"])
+        price = float(last_entry["totalReturn"])
         date = last_entry["date"]
 
         print(json.dumps({"price": price, "date": date}))
