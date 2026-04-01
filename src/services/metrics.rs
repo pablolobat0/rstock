@@ -256,7 +256,6 @@ pub async fn compute_correlation_matrix(
     let benchmark_asset = Asset {
         id: benchmark_asset_id,
         ticker: BENCHMARK_TICKER.to_owned(),
-        isin: None,
         name: BENCHMARK_NAME.to_owned(),
         asset_type: AssetType::Stock,
         currency: BENCHMARK_CURRENCY.to_owned(),
@@ -403,7 +402,6 @@ async fn ensure_benchmark_prices(
         ticker: BENCHMARK_TICKER.to_owned(),
         name: BENCHMARK_NAME.to_owned(),
         asset_type: AssetType::Stock,
-        isin: None,
         currency: BENCHMARK_CURRENCY.to_owned(),
     };
 
@@ -412,7 +410,6 @@ async fn ensure_benchmark_prices(
     let asset = Asset {
         id: asset_id,
         ticker: BENCHMARK_TICKER.to_owned(),
-        isin: None,
         name: BENCHMARK_NAME.to_owned(),
         asset_type: AssetType::Stock,
         currency: BENCHMARK_CURRENCY.to_owned(),

@@ -12,7 +12,7 @@ async fn test_full_buy_rebuild_summary_flow() {
     let db = common::setup_test_db().await;
     let mock = common::MockPriceFetcher::new();
 
-    let asset_id = common::insert_asset(&db, "XFAKE1", "Fake Corp", "stock", None, "EUR").await;
+    let asset_id = common::insert_asset(&db, "XFAKE1", "Fake Corp", "stock", "EUR").await;
 
     // Buy 1: 10 shares @ 150 on Jan 2 with 5 fees
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 150.0, 5.0).await;
@@ -100,7 +100,7 @@ async fn test_incremental_rebuild_after_second_buy() {
     let db = common::setup_test_db().await;
     let mock = common::MockPriceFetcher::new();
 
-    let asset_id = common::insert_asset(&db, "XFAKE1", "Fake Corp", "stock", None, "EUR").await;
+    let asset_id = common::insert_asset(&db, "XFAKE1", "Fake Corp", "stock", "EUR").await;
 
     // Initial buy: 20 shares @ 100
     common::insert_transaction(&db, asset_id, "2025-01-02", 20.0, 100.0, 0.0).await;

@@ -32,10 +32,11 @@ Run commands:
 ```bash
 cargo run -- get                         # Portfolio summary + 1Y NAV chart
 cargo run -- get -p ytd                  # YTD chart (also: 1m, 3m, 6m, 3y, 5y, all)
-cargo run -- buy -t MSFT -n "Microsoft" -T stock -d 2026-02-26 -q 1 -p 390
-cargo run -- sell -t MSFT -d 2026-03-01 -q 0.5 -p 400
-cargo run -- dividend -t MSFT -d 2026-03-15 -a 25.50
-cargo run -- split -t MSFT -d 2026-03-20 -r 2
+cargo run -- buy -t MSFT -n "Microsoft" -T stock -d 26-02-2026 -q 1 -p 390
+cargo run -- buy -t IE00B4L5Y983 -n "Vanguard FTSE" -T fund -d 26-02-2026 -q 10 -p 100
+cargo run -- sell -t MSFT -d 01-03-2026 -q 0.5 -p 400
+cargo run -- dividend -t MSFT -d 15-03-2026 -a 25.50
+cargo run -- split -t MSFT -d 20-03-2026 -r 2
 cargo run -- list                        # Show all assets
 cargo run -- export -o txns.csv          # Export transactions to CSV
 cargo run -- holdings                    # Fund/ETF look-through
@@ -101,7 +102,7 @@ If you change a return formula or NAV calculation, add a test case in the corres
 
 ## Key Rules
 
-- **Monetary precision**: Transaction prices are stored as `i64` cents via `f64_to_cents`/`cents_to_f64` in `src/models/transaction.rs`. Daily asset prices and NAV values use `f64` directly. Never mix these representations.
+- **Monetary precision**: Transaction prices are stored as `i64` cents via `f64_to_cents`/`cents_to_f64` in `src/models/transaction.rs`. Daily asset prices and NAV values use `f64` directly. Never mix these representations. Yahoo Finance (`yfinance-rs`) returns prices with 2 decimal places of precision.
 - **Base currency**: EUR, hardcoded as `BASE_CURRENCY` in `src/constants.rs`. All portfolio values are converted to EUR for aggregation.
 - **PriceFetcher trait**: `src/services/price.rs` defines the abstraction for all external price data. `RealPriceFetcher` hits Yahoo Finance (stocks) or Python/mstarpy scripts (funds/ETFs). Tests use `MockPriceFetcher` from `tests/common/mod.rs`. Never make network calls in tests.
 - **Test tickers**: Use non-existent tickers (e.g., `XFAKE1`) in tests to prevent real price lookups from overwriting test data.
@@ -112,7 +113,8 @@ If you change a return formula or NAV calculation, add a test case in the corres
 - **No re-exports**: Constants and types live in one file; update all import paths directly rather than re-exporting.
 - **Fund/ETF prices**: Come from Python scripts in `scripts/` run via `uv run`. The `RSTOCK_SCRIPTS_DIR` env var overrides script directory lookup.
 - **Database**: SQLite at `~/.rstock/rstock.db`, auto-created on first run. Migrations run automatically on connect in `src/db/mod.rs`.
-- **Dates**: Stored as `String` in `YYYY-MM-DD` format throughout domain models. CLI parses with `chrono::NaiveDate`.
+- **Dates**: Stored internally as `String` in `YYYY-MM-DD` format (for SQL ordering). User-facing input/output uses `DD-MM-YYYY`. See `DATE_FORMAT`, `DISPLAY_DATE_FORMAT`, and `display_date()` in `src/constants.rs`. CLI uses a custom `parse_date()` parser in `src/cli.rs`.
+- **Ticker field**: The `--ticker`/`-t` flag is the universal identifier for all assets. For stocks, use the ticker symbol (e.g., `MSFT`). For funds/ETFs, use the ISIN (e.g., `IE00B4L5Y983`). There is no separate ISIN field. In tables, the Ticker column is hidden for funds/ETFs (only the Name column is shown).
 
 ## Environment Variables
 

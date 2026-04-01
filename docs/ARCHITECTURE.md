@@ -47,7 +47,7 @@
 
 `cli.rs` defines ten subcommands using clap 4.5 derive macros:
 - **`get`** — Display portfolio with optional `--period` (1m, 3m, 6m, ytd, 1y, 3y, 5y, all)
-- **`buy`** — Record a purchase (ticker, name, type, date, quantity, price, optional: isin, fees, currency)
+- **`buy`** — Record a purchase (ticker/ISIN, name, type, date, quantity, price, optional: fees, currency)
 - **`sell`** — Record a sale (ticker, date, quantity, price, optional: fees)
 - **`dividend`** — Record a dividend payment (ticker, date, amount, optional: fees)
 - **`split`** — Record a stock split or reverse split (ticker, date, ratio)
@@ -152,8 +152,7 @@ Eight tables across five migrations:
 | Column | Type | Notes |
 |--------|------|-------|
 | id | i32 PK | Auto-increment |
-| ticker | String | UNIQUE |
-| isin | String? | Optional ISIN code |
+| ticker | String | UNIQUE — ticker symbol (stocks) or ISIN (funds/ETFs) |
 | name | String | Full asset name |
 | asset_type | String | "stock", "fund", or "etf" |
 | currency | String | Asset's native currency |
@@ -257,6 +256,17 @@ The NAV engine (`src/services/nav.rs`) uses the same valuation method as mutual 
 
 4. **Incremental rebuild**: On subsequent runs, the engine starts from the day after the last known snapshot (or rebuilds from a given date when snapshots are invalidated by new transactions).
 
+## NAV Return vs G/L%
+
+The `get` command displays two return figures that can differ:
+
+- **G/L% (money-weighted)**: Simple `(current_value - total_invested) / total_invested`. Treats all deposits equally regardless of timing.
+- **NAV return (time-weighted)**: Measures portfolio unit performance from inception (NAV 100.0). Unaffected by deposit timing because each deposit issues new shares at the current NAV.
+
+These diverge whenever deposits are made at different NAVs (e.g., DCA over time). If you add money after the portfolio has already gained, G/L% is diluted by the higher average cost, while NAV return is not — it reflects investment skill independent of cash flow timing. This is the same distinction mutual funds use: NAV return measures how the fund performed, not how much a specific investor gained.
+
+Example: a first deposit at NAV 100 and a second deposit at NAV 129 will show a higher NAV return than G/L%, because G/L% blends the returns of both deposits while NAV tracks per-unit growth from inception.
+
 ## Price Data Pipeline
 
 ### Stock Prices
@@ -273,7 +283,7 @@ Yahoo Finance API ──(yfinance-rs)──> Vec<(date, f64)> ──> daily_asse
 Morningstar ──(mstarpy via Python)──> JSON ──> daily_asset_prices table
 ```
 
-The fetcher runs `uv run scripts/get_fund_price_history.py <isin> <start> <end>` as a subprocess. The script uses Python `mstarpy` and outputs `[{"date": "YYYY-MM-DD", "price": f64}, ...]`.
+The fetcher runs `uv run scripts/get_fund_price_history.py <ticker> <start> <end>` as a subprocess. For funds/ETFs, the ticker field contains the ISIN. The script uses Python `mstarpy` and outputs `[{"date": "YYYY-MM-DD", "price": f64}, ...]`.
 
 Script resolution order:
 1. `RSTOCK_SCRIPTS_DIR` environment variable

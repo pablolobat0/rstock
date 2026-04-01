@@ -6,7 +6,7 @@ use rstock::services::daily_prices;
 use sea_orm::{EntityTrait, Set};
 
 async fn make_asset(db: &sea_orm::DatabaseConnection) -> Asset {
-    let id = common::insert_asset(db, "TEST", "Test Stock", "stock", None, "EUR").await;
+    let id = common::insert_asset(db, "TEST", "Test Stock", "stock", "EUR").await;
     let model = asset::Entity::find_by_id(id)
         .one(db)
         .await

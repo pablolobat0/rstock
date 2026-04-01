@@ -141,7 +141,6 @@ pub async fn get_portfolio(db: &DatabaseConnection) -> anyhow::Result<PortfolioR
             ticker: asset_model.ticker.clone(),
             name: asset_model.name.clone(),
             asset_type: asset_model.asset_type.clone(),
-            isin: asset_model.isin.clone(),
             currency: asset_model.currency.clone(),
             total_qty: snap.quantity,
             avg_cost,

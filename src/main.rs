@@ -11,8 +11,8 @@ use chrono::{Datelike, NaiveDate};
 use clap::Parser;
 use cli::{AnalysisTarget, ChartPeriod, Cli, Commands, CorrelationPeriod, MonitorCommands};
 use constants::{
-    format_date, DATE_FORMAT, FIVE_YEAR_DAYS, ONE_MONTH_DAYS, ONE_YEAR_DAYS, SIX_MONTH_DAYS,
-    THIRTY_DAYS, THREE_MONTH_DAYS, THREE_YEAR_DAYS,
+    format_date, DATE_FORMAT, DISPLAY_DATE_FORMAT, FIVE_YEAR_DAYS, ONE_MONTH_DAYS, ONE_YEAR_DAYS,
+    SIX_MONTH_DAYS, THIRTY_DAYS, THREE_MONTH_DAYS, THREE_YEAR_DAYS,
 };
 use models::{AssetInfo, BuyOrder, DividendOrder, SellOrder, SplitOrder};
 use services::price::RealPriceFetcher;
@@ -73,7 +73,6 @@ async fn main() -> anyhow::Result<()> {
             ticker,
             name,
             asset_type,
-            isin,
             date,
             quantity,
             price,
@@ -82,14 +81,16 @@ async fn main() -> anyhow::Result<()> {
         } => {
             let today = chrono::Local::now().date_naive();
             if date > today {
-                anyhow::bail!("Date cannot be in the future: {date}");
+                anyhow::bail!(
+                    "Date cannot be in the future: {}",
+                    date.format(DISPLAY_DATE_FORMAT)
+                );
             }
 
             let asset = AssetInfo {
                 ticker,
                 name,
                 asset_type,
-                isin,
                 currency,
             };
             let order = BuyOrder {
@@ -108,7 +109,10 @@ async fn main() -> anyhow::Result<()> {
         } => {
             let today = chrono::Local::now().date_naive();
             if date > today {
-                anyhow::bail!("Date cannot be in the future: {date}");
+                anyhow::bail!(
+                    "Date cannot be in the future: {}",
+                    date.format(DISPLAY_DATE_FORMAT)
+                );
             }
 
             let order = DividendOrder {
@@ -137,7 +141,10 @@ async fn main() -> anyhow::Result<()> {
         } => {
             let today = chrono::Local::now().date_naive();
             if date > today {
-                anyhow::bail!("Date cannot be in the future: {date}");
+                anyhow::bail!(
+                    "Date cannot be in the future: {}",
+                    date.format(DISPLAY_DATE_FORMAT)
+                );
             }
 
             let order = SplitOrder {
@@ -187,7 +194,10 @@ async fn main() -> anyhow::Result<()> {
         } => {
             let today = chrono::Local::now().date_naive();
             if date > today {
-                anyhow::bail!("Date cannot be in the future: {date}");
+                anyhow::bail!(
+                    "Date cannot be in the future: {}",
+                    date.format(DISPLAY_DATE_FORMAT)
+                );
             }
 
             let order = SellOrder {

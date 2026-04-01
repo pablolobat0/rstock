@@ -40,7 +40,6 @@ pub struct AssetInfo {
     pub ticker: String,
     pub name: String,
     pub asset_type: AssetType,
-    pub isin: Option<String>,
     pub currency: String,
 }
 
@@ -48,7 +47,6 @@ pub struct AssetInfo {
 pub struct Asset {
     pub id: i32,
     pub ticker: String,
-    pub isin: Option<String>,
     pub name: String,
     pub asset_type: AssetType,
     pub currency: String,
@@ -59,7 +57,6 @@ impl From<asset::Model> for Asset {
         Self {
             id: m.id,
             ticker: m.ticker,
-            isin: m.isin,
             name: m.name,
             asset_type: m.asset_type.parse().expect("invalid asset_type in DB"),
             currency: m.currency,
@@ -77,15 +74,12 @@ pub struct AssetRow {
     pub asset_type: String,
     #[tabled(rename = "Currency")]
     pub currency: String,
-    #[tabled(rename = "ISIN")]
-    pub isin: String,
 }
 
 pub struct AssetPosition {
     pub ticker: String,
     pub name: String,
     pub asset_type: AssetType,
-    pub isin: Option<String>,
     pub currency: String,
     pub total_qty: f64,
     pub avg_cost: f64,

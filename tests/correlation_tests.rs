@@ -14,8 +14,8 @@ async fn test_perfectly_correlated_assets() {
     let db = setup_test_db().await;
     let fetcher = MockPriceFetcher::new();
 
-    let id_a = insert_asset(&db, "XFAKE1", "Fake A", "stock", None, "EUR").await;
-    let id_b = insert_asset(&db, "XFAKE2", "Fake B", "stock", None, "EUR").await;
+    let id_a = insert_asset(&db, "XFAKE1", "Fake A", "stock", "EUR").await;
+    let id_b = insert_asset(&db, "XFAKE2", "Fake B", "stock", "EUR").await;
 
     insert_transaction(&db, id_a, "2025-01-01", 1.0, 100.0, 0.0).await;
     insert_transaction(&db, id_b, "2025-01-01", 1.0, 50.0, 0.0).await;
@@ -62,8 +62,8 @@ async fn test_negatively_correlated_assets() {
     let db = setup_test_db().await;
     let fetcher = MockPriceFetcher::new();
 
-    let id_a = insert_asset(&db, "XFAKE1", "Fake A", "stock", None, "EUR").await;
-    let id_b = insert_asset(&db, "XFAKE2", "Fake B", "stock", None, "EUR").await;
+    let id_a = insert_asset(&db, "XFAKE1", "Fake A", "stock", "EUR").await;
+    let id_b = insert_asset(&db, "XFAKE2", "Fake B", "stock", "EUR").await;
 
     insert_transaction(&db, id_a, "2025-01-01", 1.0, 100.0, 0.0).await;
     insert_transaction(&db, id_b, "2025-01-01", 1.0, 100.0, 0.0).await;
@@ -113,7 +113,7 @@ async fn test_diagonal_is_one() {
     let db = setup_test_db().await;
     let fetcher = MockPriceFetcher::new();
 
-    let id_a = insert_asset(&db, "XFAKE1", "Fake A", "stock", None, "EUR").await;
+    let id_a = insert_asset(&db, "XFAKE1", "Fake A", "stock", "EUR").await;
     insert_transaction(&db, id_a, "2025-01-01", 1.0, 100.0, 0.0).await;
 
     for i in 1..=25 {
@@ -145,8 +145,8 @@ async fn test_usd_asset_uses_eur_conversion() {
     let fetcher = MockPriceFetcher::new();
 
     // One EUR asset, one USD asset with same percentage moves
-    let id_eur = insert_asset(&db, "XFAKE1", "Fake EUR", "stock", None, "EUR").await;
-    let id_usd = insert_asset(&db, "XFAKE2", "Fake USD", "stock", None, "USD").await;
+    let id_eur = insert_asset(&db, "XFAKE1", "Fake EUR", "stock", "EUR").await;
+    let id_usd = insert_asset(&db, "XFAKE2", "Fake USD", "stock", "USD").await;
 
     insert_transaction(&db, id_eur, "2025-01-01", 1.0, 100.0, 0.0).await;
     insert_transaction(&db, id_usd, "2025-01-01", 1.0, 100.0, 0.0).await;
@@ -187,7 +187,7 @@ async fn test_insufficient_data_produces_warning() {
     let db = setup_test_db().await;
     let fetcher = MockPriceFetcher::new();
 
-    let id_a = insert_asset(&db, "XFAKE1", "Fake A", "stock", None, "EUR").await;
+    let id_a = insert_asset(&db, "XFAKE1", "Fake A", "stock", "EUR").await;
     insert_transaction(&db, id_a, "2025-01-01", 1.0, 100.0, 0.0).await;
 
     // Only 5 days of data — below MIN_DATA_POINTS (20)

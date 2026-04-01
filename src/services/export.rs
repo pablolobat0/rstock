@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use sea_orm::DatabaseConnection;
 
+use crate::constants::{display_date, MONETARY_MULTIPLIER};
 use crate::db::repos::{asset_repo, transaction_repo};
 use crate::models::cents_to_f64;
 
@@ -13,16 +14,17 @@ pub async fn export_transactions_csv(db: &DatabaseConnection, path: &str) -> any
     let mut wtr = csv::Writer::from_path(path)?;
     wtr.write_record(["Date", "Ticker", "Type", "Quantity", "Price", "Fees"])?;
 
+    let decimals = (MONETARY_MULTIPLIER as u64).trailing_zeros() as usize;
     for tx in &transactions {
         let ticker = asset_map.get(&tx.asset_id).copied().unwrap_or("unknown");
         let tx_type = tx.tx_type.to_string();
         wtr.write_record([
-            tx.date.as_str(),
+            &display_date(&tx.date),
             ticker,
             tx_type.as_str(),
             &format!("{}", tx.quantity),
-            &format!("{:.2}", cents_to_f64(tx.price_cents)),
-            &format!("{:.2}", cents_to_f64(tx.fees_cents)),
+            &format!("{:.decimals$}", cents_to_f64(tx.price_cents)),
+            &format!("{:.decimals$}", cents_to_f64(tx.fees_cents)),
         ])?;
     }
 

@@ -40,7 +40,6 @@ pub async fn create(db: &DatabaseConnection, info: &AssetInfo) -> anyhow::Result
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let new_asset = asset::ActiveModel {
         ticker: Set(info.ticker.clone()),
-        isin: Set(info.isin.clone()),
         name: Set(info.name.clone()),
         asset_type: Set(info.asset_type.to_string()),
         currency: Set(info.currency.clone()),

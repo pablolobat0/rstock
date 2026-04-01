@@ -2,9 +2,18 @@ use chrono::NaiveDate;
 
 // --- Date ---
 pub const DATE_FORMAT: &str = "%Y-%m-%d";
+pub const DISPLAY_DATE_FORMAT: &str = "%d-%m-%Y";
 
 pub fn format_date(d: NaiveDate) -> String {
     d.format(DATE_FORMAT).to_string()
+}
+
+/// Convert a YYYY-MM-DD storage string to DD-MM-YYYY for user display
+pub fn display_date(storage_date: &str) -> String {
+    NaiveDate::parse_from_str(storage_date, DATE_FORMAT).map_or_else(
+        |_| storage_date.to_owned(),
+        |d| d.format(DISPLAY_DATE_FORMAT).to_string(),
+    )
 }
 
 // --- Currency ---
@@ -41,6 +50,10 @@ pub const RSI_OVERBOUGHT: f64 = 70.0;
 pub const RSI_OVERSOLD: f64 = 30.0;
 /// Extra trading days of history to fetch for SMA200 warmup
 pub const MONITOR_WARMUP_DAYS: i64 = 300;
+
+// --- Monetary precision ---
+/// Prices stored as i64 with 4 decimal places of precision.
+pub const MONETARY_MULTIPLIER: f64 = 10_000.0;
 
 // --- Thresholds ---
 pub const ZERO_RETURN_THRESHOLD: f64 = 1e-12;

@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use chrono::NaiveDate;
 use rstock::db::repos::portfolio_history_repo;
-use rstock::models::{Asset, AssetType, Transaction, TxType};
+use rstock::models::{f64_to_cents, Asset, AssetType, Transaction, TxType};
 use rstock::services::nav;
 
 /// No transactions -> rebuild returns Ok, no portfolio_history rows.
@@ -34,7 +34,7 @@ async fn test_single_buy_initial_nav() {
     let db = common::setup_test_db().await;
     let mock = common::MockPriceFetcher::new();
 
-    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
+    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
     // Buy 10 shares at $50 = $500 deposit, 0 fees
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
     // EOD price is $50
@@ -70,7 +70,7 @@ async fn test_nav_reflects_price_change() {
     let db = common::setup_test_db().await;
     let mock = common::MockPriceFetcher::new();
 
-    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
+    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
     common::insert_daily_price(&db, asset_id, "2025-01-02", 50.0, false).await;
     common::insert_daily_price(&db, asset_id, "2025-01-03", 100.0, false).await;
@@ -108,7 +108,7 @@ async fn test_second_buy_no_nav_jump() {
     let db = common::setup_test_db().await;
     let mock = common::MockPriceFetcher::new();
 
-    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
+    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
     // Day 1: buy 10 @ $50
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
     // Day 5: buy 10 @ $60
@@ -165,7 +165,7 @@ async fn test_same_day_multiple_buys() {
     let db = common::setup_test_db().await;
     let mock = common::MockPriceFetcher::new();
 
-    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
+    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
     // Two buys on same day
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
     common::insert_transaction(&db, asset_id, "2025-01-02", 5.0, 50.0, 0.0).await;
@@ -200,7 +200,7 @@ async fn test_weekend_forward_fill() {
     let db = common::setup_test_db().await;
     let mock = common::MockPriceFetcher::new();
 
-    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
+    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
     // 2025-01-03 is a Friday
     common::insert_transaction(&db, asset_id, "2025-01-03", 10.0, 50.0, 0.0).await;
     common::insert_daily_price(&db, asset_id, "2025-01-03", 50.0, false).await;
@@ -243,7 +243,7 @@ async fn test_rebuild_from_specific_date() {
     let db = common::setup_test_db().await;
     let mock = common::MockPriceFetcher::new();
 
-    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
+    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
     for (date, price) in [
         ("2025-01-02", 50.0),
@@ -318,7 +318,7 @@ async fn test_back_dated_buy() {
     let db = common::setup_test_db().await;
     let mock = common::MockPriceFetcher::new();
 
-    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
+    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
 
     // Prices for 5 days (all at 50)
@@ -379,8 +379,8 @@ async fn test_multiple_assets() {
     let db = common::setup_test_db().await;
     let mock = common::MockPriceFetcher::new();
 
-    let asset_a = common::insert_asset(&db, "XFAKE1", "Asset A", "stock", None, "EUR").await;
-    let asset_b = common::insert_asset(&db, "XFAKE2", "Asset B", "stock", None, "EUR").await;
+    let asset_a = common::insert_asset(&db, "XFAKE1", "Asset A", "stock", "EUR").await;
+    let asset_b = common::insert_asset(&db, "XFAKE2", "Asset B", "stock", "EUR").await;
 
     // Buy 10 of A @ $50 and 5 of B @ $100
     common::insert_transaction(&db, asset_a, "2025-01-02", 10.0, 50.0, 0.0).await;
@@ -421,7 +421,7 @@ async fn test_missing_price_for_asset() {
     let db = common::setup_test_db().await;
     let mock = common::MockPriceFetcher::new();
 
-    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
+    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
     // Deliberately NOT inserting any daily price
 
@@ -455,7 +455,7 @@ async fn test_per_asset_history_created() {
     let db = common::setup_test_db().await;
     let mock = common::MockPriceFetcher::new();
 
-    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
+    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
     common::insert_daily_price(&db, asset_id, "2025-01-02", 50.0, false).await;
     common::insert_daily_price(&db, asset_id, "2025-01-03", 55.0, false).await;
@@ -490,8 +490,8 @@ async fn test_per_asset_history_multiple_assets() {
     let db = common::setup_test_db().await;
     let mock = common::MockPriceFetcher::new();
 
-    let asset_a = common::insert_asset(&db, "XFAKE1", "Asset A", "stock", None, "EUR").await;
-    let asset_b = common::insert_asset(&db, "XFAKE2", "Asset B", "stock", None, "EUR").await;
+    let asset_a = common::insert_asset(&db, "XFAKE1", "Asset A", "stock", "EUR").await;
+    let asset_b = common::insert_asset(&db, "XFAKE2", "Asset B", "stock", "EUR").await;
 
     common::insert_transaction(&db, asset_a, "2025-01-02", 10.0, 50.0, 0.0).await;
     common::insert_transaction(&db, asset_b, "2025-01-02", 5.0, 100.0, 0.0).await;
@@ -537,14 +537,14 @@ async fn test_process_day_transactions_pure() {
         tx_type: TxType::Buy,
         date: "2025-01-02".to_owned(),
         quantity: 10.0,
-        price_cents: 5000,
+        price_cents: f64_to_cents(50.0),
         fees_cents: 0,
     };
 
     let asset = Asset {
         id: 1,
         ticker: "XFAKE1".to_owned(),
-        isin: None,
+
         name: "Test".to_owned(),
         asset_type: AssetType::Stock,
         currency: "EUR".to_owned(),
@@ -569,7 +569,7 @@ async fn test_process_day_transactions_pure() {
         tx_type: TxType::Buy,
         date: "2025-01-03".to_owned(),
         quantity: 5.0,
-        price_cents: 6000,
+        price_cents: f64_to_cents(60.0),
         fees_cents: 0,
     };
 
@@ -590,7 +590,7 @@ async fn test_lazy_rebuild_no_history_on_buy() {
     let db = common::setup_test_db().await;
     let mock = common::MockPriceFetcher::new();
 
-    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
+    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
     common::insert_daily_price(&db, asset_id, "2025-01-02", 50.0, false).await;
 
@@ -625,7 +625,7 @@ async fn test_lazy_rebuild_no_history_on_buy() {
 async fn test_single_usd_asset_nav() {
     let db = common::setup_test_db().await;
 
-    let asset_id = common::insert_asset(&db, "XFAKEUSD", "US Stock", "stock", None, "USD").await;
+    let asset_id = common::insert_asset(&db, "XFAKEUSD", "US Stock", "stock", "USD").await;
     // Buy 10 shares @ $100 USD
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 100.0, 0.0).await;
 
@@ -675,8 +675,8 @@ async fn test_single_usd_asset_nav() {
 async fn test_mixed_currency_portfolio() {
     let db = common::setup_test_db().await;
 
-    let eur_id = common::insert_asset(&db, "XFAKEEUR", "EUR Fund", "fund", None, "EUR").await;
-    let usd_id = common::insert_asset(&db, "XFAKEUSD", "USD Stock", "stock", None, "USD").await;
+    let eur_id = common::insert_asset(&db, "XFAKEEUR", "EUR Fund", "fund", "EUR").await;
+    let usd_id = common::insert_asset(&db, "XFAKEUSD", "USD Stock", "stock", "USD").await;
 
     // Buy EUR fund: 10 shares @ 50 EUR
     common::insert_transaction(&db, eur_id, "2025-01-02", 10.0, 50.0, 0.0).await;
@@ -730,7 +730,7 @@ async fn test_mixed_currency_portfolio() {
 async fn test_eur_only_unchanged() {
     let db = common::setup_test_db().await;
 
-    let asset_id = common::insert_asset(&db, "XFAKE1", "EUR Stock", "stock", None, "EUR").await;
+    let asset_id = common::insert_asset(&db, "XFAKE1", "EUR Stock", "stock", "EUR").await;
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
 
     let mut mock = common::MockPriceFetcher::new();
@@ -774,7 +774,7 @@ async fn test_sell_reduces_holdings() {
     let db = common::setup_test_db().await;
     let mock = common::MockPriceFetcher::new();
 
-    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
+    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
     common::insert_sell_transaction(&db, asset_id, "2025-01-03", 5.0, 50.0, 0.0).await;
 
@@ -804,7 +804,7 @@ async fn test_sell_nav_unchanged_at_fair_value() {
     let db = common::setup_test_db().await;
     let mock = common::MockPriceFetcher::new();
 
-    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
+    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
     common::insert_sell_transaction(&db, asset_id, "2025-01-03", 5.0, 50.0, 0.0).await;
 
@@ -846,7 +846,7 @@ async fn test_sell_preserves_nav_after_gain() {
     let db = common::setup_test_db().await;
     let mock = common::MockPriceFetcher::new();
 
-    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
+    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
     common::insert_sell_transaction(&db, asset_id, "2025-01-04", 5.0, 100.0, 0.0).await;
 
@@ -888,7 +888,7 @@ async fn test_sell_with_fees() {
     let db = common::setup_test_db().await;
     let mock = common::MockPriceFetcher::new();
 
-    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
+    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
     // Sell 5 @ $50 with $10 fees -> proceeds = 250 - 10 = 240
     common::insert_sell_transaction(&db, asset_id, "2025-01-03", 5.0, 50.0, 10.0).await;
@@ -926,7 +926,7 @@ async fn test_full_liquidation() {
     let db = common::setup_test_db().await;
     let mock = common::MockPriceFetcher::new();
 
-    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
+    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
     common::insert_sell_transaction(&db, asset_id, "2025-01-03", 10.0, 50.0, 0.0).await;
 
@@ -960,7 +960,7 @@ async fn test_process_day_transactions_sell_pure() {
     let asset = Asset {
         id: 1,
         ticker: "XFAKE1".to_owned(),
-        isin: None,
+
         name: "Test".to_owned(),
         asset_type: AssetType::Stock,
         currency: "EUR".to_owned(),
@@ -974,7 +974,7 @@ async fn test_process_day_transactions_sell_pure() {
         tx_type: TxType::Buy,
         date: "2025-01-02".to_owned(),
         quantity: 10.0,
-        price_cents: 5000,
+        price_cents: f64_to_cents(50.0),
         fees_cents: 0,
     };
 
@@ -996,7 +996,7 @@ async fn test_process_day_transactions_sell_pure() {
         tx_type: TxType::Sell,
         date: "2025-01-03".to_owned(),
         quantity: 5.0,
-        price_cents: 5000,
+        price_cents: f64_to_cents(50.0),
         fees_cents: 0,
     };
 
@@ -1021,7 +1021,7 @@ async fn test_sell_redeems_shares() {
     let db = common::setup_test_db().await;
     let mock = common::MockPriceFetcher::new();
 
-    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
+    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
     // Buy 10 @ $50 = deposit 500, os = 5 (500/100)
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
     // Price goes to 80 on day 3
@@ -1067,7 +1067,7 @@ async fn test_forward_split_doubles_holdings() {
     let db = common::setup_test_db().await;
     let mock = common::MockPriceFetcher::new();
 
-    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
+    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
     // Buy 10 shares at $100 on day 1
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 100.0, 0.0).await;
     common::insert_daily_price(&db, asset_id, "2025-01-02", 100.0, false).await;
@@ -1115,7 +1115,7 @@ async fn test_reverse_split_quarters_holdings() {
     let db = common::setup_test_db().await;
     let mock = common::MockPriceFetcher::new();
 
-    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
+    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
     // Buy 100 shares at $10
     common::insert_transaction(&db, asset_id, "2025-01-02", 100.0, 10.0, 0.0).await;
     common::insert_daily_price(&db, asset_id, "2025-01-02", 10.0, false).await;
@@ -1159,7 +1159,7 @@ async fn test_split_mid_history_nav_continuity() {
     let db = common::setup_test_db().await;
     let mock = common::MockPriceFetcher::new();
 
-    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", None, "EUR").await;
+    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
     // Buy 10 shares at $50
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
     common::insert_daily_price(&db, asset_id, "2025-01-02", 50.0, false).await;
@@ -1226,7 +1226,7 @@ async fn test_process_day_transactions_split_pure() {
     let asset = Asset {
         id: 1,
         ticker: "XFAKE1".to_owned(),
-        isin: None,
+
         name: "Test".to_owned(),
         asset_type: AssetType::Stock,
         currency: "EUR".to_owned(),

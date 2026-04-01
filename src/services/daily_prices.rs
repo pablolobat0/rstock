@@ -31,7 +31,7 @@ pub async fn fill_prices_for_range(
     end_date: &str,
     price_fetcher: &dyn PriceFetcher,
 ) -> anyhow::Result<Option<String>> {
-    let lookup = asset.isin.as_deref().unwrap_or(&asset.ticker);
+    let lookup = &asset.ticker;
     let prices = price_fetcher
         .get_historical_prices(lookup, start_date, end_date, &asset.asset_type)
         .await;

@@ -1,7 +1,13 @@
 use chrono::NaiveDate;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
+use crate::constants::DISPLAY_DATE_FORMAT;
 use crate::models::AssetType;
+
+fn parse_date(s: &str) -> Result<NaiveDate, String> {
+    NaiveDate::parse_from_str(s, DISPLAY_DATE_FORMAT)
+        .map_err(|_| format!("invalid date '{s}', expected DD-MM-YYYY format"))
+}
 
 #[derive(Parser)]
 #[command(
@@ -81,7 +87,7 @@ pub enum Commands {
 
     /// Record a buy transaction, creates asset if it doesn't exist
     Buy {
-        /// Ticker symbol
+        /// Ticker symbol (stocks) or ISIN (funds/ETFs)
         #[arg(short, long)]
         ticker: String,
 
@@ -93,12 +99,8 @@ pub enum Commands {
         #[arg(short = 'T', long = "type", value_enum)]
         asset_type: AssetType,
 
-        /// ISIN code
-        #[arg(long)]
-        isin: Option<String>,
-
-        /// Purchase date (YYYY-MM-DD)
-        #[arg(short, long)]
+        /// Purchase date (DD-MM-YYYY)
+        #[arg(short, long, value_parser = parse_date)]
         date: NaiveDate,
 
         /// Number of shares/units
@@ -124,8 +126,8 @@ pub enum Commands {
         #[arg(short, long)]
         ticker: String,
 
-        /// Ex-dividend date (YYYY-MM-DD)
-        #[arg(short, long)]
+        /// Ex-dividend date (DD-MM-YYYY)
+        #[arg(short, long, value_parser = parse_date)]
         date: NaiveDate,
 
         /// Total dividend amount received
@@ -137,7 +139,7 @@ pub enum Commands {
         fees: f64,
     },
 
-    /// List all assets in the portfolio with type and ISIN
+    /// List all assets in the portfolio
     List {},
 
     /// Export all transactions to a CSV file
@@ -156,8 +158,8 @@ pub enum Commands {
         #[arg(short, long)]
         ticker: String,
 
-        /// Split date (YYYY-MM-DD)
-        #[arg(short, long)]
+        /// Split date (DD-MM-YYYY)
+        #[arg(short, long, value_parser = parse_date)]
         date: NaiveDate,
 
         /// Split ratio: new shares per old share (e.g. 2 for 2:1 split, 0.25 for 1:4 reverse split)
@@ -185,8 +187,8 @@ pub enum Commands {
         #[arg(short, long)]
         ticker: String,
 
-        /// Sale date (YYYY-MM-DD)
-        #[arg(short, long)]
+        /// Sale date (DD-MM-YYYY)
+        #[arg(short, long, value_parser = parse_date)]
         date: NaiveDate,
 
         /// Number of shares/units to sell

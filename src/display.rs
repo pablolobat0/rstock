@@ -9,13 +9,19 @@ use textplots::{Chart, Plot, Shape};
 
 use tabled::builder::Builder;
 
-use crate::constants::{RSI_OVERBOUGHT, RSI_OVERSOLD};
+use crate::constants::{display_date, MONETARY_MULTIPLIER, RSI_OVERBOUGHT, RSI_OVERSOLD};
 use crate::db::repos::watchlist_repo::WatchlistItem;
 use crate::models::monitor::{MomentumIndicators, MonitorReport};
 use crate::models::{
-    Asset, AssetRow, CorrelationMatrix, DirectHoldingRow, FundHoldingRow, HoldingsResult,
-    PeriodMetrics, PortfolioResult, PortfolioRow, PortfolioSnapshot, PortfolioSummary,
+    Asset, AssetRow, AssetType, CorrelationMatrix, DirectHoldingRow, FundHoldingRow,
+    HoldingsResult, PeriodMetrics, PortfolioResult, PortfolioRow, PortfolioSnapshot,
+    PortfolioSummary,
 };
+
+fn format_price(price: f64) -> String {
+    let decimals = (MONETARY_MULTIPLIER as u64).trailing_zeros() as usize;
+    format!("{price:.decimals$}")
+}
 
 fn format_qty(qty: f64) -> String {
     if qty.fract() == 0.0 {
@@ -173,14 +179,18 @@ pub fn print_portfolio(result: &PortfolioResult, summary: Option<&PortfolioSumma
                 };
 
                 PortfolioRow {
-                    ticker: r.ticker.clone(),
+                    ticker: if r.asset_type == AssetType::Stock {
+                        r.ticker.clone()
+                    } else {
+                        String::new()
+                    },
                     name: r.name.clone(),
                     asset_type: r.asset_type.to_string(),
                     currency: r.currency.clone(),
                     quantity: format_qty(r.total_qty),
-                    avg_cost: format!("{:.2}", r.avg_cost),
-                    current_price: format!("{:.2}", r.current_price),
-                    price_date: r.price_date.clone(),
+                    avg_cost: format_price(r.avg_cost),
+                    current_price: format_price(r.current_price),
+                    price_date: display_date(&r.price_date),
                     total_invested: format!("{:.2}", r.total_invested),
                     current_value: format!("{:.2}", r.current_value),
                     dividends: divs_text,
@@ -238,7 +248,7 @@ pub fn print_portfolio(result: &PortfolioResult, summary: Option<&PortfolioSumma
 
     if let Some(summary) = summary {
         println!();
-        println!("As of:          {}", summary.snapshot_date);
+        println!("As of:          {}", display_date(&summary.snapshot_date));
         println!("Portfolio Value: {:.2}", summary.total_value);
         println!("NAV:            {:.2}", summary.nav);
 
@@ -249,7 +259,7 @@ pub fn print_portfolio(result: &PortfolioResult, summary: Option<&PortfolioSumma
         }
 
         if let Some(ref inception) = summary.inception_date {
-            println!("Inception:      {inception}");
+            println!("Inception:      {}", display_date(inception));
         }
 
         let periods = [
@@ -280,11 +290,14 @@ pub fn print_asset_list(assets: &[Asset]) {
     let rows: Vec<AssetRow> = assets
         .iter()
         .map(|a| AssetRow {
-            ticker: a.ticker.clone(),
+            ticker: if a.asset_type == AssetType::Stock {
+                a.ticker.clone()
+            } else {
+                String::new()
+            },
             name: a.name.clone(),
             asset_type: a.asset_type.to_string(),
             currency: a.currency.clone(),
-            isin: a.isin.clone().unwrap_or_default(),
         })
         .collect();
 
@@ -387,7 +400,11 @@ pub fn print_nav_chart(snapshots: &[PortfolioSnapshot], period_label: &str) {
     Chart::new(180, 60, 0.0, xmax)
         .lineplot(&Shape::Lines(&points))
         .display();
-    println!("  {first_date}  →  {last_date}");
+    println!(
+        "  {}  →  {}",
+        display_date(first_date),
+        display_date(last_date)
+    );
 }
 
 pub fn print_holdings(result: &HoldingsResult) {
@@ -444,7 +461,6 @@ pub fn print_holdings(result: &HoldingsResult) {
                 .map(|h| {
                     let effective = fund.portfolio_weight * h.weighting / 100.0;
                     FundHoldingRow {
-                        ticker: h.ticker.clone(),
                         name: h.name.clone(),
                         fund_weight: format!("{:.2}%", h.weighting),
                         effective_weight: format!("{effective:.2}%"),
@@ -696,7 +712,11 @@ fn print_normalized_chart(
         .lineplot(&Shape::Lines(&sector_points))
         .display();
     println!("  {stock_ticker}: ——  {sector_ticker}: ··");
-    println!("  {first_date}  →  {last_date}");
+    println!(
+        "  {}  →  {}",
+        display_date(first_date),
+        display_date(last_date)
+    );
 }
 
 pub fn print_watchlist(items: &[WatchlistItem]) {

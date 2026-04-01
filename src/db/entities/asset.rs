@@ -7,7 +7,6 @@ pub struct Model {
     pub id: i32,
     #[sea_orm(unique)]
     pub ticker: String,
-    pub isin: Option<String>,
     pub name: String,
     pub asset_type: String,
     pub currency: String,

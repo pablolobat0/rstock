@@ -29,7 +29,7 @@ pub async fn get_holdings(db: &DatabaseConnection) -> anyhow::Result<HoldingsRes
                 });
             }
             AssetType::Fund | AssetType::Etf => {
-                let identifier = pos.isin.as_deref().unwrap_or(&pos.ticker);
+                let identifier = &pos.ticker;
                 let (holdings, error) = match fetch_fund_holdings(identifier).await {
                     Ok(h) => (h, None),
                     Err(e) => (Vec::new(), Some(format!("{e:#}"))),
@@ -77,8 +77,7 @@ async fn fetch_fund_holdings(identifier: &str) -> anyhow::Result<Vec<FundHolding
     let results = parsed
         .iter()
         .map(|entry| FundHolding {
-            ticker: entry["ticker"].as_str().unwrap_or("").to_owned(),
-            name: entry["name"].as_str().unwrap_or("").to_owned(),
+            name: entry["securityName"].as_str().unwrap_or("").to_owned(),
             weighting: entry["weighting"].as_f64().unwrap_or(0.0),
         })
         .collect();

@@ -61,7 +61,7 @@ Three categories of model structs:
 
 - **ORM**: SeaORM with derive macros for entities. Entities are in `src/db/entities/`, auto-generated
 - **Upsert**: Check existence, then insert or update. SeaORM `on_conflict` is not used; the pattern is manual check + insert/update
-- **Date storage**: Strings in `YYYY-MM-DD` format, not `chrono` types at the DB layer
+- **Date storage**: Strings in `YYYY-MM-DD` format internally (DB, services), `DD-MM-YYYY` for user-facing input/output. See `display_date()` and `parse_date()` in constants/cli.
 - **Monetary amounts**: Transactions use `i64` cents (`price_cents`, `fees_cents`). Daily prices use `f64` directly. Use `f64_to_cents()` before insertion and `cents_to_f64()` after retrieval
 - **Migrations**: SeaORM migration crate in `migration/`. Migrations run automatically on database connect. Files are in `migration/src/` with timestamp-based naming
 - **Connection**: Single SQLite connection created in `src/db/mod.rs`. Path: `~/.rstock/rstock.db`

@@ -1,6 +1,6 @@
 use sea_orm::DatabaseConnection;
 
-use crate::constants::FLOAT_EPSILON;
+use crate::constants::{display_date, FLOAT_EPSILON};
 use crate::db::repos::{
     asset_repo, daily_price_repo, portfolio_asset_history_repo, portfolio_history_repo,
     transaction_repo,
@@ -16,7 +16,7 @@ pub async fn buy(db: &DatabaseConnection, asset: AssetInfo, order: BuyOrder) -> 
         asset.ticker,
         order.price,
         asset.currency,
-        order.date,
+        display_date(&order.date),
         total,
         asset.currency
     );
@@ -60,7 +60,12 @@ pub async fn sell(db: &DatabaseConnection, ticker: String, order: SellOrder) -> 
     let proceeds = order.quantity * order.price - order.fees;
     let summary = format!(
         "Sold {} units of {} ({}) at {:.2} on {}. Proceeds: {:.2}",
-        order.quantity, asset.name, asset.ticker, order.price, order.date, proceeds
+        order.quantity,
+        asset.name,
+        asset.ticker,
+        order.price,
+        display_date(&order.date),
+        proceeds
     );
 
     let order_date = order.date.clone();
@@ -93,13 +98,22 @@ pub async fn dividend(
     let net_qty = Transaction::compute_holdings(&filtered_transactions);
 
     if net_qty <= FLOAT_EPSILON {
-        anyhow::bail!("No holdings of {} at date {}", ticker, order.date);
+        anyhow::bail!(
+            "No holdings of {} at date {}",
+            ticker,
+            display_date(&order.date)
+        );
     }
 
     let net_amount = order.amount - order.fees;
     let summary = format!(
         "Dividend for {} ({}): {:.2} (fees: {:.2}, net: {:.2}) on {}",
-        asset.name, ticker, order.amount, order.fees, net_amount, order.date
+        asset.name,
+        ticker,
+        order.amount,
+        order.fees,
+        net_amount,
+        display_date(&order.date)
     );
 
     let order_date = order.date.clone();
@@ -139,13 +153,22 @@ pub async fn split(
     let net_qty = Transaction::compute_holdings(&filtered_transactions);
 
     if net_qty <= FLOAT_EPSILON {
-        anyhow::bail!("No holdings of {} at date {}", ticker, order.date);
+        anyhow::bail!(
+            "No holdings of {} at date {}",
+            ticker,
+            display_date(&order.date)
+        );
     }
 
     let post_split_qty = net_qty * order.ratio;
     let summary = format!(
         "Split {} ({}): ratio {}, holdings {:.4} -> {:.4} on {}",
-        asset.name, ticker, order.ratio, net_qty, post_split_qty, order.date
+        asset.name,
+        ticker,
+        order.ratio,
+        net_qty,
+        post_split_qty,
+        display_date(&order.date)
     );
 
     transaction_repo::insert_split(db, asset.id, &order).await?;

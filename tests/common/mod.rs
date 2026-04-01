@@ -10,7 +10,7 @@ use rstock::db::entities::{
     transaction,
 };
 use rstock::models::monitor::StockInfo;
-use rstock::models::AssetType;
+use rstock::models::{f64_to_cents, AssetType};
 use rstock::services::price::PriceFetcher;
 
 pub async fn setup_test_db() -> DatabaseConnection {
@@ -28,14 +28,12 @@ pub async fn insert_asset(
     ticker: &str,
     name: &str,
     asset_type: &str,
-    isin: Option<&str>,
     currency: &str,
 ) -> i32 {
     let record = asset::ActiveModel {
         ticker: Set(ticker.to_owned()),
         name: Set(name.to_owned()),
         asset_type: Set(asset_type.to_owned()),
-        isin: Set(isin.map(|s| s.to_owned())),
         currency: Set(currency.to_owned()),
         created_at: Set("2025-01-01T00:00:00".to_owned()),
         ..Default::default()
@@ -60,8 +58,8 @@ pub async fn insert_transaction(
         tx_type: Set("buy".to_owned()),
         date: Set(date.to_owned()),
         quantity: Set(quantity),
-        price_cents: Set((price * 100.0) as i64),
-        fees_cents: Set((fees * 100.0) as i64),
+        price_cents: Set(f64_to_cents(price)),
+        fees_cents: Set(f64_to_cents(fees)),
 
         created_at: Set(format!("{}T00:00:00", date)),
         ..Default::default()
@@ -85,8 +83,8 @@ pub async fn insert_sell_transaction(
         tx_type: Set("sell".to_owned()),
         date: Set(date.to_owned()),
         quantity: Set(quantity),
-        price_cents: Set((price * 100.0) as i64),
-        fees_cents: Set((fees * 100.0) as i64),
+        price_cents: Set(f64_to_cents(price)),
+        fees_cents: Set(f64_to_cents(fees)),
 
         created_at: Set(format!("{}T00:00:00", date)),
         ..Default::default()
@@ -109,8 +107,8 @@ pub async fn insert_dividend_transaction(
         tx_type: Set("dividend".to_owned()),
         date: Set(date.to_owned()),
         quantity: Set(1.0),
-        price_cents: Set((amount * 100.0) as i64),
-        fees_cents: Set((fees * 100.0) as i64),
+        price_cents: Set(f64_to_cents(amount)),
+        fees_cents: Set(f64_to_cents(fees)),
 
         created_at: Set(format!("{date}T00:00:00")),
         ..Default::default()

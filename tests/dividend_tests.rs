@@ -5,6 +5,7 @@ use common::{
     get_asset_snapshots, get_portfolio_snapshot, insert_asset, insert_daily_price,
     insert_dividend_transaction, insert_transaction, MockPriceFetcher,
 };
+use rstock::models::f64_to_cents;
 use rstock::services::nav;
 use std::collections::HashMap;
 
@@ -14,7 +15,7 @@ use rstock::models::{Transaction, TxType};
 #[tokio::test]
 async fn test_cash_dividend_increases_nav() {
     let db = common::setup_test_db().await;
-    let asset_id = insert_asset(&db, "XFAKE1", "FakeStock", "stock", None, "EUR").await;
+    let asset_id = insert_asset(&db, "XFAKE1", "FakeStock", "stock", "EUR").await;
 
     // Buy 10 shares @ 100 on day 1
     insert_transaction(&db, asset_id, "2025-01-02", 10.0, 100.0, 0.0).await;
@@ -51,7 +52,7 @@ async fn test_cash_dividend_increases_nav() {
 #[tokio::test]
 async fn test_dividend_with_fees() {
     let db = common::setup_test_db().await;
-    let asset_id = insert_asset(&db, "XFAKE1", "FakeStock", "stock", None, "EUR").await;
+    let asset_id = insert_asset(&db, "XFAKE1", "FakeStock", "stock", "EUR").await;
 
     insert_transaction(&db, asset_id, "2025-01-02", 10.0, 100.0, 0.0).await;
     insert_daily_price(&db, asset_id, "2025-01-02", 100.0, false).await;
@@ -77,7 +78,7 @@ async fn test_dividend_with_fees() {
 #[tokio::test]
 async fn test_dividend_does_not_change_holdings() {
     let db = common::setup_test_db().await;
-    let asset_id = insert_asset(&db, "XFAKE1", "FakeStock", "stock", None, "EUR").await;
+    let asset_id = insert_asset(&db, "XFAKE1", "FakeStock", "stock", "EUR").await;
 
     insert_transaction(&db, asset_id, "2025-01-02", 10.0, 100.0, 0.0).await;
     insert_daily_price(&db, asset_id, "2025-01-02", 100.0, false).await;
@@ -101,7 +102,7 @@ async fn test_dividend_does_not_change_holdings() {
 #[tokio::test]
 async fn test_incremental_rebuild_preserves_cash_balance() {
     let db = common::setup_test_db().await;
-    let asset_id = insert_asset(&db, "XFAKE1", "FakeStock", "stock", None, "EUR").await;
+    let asset_id = insert_asset(&db, "XFAKE1", "FakeStock", "stock", "EUR").await;
 
     insert_transaction(&db, asset_id, "2025-01-02", 10.0, 100.0, 0.0).await;
     insert_daily_price(&db, asset_id, "2025-01-02", 100.0, false).await;
@@ -144,7 +145,7 @@ fn test_dividend_signed_quantity_is_zero() {
         tx_type: TxType::Dividend,
         date: "2025-01-03".to_owned(),
         quantity: 1.0,
-        price_cents: 5000,
+        price_cents: f64_to_cents(50.0),
         fees_cents: 0,
     };
     assert!((tx.signed_quantity()).abs() < f64::EPSILON);
@@ -156,7 +157,6 @@ async fn test_process_day_transactions_dividend_pure() {
     let asset = rstock::models::Asset {
         id: 1,
         ticker: "XFAKE1".to_owned(),
-        isin: None,
         name: "FakeStock".to_owned(),
         asset_type: rstock::models::AssetType::Stock,
         currency: "EUR".to_owned(),
@@ -170,7 +170,7 @@ async fn test_process_day_transactions_dividend_pure() {
         tx_type: TxType::Buy,
         date: "2025-01-02".to_owned(),
         quantity: 10.0,
-        price_cents: 10000,
+        price_cents: f64_to_cents(100.0),
         fees_cents: 0,
     };
     let mut holdings: HashMap<i32, f64> = HashMap::new();
@@ -191,7 +191,7 @@ async fn test_process_day_transactions_dividend_pure() {
         tx_type: TxType::Dividend,
         date: "2025-01-03".to_owned(),
         quantity: 1.0,
-        price_cents: 5000, // 50.00 total
+        price_cents: f64_to_cents(50.0),
         fees_cents: 0,
     };
     let (os2, nav_val2, div_income2) = nav::process_day_transactions(
