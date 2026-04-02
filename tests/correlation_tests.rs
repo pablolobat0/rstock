@@ -46,8 +46,8 @@ async fn test_perfectly_correlated_assets() {
         .unwrap();
 
     // Find XFAKE1 and XFAKE2 indices
-    let idx_a = matrix.labels.iter().position(|l| l == "XFAKE1").unwrap();
-    let idx_b = matrix.labels.iter().position(|l| l == "XFAKE2").unwrap();
+    let idx_a = matrix.names.iter().position(|l| l == "Fake A").unwrap();
+    let idx_b = matrix.names.iter().position(|l| l == "Fake B").unwrap();
 
     let corr = matrix.matrix[idx_a][idx_b].unwrap();
     assert!(
@@ -97,8 +97,8 @@ async fn test_negatively_correlated_assets() {
         .await
         .unwrap();
 
-    let idx_a = matrix.labels.iter().position(|l| l == "XFAKE1").unwrap();
-    let idx_b = matrix.labels.iter().position(|l| l == "XFAKE2").unwrap();
+    let idx_a = matrix.names.iter().position(|l| l == "Fake A").unwrap();
+    let idx_b = matrix.names.iter().position(|l| l == "Fake B").unwrap();
 
     let corr = matrix.matrix[idx_a][idx_b].unwrap();
     assert!(
@@ -132,7 +132,7 @@ async fn test_diagonal_is_one() {
         .await
         .unwrap();
 
-    for i in 0..matrix.labels.len() {
+    for i in 0..matrix.names.len() {
         let diag = matrix.matrix[i][i];
         assert_eq!(diag, Some(1.0), "diagonal [{i}][{i}] should be 1.0");
     }
@@ -170,8 +170,8 @@ async fn test_usd_asset_uses_eur_conversion() {
         .await
         .unwrap();
 
-    let idx_eur = matrix.labels.iter().position(|l| l == "XFAKE1").unwrap();
-    let idx_usd = matrix.labels.iter().position(|l| l == "XFAKE2").unwrap();
+    let idx_eur = matrix.names.iter().position(|l| l == "Fake EUR").unwrap();
+    let idx_usd = matrix.names.iter().position(|l| l == "Fake USD").unwrap();
 
     // With constant FX, EUR-converted returns are identical → correlation ~1.0
     let corr = matrix.matrix[idx_eur][idx_usd].unwrap();
@@ -207,7 +207,7 @@ async fn test_insufficient_data_produces_warning() {
         .unwrap();
 
     assert!(
-        matrix.warnings.contains(&"XFAKE1".to_string()),
-        "XFAKE1 should be in warnings due to insufficient data"
+        matrix.warnings.contains(&"Fake A".to_string()),
+        "Fake A should be in warnings due to insufficient data"
     );
 }

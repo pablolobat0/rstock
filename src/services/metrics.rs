@@ -16,6 +16,7 @@ use crate::services::daily_prices;
 use crate::services::exchange_rates;
 use crate::services::portfolio;
 use crate::services::price::PriceFetcher;
+use crate::services::price_cache;
 
 pub fn is_benchmark_ticker(ticker: &str) -> bool {
     ticker == BENCHMARK_TICKER
@@ -250,44 +251,32 @@ pub async fn compute_correlation_matrix(
     let asset_ids: Vec<i32> = held_assets.iter().map(|s| s.asset_id).collect();
     let assets = asset_repo::find_by_ids(db, asset_ids.into_iter()).await?;
 
-    // 2. Ensure benchmark prices exist
+    // 2. Ensure benchmark prices and FX rate are cached
     let benchmark_asset_id =
         ensure_benchmark_prices(db, start_date, end_date, price_fetcher).await?;
-    let benchmark_asset = Asset {
-        id: benchmark_asset_id,
-        ticker: BENCHMARK_TICKER.to_owned(),
-        name: BENCHMARK_NAME.to_owned(),
-        asset_type: AssetType::Stock,
-        currency: BENCHMARK_CURRENCY.to_owned(),
-    };
+    if BENCHMARK_CURRENCY != BASE_CURRENCY {
+        let pair = exchange_rates::currency_pair(BENCHMARK_CURRENCY);
+        price_cache::fill_exchange_rates(db, &[pair], start_date, end_date, price_fetcher).await?;
+    }
 
     // 3. Build list: held assets + benchmark
-    let mut all_assets: Vec<&Asset> = assets.iter().collect();
-    all_assets.push(&benchmark_asset);
+    let mut all_assets: Vec<Asset> = assets;
+    all_assets.push(benchmark_asset(benchmark_asset_id));
 
-    // 4. For each asset: ensure prices + FX, fetch price series, convert to EUR returns
+    // 4. For each asset: fetch cached prices + FX, convert to EUR returns
     let mut return_series: Vec<(String, HashMap<String, f64>)> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
 
     for asset in &all_assets {
-        // Ensure prices are cached
-        daily_prices::fill_prices_for_range(db, asset, start_date, end_date, price_fetcher).await?;
-
-        // Ensure FX rates for non-EUR assets
         let fx_pair = if asset.currency == BASE_CURRENCY {
             None
         } else {
-            let pair = exchange_rates::currency_pair(&asset.currency);
-            exchange_rates::fill_rates_for_range(db, &pair, start_date, end_date, price_fetcher)
-                .await?;
-            Some(pair)
+            Some(exchange_rates::currency_pair(&asset.currency))
         };
 
-        // Fetch price series
         let prices =
             daily_price_repo::find_prices_between(db, asset.id, start_date, end_date).await?;
 
-        // Convert to EUR
         let eur_prices = if let Some(ref pair) = fx_pair {
             let rates =
                 exchange_rate_repo::find_rates_between(db, pair, start_date, end_date).await?;
@@ -308,14 +297,14 @@ pub async fn compute_correlation_matrix(
 
         let returns = compute_log_returns(&eur_prices);
         if returns.len() < MIN_DATA_POINTS {
-            warnings.push(asset.ticker.clone());
+            warnings.push(asset.name.clone());
         }
-        return_series.push((asset.ticker.clone(), returns));
+        return_series.push((asset.name.clone(), returns));
     }
 
     // 5. Build N×N correlation matrix
     let n = return_series.len();
-    let labels: Vec<String> = return_series.iter().map(|(t, _)| t.clone()).collect();
+    let names: Vec<String> = return_series.iter().map(|(name, _)| name.clone()).collect();
     let mut matrix = vec![vec![None; n]; n];
 
     for i in 0..n {
@@ -332,7 +321,7 @@ pub async fn compute_correlation_matrix(
     }
 
     Ok(CorrelationMatrix {
-        labels,
+        names,
         matrix,
         warnings,
     })
@@ -392,28 +381,33 @@ fn align_return_series(a: &HashMap<String, f64>, b: &HashMap<String, f64>) -> (V
     (aligned_a, aligned_b)
 }
 
+fn benchmark_asset_info() -> AssetInfo {
+    AssetInfo {
+        ticker: BENCHMARK_TICKER.to_owned(),
+        name: BENCHMARK_NAME.to_owned(),
+        asset_type: AssetType::Stock,
+        currency: BENCHMARK_CURRENCY.to_owned(),
+    }
+}
+
+fn benchmark_asset(id: i32) -> Asset {
+    Asset {
+        id,
+        ticker: BENCHMARK_TICKER.to_owned(),
+        name: BENCHMARK_NAME.to_owned(),
+        asset_type: AssetType::Stock,
+        currency: BENCHMARK_CURRENCY.to_owned(),
+    }
+}
+
 async fn ensure_benchmark_prices(
     db: &DatabaseConnection,
     start_date: &str,
     end_date: &str,
     price_fetcher: &dyn PriceFetcher,
 ) -> anyhow::Result<i32> {
-    let info = AssetInfo {
-        ticker: BENCHMARK_TICKER.to_owned(),
-        name: BENCHMARK_NAME.to_owned(),
-        asset_type: AssetType::Stock,
-        currency: BENCHMARK_CURRENCY.to_owned(),
-    };
-
-    let asset_id = asset_repo::get_or_create(db, &info).await?;
-
-    let asset = Asset {
-        id: asset_id,
-        ticker: BENCHMARK_TICKER.to_owned(),
-        name: BENCHMARK_NAME.to_owned(),
-        asset_type: AssetType::Stock,
-        currency: BENCHMARK_CURRENCY.to_owned(),
-    };
+    let asset_id = asset_repo::get_or_create(db, &benchmark_asset_info()).await?;
+    let asset = benchmark_asset(asset_id);
 
     daily_prices::fill_prices_for_range(db, &asset, start_date, end_date, price_fetcher).await?;
 

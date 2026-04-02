@@ -1,9 +1,9 @@
 use std::fmt::Write;
 
 use tabled::builder::Builder;
-use tabled::settings::object::Cell;
+use tabled::settings::object::{Cell, Columns};
 use tabled::settings::style::{HorizontalLine, VerticalLine};
-use tabled::settings::{Color, Style};
+use tabled::settings::{Alignment, Color, Style};
 use tabled::Table;
 
 use crate::constants::display_date;
@@ -101,7 +101,7 @@ pub fn print_portfolio(result: &PortfolioResult, summary: Option<&PortfolioSumma
         println!("No positions found.");
     } else {
         let total_current_value = result.total_current_value;
-        let display_rows: Vec<PortfolioRow> = result
+        let mut display_rows: Vec<PortfolioRow> = result
             .rows
             .iter()
             .map(|r| {
@@ -144,6 +144,12 @@ pub fn print_portfolio(result: &PortfolioResult, summary: Option<&PortfolioSumma
             })
             .collect();
 
+        display_rows.sort_by(|a, b| {
+            let wa: f64 = a.weight.trim_end_matches('%').parse().unwrap_or(0.0);
+            let wb: f64 = b.weight.trim_end_matches('%').parse().unwrap_or(0.0);
+            wb.partial_cmp(&wa).unwrap_or(std::cmp::Ordering::Equal)
+        });
+
         let mut table = Table::new(&display_rows);
         table.with(
             Style::modern()
@@ -152,6 +158,10 @@ pub fn print_portfolio(result: &PortfolioResult, summary: Option<&PortfolioSumma
                 .remove_horizontal()
                 .remove_vertical(),
         );
+        // Right-align numeric columns: Quantity(4) through Weight(13)
+        for col in 4..=13 {
+            table.modify(Columns::single(col), Alignment::right());
+        }
         for (i, r) in result.rows.iter().enumerate() {
             let color = if r.gain_loss >= 0.0 {
                 Color::FG_GREEN

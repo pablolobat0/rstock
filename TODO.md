@@ -2,79 +2,28 @@
 
 ## Bugs / Code Quality
 
-- [ ] Fix silent asset_type defaulting — `src/models/asset.rs:62` uses `unwrap_or(AssetType::Stock)` for invalid types; should log a warning or return an error
-- [x] Add date validation on `buy` — currently accepts any string; should parse with chrono at CLI level
-- [ ] Prevent duplicate transactions — nothing stops recording the exact same buy twice
 - [ ] Reject buy/sell with quantity <= 0 — currently accepts zero-quantity transactions
-- [x] Extract cents<->float helper — `price_cents as f64 / 100.0` is scattered across services
+- [ ] Inspect why stock prices are not in real time
 
 ## New Commands
 
-- [x] `list` — show all assets in the portfolio
+- [ ] `edit` — edit a transaction by ID (with confirmation prompt)
 - [ ] `delete` — remove a transaction by ID (with confirmation prompt)
-- [x] `sell` — record a sell transaction (tx_type="sell", reduce quantity, track realized gains)
-- [ ] `get --ticker MSFT` — show single-asset detail view with individual price chart
-- [ ] `update` — fetch and cache latest prices without displaying portfolio
-- [x] `export` — dump transactions to CSV
 - [ ] `import` — bulk import transactions from broker CSV exports
-- [x] `holdings` — fund/ETF look-through with underlying positions
-- [x] `analyze` — portfolio correlation matrix over configurable periods
-- [x] `monitor` — stock watchlist with momentum indicators, fundamentals, and sector comparison
-
-## New Transaction Types
-
-- [x] Sell transactions — schema already has `tx_type` field (hardcoded to "buy"); add CLI command + service logic
-- [x] Dividends — new tx_type, cash income tracked in NAV (reinvest via separate buy)
-- [x] Stock splits — adjust quantity and cost basis for affected asset
 
 ## Portfolio Features
 
-- [ ] Realized vs. unrealized gains — requires FIFO/LIFO lot tracking
-- [ ] Tax lot tracking — cost basis per lot for tax reporting
 - [ ] Benchmark comparison chart — overlay portfolio NAV against benchmark (ACWI) on same chart
-- [x] Risk metrics — beta and Sharpe ratio (trailing 1Y, vs ACWI benchmark)
-- [x] Max drawdown metric — per-period max drawdown in portfolio summary
-- [x] Per-period volatility — annualized volatility for YTD, 1Y, 3Y, 5Y
-- [ ] Sector/country allocation breakdown
+- [ ] Sector/country/asset type allocation breakdown
 - [ ] Rebalancing alerts — target allocation vs. current weights
-- [x] Multi-currency support + forex conversion (exchange rate service, daily rate caching, integrated into NAV + portfolio)
-- [ ] XIRR / money-weighted return — complements time-weighted NAV return
-
-## Display Improvements
-
-- [x] Color portfolio table rows — green for gaining assets, red for losing
-- [ ] `--dry-run` flag for buy — show what would be recorded without committing
-- [ ] Interactive TUI mode (ratatui) — navigate assets, drill into history
-- [ ] Sparkline per asset in the portfolio table
-
-## Performance
-
-- [ ] Investigate why `get` command is slow — profile and identify bottlenecks (price fetching, NAV rebuild, DB queries, etc.)
 
 ## Structural Improvements
 
-- [ ] Move chart date-range logic out of `main.rs` into a service or display helper
-- [ ] Use `chrono::NaiveDate` in domain models instead of String (convert at DB boundary)
-- [ ] Add structured logging (`tracing` crate) — replace `eprintln!()` warnings
+- [ ] Add structured logging — replace `eprintln!()` warnings
 - [ ] Config file (`~/.rstock/config.toml`) — default currency, DB path, chart period, etc.
 - [ ] Database backup/restore command
-
-## External Dependencies
-
-- [ ] Test and fix ETF/mutual fund price fetching — Morningstar API returns HTTP 202 instead of data; mstarpy may need updating or alternative data source
-- [ ] Change mstarpy version pin from `==9.0.3` to `>=9.0.3` once confirmed stable
-- [ ] Check mstarpy browser config — verify if mstarpy needs browser/session configuration for Morningstar API access
 
 ## Monitor Improvements
 
 - [ ] Add color to monitor performance graph — distinguish stock vs sector ETF lines with color
 - [ ] Redesign monitor display layout — improve readability and visual presentation
-
-## Test Gaps
-
-- [ ] CLI parsing tests (invalid args, missing required flags)
-- [ ] Display output tests (snapshot testing for table/chart output)
-- [ ] Error path tests (invalid dates, DB failures, network timeouts)
-- [ ] Duplicate transaction handling
-- [ ] Full binary integration tests (`cargo run` end-to-end)
-- [ ] Performance tests with large portfolios (100+ assets, years of history)

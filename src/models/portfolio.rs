@@ -79,11 +79,11 @@ pub struct PortfolioSummary {
 }
 
 pub struct CorrelationMatrix {
-    /// Ticker labels in order (assets + reference index)
-    pub labels: Vec<String>,
+    /// Display names in order (assets + reference index)
+    pub names: Vec<String>,
     /// N×N matrix of Option<f64>; None = insufficient data
     pub matrix: Vec<Vec<Option<f64>>>,
-    /// Tickers with insufficient data for the requested period
+    /// Names with insufficient data for the requested period
     pub warnings: Vec<String>,
 }
 

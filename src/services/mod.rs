@@ -7,4 +7,5 @@ pub mod monitor;
 pub mod nav;
 pub mod portfolio;
 pub mod price;
+pub mod price_cache;
 pub mod transactions;

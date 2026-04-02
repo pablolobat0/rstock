@@ -1,6 +1,7 @@
 use colored::Colorize;
+use tabled::settings::object::Columns;
 use tabled::settings::style::{HorizontalLine, VerticalLine};
-use tabled::settings::Style;
+use tabled::settings::{Alignment, Style};
 use tabled::Table;
 
 use crate::models::{DirectHoldingRow, FundHoldingRow, HoldingsResult};
@@ -35,6 +36,9 @@ pub fn print_holdings(result: &HoldingsResult) {
                 .remove_horizontal()
                 .remove_vertical(),
         );
+        // Right-align Value(2) and Weight(3)
+        table.modify(Columns::single(2), Alignment::right());
+        table.modify(Columns::single(3), Alignment::right());
         println!("{table}");
         println!();
     }
@@ -74,6 +78,9 @@ pub fn print_holdings(result: &HoldingsResult) {
                     .remove_horizontal()
                     .remove_vertical(),
             );
+            // Right-align Fund Weight(1) and Portfolio Weight(2)
+            table.modify(Columns::single(1), Alignment::right());
+            table.modify(Columns::single(2), Alignment::right());
             println!("{table}");
         }
         println!();
