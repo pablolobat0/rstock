@@ -7,7 +7,7 @@ use crate::db::repos::{asset_repo, transaction_repo};
 use crate::models::cents_to_f64;
 
 pub async fn export_transactions_csv(db: &DatabaseConnection, path: &str) -> anyhow::Result<usize> {
-    let transactions = transaction_repo::find_all_ordered_by_date(db).await?;
+    let transactions = transaction_repo::find_all_ordered_by_date(db, None, None).await?;
     let assets = asset_repo::find_all(db).await?;
     let asset_map: HashMap<i32, &str> = assets.iter().map(|a| (a.id, a.ticker.as_str())).collect();
 

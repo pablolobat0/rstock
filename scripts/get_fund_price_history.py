@@ -38,7 +38,8 @@ def main():
 
         result = []
         for entry in history:
-            result.append({"date": entry["date"], "price": float(entry["totalReturn"])})
+            price = float(entry.get("totalReturn") or entry.get("nav"))
+            result.append({"date": entry["date"], "price": price})
 
         print(json.dumps(result))
     except Exception as e:

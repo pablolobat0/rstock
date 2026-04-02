@@ -55,6 +55,10 @@ pub const MONITOR_WARMUP_DAYS: i64 = 300;
 /// Prices stored as i64 with 4 decimal places of precision.
 pub const MONETARY_MULTIPLIER: f64 = 10_000.0;
 
+// --- API ---
+/// Extra days to pad fund/ETF API requests backward to avoid slow empty responses
+pub const FUND_API_PADDING_DAYS: i64 = 10;
+
 // --- Thresholds ---
 pub const ZERO_RETURN_THRESHOLD: f64 = 1e-12;
 pub const FLOAT_EPSILON: f64 = 1e-9;

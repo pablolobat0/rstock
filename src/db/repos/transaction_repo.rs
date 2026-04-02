@@ -30,11 +30,21 @@ pub async fn insert_buy(
     Ok(())
 }
 
-pub async fn find_all_ordered_by_date(db: &DatabaseConnection) -> anyhow::Result<Vec<Transaction>> {
-    let results = transaction::Entity::find()
-        .order_by_asc(transaction::Column::Date)
-        .all(db)
-        .await?;
+pub async fn find_all_ordered_by_date(
+    db: &DatabaseConnection,
+    start_date: Option<&str>,
+    end_date: Option<&str>,
+) -> anyhow::Result<Vec<Transaction>> {
+    let mut query = transaction::Entity::find().order_by_asc(transaction::Column::Date);
+
+    if let Some(start) = start_date {
+        query = query.filter(transaction::Column::Date.gte(start.to_string()));
+    }
+    if let Some(end) = end_date {
+        query = query.filter(transaction::Column::Date.lte(end.to_string()));
+    }
+
+    let results = query.all(db).await?;
     Ok(results.into_iter().map(Transaction::from).collect())
 }
 

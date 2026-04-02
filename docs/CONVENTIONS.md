@@ -8,6 +8,10 @@
 - **No unwrap in production code**: Use `.context()` or pattern matching for fallible operations. `unwrap()` is acceptable only in tests and for known-safe literal conversions (e.g., `NaiveDate::from_ymd_opt` with hardcoded values)
 - **Warnings**: Logged to stderr via `eprintln!("Warning: ...")`. No structured logging framework yet
 
+## Function Ordering
+
+Within each file, order functions top-to-bottom like a book: if function A calls function B, A appears above B. Public/entry-point functions go at the top, private helpers sink to the bottom.
+
 ## Module Organization
 
 - `mod.rs` files re-export public types for ergonomic imports (see `src/models/mod.rs`)

@@ -12,7 +12,166 @@ use crate::services::daily_prices;
 use crate::services::exchange_rates;
 use crate::services::price::PriceFetcher;
 
-/// Fills price caches for all assets and returns a map of `asset_id` → latest asset price date.
+#[allow(clippy::too_many_lines)]
+pub async fn rebuild_portfolio_history(
+    db: &DatabaseConnection,
+    start_date: NaiveDate,
+    end_date: NaiveDate,
+    prev_snapshot: Option<&PortfolioSnapshot>,
+    price_fetcher: &dyn PriceFetcher,
+) -> anyhow::Result<()> {
+    let end_str = format_date(end_date);
+    let start_str = format_date(start_date);
+
+    // Get latest snapshot data
+    let mut holdings: HashMap<i32, f64> = HashMap::new();
+    if let Some(snap) = prev_snapshot {
+        let asset_rows = portfolio_asset_history_repo::find_by_date(db, &snap.date).await?;
+        for row in asset_rows {
+            holdings.insert(row.asset_id, row.quantity);
+        }
+    }
+    let mut is_fresh_portfolio = prev_snapshot.is_none();
+    let mut outstanding_shares = prev_snapshot.map_or(0.0, |s| s.outstanding_shares);
+    let mut nav = prev_snapshot.map_or(INITIAL_NAV, |s| s.nav);
+    // Accumulated cash from dividends: recovered from total_value - asset_value
+    let mut accumulated_cash = prev_snapshot.map_or(0.0, |s| s.total_value - s.asset_value);
+
+    let transactions =
+        transaction_repo::find_all_ordered_by_date(db, Some(&start_str), Some(&end_str)).await?;
+
+    let needed_ids: HashSet<i32> = holdings
+        .keys()
+        .copied()
+        .chain(transactions.iter().map(|tx| tx.asset_id))
+        .collect();
+
+    if needed_ids.is_empty() {
+        return Ok(());
+    }
+    let assets = asset_repo::find_by_ids(db, needed_ids).await?;
+
+    // Determine needed currency pairs
+    let needed_currency_pairs: Vec<String> = assets
+        .iter()
+        .map(|a| &a.currency)
+        .filter(|c| c.as_str() != BASE_CURRENCY)
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .map(|c| exchange_rates::currency_pair(c))
+        .collect();
+
+    let mut tx_by_date: HashMap<String, Vec<&Transaction>> = HashMap::new();
+    for tx in &transactions {
+        tx_by_date.entry(tx.date.clone()).or_default().push(tx);
+    }
+
+    let asset_map: HashMap<i32, &Asset> = assets.iter().map(|a| (a.id, a)).collect();
+
+    // Fill price caches and exchange rate caches
+    let latest_cache_dates =
+        fill_asset_prices(db, &assets, &start_str, &end_str, price_fetcher).await?;
+
+    let latest_rate_dates = if needed_currency_pairs.is_empty() {
+        HashMap::new()
+    } else {
+        fill_exchange_rates(
+            db,
+            &needed_currency_pairs,
+            &start_str,
+            &end_str,
+            price_fetcher,
+        )
+        .await?
+    };
+
+    // Effective end date = min(end_date, min of latest cache dates for all assets and rates)
+    let min_asset_date = assets
+        .iter()
+        .filter_map(|a| {
+            latest_cache_dates
+                .get(&a.id)
+                .and_then(|d| NaiveDate::parse_from_str(d, DATE_FORMAT).ok())
+        })
+        .min();
+
+    let min_rate_date = latest_rate_dates
+        .values()
+        .filter_map(|d| NaiveDate::parse_from_str(d, DATE_FORMAT).ok())
+        .min();
+
+    let effective_end = [Some(end_date), min_asset_date, min_rate_date]
+        .into_iter()
+        .flatten()
+        .min()
+        .unwrap_or(end_date);
+
+    // Iterate each calendar day
+    let mut current = start_date;
+    while current <= effective_end {
+        let date_str = format_date(current);
+
+        // Build day's exchange rates
+        let day_rates = if needed_currency_pairs.is_empty() {
+            HashMap::new()
+        } else {
+            get_day_rates(db, &needed_currency_pairs, &date_str).await?
+        };
+
+        // Process transactions for this day
+        if let Some(day_txs) = tx_by_date.get(&date_str) {
+            let (new_shares, new_nav, dividend_income) = process_day_transactions(
+                day_txs,
+                &mut holdings,
+                outstanding_shares,
+                nav,
+                &asset_map,
+                &day_rates,
+            );
+            outstanding_shares = new_shares;
+            nav = new_nav;
+            accumulated_cash += dividend_income;
+        }
+
+        // First-ever transaction day: store a seed snapshot for (day - 1) with NAV=100
+        if is_fresh_portfolio && outstanding_shares > 0.0 {
+            let seed_date = format_date(current - chrono::Duration::days(1));
+            store_daily_snapshot(db, &seed_date, 0.0, 0.0, 0.0, INITIAL_NAV, &[]).await?;
+            is_fresh_portfolio = false;
+        }
+
+        if outstanding_shares == 0.0 && is_fresh_portfolio {
+            current += chrono::Duration::days(1);
+            continue;
+        }
+
+        // Compute EOD values (aggregate + per-asset) with currency conversion
+        let (asset_value, asset_values) =
+            compute_day_asset_values(db, &holdings, &asset_map, &date_str, &day_rates).await?;
+
+        let total_value = asset_value + accumulated_cash;
+        if outstanding_shares > 0.0 {
+            nav = total_value / outstanding_shares;
+        }
+
+        store_daily_snapshot(
+            db,
+            &date_str,
+            asset_value,
+            total_value,
+            outstanding_shares,
+            nav,
+            &asset_values,
+        )
+        .await?;
+
+        current += chrono::Duration::days(1);
+    }
+
+    Ok(())
+}
+
+/// Fills price caches for all assets in parallel and returns a map of `asset_id` → latest asset price date.
 async fn fill_asset_prices(
     db: &DatabaseConnection,
     assets: &[Asset],
@@ -20,11 +179,21 @@ async fn fill_asset_prices(
     end_date: &str,
     price_fetcher: &dyn PriceFetcher,
 ) -> anyhow::Result<HashMap<i32, String>> {
+    let futures: Vec<_> = assets
+        .iter()
+        .map(|asset| async move {
+            let result =
+                daily_prices::fill_prices_for_range(db, asset, start_date, end_date, price_fetcher)
+                    .await;
+            (asset, result)
+        })
+        .collect();
+
+    let results = futures::future::join_all(futures).await;
+
     let mut latest_dates: HashMap<i32, String> = HashMap::new();
-    for asset in assets {
-        match daily_prices::fill_prices_for_range(db, asset, start_date, end_date, price_fetcher)
-            .await
-        {
+    for (asset, result) in results {
+        match result {
             Ok(Some(date)) => {
                 latest_dates.insert(asset.id, date);
             }
@@ -39,7 +208,7 @@ async fn fill_asset_prices(
     Ok(latest_dates)
 }
 
-/// Fills exchange rate caches for all needed currency pairs.
+/// Fills exchange rate caches for all needed currency pairs in parallel.
 /// Returns a map of pair → latest API date.
 async fn fill_exchange_rates(
     db: &DatabaseConnection,
@@ -48,11 +217,21 @@ async fn fill_exchange_rates(
     end_date: &str,
     price_fetcher: &dyn PriceFetcher,
 ) -> anyhow::Result<HashMap<String, String>> {
+    let futures: Vec<_> = pairs
+        .iter()
+        .map(|pair| async move {
+            let result =
+                exchange_rates::fill_rates_for_range(db, pair, start_date, end_date, price_fetcher)
+                    .await;
+            (pair, result)
+        })
+        .collect();
+
+    let results = futures::future::join_all(futures).await;
+
     let mut latest_dates: HashMap<String, String> = HashMap::new();
-    for pair in pairs {
-        match exchange_rates::fill_rates_for_range(db, pair, start_date, end_date, price_fetcher)
-            .await
-        {
+    for (pair, result) in results {
+        match result {
             Ok(Some(date)) => {
                 latest_dates.insert(pair.clone(), date);
             }
@@ -147,6 +326,34 @@ pub fn process_day_transactions(
     (os, current_nav, dividend_income)
 }
 
+async fn store_daily_snapshot(
+    db: &DatabaseConnection,
+    date: &str,
+    asset_value: f64,
+    total_value: f64,
+    outstanding_shares: f64,
+    nav: f64,
+    asset_values: &[AssetSnapshot],
+) -> anyhow::Result<()> {
+    portfolio_history_repo::upsert(
+        db,
+        &PortfolioSnapshot {
+            date: date.to_owned(),
+            asset_value,
+            total_value,
+            outstanding_shares,
+            nav,
+        },
+    )
+    .await?;
+
+    for av in asset_values {
+        portfolio_asset_history_repo::upsert(db, av).await?;
+    }
+
+    Ok(())
+}
+
 async fn compute_day_asset_values(
     db: &DatabaseConnection,
     holdings: &HashMap<i32, f64>,
@@ -210,181 +417,4 @@ async fn compute_day_asset_values(
     }
 
     Ok((total_asset_value, asset_values))
-}
-
-async fn store_daily_snapshot(
-    db: &DatabaseConnection,
-    date: &str,
-    asset_value: f64,
-    total_value: f64,
-    outstanding_shares: f64,
-    nav: f64,
-    asset_values: &[AssetSnapshot],
-) -> anyhow::Result<()> {
-    portfolio_history_repo::upsert(
-        db,
-        &PortfolioSnapshot {
-            date: date.to_owned(),
-            asset_value,
-            total_value,
-            outstanding_shares,
-            nav,
-        },
-    )
-    .await?;
-
-    for av in asset_values {
-        portfolio_asset_history_repo::upsert(db, av).await?;
-    }
-
-    Ok(())
-}
-
-#[allow(clippy::too_many_lines)]
-pub async fn rebuild_portfolio_history(
-    db: &DatabaseConnection,
-    start_date: NaiveDate,
-    end_date: NaiveDate,
-    prev_snapshot: Option<&PortfolioSnapshot>,
-    price_fetcher: &dyn PriceFetcher,
-) -> anyhow::Result<()> {
-    let end_str = format_date(end_date);
-    let start_str = format_date(start_date);
-
-    let transactions = transaction_repo::find_all_ordered_by_date(db).await?;
-
-    if transactions.is_empty() {
-        return Ok(());
-    }
-
-    let needed_ids: HashSet<i32> = transactions.iter().map(|t| t.asset_id).collect();
-    let assets = asset_repo::find_by_ids(db, needed_ids).await?;
-
-    // Determine needed currency pairs
-    let needed_pairs: Vec<String> = assets
-        .iter()
-        .map(|a| &a.currency)
-        .filter(|c| c.as_str() != BASE_CURRENCY)
-        .collect::<HashSet<_>>()
-        .into_iter()
-        .map(|c| exchange_rates::currency_pair(c))
-        .collect();
-
-    let mut is_fresh_portfolio = prev_snapshot.is_none();
-    let mut outstanding_shares = prev_snapshot.map_or(0.0, |s| s.outstanding_shares);
-    let mut nav = prev_snapshot.map_or(INITIAL_NAV, |s| s.nav);
-    // Accumulated cash from dividends: recovered from total_value - asset_value
-    let mut accumulated_cash = prev_snapshot.map_or(0.0, |s| s.total_value - s.asset_value);
-
-    let mut holdings: HashMap<i32, f64> = HashMap::new();
-    if let Some(snap) = prev_snapshot {
-        let asset_rows = portfolio_asset_history_repo::find_by_date(db, &snap.date).await?;
-        for row in asset_rows {
-            holdings.insert(row.asset_id, row.quantity);
-        }
-    }
-
-    let mut tx_by_date: HashMap<String, Vec<&Transaction>> = HashMap::new();
-    for tx in &transactions {
-        if tx.date >= start_str && tx.date <= end_str {
-            tx_by_date.entry(tx.date.clone()).or_default().push(tx);
-        }
-    }
-
-    let asset_map: HashMap<i32, &Asset> = assets.iter().map(|a| (a.id, a)).collect();
-
-    // Fill price caches and exchange rate caches
-    let latest_api_dates =
-        fill_asset_prices(db, &assets, &start_str, &end_str, price_fetcher).await?;
-
-    let latest_rate_dates = if needed_pairs.is_empty() {
-        HashMap::new()
-    } else {
-        fill_exchange_rates(db, &needed_pairs, &start_str, &end_str, price_fetcher).await?
-    };
-
-    // Effective end date = min(end_date, min of latest API dates for all assets, min of latest rate dates)
-    let min_asset_date = assets
-        .iter()
-        .filter_map(|a| {
-            latest_api_dates
-                .get(&a.id)
-                .and_then(|d| NaiveDate::parse_from_str(d, DATE_FORMAT).ok())
-        })
-        .min();
-
-    let min_rate_date = latest_rate_dates
-        .values()
-        .filter_map(|d| NaiveDate::parse_from_str(d, DATE_FORMAT).ok())
-        .min();
-
-    let effective_end = [Some(end_date), min_asset_date, min_rate_date]
-        .into_iter()
-        .flatten()
-        .min()
-        .unwrap_or(end_date);
-
-    // Iterate each calendar day
-    let mut current = start_date;
-    while current <= effective_end {
-        let date_str = format_date(current);
-
-        // Build day's exchange rates
-        let day_rates = if needed_pairs.is_empty() {
-            HashMap::new()
-        } else {
-            get_day_rates(db, &needed_pairs, &date_str).await?
-        };
-
-        // Process transactions for this day
-        if let Some(day_txs) = tx_by_date.get(&date_str) {
-            let (new_shares, new_nav, dividend_income) = process_day_transactions(
-                day_txs,
-                &mut holdings,
-                outstanding_shares,
-                nav,
-                &asset_map,
-                &day_rates,
-            );
-            outstanding_shares = new_shares;
-            nav = new_nav;
-            accumulated_cash += dividend_income;
-        }
-
-        // First-ever transaction day: store a seed snapshot for (day - 1) with NAV=100
-        if is_fresh_portfolio && outstanding_shares > 0.0 {
-            let seed_date = format_date(current - chrono::Duration::days(1));
-            store_daily_snapshot(db, &seed_date, 0.0, 0.0, 0.0, INITIAL_NAV, &[]).await?;
-            is_fresh_portfolio = false;
-        }
-
-        if outstanding_shares == 0.0 && is_fresh_portfolio {
-            current += chrono::Duration::days(1);
-            continue;
-        }
-
-        // Compute EOD values (aggregate + per-asset) with currency conversion
-        let (asset_value, asset_values) =
-            compute_day_asset_values(db, &holdings, &asset_map, &date_str, &day_rates).await?;
-
-        let total_value = asset_value + accumulated_cash;
-        if outstanding_shares > 0.0 {
-            nav = total_value / outstanding_shares;
-        }
-
-        store_daily_snapshot(
-            db,
-            &date_str,
-            asset_value,
-            total_value,
-            outstanding_shares,
-            nav,
-            &asset_values,
-        )
-        .await?;
-
-        current += chrono::Duration::days(1);
-    }
-
-    Ok(())
 }

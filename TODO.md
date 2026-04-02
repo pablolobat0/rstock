@@ -47,6 +47,10 @@
 - [ ] Interactive TUI mode (ratatui) — navigate assets, drill into history
 - [ ] Sparkline per asset in the portfolio table
 
+## Performance
+
+- [ ] Investigate why `get` command is slow — profile and identify bottlenecks (price fetching, NAV rebuild, DB queries, etc.)
+
 ## Structural Improvements
 
 - [ ] Move chart date-range logic out of `main.rs` into a service or display helper

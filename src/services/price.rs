@@ -72,6 +72,12 @@ async fn get_fund_historical_prices(
     start: &str,
     end: &str,
 ) -> anyhow::Result<Vec<(String, f64)>> {
+    // Pad start date backward to avoid slow empty API responses when the
+    // requested range falls on non-trading days (holidays, API lag).
+    let start_date = NaiveDate::parse_from_str(start, DATE_FORMAT).context("invalid start date")?;
+    let padded_start = start_date - chrono::Duration::days(crate::constants::FUND_API_PADDING_DAYS);
+    let padded_start_str = padded_start.format(DATE_FORMAT).to_string();
+
     let scripts_dir = resolve_scripts_dir()?;
     let script = scripts_dir.join("get_fund_price_history.py");
 
@@ -79,7 +85,7 @@ async fn get_fund_historical_prices(
         .arg("run")
         .arg(&script)
         .arg(identifier)
-        .arg(start)
+        .arg(&padded_start_str)
         .arg(end)
         .output()
         .await

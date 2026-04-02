@@ -19,6 +19,7 @@ textplots = "0.8"
 colored = "3"
 yfinance-rs = "0.7"
 csv = "1"
+futures = "0.3"
 
 [dev-dependencies]
 async-trait = "0.1"

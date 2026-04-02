@@ -35,7 +35,7 @@ def main():
             sys.exit(1)
 
         last_entry = history[-1]
-        price = float(last_entry["totalReturn"])
+        price = float(last_entry["price"])
         date = last_entry["date"]
 
         print(json.dumps({"price": price, "date": date}))
