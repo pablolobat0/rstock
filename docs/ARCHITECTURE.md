@@ -83,16 +83,16 @@ All business logic lives here. Key modules:
 
 **`export.rs`** — `export_transactions_csv()` dumps all transactions to a CSV file.
 
-### Display Layer (`display.rs`)
+### Display Layer (`display/`)
 
-Pure output formatting with no business logic:
-- `print_portfolio()` — Renders per-asset table and summary (NAV, returns, risk metrics) using `tabled` with green/red coloring via `colored`
-- `print_nav_chart()` — ASCII NAV chart via `textplots`
-- `print_asset_list()` — Lists all tracked assets
-- `print_correlation_matrix()` — Renders N×N correlation matrix with color-coded values
-- `print_holdings()` — Renders fund/ETF look-through report with underlying positions
-- `print_monitor_report()` — Renders stock analysis with fundamentals, momentum indicators, and sector comparison charts
-- `print_watchlist()` — Lists monitored stocks
+Pure output formatting with no business logic, split into submodules:
+
+- **`helpers.rs`** — Shared formatting utilities (price, quantity, percentage, color helpers)
+- **`portfolio.rs`** — `print_portfolio()` renders per-asset table and summary (NAV, returns, risk metrics) using `tabled` with green/red coloring via `colored`
+- **`simple.rs`** — `print_asset_list()` lists all tracked assets, `print_nav_chart()` renders ASCII NAV chart via `textplots`, `print_watchlist()` lists monitored stocks
+- **`correlation.rs`** — `print_correlation_matrix()` renders N×N correlation matrix with color-coded values
+- **`holdings.rs`** — `print_holdings()` renders fund/ETF look-through report with underlying positions
+- **`monitor.rs`** — `print_monitor_report()` renders stock analysis with fundamentals, momentum indicators, and sector comparison charts
 
 ### Model Layer (`models/`)
 

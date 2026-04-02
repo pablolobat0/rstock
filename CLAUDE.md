@@ -129,7 +129,14 @@ src/
   main.rs              — Entry point, CLI command dispatch
   cli.rs               — Clap CLI definitions (get, buy, sell, dividend, split, list, export, holdings, analyze, monitor)
   constants.rs         — Centralized constants (dates, currency, metrics, thresholds)
-  display.rs           — Terminal tables (tabled), NAV chart (textplots), reports
+  display/
+    mod.rs             — Submodule declarations and re-exports
+    helpers.rs         — Shared formatting utilities (price, quantity, color)
+    portfolio.rs       — Portfolio table and summary display
+    simple.rs          — Asset list, NAV chart, watchlist display
+    correlation.rs     — Correlation matrix display
+    holdings.rs        — Fund/ETF holdings display
+    monitor.rs         — Monitor report and normalized chart display
   utils.rs             — Utility functions (scripts directory resolution)
   lib.rs               — Public module exports
   models/
