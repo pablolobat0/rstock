@@ -9,6 +9,18 @@ fn parse_date(s: &str) -> Result<NaiveDate, String> {
         .map_err(|_| format!("invalid date '{s}', expected DD-MM-YYYY format"))
 }
 
+fn parse_positive_f64(s: &str) -> Result<f64, String> {
+    let val: f64 = s
+        .parse()
+        .map_err(|_| format!("'{s}' is not a valid number"))?;
+
+    if val > 0.0 {
+        Ok(val)
+    } else {
+        Err("value must be greater than 0".to_string())
+    }
+}
+
 #[derive(Parser)]
 #[command(
     name = "rstock",
@@ -104,11 +116,11 @@ pub enum Commands {
         date: NaiveDate,
 
         /// Number of shares/units
-        #[arg(short, long)]
+        #[arg(short, long, value_parser = parse_positive_f64)]
         quantity: f64,
 
         /// Price per unit (e.g. 150.25)
-        #[arg(short, long)]
+        #[arg(short, long, value_parser = parse_positive_f64)]
         price: f64,
 
         /// Broker commission and fees
@@ -192,11 +204,11 @@ pub enum Commands {
         date: NaiveDate,
 
         /// Number of shares/units to sell
-        #[arg(short, long)]
+        #[arg(short, long, value_parser = parse_positive_f64)]
         quantity: f64,
 
         /// Sale price per unit (e.g. 150.25)
-        #[arg(short, long)]
+        #[arg(short, long,value_parser = parse_positive_f64)]
         price: f64,
 
         /// Broker commission and fees
