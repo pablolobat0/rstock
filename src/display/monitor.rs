@@ -6,15 +6,15 @@ use textplots::{Chart, Plot, Shape};
 use crate::constants::{display_date, RSI_OVERBOUGHT, RSI_OVERSOLD};
 use crate::models::monitor::{MomentumIndicators, MonitorReport};
 
-use super::helpers::color_value;
+use super::helpers::{color_value, format_eu};
 
 fn format_volume(v: u64) -> String {
     if v >= 1_000_000_000 {
-        format!("{:.1}B", v as f64 / 1_000_000_000.0)
+        format_eu(&format!("{:.2}B", v as f64 / 1_000_000_000.0))
     } else if v >= 1_000_000 {
-        format!("{:.1}M", v as f64 / 1_000_000.0)
+        format_eu(&format!("{:.2}M", v as f64 / 1_000_000.0))
     } else if v >= 1_000 {
-        format!("{:.1}K", v as f64 / 1_000.0)
+        format_eu(&format!("{:.2}K", v as f64 / 1_000.0))
     } else {
         format!("{v}")
     }
@@ -22,13 +22,13 @@ fn format_volume(v: u64) -> String {
 
 fn format_market_cap(v: f64) -> String {
     if v >= 1e12 {
-        format!("{:.2}T", v / 1e12)
+        format_eu(&format!("{:.2}T", v / 1e12))
     } else if v >= 1e9 {
-        format!("{:.2}B", v / 1e9)
+        format_eu(&format!("{:.2}B", v / 1e9))
     } else if v >= 1e6 {
-        format!("{:.2}M", v / 1e6)
+        format_eu(&format!("{:.2}M", v / 1e6))
     } else {
-        format!("{v:.2}")
+        format_eu(&format!("{v:.2}"))
     }
 }
 
@@ -46,7 +46,11 @@ fn print_momentum_section(label: &str, m: &MomentumIndicators) {
     println!("\n{label}");
 
     if let Some(rsi) = m.rsi_14 {
-        println!("  RSI(14):    {rsi:>8.1}         [{}]", rsi_label(rsi));
+        println!(
+            "  RSI(14):    {:>8}         [{}]",
+            format_eu(&format!("{rsi:.2}")),
+            rsi_label(rsi)
+        );
     } else {
         println!("  RSI(14):         N/A");
     }
@@ -54,7 +58,10 @@ fn print_momentum_section(label: &str, m: &MomentumIndicators) {
     if let Some(sma) = m.sma_50 {
         let signal = m.sma_50_signal.as_deref().unwrap_or("N/A");
         let arrow = if signal == "Above" { " ↑" } else { " ↓" };
-        println!("  SMA(50):    {sma:>8.2}       Price {signal}{arrow}");
+        println!(
+            "  SMA(50):    {:>8}       Price {signal}{arrow}",
+            format_eu(&format!("{sma:.2}"))
+        );
     } else {
         println!("  SMA(50):         N/A");
     }
@@ -62,7 +69,10 @@ fn print_momentum_section(label: &str, m: &MomentumIndicators) {
     if let Some(sma) = m.sma_200 {
         let signal = m.sma_200_signal.as_deref().unwrap_or("N/A");
         let arrow = if signal == "Above" { " ↑" } else { " ↓" };
-        println!("  SMA(200):   {sma:>8.2}       Price {signal}{arrow}");
+        println!(
+            "  SMA(200):   {:>8}       Price {signal}{arrow}",
+            format_eu(&format!("{sma:.2}"))
+        );
     } else {
         println!("  SMA(200):        N/A");
     }
@@ -74,7 +84,12 @@ fn print_momentum_section(label: &str, m: &MomentumIndicators) {
     if let (Some(ml), Some(ms), Some(mh)) = (m.macd_line, m.macd_signal, m.macd_histogram) {
         let signal_text = m.macd_signal_text.as_deref().unwrap_or("N/A");
         let sign = if mh >= 0.0 { "+" } else { "" };
-        println!("  MACD:       {ml:>8.2}  Signal: {ms:.2}  Hist: {sign}{mh:.2}  [{signal_text}]");
+        println!(
+            "  MACD:       {:>8}  Signal: {}  Hist: {}  [{signal_text}]",
+            format_eu(&format!("{ml:.2}")),
+            format_eu(&format!("{ms:.2}")),
+            format_eu(&format!("{sign}{mh:.2}")),
+        );
     } else {
         println!("  MACD:            N/A");
     }
@@ -93,17 +108,21 @@ pub fn print_monitor_report(report: &MonitorReport) {
     println!();
     let price_str = info
         .current_price
-        .map_or("N/A".to_string(), |p| format!("{p:.2}"));
+        .map_or("N/A".to_string(), |p| format_eu(&format!("{p:.2}")));
     let prev_str = info
         .previous_close
-        .map_or("N/A".to_string(), |p| format!("{p:.2}"));
+        .map_or("N/A".to_string(), |p| format_eu(&format!("{p:.2}")));
 
     let change_str = match (info.current_price, info.previous_close) {
         (Some(cur), Some(prev)) if prev > 0.0 => {
             let diff = cur - prev;
             let pct = diff / prev * 100.0;
             let sign = if diff >= 0.0 { "+" } else { "" };
-            let text = format!("{sign}{diff:.2} ({sign}{pct:.2}%)");
+            let text = format!(
+                "{} ({})",
+                format_eu(&format!("{sign}{diff:.2}")),
+                format_eu(&format!("{sign}{pct:.2}%")),
+            );
             color_value(diff, &text)
         }
         _ => "N/A".to_string(),
@@ -113,10 +132,18 @@ pub fn print_monitor_report(report: &MonitorReport) {
     println!("  Price: {price_str} {currency}  Prev Close: {prev_str}  Change: {change_str}");
 
     if let Some((lo, hi)) = info.day_range {
-        print!("  Day Range: {lo:.2} – {hi:.2}");
+        print!(
+            "  Day Range: {} – {}",
+            format_eu(&format!("{lo:.2}")),
+            format_eu(&format!("{hi:.2}"))
+        );
     }
     if let Some((lo, hi)) = info.fifty_two_week_range {
-        print!("    52W Range: {lo:.2} – {hi:.2}");
+        print!(
+            "    52W Range: {} – {}",
+            format_eu(&format!("{lo:.2}")),
+            format_eu(&format!("{hi:.2}"))
+        );
     }
     println!();
 
@@ -129,13 +156,15 @@ pub fn print_monitor_report(report: &MonitorReport) {
     }
     println!();
 
-    let pe_str = info.pe_ttm.map_or("N/A".to_string(), |v| format!("{v:.2}"));
+    let pe_str = info
+        .pe_ttm
+        .map_or("N/A".to_string(), |v| format_eu(&format!("{v:.2}")));
     let eps_str = info
         .eps_ttm
-        .map_or("N/A".to_string(), |v| format!("{v:.2}"));
-    let div_str = info
-        .dividend_yield
-        .map_or("N/A".to_string(), |v| format!("{:.2}%", v * 100.0));
+        .map_or("N/A".to_string(), |v| format_eu(&format!("{v:.2}")));
+    let div_str = info.dividend_yield.map_or("N/A".to_string(), |v| {
+        format_eu(&format!("{:.2}%", v * 100.0))
+    });
     println!("  P/E: {pe_str}  EPS: {eps_str}  Div Yield: {div_str}");
 
     let stock_label = format!("── Momentum: {} ──────────────────────", info.ticker);
@@ -155,15 +184,19 @@ pub fn print_monitor_report(report: &MonitorReport) {
     if let Some(rs) = rel.relative_strength_current {
         let change_str = rel.relative_strength_change.map_or(String::new(), |c| {
             let sign = if c >= 0.0 { "+" } else { "" };
-            format!("  ({sign}{c:.1}% over period)")
+            format!("  ({}% over period)", format_eu(&format!("{sign}{c:.2}")))
         });
-        println!("  Relative Strength: {rs:.2}{change_str}");
+        println!(
+            "  Relative Strength: {}{}",
+            format_eu(&format!("{rs:.2}")),
+            change_str
+        );
     }
     if let Some(beta) = rel.beta_vs_sector {
-        println!("  Beta vs Sector:    {beta:.2}");
+        println!("  Beta vs Sector:    {}", format_eu(&format!("{beta:.2}")));
     }
     if let Some(corr) = rel.correlation {
-        println!("  Correlation:       {corr:.2}");
+        println!("  Correlation:       {}", format_eu(&format!("{corr:.2}")));
     }
 
     print_normalized_chart(

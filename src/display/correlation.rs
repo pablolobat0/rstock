@@ -5,6 +5,8 @@ use tabled::settings::{Alignment, Color, Style};
 
 use crate::models::CorrelationMatrix;
 
+use super::helpers::format_eu;
+
 pub fn print_correlation_matrix(matrix: &CorrelationMatrix, period_label: &str) {
     if matrix.names.is_empty() {
         println!("No assets found for correlation analysis.");
@@ -28,7 +30,7 @@ pub fn print_correlation_matrix(matrix: &CorrelationMatrix, period_label: &str) 
         let mut row = vec![matrix.names[i].clone()];
         for j in 0..n {
             let cell = match matrix.matrix[i][j] {
-                Some(v) => format!("{v:.2}"),
+                Some(v) => format_eu(&format!("{v:.2}")),
                 None => "N/A".to_string(),
             };
             row.push(cell);

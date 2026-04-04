@@ -10,8 +10,7 @@ use crate::constants::display_date;
 use crate::models::{AssetType, PeriodMetrics, PortfolioResult, PortfolioRow, PortfolioSummary};
 
 use super::helpers::{
-    color_for_value, color_value, format_pct, format_plain, format_price, format_qty,
-    format_return_plain,
+    color_for_value, color_value, format_eu, format_pct, format_plain, format_return_plain,
 };
 
 fn print_metrics_table(periods: &[(&str, Option<f64>, &Option<PeriodMetrics>)]) {
@@ -107,16 +106,19 @@ pub fn print_portfolio(result: &PortfolioResult, summary: Option<&PortfolioSumma
             .map(|r| {
                 let sign = if r.gain_loss >= 0.0 { "+" } else { "" };
                 let weight = if total_current_value > 0.0 {
-                    format!("{:.1}%", (r.current_value / total_current_value) * 100.0)
+                    format_eu(&format!(
+                        "{:.1}%",
+                        (r.current_value / total_current_value) * 100.0
+                    ))
                 } else {
-                    "0.0%".to_string()
+                    "0,0%".to_string()
                 };
 
-                let gl_text = format!("{}{:.2}", sign, r.gain_loss);
-                let gl_pct_text = format!("{}{:.2}%", sign, r.gain_loss_pct);
+                let gl_text = format_eu(&format!("{}{:.2}", sign, r.gain_loss));
+                let gl_pct_text = format_eu(&format!("{}{:.2}%", sign, r.gain_loss_pct));
 
                 let divs_text = if r.dividends_received > 0.0 {
-                    format!("{:.2}", r.dividends_received)
+                    format_eu(&format!("{:.2}", r.dividends_received))
                 } else {
                     String::new()
                 };
@@ -130,12 +132,16 @@ pub fn print_portfolio(result: &PortfolioResult, summary: Option<&PortfolioSumma
                     name: r.name.clone(),
                     asset_type: r.asset_type.to_string(),
                     currency: r.currency.clone(),
-                    quantity: format_qty(r.total_qty),
-                    avg_cost: format_price(r.avg_cost),
-                    current_price: format_price(r.current_price),
+                    quantity: if r.total_qty.fract() == 0.0 {
+                        format_eu(&format!("{}", r.total_qty as i64))
+                    } else {
+                        format_eu(&format!("{:.2}", r.total_qty))
+                    },
+                    avg_cost: format_eu(&format!("{:.2}", r.avg_cost)),
+                    current_price: format_eu(&format!("{:.2}", r.current_price)),
                     price_date: display_date(&r.price_date),
-                    total_invested: format!("{:.2}", r.total_invested),
-                    current_value: format!("{:.2}", r.current_value),
+                    total_invested: format_eu(&format!("{:.2}", r.total_invested)),
+                    current_value: format_eu(&format!("{:.2}", r.current_value)),
                     dividends: divs_text,
                     gain_loss: gl_text,
                     gain_loss_pct: gl_pct_text,
@@ -145,8 +151,20 @@ pub fn print_portfolio(result: &PortfolioResult, summary: Option<&PortfolioSumma
             .collect();
 
         display_rows.sort_by(|a, b| {
-            let wa: f64 = a.weight.trim_end_matches('%').parse().unwrap_or(0.0);
-            let wb: f64 = b.weight.trim_end_matches('%').parse().unwrap_or(0.0);
+            let wa: f64 = a
+                .weight
+                .trim_end_matches('%')
+                .replace('.', "")
+                .replace(',', ".")
+                .parse()
+                .unwrap_or(0.0);
+            let wb: f64 = b
+                .weight
+                .trim_end_matches('%')
+                .replace('.', "")
+                .replace(',', ".")
+                .parse()
+                .unwrap_or(0.0);
             wb.partial_cmp(&wa).unwrap_or(std::cmp::Ordering::Equal)
         });
 
@@ -180,16 +198,22 @@ pub fn print_portfolio(result: &PortfolioResult, summary: Option<&PortfolioSumma
             ""
         };
         let gl_text = format!(
-            "{}{:.2} ({}{:.2}%)",
-            sign, result.total_gain_loss, sign, result.total_gain_loss_pct
+            "{} ({})",
+            format_eu(&format!("{}{:.2}", sign, result.total_gain_loss)),
+            format_eu(&format!("{}{:.2}%", sign, result.total_gain_loss_pct)),
         );
         println!();
         let mut totals = format!(
-            "Invested: {:.2}  Value: {:.2}",
-            result.total_invested, result.total_current_value,
+            "Invested: {}  Value: {}",
+            format_eu(&format!("{:.2}", result.total_invested)),
+            format_eu(&format!("{:.2}", result.total_current_value)),
         );
         if result.total_dividends > 0.0 {
-            let _ = write!(totals, "  Divs: {:.2}", result.total_dividends);
+            let _ = write!(
+                totals,
+                "  Divs: {}",
+                format_eu(&format!("{:.2}", result.total_dividends))
+            );
         }
         let _ = write!(
             totals,
@@ -202,12 +226,22 @@ pub fn print_portfolio(result: &PortfolioResult, summary: Option<&PortfolioSumma
     if let Some(summary) = summary {
         println!();
         println!("As of:          {}", display_date(&summary.snapshot_date));
-        println!("Portfolio Value: {:.2}", summary.total_value);
-        println!("NAV:            {:.2}", summary.nav);
+        println!(
+            "Portfolio Value: {}",
+            format_eu(&format!("{:.2}", summary.total_value))
+        );
+        println!(
+            "NAV:            {}",
+            format_eu(&format!("{:.2}", summary.nav))
+        );
 
         if let (Some(change), Some(change_pct)) = (summary.daily_change, summary.daily_change_pct) {
             let sign = if change >= 0.0 { "+" } else { "" };
-            let text = format!("{sign}{change:.2} ({sign}{change_pct:.2}%)");
+            let text = format!(
+                "{} ({})",
+                format_eu(&format!("{sign}{change:.2}")),
+                format_eu(&format!("{sign}{change_pct:.2}%")),
+            );
             println!("Daily:          {}", color_value(change, &text));
         }
 

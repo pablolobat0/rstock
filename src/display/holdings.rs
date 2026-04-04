@@ -6,6 +6,8 @@ use tabled::Table;
 
 use crate::models::{DirectHoldingRow, FundHoldingRow, HoldingsResult};
 
+use super::helpers::format_eu;
+
 pub fn print_holdings(result: &HoldingsResult) {
     if result.stocks.is_empty() && result.funds.is_empty() {
         println!("No positions found.");
@@ -23,8 +25,8 @@ pub fn print_holdings(result: &HoldingsResult) {
             .map(|s| DirectHoldingRow {
                 ticker: s.ticker.clone(),
                 name: s.name.clone(),
-                current_value: format!("{:.2}", s.current_value),
-                portfolio_weight: format!("{:.1}%", s.portfolio_weight),
+                current_value: format_eu(&format!("{:.2}", s.current_value)),
+                portfolio_weight: format_eu(&format!("{:.2}%", s.portfolio_weight)),
             })
             .collect();
 
@@ -46,8 +48,11 @@ pub fn print_holdings(result: &HoldingsResult) {
     // Section 2: Each fund/ETF with its underlying holdings
     for fund in &result.funds {
         let header = format!(
-            "{} ({}) — {:.1}% of portfolio, €{:.2}",
-            fund.name, fund.ticker, fund.portfolio_weight, fund.current_value
+            "{} ({}) — {}% of portfolio, €{}",
+            fund.name,
+            fund.ticker,
+            format_eu(&format!("{:.2}", fund.portfolio_weight)),
+            format_eu(&format!("{:.2}", fund.current_value)),
         );
         println!("{}", header.bold());
         println!();
@@ -64,8 +69,8 @@ pub fn print_holdings(result: &HoldingsResult) {
                     let effective = fund.portfolio_weight * h.weighting / 100.0;
                     FundHoldingRow {
                         name: h.name.clone(),
-                        fund_weight: format!("{:.2}%", h.weighting),
-                        effective_weight: format!("{effective:.2}%"),
+                        fund_weight: format_eu(&format!("{:.2}%", h.weighting)),
+                        effective_weight: format_eu(&format!("{effective:.2}%")),
                     }
                 })
                 .collect();
@@ -86,5 +91,8 @@ pub fn print_holdings(result: &HoldingsResult) {
         println!();
     }
 
-    println!("Total portfolio value: {:.2}", result.total_portfolio_value);
+    println!(
+        "Total portfolio value: {}",
+        format_eu(&format!("{:.2}", result.total_portfolio_value))
+    );
 }

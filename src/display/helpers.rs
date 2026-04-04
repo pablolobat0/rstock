@@ -1,19 +1,47 @@
 use colored::Colorize;
 use tabled::settings::Color;
 
-use crate::constants::MONETARY_MULTIPLIER;
-
-pub(super) fn format_price(price: f64) -> String {
-    let decimals = (MONETARY_MULTIPLIER as u64).trailing_zeros() as usize;
-    format!("{price:.decimals$}")
-}
-
-pub(super) fn format_qty(qty: f64) -> String {
-    if qty.fract() == 0.0 {
-        format!("{}", qty as i64)
+/// Converts a formatted number string to EU format: `,` as decimal separator,
+/// `.` as thousands separator. Preserves leading sign (+/-) and trailing suffixes (%, K, B, T).
+/// Numbers with decimals are displayed with 2 digits; numbers without stay as-is.
+pub(super) fn format_eu(s: &str) -> String {
+    let (sign, rest) = if let Some(stripped) = s.strip_prefix('-') {
+        ("-", stripped)
+    } else if let Some(stripped) = s.strip_prefix('+') {
+        ("+", stripped)
     } else {
-        format!("{qty:.4}")
+        ("", s)
+    };
+
+    // Separate trailing non-numeric suffix (e.g. %, K, B, T, M)
+    let suffix_start = rest
+        .find(|c: char| !c.is_ascii_digit() && c != '.')
+        .unwrap_or(rest.len());
+    let num = &rest[..suffix_start];
+    let suffix = &rest[suffix_start..];
+
+    let (integer, decimal) = match num.split_once('.') {
+        Some((int, dec)) => (int, Some(dec)),
+        None => (num, None),
+    };
+
+    // Add thousands separator (.)
+    let mut reversed = String::new();
+    for (i, c) in integer.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            reversed.push('.');
+        }
+        reversed.push(c);
     }
+    let integer_formatted: String = reversed.chars().rev().collect();
+
+    let mut output = format!("{sign}{integer_formatted}");
+    if let Some(dec) = decimal {
+        output.push(',');
+        output.push_str(dec);
+    }
+    output.push_str(suffix);
+    output
 }
 
 pub(super) fn color_value(value: f64, formatted: &str) -> String {
@@ -26,14 +54,14 @@ pub(super) fn color_value(value: f64, formatted: &str) -> String {
 
 pub(super) fn format_pct(v: Option<f64>) -> String {
     match v {
-        Some(val) => format!("{val:.2}%"),
+        Some(val) => format_eu(&format!("{val:.2}%")),
         None => "N/A".to_string(),
     }
 }
 
 pub(super) fn format_plain(v: Option<f64>) -> String {
     match v {
-        Some(val) => format!("{val:.2}"),
+        Some(val) => format_eu(&format!("{val:.2}")),
         None => "N/A".to_string(),
     }
 }
@@ -42,7 +70,7 @@ pub(super) fn format_return_plain(r: Option<f64>) -> String {
     match r {
         Some(v) => {
             let sign = if v >= 0.0 { "+" } else { "" };
-            format!("{sign}{v:.2}%")
+            format_eu(&format!("{sign}{v:.2}%"))
         }
         None => "N/A".to_string(),
     }
