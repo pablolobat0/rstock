@@ -4,6 +4,7 @@ mod holdings;
 mod monitor;
 mod portfolio;
 mod simple;
+mod types;
 
 pub use correlation::print_correlation_matrix;
 pub use holdings::print_holdings;

@@ -39,6 +39,10 @@ pub const ANNUAL_RISK_FREE_RATE: f64 = 0.03;
 pub const TRADING_DAYS_PER_YEAR: f64 = 252.0;
 pub const MIN_DATA_POINTS: usize = 20;
 
+pub fn is_benchmark_ticker(ticker: &str) -> bool {
+    ticker == BENCHMARK_TICKER
+}
+
 // --- Monitor / Momentum indicators ---
 pub const RSI_PERIOD: usize = 14;
 pub const SMA_SHORT: usize = 50;

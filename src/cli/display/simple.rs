@@ -4,8 +4,9 @@ use tabled::Table;
 use textplots::{Chart, Plot, Shape};
 
 use crate::constants::display_date;
-use crate::db::repos::watchlist_repo::WatchlistItem;
-use crate::models::{Asset, AssetRow, AssetType, PortfolioSnapshot};
+use crate::models::{Asset, AssetType, PortfolioSnapshot, WatchlistItem};
+
+use super::types::AssetRow;
 
 pub fn print_asset_list(assets: &[Asset]) {
     if assets.is_empty() {

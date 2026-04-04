@@ -4,7 +4,9 @@ use tabled::settings::style::{HorizontalLine, VerticalLine};
 use tabled::settings::{Alignment, Style};
 use tabled::Table;
 
-use crate::models::{DirectHoldingRow, FundHoldingRow, HoldingsResult};
+use crate::models::HoldingsResult;
+
+use super::types::{DirectHoldingRow, FundHoldingRow};
 
 use super::helpers::format_eu;
 

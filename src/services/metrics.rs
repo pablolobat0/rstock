@@ -14,13 +14,8 @@ use crate::models::{
 };
 use crate::services::daily_prices;
 use crate::services::exchange_rates;
-use crate::services::portfolio;
 use crate::services::price::PriceFetcher;
 use crate::services::price_cache;
-
-pub fn is_benchmark_ticker(ticker: &str) -> bool {
-    ticker == BENCHMARK_TICKER
-}
 
 /// Computes annualized volatility from a slice of daily NAV snapshots.
 /// Returns `None` if fewer than 2 snapshots.
@@ -238,9 +233,6 @@ pub async fn compute_correlation_matrix(
     end_date: &str,
     price_fetcher: &dyn PriceFetcher,
 ) -> anyhow::Result<CorrelationMatrix> {
-    // 0. Ensure portfolio history is up to date
-    portfolio::trigger_rebuild_if_needed(db, price_fetcher).await?;
-
     // 1. Get held assets from latest portfolio snapshot
     let latest = portfolio_history_repo::find_latest(db).await?;
     let held_assets = match &latest {

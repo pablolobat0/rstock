@@ -1,3 +1,6 @@
+pub mod commands;
+pub mod display;
+
 use chrono::NaiveDate;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
@@ -5,8 +8,13 @@ use crate::constants::DISPLAY_DATE_FORMAT;
 use crate::models::AssetType;
 
 fn parse_date(s: &str) -> Result<NaiveDate, String> {
-    NaiveDate::parse_from_str(s, DISPLAY_DATE_FORMAT)
-        .map_err(|_| format!("invalid date '{s}', expected DD-MM-YYYY format"))
+    let date = NaiveDate::parse_from_str(s, DISPLAY_DATE_FORMAT)
+        .map_err(|_| format!("invalid date '{s}', expected DD-MM-YYYY format"))?;
+    let today = chrono::Local::now().date_naive();
+    if date > today {
+        return Err(format!("date cannot be in the future: {s}"));
+    }
+    Ok(date)
 }
 
 fn parse_positive_f64(s: &str) -> Result<f64, String> {
@@ -208,7 +216,7 @@ pub enum Commands {
         quantity: f64,
 
         /// Sale price per unit (e.g. 150.25)
-        #[arg(short, long,value_parser = parse_positive_f64)]
+        #[arg(short, long, value_parser = parse_positive_f64)]
         price: f64,
 
         /// Broker commission and fees

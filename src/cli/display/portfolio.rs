@@ -7,7 +7,9 @@ use tabled::settings::{Alignment, Color, Style};
 use tabled::Table;
 
 use crate::constants::display_date;
-use crate::models::{AssetType, PeriodMetrics, PortfolioResult, PortfolioRow, PortfolioSummary};
+use crate::models::{AssetType, PeriodMetrics, PortfolioResult, PortfolioSummary};
+
+use super::types::PortfolioRow;
 
 use super::helpers::{
     color_for_value, color_value, format_eu, format_pct, format_plain, format_return_plain,

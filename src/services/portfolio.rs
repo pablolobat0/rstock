@@ -3,6 +3,7 @@ use chrono::{Datelike, Duration, NaiveDate};
 use sea_orm::DatabaseConnection;
 use std::collections::HashMap;
 
+use crate::constants::is_benchmark_ticker;
 use crate::constants::{
     format_date, BASE_CURRENCY, DATE_FORMAT, FIVE_YEAR_DAYS, ONE_YEAR_DAYS, THREE_YEAR_DAYS,
 };
@@ -70,7 +71,7 @@ pub async fn get_portfolio(
         };
 
         // Skip benchmark asset from portfolio display
-        if metrics::is_benchmark_ticker(&asset_model.ticker) {
+        if is_benchmark_ticker(&asset_model.ticker) {
             continue;
         }
 
@@ -308,7 +309,7 @@ async fn fetch_live_stock_prices(
 ) -> HashMap<i32, f64> {
     let stock_assets: Vec<_> = assets
         .iter()
-        .filter(|a| a.asset_type == AssetType::Stock && !metrics::is_benchmark_ticker(&a.ticker))
+        .filter(|a| a.asset_type == AssetType::Stock && !is_benchmark_ticker(&a.ticker))
         .collect();
     let futures: Vec<_> = stock_assets
         .iter()
@@ -331,7 +332,7 @@ async fn fetch_live_exchange_rates(
 ) -> HashMap<String, f64> {
     let fx_pairs: Vec<String> = assets
         .iter()
-        .filter(|a| a.currency != BASE_CURRENCY && !metrics::is_benchmark_ticker(&a.ticker))
+        .filter(|a| a.currency != BASE_CURRENCY && !is_benchmark_ticker(&a.ticker))
         .map(|a| exchange_rates::currency_pair(&a.currency))
         .collect::<std::collections::HashSet<_>>()
         .into_iter()
@@ -348,6 +349,23 @@ async fn fetch_live_exchange_rates(
         .into_iter()
         .filter_map(|(pair, r)| r.ok().flatten().map(|rate| (pair, rate)))
         .collect()
+}
+
+pub async fn list_assets(db: &DatabaseConnection) -> anyhow::Result<Vec<Asset>> {
+    asset_repo::find_all(db).await
+}
+
+pub async fn get_nav_snapshots(
+    db: &DatabaseConnection,
+    start_date: &str,
+    end_date: &str,
+) -> anyhow::Result<Vec<crate::models::PortfolioSnapshot>> {
+    portfolio_history_repo::find_between(db, start_date, end_date).await
+}
+
+pub async fn get_inception_date(db: &DatabaseConnection) -> anyhow::Result<Option<String>> {
+    let earliest = portfolio_history_repo::find_earliest(db).await?;
+    Ok(earliest.map(|s| s.date))
 }
 
 async fn calc_return(

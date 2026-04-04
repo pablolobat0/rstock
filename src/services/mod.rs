@@ -9,3 +9,4 @@ pub mod portfolio;
 pub mod price;
 pub mod price_cache;
 pub mod transactions;
+pub mod watchlist;

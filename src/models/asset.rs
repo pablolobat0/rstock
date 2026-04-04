@@ -2,7 +2,6 @@ use std::fmt;
 use std::str::FromStr;
 
 use clap::ValueEnum;
-use tabled::Tabled;
 
 use crate::db::entities::asset;
 
@@ -62,18 +61,6 @@ impl From<asset::Model> for Asset {
             currency: m.currency,
         }
     }
-}
-
-#[derive(Tabled)]
-pub struct AssetRow {
-    #[tabled(rename = "Ticker")]
-    pub ticker: String,
-    #[tabled(rename = "Name")]
-    pub name: String,
-    #[tabled(rename = "Type")]
-    pub asset_type: String,
-    #[tabled(rename = "Currency")]
-    pub currency: String,
 }
 
 pub struct AssetPosition {
