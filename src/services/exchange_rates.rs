@@ -21,6 +21,18 @@ pub async fn get_exchange_rate(
     exchange_rate_repo::find_rate_at_or_before(db, pair, date).await
 }
 
+/// Fetches the latest exchange rate from the API without persisting to DB.
+pub async fn fetch_live_rate(
+    pair: &str,
+    date: &str,
+    price_fetcher: &dyn PriceFetcher,
+) -> anyhow::Result<Option<f64>> {
+    let rates = price_fetcher
+        .get_historical_exchange_rates(pair, date, date)
+        .await?;
+    Ok(rates.last().map(|(_, rate)| *rate))
+}
+
 pub async fn fill_rates_for_range(
     db: &DatabaseConnection,
     pair: &str,

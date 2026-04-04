@@ -10,14 +10,19 @@ use crate::db::repos::{
     asset_repo, daily_price_repo, portfolio_asset_history_repo, portfolio_history_repo,
     transaction_repo,
 };
-use crate::models::{cents_to_f64, AssetPosition, PortfolioResult, PortfolioSummary, Transaction};
-use crate::services::exchange_rates;
+use crate::models::{
+    cents_to_f64, Asset, AssetPosition, AssetType, PortfolioResult, PortfolioSummary, Transaction,
+};
 use crate::services::metrics;
 use crate::services::nav;
 use crate::services::price::PriceFetcher;
+use crate::services::{daily_prices, exchange_rates};
 
 #[allow(clippy::too_many_lines)]
-pub async fn get_portfolio(db: &DatabaseConnection) -> anyhow::Result<PortfolioResult> {
+pub async fn get_portfolio(
+    db: &DatabaseConnection,
+    price_fetcher: &dyn PriceFetcher,
+) -> anyhow::Result<PortfolioResult> {
     let latest_snapshot = portfolio_history_repo::find_latest(db).await?;
     let snapshot_date = match &latest_snapshot {
         Some(s) => s.date.clone(),
@@ -46,11 +51,16 @@ pub async fn get_portfolio(db: &DatabaseConnection) -> anyhow::Result<PortfolioR
         });
     }
 
-    let yesterday = format_date(chrono::Local::now().date_naive() - chrono::Duration::days(1));
+    let today = chrono::Local::now().date_naive();
+    let today_str = format_date(today);
+    let yesterday = format_date(today - chrono::Duration::days(1));
 
     let asset_ids: Vec<i32> = asset_snapshots.iter().map(|s| s.asset_id).collect();
     let assets = asset_repo::find_by_ids(db, asset_ids).await?;
     let asset_map: HashMap<i32, _> = assets.iter().map(|a| (a.id, a)).collect();
+
+    let live_prices = fetch_live_stock_prices(&assets, &today_str, price_fetcher).await;
+    let live_rates = fetch_live_exchange_rates(&assets, &today_str, price_fetcher).await;
 
     let mut rows: Vec<AssetPosition> = Vec::new();
 
@@ -64,14 +74,18 @@ pub async fn get_portfolio(db: &DatabaseConnection) -> anyhow::Result<PortfolioR
             continue;
         }
 
-        // Get the latest exchange rate for this asset's currency
+        // Use live exchange rate if available, fall back to DB cache
         let exchange_rate = if asset_model.currency == BASE_CURRENCY {
             1.0
         } else {
             let pair = exchange_rates::currency_pair(&asset_model.currency);
-            exchange_rates::get_exchange_rate(db, &pair, &yesterday)
-                .await?
-                .unwrap_or(snap.exchange_rate)
+            if let Some(&live_rate) = live_rates.get(&pair) {
+                live_rate
+            } else {
+                exchange_rates::get_exchange_rate(db, &pair, &yesterday)
+                    .await?
+                    .unwrap_or(snap.exchange_rate)
+            }
         };
 
         // Compute avg_cost from buy transactions only, converted to EUR
@@ -119,14 +133,18 @@ pub async fn get_portfolio(db: &DatabaseConnection) -> anyhow::Result<PortfolioR
             }
         }
 
-        // Get each asset's own latest price and its date
-        let (current_price, price_date) =
+        // For stocks use live price if available, otherwise fall back to DB cache
+        let (current_price, price_date) = if let Some(&live_price) = live_prices.get(&snap.asset_id)
+        {
+            (live_price, today_str.clone())
+        } else {
             match daily_price_repo::find_price_and_date_at_or_before(db, snap.asset_id, &yesterday)
                 .await?
             {
                 Some((price, date)) => (price, date),
                 None => (snap.closing_price, snap.date.clone()),
-            };
+            }
+        };
 
         let current_value = snap.quantity * current_price * exchange_rate;
         let total_invested_for_asset = net_qty * avg_cost;
@@ -281,6 +299,55 @@ pub async fn get_portfolio_summary(
         three_year_metrics,
         five_year_metrics,
     }))
+}
+
+async fn fetch_live_stock_prices(
+    assets: &[Asset],
+    today: &str,
+    price_fetcher: &dyn PriceFetcher,
+) -> HashMap<i32, f64> {
+    let stock_assets: Vec<_> = assets
+        .iter()
+        .filter(|a| a.asset_type == AssetType::Stock && !metrics::is_benchmark_ticker(&a.ticker))
+        .collect();
+    let futures: Vec<_> = stock_assets
+        .iter()
+        .map(|asset| async {
+            let result = daily_prices::fetch_live_price(asset, today, price_fetcher).await;
+            (asset.id, result)
+        })
+        .collect();
+    futures::future::join_all(futures)
+        .await
+        .into_iter()
+        .filter_map(|(id, r)| r.ok().flatten().map(|p| (id, p)))
+        .collect()
+}
+
+async fn fetch_live_exchange_rates(
+    assets: &[Asset],
+    today: &str,
+    price_fetcher: &dyn PriceFetcher,
+) -> HashMap<String, f64> {
+    let fx_pairs: Vec<String> = assets
+        .iter()
+        .filter(|a| a.currency != BASE_CURRENCY && !metrics::is_benchmark_ticker(&a.ticker))
+        .map(|a| exchange_rates::currency_pair(&a.currency))
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    let futures: Vec<_> = fx_pairs
+        .iter()
+        .map(|pair| async {
+            let result = exchange_rates::fetch_live_rate(pair, today, price_fetcher).await;
+            (pair.clone(), result)
+        })
+        .collect();
+    futures::future::join_all(futures)
+        .await
+        .into_iter()
+        .filter_map(|(pair, r)| r.ok().flatten().map(|rate| (pair, rate)))
+        .collect()
 }
 
 async fn calc_return(

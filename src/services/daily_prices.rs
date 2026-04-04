@@ -21,6 +21,19 @@ pub async fn get_closing_price(
     daily_price_repo::find_price_at_or_before(db, asset.id, date).await
 }
 
+/// Fetches the latest price from the API without persisting to DB.
+/// Returns the most recent price returned by the API, or `None` if unavailable.
+pub async fn fetch_live_price(
+    asset: &Asset,
+    date: &str,
+    price_fetcher: &dyn PriceFetcher,
+) -> anyhow::Result<Option<f64>> {
+    let prices = price_fetcher
+        .get_historical_prices(&asset.ticker, date, date, &asset.asset_type)
+        .await?;
+    Ok(prices.last().map(|(_, price)| *price))
+}
+
 /// Fetches historical prices from the API and caches them in `daily_asset_prices`.
 /// Forward-fills only between API data points (weekends/holidays), never beyond the last API date.
 /// Returns the latest date for which the API returned a price, or `None` if the API failed/returned empty.

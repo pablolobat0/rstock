@@ -29,7 +29,7 @@ async fn main() -> anyhow::Result<()> {
     match cli.command {
         Commands::Get { period } => {
             let summary = services::portfolio::get_portfolio_summary(&db, &fetcher).await?;
-            let result = services::portfolio::get_portfolio(&db).await?;
+            let result = services::portfolio::get_portfolio(&db, &fetcher).await?;
 
             display::print_portfolio(&result, summary.as_ref());
 
@@ -123,7 +123,7 @@ async fn main() -> anyhow::Result<()> {
             services::transactions::dividend(&db, ticker, order).await?;
         }
         Commands::Holdings {} => {
-            let result = services::holdings::get_holdings(&db).await?;
+            let result = services::holdings::get_holdings(&db, &fetcher).await?;
             display::print_holdings(&result);
         }
         Commands::List {} => {

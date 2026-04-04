@@ -3,10 +3,14 @@ use sea_orm::DatabaseConnection;
 
 use crate::models::{AssetType, DirectHolding, FundHolding, FundWithHoldings, HoldingsResult};
 use crate::services::portfolio::get_portfolio;
+use crate::services::price::PriceFetcher;
 use crate::utils::resolve_scripts_dir;
 
-pub async fn get_holdings(db: &DatabaseConnection) -> anyhow::Result<HoldingsResult> {
-    let portfolio = get_portfolio(db).await?;
+pub async fn get_holdings(
+    db: &DatabaseConnection,
+    price_fetcher: &dyn PriceFetcher,
+) -> anyhow::Result<HoldingsResult> {
+    let portfolio = get_portfolio(db, price_fetcher).await?;
     let total_value = portfolio.total_current_value;
 
     let mut stocks = Vec::new();
