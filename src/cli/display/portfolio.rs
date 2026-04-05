@@ -102,7 +102,7 @@ pub fn print_portfolio(result: &PortfolioResult, summary: Option<&PortfolioSumma
         println!("No positions found.");
     } else {
         let total_current_value = result.total_current_value;
-        let mut display_rows: Vec<PortfolioRow> = result
+        let display_rows: Vec<PortfolioRow> = result
             .rows
             .iter()
             .map(|r| {
@@ -152,7 +152,8 @@ pub fn print_portfolio(result: &PortfolioResult, summary: Option<&PortfolioSumma
             })
             .collect();
 
-        display_rows.sort_by(|a, b| {
+        let mut sorted: Vec<_> = display_rows.into_iter().zip(result.rows.iter()).collect();
+        sorted.sort_by(|(a, _), (b, _)| {
             let wa: f64 = a
                 .weight
                 .trim_end_matches('%')
@@ -169,6 +170,7 @@ pub fn print_portfolio(result: &PortfolioResult, summary: Option<&PortfolioSumma
                 .unwrap_or(0.0);
             wb.partial_cmp(&wa).unwrap_or(std::cmp::Ordering::Equal)
         });
+        let (display_rows, sorted_rows): (Vec<_>, Vec<_>) = sorted.into_iter().unzip();
 
         let mut table = Table::new(&display_rows);
         table.with(
@@ -182,7 +184,7 @@ pub fn print_portfolio(result: &PortfolioResult, summary: Option<&PortfolioSumma
         for col in 4..=13 {
             table.modify(Columns::single(col), Alignment::right());
         }
-        for (i, r) in result.rows.iter().enumerate() {
+        for (i, r) in sorted_rows.iter().enumerate() {
             let color = if r.gain_loss >= 0.0 {
                 Color::FG_GREEN
             } else {

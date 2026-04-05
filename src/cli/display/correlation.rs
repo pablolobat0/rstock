@@ -58,8 +58,10 @@ pub fn print_correlation_matrix(matrix: &CorrelationMatrix, period_label: &str) 
             let color = match matrix.matrix[i][j] {
                 None => Color::FG_BRIGHT_BLACK,
                 Some(_) if i == j => Color::FG_WHITE,
-                Some(v) if v.abs() > 0.7 => Color::FG_RED,
-                Some(v) if v.abs() >= 0.3 => Color::FG_YELLOW,
+                Some(v) if v > 0.7 => Color::FG_RED,
+                Some(v) if v >= 0.3 => Color::FG_YELLOW,
+                Some(v) if v >= -0.3 => Color::FG_GREEN,
+                Some(v) if v >= -0.7 => Color::FG_YELLOW,
                 Some(_) => Color::FG_GREEN,
             };
             // +1 for header row, +1 for name column
