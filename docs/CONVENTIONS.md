@@ -6,7 +6,7 @@
 - **Error handling**: `anyhow::Result<T>` for all fallible functions. Use `?` for propagation, `.context("message")` to add context, `anyhow::bail!()` for validation failures
 - **Async**: All service and repository functions are `async`. Tokio runtime with full features. Use `async_trait` for async trait methods
 - **No unwrap in production code**: Use `.context()` or pattern matching for fallible operations. `unwrap()` is acceptable only in tests and for known-safe literal conversions (e.g., `NaiveDate::from_ymd_opt` with hardcoded values)
-- **Warnings**: Logged to stderr via `eprintln!("Warning: ...")`. No structured logging framework yet
+- **Logging**: Uses `tracing` with `tracing-subscriber`. Initialized in `src/logging.rs`. Default level: `WARN`. CLI flag `-v`/`-vv`/`-vvv` increases verbosity; `RUST_LOG` env var is used as fallback when no `-v` flag is given. Logs are written to both stderr (colored, compact) and `~/.rstock/rstock.log` (daily rotation, no color). Use structured fields in tracing macros (e.g., `tracing::warn!(ticker, error = %e, "message")`) rather than string interpolation. Do NOT convert user-facing `println!` output to logging
 
 ## Function Ordering
 

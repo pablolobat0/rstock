@@ -42,6 +42,7 @@ impl PriceFetcher for RealPriceFetcher {
         end: &str,
         asset_type: &AssetType,
     ) -> anyhow::Result<Vec<(String, f64)>> {
+        tracing::debug!(%ticker, %start, %end, ?asset_type, "fetching historical prices");
         match asset_type {
             AssetType::Fund | AssetType::Etf => {
                 get_fund_historical_prices(ticker, start, end).await
@@ -56,11 +57,13 @@ impl PriceFetcher for RealPriceFetcher {
         start: &str,
         end: &str,
     ) -> anyhow::Result<Vec<(String, f64)>> {
+        tracing::debug!(%pair, %start, %end, "fetching exchange rates");
         let ticker = format!("{pair}=X");
         get_stock_historical_prices(&ticker, start, end).await
     }
 
     async fn get_stock_info(&self, ticker: &str) -> anyhow::Result<StockInfo> {
+        tracing::debug!(%ticker, "fetching stock info");
         fetch_stock_info(ticker).await
     }
 }

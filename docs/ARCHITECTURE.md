@@ -59,6 +59,14 @@
 
 `main.rs` dispatches commands to service functions. It also handles chart period date-range calculation and date validation (rejects future dates).
 
+### Logging (`logging.rs`)
+
+Structured logging via `tracing`. Two output layers:
+- **stderr** — Colored, compact format. Controlled by `-v` flag or `RUST_LOG` env var. Default: warnings only.
+- **File** — Daily-rotating log at `~/.rstock/rstock.log`. Full timestamps, includes module target path.
+
+Verbosity mapping: default=WARN, `-v`=INFO, `-vv`=DEBUG, `-vvv`=TRACE.
+
 ### Service Layer (`services/`)
 
 All business logic lives here. Key modules:

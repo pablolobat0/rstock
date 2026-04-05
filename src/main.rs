@@ -1,6 +1,7 @@
 mod cli;
 mod constants;
 mod db;
+mod logging;
 mod models;
 mod services;
 mod utils;
@@ -13,6 +14,10 @@ use services::price::RealPriceFetcher;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    logging::init(cli.verbose)?;
+
+    tracing::debug!(command = ?cli.command, "starting rstock");
+
     let db = db::connect().await?;
     let fetcher = RealPriceFetcher;
 

@@ -20,6 +20,9 @@ colored = "3"
 yfinance-rs = "0.7"
 csv = "1"
 futures = "0.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+tracing-appender = "0.2"
 
 [dev-dependencies]
 async-trait = "0.1"

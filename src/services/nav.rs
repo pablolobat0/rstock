@@ -21,6 +21,8 @@ pub async fn rebuild_portfolio_history(
     prev_snapshot: Option<&PortfolioSnapshot>,
     price_fetcher: &dyn PriceFetcher,
 ) -> anyhow::Result<()> {
+    tracing::info!(%start_date, %end_date, "rebuilding portfolio history");
+
     let end_str = format_date(end_date);
     let start_str = format_date(start_date);
 

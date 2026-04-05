@@ -52,10 +52,7 @@ pub async fn fill_prices_for_range(
     let price_map: std::collections::HashMap<String, f64> = match prices {
         Ok(prices) => prices.into_iter().collect(),
         Err(e) => {
-            eprintln!(
-                "Warning: failed to fetch historical prices for {}: {}",
-                asset.ticker, e
-            );
+            tracing::warn!(ticker = %asset.ticker, error = %e, "failed to fetch historical prices");
             return Ok(None);
         }
     };

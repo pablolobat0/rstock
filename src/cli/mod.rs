@@ -40,6 +40,10 @@ fn parse_positive_f64(s: &str) -> Result<f64, String> {
     after_help = "Use 'rstock <command> --help' for more information about a specific command."
 )]
 pub struct Cli {
+    /// Increase logging verbosity (-v info, -vv debug, -vvv trace)
+    #[arg(short, long, action = clap::ArgAction::Count, global = true)]
+    pub verbose: u8,
+
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -96,7 +100,7 @@ impl ChartPeriod {
     }
 }
 
-#[derive(Subcommand)]
+#[derive(Debug, Subcommand)]
 pub enum Commands {
     /// Show portfolio overview with NAV chart and key metrics
     Get {
@@ -225,13 +229,13 @@ pub enum Commands {
     },
 }
 
-#[derive(Args)]
+#[derive(Debug, Args)]
 pub struct MonitorArgs {
     #[command(subcommand)]
     pub command: MonitorCommands,
 }
 
-#[derive(Subcommand)]
+#[derive(Debug, Subcommand)]
 pub enum MonitorCommands {
     /// Add a stock to the watchlist with its sector ETF
     Add {

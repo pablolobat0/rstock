@@ -30,6 +30,13 @@ pub async fn buy(db: &DatabaseConnection, asset: AssetInfo, order: BuyOrder) -> 
     portfolio_history_repo::delete_from_date(db, &order_date).await?;
     portfolio_asset_history_repo::delete_from_date_for_asset(db, &order_date, asset_id).await?;
 
+    tracing::info!(
+        ticker = %asset.ticker,
+        quantity = order.quantity,
+        price = order.price,
+        date = %order.date,
+        "buy transaction recorded"
+    );
     println!("{summary}");
 
     Ok(())
@@ -75,6 +82,13 @@ pub async fn sell(db: &DatabaseConnection, ticker: String, order: SellOrder) -> 
     portfolio_history_repo::delete_from_date(db, &order_date).await?;
     portfolio_asset_history_repo::delete_from_date_for_asset(db, &order_date, asset.id).await?;
 
+    tracing::info!(
+        %ticker,
+        quantity = order.quantity,
+        price = order.price,
+        date = %order.date,
+        "sell transaction recorded"
+    );
     println!("{summary}");
 
     Ok(())
@@ -123,6 +137,12 @@ pub async fn dividend(
     portfolio_history_repo::delete_from_date(db, &order_date).await?;
     portfolio_asset_history_repo::delete_from_date_for_asset(db, &order_date, asset.id).await?;
 
+    tracing::info!(
+        %ticker,
+        amount = order.amount,
+        date = %order.date,
+        "dividend recorded"
+    );
     println!("{summary}");
 
     Ok(())
@@ -182,6 +202,12 @@ pub async fn split(
     portfolio_history_repo::delete_from_date(db, &earliest_date).await?;
     portfolio_asset_history_repo::delete_from_date_for_asset(db, &earliest_date, asset.id).await?;
 
+    tracing::info!(
+        %ticker,
+        ratio = order.ratio,
+        date = %order.date,
+        "split recorded"
+    );
     println!("{summary}");
 
     Ok(())

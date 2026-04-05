@@ -15,6 +15,8 @@ pub async fn fill_asset_prices(
     end_date: &str,
     price_fetcher: &dyn PriceFetcher,
 ) -> anyhow::Result<HashMap<i32, String>> {
+    tracing::debug!(asset_count = assets.len(), %start_date, %end_date, "filling asset price cache");
+
     let futures: Vec<_> = assets
         .iter()
         .map(|asset| async move {
@@ -34,10 +36,10 @@ pub async fn fill_asset_prices(
                 latest_dates.insert(asset.id, date);
             }
             Ok(None) => {
-                eprintln!("Warning: no price data available for {}", asset.ticker);
+                tracing::warn!(ticker = %asset.ticker, "no price data available");
             }
             Err(e) => {
-                eprintln!("Warning: failed to fill prices for {}: {}", asset.ticker, e);
+                tracing::warn!(ticker = %asset.ticker, error = %e, "failed to fill prices");
             }
         }
     }
@@ -53,6 +55,8 @@ pub async fn fill_exchange_rates(
     end_date: &str,
     price_fetcher: &dyn PriceFetcher,
 ) -> anyhow::Result<HashMap<String, String>> {
+    tracing::debug!(pair_count = pairs.len(), %start_date, %end_date, "filling exchange rate cache");
+
     let futures: Vec<_> = pairs
         .iter()
         .map(|pair| async move {
@@ -72,10 +76,10 @@ pub async fn fill_exchange_rates(
                 latest_dates.insert(pair.clone(), date);
             }
             Ok(None) => {
-                eprintln!("Warning: no exchange rate data available for {pair}");
+                tracing::warn!(%pair, "no exchange rate data available");
             }
             Err(e) => {
-                eprintln!("Warning: failed to fill exchange rates for {pair}: {e}");
+                tracing::warn!(%pair, error = %e, "failed to fill exchange rates");
             }
         }
     }

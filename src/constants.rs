@@ -1,4 +1,12 @@
+use std::path::PathBuf;
+
 use chrono::NaiveDate;
+
+// --- App directories ---
+pub fn app_data_dir() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    PathBuf::from(home).join(".rstock")
+}
 
 // --- Date ---
 pub const DATE_FORMAT: &str = "%Y-%m-%d";

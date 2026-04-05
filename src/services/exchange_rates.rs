@@ -47,7 +47,7 @@ pub async fn fill_rates_for_range(
     let rate_map: std::collections::HashMap<String, f64> = match rates {
         Ok(rates) => rates.into_iter().collect(),
         Err(e) => {
-            eprintln!("Warning: failed to fetch exchange rates for {pair}: {e}");
+            tracing::warn!(%pair, error = %e, "failed to fetch exchange rates");
             return Ok(None);
         }
     };

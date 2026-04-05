@@ -1,165 +1,21 @@
-# rstock
+# rstock (Rust CLI Portfolio Tracker)
+**References:** Read `docs/ARCHITECTURE.md` (design) and `docs/CONVENTIONS.md` (patterns) before modifying code.
 
-Rust CLI portfolio tracker with NAV unitization, multi-currency support, and ASCII charts. ~3,900 lines, edition 2021.
+## Execution & Quality
+* **Verification:** `cargo fmt && cargo clippy -- -D warnings`
+* **Tests:** `cargo test`. Never make network calls. Use `setup_test_db()` (in-memory SQLite) and dummy tickers (e.g., `XFAKE1`).
+* **Migrations:** `cd migration && cargo run -- [up|down|generate NAME]`
+* **Logging:** `tracing` macros for diagnostic output. Never convert `println!` (user-facing) to logging. Use structured fields: `tracing::warn!(ticker, error = %e, "message")`.
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for system design and [docs/CONVENTIONS.md](docs/CONVENTIONS.md) for code patterns.
+## Core Domain Rules
+* **Precision:** Transaction prices use `i64` cents (`src/models/transaction.rs`). Daily asset prices and NAV use `f64`.
+* **Currency:** EUR base (`BASE_CURRENCY` in `src/constants.rs`). All values aggregate to EUR.
+* **Tickers:** Universal identifier (`-t`). Stocks = Symbol (MSFT). Funds/ETFs = ISIN (IE00B4L5Y983). Hide ticker column for funds in UI.
+* **Dates:** Internal/DB = `YYYY-MM-DD`. Display/CLI Input = `DD-MM-YYYY` (custom parser in `src/cli.rs`).
 
-## Workflow
-
-Follow these steps in order for every code change:
-
-1. **Plan** — Understand the task, read relevant code, and outline the approach before writing anything.
-2. **Implement** — Write the code changes.
-3. **Format and lint** — Run `cargo fmt` and `cargo clippy -- -D warnings`. Fix all issues before proceeding.
-4. **Test** — Run `cargo test`. Add or update tests as needed. All tests must pass.
-5. **Update documentation** — Update any affected `.md` files (CLAUDE.md, README.md, docs/ARCHITECTURE.md, docs/CONVENTIONS.md, TODO.md) to reflect the changes.
-
-## Build, Test, Run
-
-```bash
-cargo build                              # Debug build
-cargo build --release                    # Release build (binary at target/release/rstock)
-cargo test                               # All tests
-cargo test --test nav_tests              # Single test file
-cargo test test_single_buy_initial_nav   # Single test by name
-cargo test -- --nocapture                # Show stdout/stderr
-cargo clippy                             # Lint
-cargo fmt                                # Format
-```
-
-Run commands:
-
-```bash
-cargo run -- get                         # Portfolio summary + 1Y NAV chart
-cargo run -- get -p ytd                  # YTD chart (also: 1m, 3m, 6m, 3y, 5y, all)
-cargo run -- buy -t MSFT -n "Microsoft" -T stock -d 26-02-2026 -q 1 -p 390
-cargo run -- buy -t IE00B4L5Y983 -n "Vanguard FTSE" -T fund -d 26-02-2026 -q 10 -p 100
-cargo run -- sell -t MSFT -d 01-03-2026 -q 0.5 -p 400
-cargo run -- dividend -t MSFT -d 15-03-2026 -a 25.50
-cargo run -- split -t MSFT -d 20-03-2026 -r 2
-cargo run -- list                        # Show all assets
-cargo run -- export -o txns.csv          # Export transactions to CSV
-cargo run -- holdings                    # Fund/ETF look-through
-cargo run -- analyze portfolio           # Correlation matrix (default 1y)
-cargo run -- monitor add -t AAPL -s XLK
-cargo run -- monitor view AAPL           # Momentum + sector analysis
-cargo run -- monitor list                # Show watchlist
-cargo run -- monitor remove -t AAPL
-```
-
-Migrations:
-
-```bash
-cd migration && cargo run -- up          # Apply pending
-cd migration && cargo run -- down        # Rollback last
-cd migration && cargo run -- generate NAME  # New migration
-```
-
-## Verification
-
-After any code change, run this checklist:
-
-```bash
-cargo fmt --check                        # Formatting
-cargo clippy -- -D warnings              # Lint (treat warnings as errors)
-cargo test                               # All tests (NAV, prices, portfolio, integration)
-cargo build                              # Confirm it compiles
-```
-
-### Verifying financial metrics
-
-The `get` command outputs NAV, returns, and risk metrics. After changing code in `services/nav.rs`, `services/portfolio.rs`, or `services/metrics.rs`, verify the output makes financial sense:
-
-```bash
-cargo run -- get                         # Check full output
-cargo run -- get --period all            # Broader view
-```
-
-**What to check in the `get` output:**
-
-- **NAV**: Should be a positive number. If the portfolio has only gained value since inception, NAV > 100.0 (initial NAV). If it has lost value, NAV < 100.0.
-- **Daily change**: The absolute and percentage change between the last two snapshots. Sign should match (both positive or both negative).
-- **YTD return**: Simple return `((current_nav - jan1_nav) / jan1_nav) * 100`. Should be consistent with the NAV chart trend since January 1.
-- **1Y return**: Simple return from 365 days ago. Should reflect the chart's 1Y trend.
-- **3Y/5Y CAGR**: Annualized using `((end/start)^(1/years) - 1) * 100`. Should be smaller in magnitude than the simple return over the same period. A 100% total return over 3 years is ~26% CAGR, not 33%.
-- **Beta**: Measures correlation with ACWI benchmark. Typically 0.5–1.5 for a diversified stock portfolio. Values far outside this range suggest a data issue.
-- **Sharpe ratio**: Excess return per unit of risk. Typically -1 to 3 for a real portfolio. Uses 3% annual risk-free rate and 252 trading days/year.
-- **Portfolio table**: Gain/loss per asset should be green (positive) or red (negative). Weight column should sum to ~100%. Avg cost and current price should be in the asset's native currency.
-
-**Automated test coverage for metrics:**
-
-| Metric | Test file | What's tested |
-|--------|-----------|---------------|
-| NAV unitization | `tests/nav_tests.rs` | Single/multiple buys, sells, deposits at different NAVs, fees, multi-asset |
-| YTD/period returns | `tests/portfolio_summary_tests.rs` | Simple return, CAGR formula, negative returns, period boundary lookup |
-| Price caching | `tests/daily_price_tests.rs` | Forward-fill, cache hits, date gaps |
-| End-to-end flows | `tests/integration_test.rs` | Buy + price change + portfolio query |
-| Dividends | `tests/dividend_tests.rs` | Dividend recording and NAV cash accumulation |
-| Correlations | `tests/correlation_tests.rs` | Portfolio asset correlation matrix computation |
-| Monitor | `tests/monitor_tests.rs` | Momentum indicators and monitor report generation |
-
-If you change a return formula or NAV calculation, add a test case in the corresponding file with known inputs and expected outputs before modifying the implementation.
-
-## Key Rules
-
-- **Monetary precision**: Transaction prices are stored as `i64` cents via `f64_to_cents`/`cents_to_f64` in `src/models/transaction.rs`. Daily asset prices and NAV values use `f64` directly. Never mix these representations. Yahoo Finance (`yfinance-rs`) returns prices with 2 decimal places of precision.
-- **Base currency**: EUR, hardcoded as `BASE_CURRENCY` in `src/constants.rs`. All portfolio values are converted to EUR for aggregation.
-- **PriceFetcher trait**: `src/services/price.rs` defines the abstraction for all external price data. `RealPriceFetcher` hits Yahoo Finance (stocks) or Python/mstarpy scripts (funds/ETFs). Tests use `MockPriceFetcher` from `tests/common/mod.rs`. Never make network calls in tests.
-- **Test tickers**: Use non-existent tickers (e.g., `XFAKE1`) in tests to prevent real price lookups from overwriting test data.
-- **Test database**: Tests use in-memory SQLite via `setup_test_db()` in `tests/common/mod.rs`.
-- **Snapshot invalidation**: When inserting a buy or sell transaction, delete `portfolio_history` and `portfolio_asset_history` rows from that date forward. This triggers a rebuild on the next `get` command. See `src/services/transactions.rs`.
-- **Forward-fill**: Prices are forward-filled for weekends/holidays but never beyond the last date returned by the API. The effective end date in `src/services/nav.rs` is the minimum across all assets and exchange rates.
-- **NAV unitization**: First deposit sets NAV = 100.0 and issues shares. Subsequent deposits issue shares at the current NAV. Sells redeem shares. See `process_day_transactions` in `src/services/nav.rs`.
-- **No re-exports**: Constants and types live in one file; update all import paths directly rather than re-exporting.
-- **Fund/ETF prices**: Come from Python scripts in `scripts/` run via `uv run`. The `RSTOCK_SCRIPTS_DIR` env var overrides script directory lookup.
-- **Database**: SQLite at `~/.rstock/rstock.db`, auto-created on first run. Migrations run automatically on connect in `src/db/mod.rs`.
-- **Dates**: Stored internally as `String` in `YYYY-MM-DD` format (for SQL ordering). User-facing input/output uses `DD-MM-YYYY`. See `DATE_FORMAT`, `DISPLAY_DATE_FORMAT`, and `display_date()` in `src/constants.rs`. CLI uses a custom `parse_date()` parser in `src/cli.rs`.
-- **Ticker field**: The `--ticker`/`-t` flag is the universal identifier for all assets. For stocks, use the ticker symbol (e.g., `MSFT`). For funds/ETFs, use the ISIN (e.g., `IE00B4L5Y983`). There is no separate ISIN field. In tables, the Ticker column is hidden for funds/ETFs (only the Name column is shown).
-
-## Environment Variables
-
-| Variable | Description |
-|---|---|
-| `RSTOCK_SCRIPTS_DIR` | Override Python scripts directory lookup |
-
-## Project Structure
-
-```
-src/
-  main.rs              — Entry point, CLI command dispatch
-  cli.rs               — Clap CLI definitions (get, buy, sell, dividend, split, list, export, holdings, analyze, monitor)
-  constants.rs         — Centralized constants (dates, currency, metrics, thresholds)
-  display/
-    mod.rs             — Submodule declarations and re-exports
-    helpers.rs         — Shared formatting utilities (price, quantity, color)
-    portfolio.rs       — Portfolio table and summary display
-    simple.rs          — Asset list, NAV chart, watchlist display
-    correlation.rs     — Correlation matrix display
-    holdings.rs        — Fund/ETF holdings display
-    monitor.rs         — Monitor report and normalized chart display
-  utils.rs             — Utility functions (scripts directory resolution)
-  lib.rs               — Public module exports
-  models/
-    asset.rs           — AssetType enum, Asset, AssetInfo, AssetPosition
-    portfolio.rs       — PortfolioSnapshot, PortfolioSummary, CorrelationMatrix, holdings models
-    transaction.rs     — BuyOrder, SellOrder, DividendOrder, SplitOrder, TxType, Transaction, cents helpers
-    monitor.rs         — StockInfo, MomentumIndicators, RelationshipMetrics, MonitorReport
-  services/
-    nav.rs             — NAV unitization engine (rebuild_portfolio_history)
-    portfolio.rs       — Portfolio summary, return calculations
-    transactions.rs    — Buy/sell/dividend/split recording + snapshot invalidation
-    daily_prices.rs    — Price caching with forward-fill
-    exchange_rates.rs  — FX rate caching (EUR base)
-    price.rs           — PriceFetcher trait + RealPriceFetcher
-    metrics.rs         — Beta, Sharpe, volatility, drawdown, correlation matrix (ACWI benchmark)
-    holdings.rs        — Fund/ETF look-through holdings report
-    monitor.rs         — Stock analysis with momentum indicators and sector comparison
-    export.rs          — Transaction CSV export
-  db/
-    mod.rs             — SQLite connection + auto-migration
-    entities/          — SeaORM generated models (8 tables, including watchlist)
-    repos/             — Repository layer (one per entity, including watchlist_repo)
-migration/src/         — SeaORM schema migrations (5 migrations)
-tests/                 — Integration tests + common test utilities
-scripts/               — Python helpers for fund/ETF prices and holdings (mstarpy)
-```
+## System Behaviors
+* **Price Fetching:** `PriceFetcher` trait (`src/services/price.rs`). Stocks = Yahoo. Funds/ETFs = Python scripts via `uv run` in `scripts/` (override dir via `RSTOCK_SCRIPTS_DIR` env var). 
+* **Data Filling:** Forward-fill prices for weekends/holidays up to the minimum effective end date across all assets/FX.
+* **NAV Unitization:** Initial deposit sets NAV=100.0. Subsequent deposits issue shares at current NAV; sells redeem shares (`src/services/nav.rs`).
+* **Snapshots Invalidation:** Buy/sell transactions delete `portfolio_history` and `portfolio_asset_history` from the transaction date forward to trigger rebuilds.
+* **Database:** SQLite at `~/.rstock/rstock.db`. Auto-migrates on connection (`src/db/mod.rs`).
