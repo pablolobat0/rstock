@@ -205,6 +205,9 @@ pub enum Commands {
     /// Monitor a stock: fundamentals, momentum, and sector comparison
     Monitor(MonitorArgs),
 
+    /// Edit or delete existing transactions
+    Transaction(TransactionArgs),
+
     /// Record a sell transaction for an existing asset
     Sell {
         /// Ticker symbol (asset must already exist)
@@ -266,5 +269,50 @@ pub enum MonitorCommands {
         /// Time period for analysis
         #[arg(short, long, value_enum, default_value = "1y")]
         period: ChartPeriod,
+    },
+}
+
+#[derive(Debug, Args)]
+pub struct TransactionArgs {
+    #[command(subcommand)]
+    pub command: TransactionCommands,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum TransactionCommands {
+    /// Edit an existing transaction (date, quantity, price, fees)
+    Edit {
+        /// Transaction ID
+        id: i32,
+
+        /// New date (DD-MM-YYYY)
+        #[arg(short, long, value_parser = parse_date)]
+        date: Option<NaiveDate>,
+
+        /// New quantity
+        #[arg(short, long, value_parser = parse_positive_f64)]
+        quantity: Option<f64>,
+
+        /// New price per unit
+        #[arg(short, long, value_parser = parse_positive_f64)]
+        price: Option<f64>,
+
+        /// New fees
+        #[arg(short, long)]
+        fees: Option<f64>,
+
+        /// Skip confirmation prompt
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
+
+    /// Delete an existing transaction
+    Delete {
+        /// Transaction ID
+        id: i32,
+
+        /// Skip confirmation prompt
+        #[arg(short = 'y', long)]
+        yes: bool,
     },
 }

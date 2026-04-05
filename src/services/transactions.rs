@@ -5,7 +5,9 @@ use crate::db::repos::{
     asset_repo, daily_price_repo, portfolio_asset_history_repo, portfolio_history_repo,
     transaction_repo,
 };
-use crate::models::{AssetInfo, BuyOrder, DividendOrder, SellOrder, SplitOrder, Transaction};
+use crate::models::{
+    f64_to_cents, AssetInfo, BuyOrder, DividendOrder, SellOrder, SplitOrder, Transaction,
+};
 
 pub async fn buy(db: &DatabaseConnection, asset: AssetInfo, order: BuyOrder) -> anyhow::Result<()> {
     let total = order.quantity * order.price + order.fees;
@@ -24,7 +26,7 @@ pub async fn buy(db: &DatabaseConnection, asset: AssetInfo, order: BuyOrder) -> 
     let asset_id = asset_repo::get_or_create(db, &asset).await?;
 
     let order_date = order.date.clone();
-    transaction_repo::insert_buy(db, asset_id, &order).await?;
+    let tx_id = transaction_repo::insert_buy(db, asset_id, &order).await?;
 
     // Invalidate snapshots from the buy date
     portfolio_history_repo::delete_from_date(db, &order_date).await?;
@@ -38,6 +40,7 @@ pub async fn buy(db: &DatabaseConnection, asset: AssetInfo, order: BuyOrder) -> 
         "buy transaction recorded"
     );
     println!("{summary}");
+    println!("Transaction ID: {tx_id}");
 
     Ok(())
 }
@@ -76,7 +79,7 @@ pub async fn sell(db: &DatabaseConnection, ticker: String, order: SellOrder) -> 
     );
 
     let order_date = order.date.clone();
-    transaction_repo::insert_sell(db, asset.id, &order).await?;
+    let tx_id = transaction_repo::insert_sell(db, asset.id, &order).await?;
 
     // Invalidate snapshots from the sell date
     portfolio_history_repo::delete_from_date(db, &order_date).await?;
@@ -90,6 +93,7 @@ pub async fn sell(db: &DatabaseConnection, ticker: String, order: SellOrder) -> 
         "sell transaction recorded"
     );
     println!("{summary}");
+    println!("Transaction ID: {tx_id}");
 
     Ok(())
 }
@@ -131,7 +135,7 @@ pub async fn dividend(
     );
 
     let order_date = order.date.clone();
-    transaction_repo::insert_dividend(db, asset.id, &order).await?;
+    let tx_id = transaction_repo::insert_dividend(db, asset.id, &order).await?;
 
     // Invalidate snapshots from the dividend date
     portfolio_history_repo::delete_from_date(db, &order_date).await?;
@@ -144,6 +148,7 @@ pub async fn dividend(
         "dividend recorded"
     );
     println!("{summary}");
+    println!("Transaction ID: {tx_id}");
 
     Ok(())
 }
@@ -191,7 +196,7 @@ pub async fn split(
         display_date(&order.date)
     );
 
-    transaction_repo::insert_split(db, asset.id, &order).await?;
+    let tx_id = transaction_repo::insert_split(db, asset.id, &order).await?;
 
     // Price providers retroactively adjust all historical prices after a split,
     // so the entire price cache for this asset is stale.
@@ -209,6 +214,69 @@ pub async fn split(
         "split recorded"
     );
     println!("{summary}");
+    println!("Transaction ID: {tx_id}");
 
+    Ok(())
+}
+
+pub async fn delete(db: &DatabaseConnection, id: i32) -> anyhow::Result<()> {
+    let tx = transaction_repo::find_by_id(db, id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("Transaction {id} not found"))?;
+
+    transaction_repo::delete_by_id(db, id).await?;
+
+    portfolio_history_repo::delete_from_date(db, &tx.date).await?;
+    portfolio_asset_history_repo::delete_from_date_for_asset(db, &tx.date, tx.asset_id).await?;
+
+    if tx.is_split() {
+        daily_price_repo::delete_all_for_asset(db, tx.asset_id).await?;
+    }
+
+    tracing::info!(id, "transaction deleted");
+    println!("Transaction {id} deleted.");
+    Ok(())
+}
+
+pub async fn edit(
+    db: &DatabaseConnection,
+    id: i32,
+    new_date: Option<String>,
+    new_quantity: Option<f64>,
+    new_price: Option<f64>,
+    new_fees: Option<f64>,
+) -> anyhow::Result<()> {
+    let tx = transaction_repo::find_by_id(db, id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("Transaction {id} not found"))?;
+
+    let new_price_cents = new_price.map(f64_to_cents);
+    let new_fees_cents = new_fees.map(f64_to_cents);
+
+    transaction_repo::update_by_id(
+        db,
+        id,
+        new_date.clone(),
+        new_quantity,
+        new_price_cents,
+        new_fees_cents,
+    )
+    .await?;
+
+    let invalidation_date = match &new_date {
+        Some(d) if d < &tx.date => d.clone(),
+        _ => tx.date.clone(),
+    };
+
+    portfolio_history_repo::delete_from_date(db, &invalidation_date).await?;
+    portfolio_asset_history_repo::delete_from_date_for_asset(db, &invalidation_date, tx.asset_id)
+        .await?;
+
+    if tx.is_split() {
+        daily_price_repo::delete_all_for_asset(db, tx.asset_id).await?;
+    }
+
+    tracing::info!(id, "transaction edited");
+    println!("Transaction {id} updated.");
     Ok(())
 }

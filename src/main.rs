@@ -8,7 +8,7 @@ mod utils;
 
 use clap::Parser;
 
-use cli::{Cli, Commands};
+use cli::{Cli, Commands, TransactionCommands};
 use services::price::RealPriceFetcher;
 
 #[tokio::main]
@@ -63,5 +63,18 @@ async fn main() -> anyhow::Result<()> {
             cli::commands::analyze::run(&db, &fetcher, target, period).await
         }
         Commands::Monitor(args) => cli::commands::monitor::run(&db, &fetcher, args).await,
+        Commands::Transaction(args) => match args.command {
+            TransactionCommands::Edit {
+                id,
+                date,
+                quantity,
+                price,
+                fees,
+                yes,
+            } => cli::commands::transactions::edit(&db, id, date, quantity, price, fees, yes).await,
+            TransactionCommands::Delete { id, yes } => {
+                cli::commands::transactions::delete(&db, id, yes).await
+            }
+        },
     }
 }

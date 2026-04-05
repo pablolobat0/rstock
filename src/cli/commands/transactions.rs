@@ -1,9 +1,12 @@
 use chrono::NaiveDate;
 use sea_orm::DatabaseConnection;
 
+use crate::cli::display::format_transaction_detail;
 use crate::constants::format_date;
+use crate::db::repos::{asset_repo, transaction_repo};
 use crate::models::{AssetInfo, AssetType, BuyOrder, DividendOrder, SellOrder, SplitOrder};
 use crate::services;
+use crate::utils::confirm_action;
 
 #[allow(clippy::too_many_arguments)]
 pub async fn buy(
@@ -75,4 +78,55 @@ pub async fn split(
         ratio,
     };
     services::transactions::split(db, ticker, order).await
+}
+
+pub async fn edit(
+    db: &DatabaseConnection,
+    id: i32,
+    date: Option<NaiveDate>,
+    quantity: Option<f64>,
+    price: Option<f64>,
+    fees: Option<f64>,
+    yes: bool,
+) -> anyhow::Result<()> {
+    if date.is_none() && quantity.is_none() && price.is_none() && fees.is_none() {
+        anyhow::bail!("At least one field must be specified (--date, --quantity, --price, --fees)");
+    }
+
+    let tx = transaction_repo::find_by_id(db, id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("Transaction {id} not found"))?;
+
+    let assets = asset_repo::find_by_ids(db, [tx.asset_id]).await?;
+    let ticker = assets.first().map_or("unknown", |a| a.ticker.as_str());
+
+    println!("Current transaction:");
+    println!("{}", format_transaction_detail(&tx, ticker));
+
+    if !yes && !confirm_action("Apply changes?") {
+        println!("Cancelled.");
+        return Ok(());
+    }
+
+    let new_date = date.map(format_date);
+    services::transactions::edit(db, id, new_date, quantity, price, fees).await
+}
+
+pub async fn delete(db: &DatabaseConnection, id: i32, yes: bool) -> anyhow::Result<()> {
+    let tx = transaction_repo::find_by_id(db, id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("Transaction {id} not found"))?;
+
+    let assets = asset_repo::find_by_ids(db, [tx.asset_id]).await?;
+    let ticker = assets.first().map_or("unknown", |a| a.ticker.as_str());
+
+    println!("Transaction to delete:");
+    println!("{}", format_transaction_detail(&tx, ticker));
+
+    if !yes && !confirm_action("Delete this transaction?") {
+        println!("Cancelled.");
+        return Ok(());
+    }
+
+    services::transactions::delete(db, id).await
 }

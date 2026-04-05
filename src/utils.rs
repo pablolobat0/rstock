@@ -1,5 +1,15 @@
-use anyhow::{bail, Context};
+use std::io::{self, Write};
 use std::path::PathBuf;
+
+use anyhow::{bail, Context};
+
+pub fn confirm_action(message: &str) -> bool {
+    print!("{message} [y/N] ");
+    io::stdout().flush().ok();
+    let mut input = String::new();
+    io::stdin().read_line(&mut input).ok();
+    matches!(input.trim().to_lowercase().as_str(), "y" | "yes")
+}
 
 /// Locate the `scripts/` directory used for Python helper scripts.
 ///

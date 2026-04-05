@@ -11,7 +11,7 @@ pub async fn insert_buy(
     db: &DatabaseConnection,
     asset_id: i32,
     order: &BuyOrder,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<i32> {
     let price_cents = f64_to_cents(order.price);
     let fees_cents = f64_to_cents(order.fees);
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
@@ -26,8 +26,8 @@ pub async fn insert_buy(
         created_at: Set(now),
         ..Default::default()
     };
-    tx.insert(db).await?;
-    Ok(())
+    let result = tx.insert(db).await?;
+    Ok(result.id)
 }
 
 pub async fn find_all_ordered_by_date(
@@ -63,7 +63,7 @@ pub async fn insert_sell(
     db: &DatabaseConnection,
     asset_id: i32,
     order: &SellOrder,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<i32> {
     let price_cents = f64_to_cents(order.price);
     let fees_cents = f64_to_cents(order.fees);
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
@@ -78,15 +78,15 @@ pub async fn insert_sell(
         created_at: Set(now),
         ..Default::default()
     };
-    tx.insert(db).await?;
-    Ok(())
+    let result = tx.insert(db).await?;
+    Ok(result.id)
 }
 
 pub async fn insert_dividend(
     db: &DatabaseConnection,
     asset_id: i32,
     order: &DividendOrder,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<i32> {
     let amount_cents = f64_to_cents(order.amount);
     let fees_cents = f64_to_cents(order.fees);
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
@@ -101,15 +101,15 @@ pub async fn insert_dividend(
         created_at: Set(now),
         ..Default::default()
     };
-    tx.insert(db).await?;
-    Ok(())
+    let result = tx.insert(db).await?;
+    Ok(result.id)
 }
 
 pub async fn insert_split(
     db: &DatabaseConnection,
     asset_id: i32,
     order: &SplitOrder,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<i32> {
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
     let tx = transaction::ActiveModel {
@@ -122,8 +122,8 @@ pub async fn insert_split(
         created_at: Set(now),
         ..Default::default()
     };
-    tx.insert(db).await?;
-    Ok(())
+    let result = tx.insert(db).await?;
+    Ok(result.id)
 }
 
 pub async fn find_earliest(db: &DatabaseConnection) -> anyhow::Result<Option<Transaction>> {
@@ -132,4 +132,44 @@ pub async fn find_earliest(db: &DatabaseConnection) -> anyhow::Result<Option<Tra
         .one(db)
         .await?;
     Ok(result.map(Transaction::from))
+}
+
+pub async fn find_by_id(db: &DatabaseConnection, id: i32) -> anyhow::Result<Option<Transaction>> {
+    let result = transaction::Entity::find_by_id(id).one(db).await?;
+    Ok(result.map(Transaction::from))
+}
+
+pub async fn delete_by_id(db: &DatabaseConnection, id: i32) -> anyhow::Result<()> {
+    transaction::Entity::delete_by_id(id).exec(db).await?;
+    Ok(())
+}
+
+pub async fn update_by_id(
+    db: &DatabaseConnection,
+    id: i32,
+    date: Option<String>,
+    quantity: Option<f64>,
+    price_cents: Option<i64>,
+    fees_cents: Option<i64>,
+) -> anyhow::Result<()> {
+    let record = transaction::Entity::find_by_id(id)
+        .one(db)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("Transaction {id} not found"))?;
+
+    let mut active: transaction::ActiveModel = record.into();
+    if let Some(d) = date {
+        active.date = Set(d);
+    }
+    if let Some(q) = quantity {
+        active.quantity = Set(q);
+    }
+    if let Some(p) = price_cents {
+        active.price_cents = Set(p);
+    }
+    if let Some(f) = fees_cents {
+        active.fees_cents = Set(f);
+    }
+    active.update(db).await?;
+    Ok(())
 }

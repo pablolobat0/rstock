@@ -71,6 +71,7 @@ pub struct SplitOrder {
 }
 
 pub struct Transaction {
+    pub id: i32,
     pub asset_id: i32,
     pub tx_type: TxType,
     pub date: String,
@@ -122,6 +123,7 @@ impl Transaction {
 impl From<transaction::Model> for Transaction {
     fn from(m: transaction::Model) -> Self {
         Self {
+            id: m.id,
             asset_id: m.asset_id,
             tx_type: m.tx_type.parse().expect("invalid tx_type in DB"),
             date: m.date,

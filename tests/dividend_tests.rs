@@ -141,6 +141,7 @@ async fn test_incremental_rebuild_preserves_cash_balance() {
 #[test]
 fn test_dividend_signed_quantity_is_zero() {
     let tx = Transaction {
+        id: 0,
         asset_id: 1,
         tx_type: TxType::Dividend,
         date: "2025-01-03".to_owned(),
@@ -166,6 +167,7 @@ async fn test_process_day_transactions_dividend_pure() {
 
     // First buy to establish holdings and shares
     let buy_tx = Transaction {
+        id: 0,
         asset_id: 1,
         tx_type: TxType::Buy,
         date: "2025-01-02".to_owned(),
@@ -187,6 +189,7 @@ async fn test_process_day_transactions_dividend_pure() {
 
     // Now process a dividend
     let div_tx = Transaction {
+        id: 0,
         asset_id: 1,
         tx_type: TxType::Dividend,
         date: "2025-01-03".to_owned(),

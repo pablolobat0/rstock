@@ -533,6 +533,7 @@ async fn test_per_asset_history_multiple_assets() {
 async fn test_process_day_transactions_pure() {
     // Simulate first buy: 10 shares @ $50
     let tx1 = Transaction {
+        id: 0,
         asset_id: 1,
         tx_type: TxType::Buy,
         date: "2025-01-02".to_owned(),
@@ -565,6 +566,7 @@ async fn test_process_day_transactions_pure() {
 
     // Simulate second buy at NAV=100
     let tx2 = Transaction {
+        id: 0,
         asset_id: 1,
         tx_type: TxType::Buy,
         date: "2025-01-03".to_owned(),
@@ -970,6 +972,7 @@ async fn test_process_day_transactions_sell_pure() {
 
     // First: buy 10 @ $50
     let buy_tx = Transaction {
+        id: 0,
         asset_id: 1,
         tx_type: TxType::Buy,
         date: "2025-01-02".to_owned(),
@@ -992,6 +995,7 @@ async fn test_process_day_transactions_sell_pure() {
 
     // Now sell 5 @ $50 at NAV=100
     let sell_tx = Transaction {
+        id: 0,
         asset_id: 1,
         tx_type: TxType::Sell,
         date: "2025-01-03".to_owned(),
@@ -1215,6 +1219,7 @@ async fn test_split_mid_history_nav_continuity() {
 #[tokio::test]
 async fn test_process_day_transactions_split_pure() {
     let split_tx = Transaction {
+        id: 0,
         asset_id: 1,
         tx_type: TxType::Split,
         date: "2025-01-03".to_owned(),

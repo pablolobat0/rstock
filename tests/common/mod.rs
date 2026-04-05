@@ -162,6 +162,25 @@ pub async fn insert_daily_price(
         .expect("failed to insert daily price");
 }
 
+pub async fn insert_portfolio_snapshot(
+    db: &DatabaseConnection,
+    date: &str,
+    nav: f64,
+    outstanding_shares: f64,
+) {
+    let record = portfolio_history::ActiveModel {
+        date: Set(date.to_owned()),
+        asset_value: Set(1000.0),
+        total_value: Set(1000.0),
+        nav: Set(nav),
+        outstanding_shares: Set(outstanding_shares),
+    };
+    portfolio_history::Entity::insert(record)
+        .exec(db)
+        .await
+        .expect("failed to insert portfolio snapshot");
+}
+
 pub async fn get_portfolio_snapshot(
     db: &DatabaseConnection,
     date: &str,
