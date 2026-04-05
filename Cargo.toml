@@ -26,6 +26,7 @@ tracing-appender = "0.2"
 
 [dev-dependencies]
 async-trait = "0.1"
+tempfile = "3.27.0"
 tokio = { version = ">=1, <1.49", features = ["full", "test-util"] }
 
 [lints.clippy]

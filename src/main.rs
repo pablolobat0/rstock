@@ -59,6 +59,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::List {} => cli::commands::portfolio::list(&db).await,
         Commands::Holdings {} => cli::commands::portfolio::holdings(&db, &fetcher).await,
         Commands::Export { output } => cli::commands::export::run(&db, output).await,
+        Commands::Import { input } => cli::commands::import::run(&db, input).await,
         Commands::Analyze { target, period } => {
             cli::commands::analyze::run(&db, &fetcher, target, period).await
         }

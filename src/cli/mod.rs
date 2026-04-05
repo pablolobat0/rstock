@@ -173,6 +173,13 @@ pub enum Commands {
         output: String,
     },
 
+    /// Import transactions from a CSV file
+    Import {
+        /// Input CSV file path (e.g. transactions.csv)
+        #[arg(long, short)]
+        input: String,
+    },
+
     /// Show portfolio holdings breakdown (stocks directly, funds/ETFs with underlying positions)
     Holdings {},
 

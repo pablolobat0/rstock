@@ -70,6 +70,19 @@ pub struct SplitOrder {
     pub ratio: f64,
 }
 
+pub struct CsvRow {
+    pub source_row: usize,
+    pub date: chrono::NaiveDate,
+    pub ticker: String,
+    pub name: Option<String>,
+    pub asset_type: Option<super::AssetType>,
+    pub currency: Option<String>,
+    pub tx_type: TxType,
+    pub quantity: f64,
+    pub price: f64,
+    pub fees: f64,
+}
+
 pub struct Transaction {
     pub id: i32,
     pub asset_id: i32,

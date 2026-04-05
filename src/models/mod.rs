@@ -10,6 +10,7 @@ pub use portfolio::{
     PeriodMetrics, PortfolioResult, PortfolioSnapshot, PortfolioSummary,
 };
 pub use transaction::{
-    cents_to_f64, f64_to_cents, BuyOrder, DividendOrder, SellOrder, SplitOrder, Transaction, TxType,
+    cents_to_f64, f64_to_cents, BuyOrder, CsvRow, DividendOrder, SellOrder, SplitOrder,
+    Transaction, TxType,
 };
 pub use watchlist::WatchlistItem;
