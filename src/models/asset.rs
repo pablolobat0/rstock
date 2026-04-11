@@ -49,6 +49,7 @@ pub struct Asset {
     pub name: String,
     pub asset_type: AssetType,
     pub currency: String,
+    pub morningstar_code: Option<String>,
 }
 
 impl From<asset::Model> for Asset {
@@ -59,6 +60,7 @@ impl From<asset::Model> for Asset {
             name: m.name,
             asset_type: m.asset_type.parse().expect("invalid asset_type in DB"),
             currency: m.currency,
+            morningstar_code: m.morningstar_code,
         }
     }
 }
@@ -68,6 +70,7 @@ pub struct AssetPosition {
     pub name: String,
     pub asset_type: AssetType,
     pub currency: String,
+    pub morningstar_code: Option<String>,
     pub total_qty: f64,
     pub avg_cost: f64,
     pub current_price: f64,

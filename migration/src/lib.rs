@@ -6,6 +6,7 @@ mod m20250225_000001_portfolio_asset_history;
 mod m20250308_000001_add_exchange_rates;
 mod m20260330_000001_create_watchlist;
 mod m20260401_000001_drop_isin;
+mod m20260411_000001_add_morningstar_code;
 
 pub struct Migrator;
 
@@ -19,6 +20,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20250308_000001_add_exchange_rates::Migration),
             Box::new(m20260330_000001_create_watchlist::Migration),
             Box::new(m20260401_000001_drop_isin::Migration),
+            Box::new(m20260411_000001_add_morningstar_code::Migration),
         ]
     }
 }

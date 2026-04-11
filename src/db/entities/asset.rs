@@ -11,6 +11,7 @@ pub struct Model {
     pub asset_type: String,
     pub currency: String,
     pub created_at: String,
+    pub morningstar_code: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
