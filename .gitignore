@@ -16,3 +16,9 @@
 .idea/
 .DS_Store
 .claude/worktrees/
+scripts/morningstar_client.py
+scripts/test.py
+scripts/__pycache__/
+mstarpy/
+migration/target/
+migration/Cargo.lock

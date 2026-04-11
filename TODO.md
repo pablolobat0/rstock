@@ -18,13 +18,13 @@
 - [x] Review CLAUDE.md — reduce token usage while keeping essential info
 - [ ] Improve and extend analysis feature
 - [ ] Improve and change CLI structure
-- [ ] Review metrics calculus
+- [ ] Review metrics calculus, adapt method to not use models of the code, just enter numbers. Move database access out of metrics service. Chech that trading days are the same as returns
 
 
 ## Display
 - [x] Use , for decimals separator and . for the others
 - [ ] Improve graphs
-- [ ] Review green and red color in tables
+- [x] Review green and red color in tables
 
 ## Monitor Improvements
 
@@ -34,9 +34,9 @@
 
 ## New Commands
 
-- [ ] `edit` — edit a transaction by ID (with confirmation prompt)
-- [ ] `delete` — remove a transaction by ID (with confirmation prompt)
-- [ ] `import` — bulk import transactions from broker CSV exports
+- [x] `edit` — edit a transaction by ID (with confirmation prompt)
+- [x] `delete` — remove a transaction by ID (with confirmation prompt)
+- [x] `import` — bulk import transactions from broker CSV exports
 
 ## Analysis Features
 
