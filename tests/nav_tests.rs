@@ -198,13 +198,19 @@ async fn test_same_day_multiple_buys() {
 #[tokio::test]
 async fn test_weekend_forward_fill() {
     let db = common::setup_test_db().await;
-    let mock = common::MockPriceFetcher::new();
+    let mut mock = common::MockPriceFetcher::new();
 
     let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
-    // 2025-01-03 is a Friday
+    // 2025-01-03 is a Friday; 2025-01-06 is the next Monday.
+    // API returns Friday + Monday; Sat/Sun get forward-filled between trading days.
+    mock.historical_prices.insert(
+        "XFAKE1".to_string(),
+        vec![
+            ("2025-01-03".to_string(), 50.0),
+            ("2025-01-06".to_string(), 50.0),
+        ],
+    );
     common::insert_transaction(&db, asset_id, "2025-01-03", 10.0, 50.0, 0.0).await;
-    common::insert_daily_price(&db, asset_id, "2025-01-03", 50.0, false).await;
-    // No prices for Sat/Sun -- forward-fill should kick in
 
     let start = NaiveDate::from_ymd_opt(2025, 1, 3).unwrap();
     nav::rebuild_portfolio_history(
@@ -549,6 +555,7 @@ async fn test_process_day_transactions_pure() {
         name: "Test".to_owned(),
         asset_type: AssetType::Stock,
         currency: "EUR".to_owned(),
+        morningstar_code: None,
     };
     let asset_map: HashMap<i32, &Asset> = [(1, &asset)].into_iter().collect();
     let day_rates: HashMap<String, f64> = HashMap::new();
@@ -966,6 +973,7 @@ async fn test_process_day_transactions_sell_pure() {
         name: "Test".to_owned(),
         asset_type: AssetType::Stock,
         currency: "EUR".to_owned(),
+        morningstar_code: None,
     };
     let asset_map: HashMap<i32, &Asset> = [(1, &asset)].into_iter().collect();
     let day_rates: HashMap<String, f64> = HashMap::new();
@@ -1235,6 +1243,7 @@ async fn test_process_day_transactions_split_pure() {
         name: "Test".to_owned(),
         asset_type: AssetType::Stock,
         currency: "EUR".to_owned(),
+        morningstar_code: None,
     };
     let asset_map: HashMap<i32, &Asset> = [(1, &asset)].into_iter().collect();
     let day_rates: HashMap<String, f64> = HashMap::new();

@@ -161,6 +161,7 @@ async fn test_process_day_transactions_dividend_pure() {
         name: "FakeStock".to_owned(),
         asset_type: rstock::models::AssetType::Stock,
         currency: "EUR".to_owned(),
+        morningstar_code: None,
     };
     let asset_map: HashMap<i32, &rstock::models::Asset> = HashMap::from([(1, &asset)]);
     let day_rates: HashMap<String, f64> = HashMap::new();

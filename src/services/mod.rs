@@ -1,3 +1,4 @@
+pub mod analytics;
 pub mod daily_prices;
 pub mod exchange_rates;
 pub mod export;

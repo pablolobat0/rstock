@@ -4,7 +4,7 @@ use common::{
     insert_asset, insert_daily_price, insert_exchange_rate, insert_transaction, setup_test_db,
     MockPriceFetcher,
 };
-use rstock::services::metrics::compute_correlation_matrix;
+use rstock::services::analytics::compute_correlation_data;
 use rstock::services::nav::rebuild_portfolio_history;
 
 /// Two perfectly correlated EUR assets (prices move in lockstep)
@@ -41,7 +41,7 @@ async fn test_perfectly_correlated_assets() {
         .await
         .unwrap();
 
-    let matrix = compute_correlation_matrix(&db, "2025-01-01", "2025-01-25", &fetcher)
+    let matrix = compute_correlation_data(&db, "2025-01-01", "2025-01-25", &fetcher)
         .await
         .unwrap();
 
@@ -93,7 +93,7 @@ async fn test_negatively_correlated_assets() {
         .await
         .unwrap();
 
-    let matrix = compute_correlation_matrix(&db, "2025-01-01", "2025-01-25", &fetcher)
+    let matrix = compute_correlation_data(&db, "2025-01-01", "2025-01-25", &fetcher)
         .await
         .unwrap();
 
@@ -128,7 +128,7 @@ async fn test_diagonal_is_one() {
         .await
         .unwrap();
 
-    let matrix = compute_correlation_matrix(&db, "2025-01-01", "2025-01-25", &fetcher)
+    let matrix = compute_correlation_data(&db, "2025-01-01", "2025-01-25", &fetcher)
         .await
         .unwrap();
 
@@ -166,7 +166,7 @@ async fn test_usd_asset_uses_eur_conversion() {
         .await
         .unwrap();
 
-    let matrix = compute_correlation_matrix(&db, "2025-01-01", "2025-01-25", &fetcher)
+    let matrix = compute_correlation_data(&db, "2025-01-01", "2025-01-25", &fetcher)
         .await
         .unwrap();
 
@@ -202,7 +202,7 @@ async fn test_insufficient_data_produces_warning() {
         .await
         .unwrap();
 
-    let matrix = compute_correlation_matrix(&db, "2025-01-01", "2025-01-05", &fetcher)
+    let matrix = compute_correlation_data(&db, "2025-01-01", "2025-01-05", &fetcher)
         .await
         .unwrap();
 
