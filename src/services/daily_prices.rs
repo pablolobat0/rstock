@@ -1,11 +1,23 @@
+use std::collections::HashMap;
+
 use anyhow::Context;
 use chrono::NaiveDate;
 use sea_orm::DatabaseConnection;
 
-use crate::constants::{format_date, DATE_FORMAT};
+use crate::constants::{format_date, is_benchmark_ticker, DATE_FORMAT};
 use crate::db::repos::daily_price_repo;
-use crate::models::Asset;
+use crate::models::{Asset, AssetType};
 use crate::services::price::PriceFetcher;
+
+/// Returns the identifier to pass to the price fetcher for this asset.
+/// Stocks use their ticker. Funds/ETFs use their Morningstar code, and
+/// return `None` if it hasn't been set yet.
+fn price_lookup_identifier(asset: &Asset) -> Option<&str> {
+    match asset.asset_type {
+        AssetType::Stock => Some(&asset.ticker),
+        AssetType::Fund | AssetType::Etf => asset.morningstar_code.as_deref(),
+    }
+}
 
 pub async fn get_closing_price(
     db: &DatabaseConnection,
@@ -28,10 +40,51 @@ pub async fn fetch_live_price(
     date: &str,
     price_fetcher: &dyn PriceFetcher,
 ) -> anyhow::Result<Option<f64>> {
+    let Some(lookup) = price_lookup_identifier(asset) else {
+        tracing::warn!(
+            ticker = %asset.ticker,
+            "skipping price fetch: fund/ETF has no morningstar_code set"
+        );
+        return Ok(None);
+    };
     let prices = price_fetcher
-        .get_historical_prices(&asset.ticker, date, date, &asset.asset_type)
+        .get_historical_prices(lookup, date, date, &asset.asset_type)
         .await?;
     Ok(prices.last().map(|(_, price)| *price))
+}
+
+/// Fetches live prices for all stock assets (excluding benchmarks) in parallel.
+/// Returns a map of `asset_id` -> price for assets where the fetch succeeded.
+pub async fn fetch_live_prices_batch(
+    assets: &[Asset],
+    today: &str,
+    price_fetcher: &dyn PriceFetcher,
+) -> HashMap<i32, f64> {
+    let stock_assets: Vec<_> = assets
+        .iter()
+        .filter(|a| a.asset_type == AssetType::Stock && !is_benchmark_ticker(&a.ticker))
+        .collect();
+    let futures: Vec<_> = stock_assets
+        .iter()
+        .map(|asset| async {
+            let result = fetch_live_price(asset, today, price_fetcher).await;
+            (asset.id, result)
+        })
+        .collect();
+    futures::future::join_all(futures)
+        .await
+        .into_iter()
+        .filter_map(|(id, r)| r.ok().flatten().map(|p| (id, p)))
+        .collect()
+}
+
+/// Returns the most recent price and its date on or before the given date.
+pub async fn get_price_and_date_at_or_before(
+    db: &DatabaseConnection,
+    asset_id: i32,
+    date: &str,
+) -> anyhow::Result<Option<(f64, String)>> {
+    daily_price_repo::find_price_and_date_at_or_before(db, asset_id, date).await
 }
 
 /// Fetches historical prices from the API and caches them in `daily_asset_prices`.
@@ -44,7 +97,13 @@ pub async fn fill_prices_for_range(
     end_date: &str,
     price_fetcher: &dyn PriceFetcher,
 ) -> anyhow::Result<Option<String>> {
-    let lookup = &asset.ticker;
+    let Some(lookup) = price_lookup_identifier(asset) else {
+        tracing::warn!(
+            ticker = %asset.ticker,
+            "skipping price fill: fund/ETF has no morningstar_code set"
+        );
+        return Ok(None);
+    };
     let prices = price_fetcher
         .get_historical_prices(lookup, start_date, end_date, &asset.asset_type)
         .await;

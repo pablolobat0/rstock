@@ -17,10 +17,9 @@ pub async fn get(
     fetcher: &dyn PriceFetcher,
     period: ChartPeriod,
 ) -> anyhow::Result<()> {
-    let summary = services::portfolio::get_portfolio_summary(db, fetcher).await?;
     let result = services::portfolio::get_portfolio(db, fetcher).await?;
 
-    display::print_portfolio(&result, summary.as_ref());
+    display::print_portfolio(&result);
 
     let today = chrono::Local::now().date_naive();
     let today_str = format_date(today);

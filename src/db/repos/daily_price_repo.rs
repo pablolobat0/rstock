@@ -48,6 +48,19 @@ pub async fn find_price_and_date_at_or_before(
     Ok(result.map(|r| (r.closing_price, r.date)))
 }
 
+pub async fn find_latest_date(
+    db: &DatabaseConnection,
+    asset_id: i32,
+) -> anyhow::Result<Option<String>> {
+    let result = daily_asset_price::Entity::find()
+        .filter(daily_asset_price::Column::AssetId.eq(asset_id))
+        .filter(daily_asset_price::Column::IsApiFailure.eq(false))
+        .order_by_desc(daily_asset_price::Column::Date)
+        .one(db)
+        .await?;
+    Ok(result.map(|r| r.date))
+}
+
 pub async fn find_price_before(
     db: &DatabaseConnection,
     asset_id: i32,

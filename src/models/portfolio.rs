@@ -44,15 +44,6 @@ impl From<portfolio_asset_history::Model> for AssetSnapshot {
     }
 }
 
-pub struct PortfolioResult {
-    pub rows: Vec<AssetPosition>,
-    pub total_invested: f64,
-    pub total_current_value: f64,
-    pub total_dividends: f64,
-    pub total_gain_loss: f64,
-    pub total_gain_loss_pct: f64,
-}
-
 pub struct PeriodMetrics {
     pub volatility: Option<f64>,
     pub max_drawdown: Option<f64>,
@@ -60,10 +51,15 @@ pub struct PeriodMetrics {
     pub sharpe: Option<f64>,
 }
 
-pub struct PortfolioSummary {
-    pub total_value: f64,
-    pub nav: f64,
-    pub snapshot_date: String,
+pub struct PortfolioResult {
+    pub rows: Vec<AssetPosition>,
+    pub total_invested: f64,
+    pub total_current_value: f64,
+    pub total_dividends: f64,
+    pub total_gain_loss: f64,
+    pub total_gain_loss_pct: f64,
+    pub snapshot_date: Option<String>,
+    pub nav: Option<f64>,
     pub daily_change: Option<f64>,
     pub daily_change_pct: Option<f64>,
     pub inception_date: Option<String>,
@@ -92,6 +88,8 @@ pub struct FundHolding {
     pub name: String,
     /// Weight within the fund (0–100 percentage)
     pub weighting: f64,
+    pub ticker: Option<String>,
+    pub sector: Option<String>,
 }
 
 pub struct DirectHolding {

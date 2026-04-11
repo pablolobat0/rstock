@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use sea_orm::DatabaseConnection;
 
+use crate::db::repos::{daily_price_repo, exchange_rate_repo};
 use crate::models::Asset;
 use crate::services::daily_prices;
 use crate::services::exchange_rates;
@@ -36,10 +37,18 @@ pub async fn fill_asset_prices(
                 latest_dates.insert(asset.id, date);
             }
             Ok(None) => {
-                tracing::warn!(ticker = %asset.ticker, "no price data available");
+                tracing::warn!(ticker = %asset.ticker, "no new price data from API, falling back to latest cached date");
+                if let Some(cached) = daily_price_repo::find_latest_date(db, asset.id).await? {
+                    latest_dates.insert(asset.id, cached);
+                } else {
+                    tracing::warn!(ticker = %asset.ticker, "no cached price data available at all");
+                }
             }
             Err(e) => {
-                tracing::warn!(ticker = %asset.ticker, error = %e, "failed to fill prices");
+                tracing::warn!(ticker = %asset.ticker, error = %e, "failed to fill prices, falling back to latest cached date");
+                if let Some(cached) = daily_price_repo::find_latest_date(db, asset.id).await? {
+                    latest_dates.insert(asset.id, cached);
+                }
             }
         }
     }
@@ -76,10 +85,18 @@ pub async fn fill_exchange_rates(
                 latest_dates.insert(pair.clone(), date);
             }
             Ok(None) => {
-                tracing::warn!(%pair, "no exchange rate data available");
+                tracing::warn!(%pair, "no new exchange rate data from API, falling back to latest cached date");
+                if let Some(cached) = exchange_rate_repo::find_latest_date(db, pair).await? {
+                    latest_dates.insert(pair.clone(), cached);
+                } else {
+                    tracing::warn!(%pair, "no cached exchange rate data available at all");
+                }
             }
             Err(e) => {
-                tracing::warn!(%pair, error = %e, "failed to fill exchange rates");
+                tracing::warn!(%pair, error = %e, "failed to fill exchange rates, falling back to latest cached date");
+                if let Some(cached) = exchange_rate_repo::find_latest_date(db, pair).await? {
+                    latest_dates.insert(pair.clone(), cached);
+                }
             }
         }
     }

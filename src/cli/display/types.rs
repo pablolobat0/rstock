@@ -60,8 +60,10 @@ pub struct DirectHoldingRow {
 pub struct FundHoldingRow {
     #[tabled(rename = "Name")]
     pub name: String,
-    #[tabled(rename = "Fund Weight")]
-    pub fund_weight: String,
-    #[tabled(rename = "Portfolio Weight")]
-    pub effective_weight: String,
+    #[tabled(rename = "Weight")]
+    pub weighting: String,
+    #[tabled(rename = "Ticker")]
+    pub ticker: String,
+    #[tabled(rename = "Sector")]
+    pub sector: String,
 }

@@ -2,7 +2,7 @@ use anyhow::Context;
 use sea_orm::DatabaseConnection;
 
 use crate::models::{AssetType, DirectHolding, FundHolding, FundWithHoldings, HoldingsResult};
-use crate::services::portfolio::get_portfolio;
+use crate::services::portfolio::get_asset_positions;
 use crate::services::price::PriceFetcher;
 use crate::utils::resolve_scripts_dir;
 
@@ -10,7 +10,7 @@ pub async fn get_holdings(
     db: &DatabaseConnection,
     price_fetcher: &dyn PriceFetcher,
 ) -> anyhow::Result<HoldingsResult> {
-    let portfolio = get_portfolio(db, price_fetcher).await?;
+    let portfolio = get_asset_positions(db, price_fetcher).await?;
     let total_value = portfolio.total_current_value;
 
     let mut stocks = Vec::new();
@@ -33,10 +33,19 @@ pub async fn get_holdings(
                 });
             }
             AssetType::Fund | AssetType::Etf => {
-                let identifier = &pos.ticker;
-                let (holdings, error) = match fetch_fund_holdings(identifier).await {
-                    Ok(h) => (h, None),
-                    Err(e) => (Vec::new(), Some(format!("{e:#}"))),
+                let (holdings, error) = match pos.morningstar_code.as_deref() {
+                    Some(code) => match fetch_fund_holdings(code).await {
+                        Ok(h) => (h, None),
+                        Err(e) => (Vec::new(), Some(format!("{e:#}"))),
+                    },
+                    None => (
+                        Vec::new(),
+                        Some(
+                            "no morningstar_code set for this fund; \
+                             set it in the assets table to fetch holdings"
+                                .to_owned(),
+                        ),
+                    ),
                 };
                 funds.push(FundWithHoldings {
                     ticker: pos.ticker.clone(),
@@ -83,6 +92,8 @@ async fn fetch_fund_holdings(identifier: &str) -> anyhow::Result<Vec<FundHolding
         .map(|entry| FundHolding {
             name: entry["securityName"].as_str().unwrap_or("").to_owned(),
             weighting: entry["weighting"].as_f64().unwrap_or(0.0),
+            ticker: entry["ticker"].as_str().map(str::to_owned),
+            sector: entry["sector"].as_str().map(str::to_owned),
         })
         .collect();
 

@@ -64,13 +64,6 @@ pub async fn rebuild_portfolio_history(
         .map(|c| exchange_rates::currency_pair(c))
         .collect();
 
-    let mut tx_by_date: HashMap<String, Vec<&Transaction>> = HashMap::new();
-    for tx in &transactions {
-        tx_by_date.entry(tx.date.clone()).or_default().push(tx);
-    }
-
-    let asset_map: HashMap<i32, &Asset> = assets.iter().map(|a| (a.id, a)).collect();
-
     // Fill price caches and exchange rate caches
     let latest_cache_dates =
         price_cache::fill_asset_prices(db, &assets, &start_str, &end_str, price_fetcher).await?;
@@ -108,6 +101,13 @@ pub async fn rebuild_portfolio_history(
         .flatten()
         .min()
         .unwrap_or(end_date);
+
+    let mut tx_by_date: HashMap<String, Vec<&Transaction>> = HashMap::new();
+    for tx in &transactions {
+        tx_by_date.entry(tx.date.clone()).or_default().push(tx);
+    }
+
+    let asset_map: HashMap<i32, &Asset> = assets.iter().map(|a| (a.id, a)).collect();
 
     // Iterate each calendar day
     let mut current = start_date;
@@ -254,34 +254,6 @@ pub fn process_day_transactions(
     (os, current_nav, dividend_income)
 }
 
-async fn store_daily_snapshot(
-    db: &DatabaseConnection,
-    date: &str,
-    asset_value: f64,
-    total_value: f64,
-    outstanding_shares: f64,
-    nav: f64,
-    asset_values: &[AssetSnapshot],
-) -> anyhow::Result<()> {
-    portfolio_history_repo::upsert(
-        db,
-        &PortfolioSnapshot {
-            date: date.to_owned(),
-            asset_value,
-            total_value,
-            outstanding_shares,
-            nav,
-        },
-    )
-    .await?;
-
-    for av in asset_values {
-        portfolio_asset_history_repo::upsert(db, av).await?;
-    }
-
-    Ok(())
-}
-
 async fn compute_day_asset_values(
     db: &DatabaseConnection,
     holdings: &HashMap<i32, f64>,
@@ -345,4 +317,32 @@ async fn compute_day_asset_values(
     }
 
     Ok((total_asset_value, asset_values))
+}
+
+async fn store_daily_snapshot(
+    db: &DatabaseConnection,
+    date: &str,
+    asset_value: f64,
+    total_value: f64,
+    outstanding_shares: f64,
+    nav: f64,
+    asset_values: &[AssetSnapshot],
+) -> anyhow::Result<()> {
+    portfolio_history_repo::upsert(
+        db,
+        &PortfolioSnapshot {
+            date: date.to_owned(),
+            asset_value,
+            total_value,
+            outstanding_shares,
+            nav,
+        },
+    )
+    .await?;
+
+    for av in asset_values {
+        portfolio_asset_history_repo::upsert(db, av).await?;
+    }
+
+    Ok(())
 }

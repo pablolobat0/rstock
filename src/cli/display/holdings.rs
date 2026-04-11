@@ -67,13 +67,11 @@ pub fn print_holdings(result: &HoldingsResult) {
             let rows: Vec<FundHoldingRow> = fund
                 .holdings
                 .iter()
-                .map(|h| {
-                    let effective = fund.portfolio_weight * h.weighting / 100.0;
-                    FundHoldingRow {
-                        name: h.name.clone(),
-                        fund_weight: format_eu(&format!("{:.2}%", h.weighting)),
-                        effective_weight: format_eu(&format!("{effective:.2}%")),
-                    }
+                .map(|h| FundHoldingRow {
+                    name: h.name.clone(),
+                    weighting: format_eu(&format!("{:.2}%", h.weighting)),
+                    ticker: h.ticker.clone().unwrap_or_default(),
+                    sector: h.sector.clone().unwrap_or_default(),
                 })
                 .collect();
 
@@ -85,9 +83,8 @@ pub fn print_holdings(result: &HoldingsResult) {
                     .remove_horizontal()
                     .remove_vertical(),
             );
-            // Right-align Fund Weight(1) and Portfolio Weight(2)
+            // Right-align Weight(1)
             table.modify(Columns::single(1), Alignment::right());
-            table.modify(Columns::single(2), Alignment::right());
             println!("{table}");
         }
         println!();

@@ -47,6 +47,18 @@ pub async fn find_rates_between(
     Ok(results.into_iter().map(|r| (r.date, r.rate)).collect())
 }
 
+pub async fn find_latest_date(
+    db: &DatabaseConnection,
+    pair: &str,
+) -> anyhow::Result<Option<String>> {
+    let result = daily_exchange_rate::Entity::find()
+        .filter(daily_exchange_rate::Column::Pair.eq(pair))
+        .order_by_desc(daily_exchange_rate::Column::Date)
+        .one(db)
+        .await?;
+    Ok(result.map(|r| r.date))
+}
+
 pub async fn find_rate_before(
     db: &DatabaseConnection,
     pair: &str,

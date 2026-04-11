@@ -7,7 +7,7 @@ use tabled::settings::{Alignment, Color, Style};
 use tabled::Table;
 
 use crate::constants::display_date;
-use crate::models::{AssetType, PeriodMetrics, PortfolioResult, PortfolioSummary};
+use crate::models::{AssetType, PeriodMetrics, PortfolioResult};
 
 use super::types::PortfolioRow;
 
@@ -97,7 +97,7 @@ fn print_metrics_table(periods: &[(&str, Option<f64>, &Option<PeriodMetrics>)]) 
 }
 
 #[allow(clippy::too_many_lines)]
-pub fn print_portfolio(result: &PortfolioResult, summary: Option<&PortfolioSummary>) {
+pub fn print_portfolio(result: &PortfolioResult) {
     if result.rows.is_empty() {
         println!("No positions found.");
     } else {
@@ -227,19 +227,18 @@ pub fn print_portfolio(result: &PortfolioResult, summary: Option<&PortfolioSumma
         println!("{totals}");
     }
 
-    if let Some(summary) = summary {
+    if let Some(ref snapshot_date) = result.snapshot_date {
         println!();
-        println!("As of:          {}", display_date(&summary.snapshot_date));
+        println!("As of:          {}", display_date(snapshot_date));
         println!(
             "Portfolio Value: {}",
-            format_eu(&format!("{:.2}", summary.total_value))
+            format_eu(&format!("{:.2}", result.total_current_value))
         );
-        println!(
-            "NAV:            {}",
-            format_eu(&format!("{:.2}", summary.nav))
-        );
+        if let Some(nav) = result.nav {
+            println!("NAV:            {}", format_eu(&format!("{nav:.2}")));
+        }
 
-        if let (Some(change), Some(change_pct)) = (summary.daily_change, summary.daily_change_pct) {
+        if let (Some(change), Some(change_pct)) = (result.daily_change, result.daily_change_pct) {
             let sign = if change >= 0.0 { "+" } else { "" };
             let text = format!(
                 "{} ({})",
@@ -249,22 +248,22 @@ pub fn print_portfolio(result: &PortfolioResult, summary: Option<&PortfolioSumma
             println!("Daily:          {}", color_value(change, &text));
         }
 
-        if let Some(ref inception) = summary.inception_date {
+        if let Some(ref inception) = result.inception_date {
             println!("Inception:      {}", display_date(inception));
         }
 
         let periods = [
-            ("YTD", summary.ytd_return, &summary.ytd_metrics),
-            ("1Y", summary.one_year_return, &summary.one_year_metrics),
+            ("YTD", result.ytd_return, &result.ytd_metrics),
+            ("1Y", result.one_year_return, &result.one_year_metrics),
             (
                 "3Y(CAGR)",
-                summary.three_year_return,
-                &summary.three_year_metrics,
+                result.three_year_return,
+                &result.three_year_metrics,
             ),
             (
                 "5Y(CAGR)",
-                summary.five_year_return,
-                &summary.five_year_metrics,
+                result.five_year_return,
+                &result.five_year_metrics,
             ),
         ];
 

@@ -39,7 +39,7 @@ pub async fn run(
             let start_str = format_date(start_date);
             services::portfolio::trigger_rebuild_if_needed(db, fetcher).await?;
             let matrix =
-                services::metrics::compute_correlation_matrix(db, &start_str, &today_str, fetcher)
+                services::analytics::compute_correlation_data(db, &start_str, &today_str, fetcher)
                     .await?;
 
             display::print_correlation_matrix(&matrix, period_label);

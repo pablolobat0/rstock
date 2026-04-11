@@ -1,9 +1,12 @@
+use std::collections::HashMap;
+
 use anyhow::Context;
 use chrono::NaiveDate;
 use sea_orm::DatabaseConnection;
 
-use crate::constants::{format_date, BASE_CURRENCY, DATE_FORMAT};
+use crate::constants::{format_date, is_benchmark_ticker, BASE_CURRENCY, DATE_FORMAT};
 use crate::db::repos::exchange_rate_repo;
+use crate::models::Asset;
 use crate::services::price::PriceFetcher;
 
 pub fn currency_pair(from: &str) -> String {
@@ -31,6 +34,34 @@ pub async fn fetch_live_rate(
         .get_historical_exchange_rates(pair, date, date)
         .await?;
     Ok(rates.last().map(|(_, rate)| *rate))
+}
+
+/// Fetches live exchange rates for all non-EUR currencies (excluding benchmark assets)
+/// in parallel. Returns a map of currency pair -> rate for pairs where the fetch succeeded.
+pub async fn fetch_live_rates_batch(
+    assets: &[Asset],
+    today: &str,
+    price_fetcher: &dyn PriceFetcher,
+) -> HashMap<String, f64> {
+    let fx_pairs: Vec<String> = assets
+        .iter()
+        .filter(|a| a.currency != BASE_CURRENCY && !is_benchmark_ticker(&a.ticker))
+        .map(|a| currency_pair(&a.currency))
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    let futures: Vec<_> = fx_pairs
+        .iter()
+        .map(|pair| async {
+            let result = fetch_live_rate(pair, today, price_fetcher).await;
+            (pair.clone(), result)
+        })
+        .collect();
+    futures::future::join_all(futures)
+        .await
+        .into_iter()
+        .filter_map(|(pair, r)| r.ok().flatten().map(|rate| (pair, rate)))
+        .collect()
 }
 
 pub async fn fill_rates_for_range(
