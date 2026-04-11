@@ -17,8 +17,8 @@
 - [ ] Review and improve code quality and comments
 - [x] Review CLAUDE.md — reduce token usage while keeping essential info
 - [ ] Improve and extend analysis feature
-- [ ] Improve and change CLI structure
-- [ ] Review metrics calculus, adapt method to not use models of the code, just enter numbers. Move database access out of metrics service. Chech that trading days are the same as returns
+- [x] Improve and change CLI structure
+- [x] Review metrics calculus, adapt method to not use models of the code, just enter numbers. Move database access out of metrics service. Chech that trading days are the same as returns
 
 
 ## Display

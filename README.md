@@ -68,23 +68,25 @@ All `buy` flags:
 | `--fees`     | No       | `0`     | Commission/fees                      |
 | `--currency` | No       | `EUR`   | Currency                             |
 
+`buy` is also available as `rstock transaction buy ...`. The root form is a shortcut.
+
 ### Record a sell transaction
 
 ```bash
-rstock sell --ticker MSFT --date 2026-03-01 --quantity 0.5 --price 400
+rstock transaction sell --ticker MSFT --date 2026-03-01 --quantity 0.5 --price 400
 ```
 
 ### Record a dividend
 
 ```bash
-rstock dividend --ticker MSFT --date 2026-03-15 --amount 25.50 --fees 3.80
+rstock transaction dividend --ticker MSFT --date 2026-03-15 --amount 25.50 --fees 3.80
 ```
 
 ### Record a stock split
 
 ```bash
-rstock split --ticker MSFT --date 2026-03-20 --ratio 2    # 2:1 split
-rstock split --ticker MSFT --date 2026-03-20 --ratio 0.25  # 1:4 reverse split
+rstock transaction split --ticker MSFT --date 2026-03-20 --ratio 2    # 2:1 split
+rstock transaction split --ticker MSFT --date 2026-03-20 --ratio 0.25  # 1:4 reverse split
 ```
 
 ### View portfolio
@@ -95,19 +97,20 @@ rstock get --period ytd   # YTD chart
 rstock get --period 5y    # 5-year chart
 ```
 
-Chart periods: `1m`, `3m`, `6m`, `ytd`, `1y` (default), `3y`, `5y`, `all`.
+`get` is also available as `rstock portfolio get ...`. Chart periods: `1m`, `3m`, `6m`, `ytd`, `1y` (default), `3y`, `5y`, `all`.
 
-### List assets and export
+### List assets and CSV import/export
 
 ```bash
-rstock list                          # Show all portfolio assets
-rstock export --output txns.csv      # Export transactions to CSV
+rstock portfolio list                # Show all portfolio assets
+rstock data export --output txns.csv # Export transactions to CSV
+rstock data import --input txns.csv  # Import transactions from CSV
 ```
 
 ### Holdings look-through
 
 ```bash
-rstock holdings    # Stocks directly, funds/ETFs with underlying positions
+rstock portfolio holdings    # Stocks directly, funds/ETFs with underlying positions
 ```
 
 ### Analyze correlations
@@ -133,7 +136,7 @@ rstock monitor remove --ticker AAPL
 
 ```
 src/
-├── cli.rs              # Clap CLI definition (get, buy, sell, dividend, split, list, export, holdings, analyze, monitor)
+├── cli/                # Clap CLI: root commands (get, buy shortcuts) + groups (portfolio, transaction, data, analyze, monitor)
 ├── main.rs             # Entry point, command dispatch
 ├── constants.rs        # Centralized constants (dates, currency, metrics, thresholds)
 ├── display.rs          # Terminal output: tables, charts, reports

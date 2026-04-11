@@ -102,14 +102,14 @@ impl ChartPeriod {
 
 #[derive(Debug, Subcommand)]
 pub enum Commands {
-    /// Show portfolio overview with NAV chart and key metrics
+    /// Show portfolio overview with NAV chart and key metrics (shortcut for `portfolio get`)
     Get {
         /// Time period for the NAV chart
         #[arg(short, long, value_enum, default_value = "1y")]
         period: ChartPeriod,
     },
 
-    /// Record a buy transaction, creates asset if it doesn't exist
+    /// Record a buy transaction, creates asset if it doesn't exist (shortcut for `transaction buy`)
     Buy {
         /// Ticker symbol (stocks) or ISIN (funds/ETFs)
         #[arg(short, long)]
@@ -144,59 +144,14 @@ pub enum Commands {
         currency: String,
     },
 
-    /// Record a dividend payment for an existing asset
-    Dividend {
-        /// Ticker symbol (asset must already exist)
-        #[arg(short, long)]
-        ticker: String,
+    /// Portfolio views: overview, asset list, holdings breakdown
+    Portfolio(PortfolioArgs),
 
-        /// Ex-dividend date (DD-MM-YYYY)
-        #[arg(short, long, value_parser = parse_date)]
-        date: NaiveDate,
+    /// Record, edit, or delete transactions (buy, sell, dividend, split, edit, delete)
+    Transaction(TransactionArgs),
 
-        /// Total dividend amount received
-        #[arg(short, long)]
-        amount: f64,
-
-        /// Withholding tax or fees
-        #[arg(short, long, default_value = "0")]
-        fees: f64,
-    },
-
-    /// List all assets in the portfolio
-    List {},
-
-    /// Export all transactions to a CSV file
-    Export {
-        /// Output file path (e.g. transactions.csv)
-        #[arg(long, short)]
-        output: String,
-    },
-
-    /// Import transactions from a CSV file
-    Import {
-        /// Input CSV file path (e.g. transactions.csv)
-        #[arg(long, short)]
-        input: String,
-    },
-
-    /// Show portfolio holdings breakdown (stocks directly, funds/ETFs with underlying positions)
-    Holdings {},
-
-    /// Record a stock split or reverse split for an existing asset
-    Split {
-        /// Ticker symbol (asset must already exist)
-        #[arg(short, long)]
-        ticker: String,
-
-        /// Split date (DD-MM-YYYY)
-        #[arg(short, long, value_parser = parse_date)]
-        date: NaiveDate,
-
-        /// Split ratio: new shares per old share (e.g. 2 for 2:1 split, 0.25 for 1:4 reverse split)
-        #[arg(short, long)]
-        ratio: f64,
-    },
+    /// Import or export transactions as CSV
+    Data(DataArgs),
 
     /// Analyze portfolio correlations across holdings
     Analyze {
@@ -211,31 +166,50 @@ pub enum Commands {
 
     /// Monitor a stock: fundamentals, momentum, and sector comparison
     Monitor(MonitorArgs),
+}
 
-    /// Edit or delete existing transactions
-    Transaction(TransactionArgs),
+#[derive(Debug, Args)]
+pub struct PortfolioArgs {
+    #[command(subcommand)]
+    pub command: PortfolioCommands,
+}
 
-    /// Record a sell transaction for an existing asset
-    Sell {
-        /// Ticker symbol (asset must already exist)
-        #[arg(short, long)]
-        ticker: String,
+#[derive(Debug, Subcommand)]
+pub enum PortfolioCommands {
+    /// Show portfolio overview with NAV chart and key metrics
+    Get {
+        /// Time period for the NAV chart
+        #[arg(short, long, value_enum, default_value = "1y")]
+        period: ChartPeriod,
+    },
 
-        /// Sale date (DD-MM-YYYY)
-        #[arg(short, long, value_parser = parse_date)]
-        date: NaiveDate,
+    /// List all assets in the portfolio
+    List {},
 
-        /// Number of shares/units to sell
-        #[arg(short, long, value_parser = parse_positive_f64)]
-        quantity: f64,
+    /// Show portfolio holdings breakdown (stocks directly, funds/ETFs with underlying positions)
+    Holdings {},
+}
 
-        /// Sale price per unit (e.g. 150.25)
-        #[arg(short, long, value_parser = parse_positive_f64)]
-        price: f64,
+#[derive(Debug, Args)]
+pub struct DataArgs {
+    #[command(subcommand)]
+    pub command: DataCommands,
+}
 
-        /// Broker commission and fees
-        #[arg(short, long, default_value = "0")]
-        fees: f64,
+#[derive(Debug, Subcommand)]
+pub enum DataCommands {
+    /// Export all transactions to a CSV file
+    Export {
+        /// Output file path (e.g. transactions.csv)
+        #[arg(long, short)]
+        output: String,
+    },
+
+    /// Import transactions from a CSV file
+    Import {
+        /// Input CSV file path (e.g. transactions.csv)
+        #[arg(long, short)]
+        input: String,
     },
 }
 
@@ -287,6 +261,98 @@ pub struct TransactionArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum TransactionCommands {
+    /// Record a buy transaction, creates asset if it doesn't exist
+    Buy {
+        /// Ticker symbol (stocks) or ISIN (funds/ETFs)
+        #[arg(short, long)]
+        ticker: String,
+
+        /// Full name of the asset
+        #[arg(short, long)]
+        name: String,
+
+        /// Asset type
+        #[arg(short = 'T', long = "type", value_enum)]
+        asset_type: AssetType,
+
+        /// Purchase date (DD-MM-YYYY)
+        #[arg(short, long, value_parser = parse_date)]
+        date: NaiveDate,
+
+        /// Number of shares/units
+        #[arg(short, long, value_parser = parse_positive_f64)]
+        quantity: f64,
+
+        /// Price per unit (e.g. 150.25)
+        #[arg(short, long, value_parser = parse_positive_f64)]
+        price: f64,
+
+        /// Broker commission and fees
+        #[arg(short, long, default_value = "0")]
+        fees: f64,
+
+        /// Transaction currency code
+        #[arg(short, long, default_value = "EUR")]
+        currency: String,
+    },
+
+    /// Record a sell transaction for an existing asset
+    Sell {
+        /// Ticker symbol (asset must already exist)
+        #[arg(short, long)]
+        ticker: String,
+
+        /// Sale date (DD-MM-YYYY)
+        #[arg(short, long, value_parser = parse_date)]
+        date: NaiveDate,
+
+        /// Number of shares/units to sell
+        #[arg(short, long, value_parser = parse_positive_f64)]
+        quantity: f64,
+
+        /// Sale price per unit (e.g. 150.25)
+        #[arg(short, long, value_parser = parse_positive_f64)]
+        price: f64,
+
+        /// Broker commission and fees
+        #[arg(short, long, default_value = "0")]
+        fees: f64,
+    },
+
+    /// Record a dividend payment for an existing asset
+    Dividend {
+        /// Ticker symbol (asset must already exist)
+        #[arg(short, long)]
+        ticker: String,
+
+        /// Ex-dividend date (DD-MM-YYYY)
+        #[arg(short, long, value_parser = parse_date)]
+        date: NaiveDate,
+
+        /// Total dividend amount received
+        #[arg(short, long)]
+        amount: f64,
+
+        /// Withholding tax or fees
+        #[arg(short, long, default_value = "0")]
+        fees: f64,
+    },
+
+    /// Record a stock split or reverse split for an existing asset
+    Split {
+        /// Ticker symbol (asset must already exist)
+        #[arg(short, long)]
+        ticker: String,
+
+        /// Split date (DD-MM-YYYY)
+        #[arg(short, long, value_parser = parse_date)]
+        date: NaiveDate,
+
+        /// Split ratio: new shares per old share (e.g. 2 for 2:1 split, 0.25 for 1:4 reverse split)
+        #[arg(short, long)]
+        ratio: f64,
+    },
+
     /// Edit an existing transaction (date, quantity, price, fees)
     Edit {
         /// Transaction ID
