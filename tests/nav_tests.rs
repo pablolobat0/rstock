@@ -684,7 +684,7 @@ async fn test_single_usd_asset_nav() {
 async fn test_mixed_currency_portfolio() {
     let db = common::setup_test_db().await;
 
-    let eur_id = common::insert_asset(&db, "XFAKEEUR", "EUR Fund", "fund", "EUR").await;
+    let eur_id = common::insert_fund_asset(&db, "XFAKEEUR", "EUR Fund", "EUR", "XFAKEEUR").await;
     let usd_id = common::insert_asset(&db, "XFAKEUSD", "USD Stock", "stock", "USD").await;
 
     // Buy EUR fund: 10 shares @ 50 EUR

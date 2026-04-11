@@ -45,6 +45,29 @@ pub async fn insert_asset(
     result.last_insert_id
 }
 
+pub async fn insert_fund_asset(
+    db: &DatabaseConnection,
+    ticker: &str,
+    name: &str,
+    currency: &str,
+    morningstar_code: &str,
+) -> i32 {
+    let record = asset::ActiveModel {
+        ticker: Set(ticker.to_owned()),
+        name: Set(name.to_owned()),
+        asset_type: Set("fund".to_owned()),
+        currency: Set(currency.to_owned()),
+        morningstar_code: Set(Some(morningstar_code.to_owned())),
+        created_at: Set("2025-01-01T00:00:00".to_owned()),
+        ..Default::default()
+    };
+    let result = asset::Entity::insert(record)
+        .exec(db)
+        .await
+        .expect("failed to insert fund asset");
+    result.last_insert_id
+}
+
 pub async fn insert_transaction(
     db: &DatabaseConnection,
     asset_id: i32,
