@@ -1,10 +1,14 @@
 mod asset;
+mod classification;
 pub mod monitor;
 mod portfolio;
 mod transaction;
 mod watchlist;
 
 pub use asset::{Asset, AssetInfo, AssetPosition, AssetType};
+pub use classification::{
+    enum_to_db, AssetClass, AssetClassification, BondCredit, BondDuration, EquityStyle, Management,
+};
 pub use portfolio::{
     AssetSnapshot, CorrelationMatrix, DirectHolding, FundHolding, FundWithHoldings, HoldingsResult,
     PeriodMetrics, PortfolioResult, PortfolioSnapshot,

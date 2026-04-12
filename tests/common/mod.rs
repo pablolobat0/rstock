@@ -84,7 +84,7 @@ pub async fn insert_transaction(
         price_cents: Set(f64_to_cents(price)),
         fees_cents: Set(f64_to_cents(fees)),
 
-        created_at: Set(format!("{}T00:00:00", date)),
+        created_at: Set(format!("{date}T00:00:00")),
         ..Default::default()
     };
     transaction::Entity::insert(record)
@@ -109,7 +109,7 @@ pub async fn insert_sell_transaction(
         price_cents: Set(f64_to_cents(price)),
         fees_cents: Set(f64_to_cents(fees)),
 
-        created_at: Set(format!("{}T00:00:00", date)),
+        created_at: Set(format!("{date}T00:00:00")),
         ..Default::default()
     };
     transaction::Entity::insert(record)

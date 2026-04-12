@@ -3,8 +3,10 @@ use chrono::NaiveDate;
 use sea_orm::DatabaseConnection;
 
 use crate::constants::{format_date, DISPLAY_DATE_FORMAT};
+use crate::db::repos::asset_repo;
 use crate::models::{
-    AssetInfo, AssetType, BuyOrder, CsvRow, DividendOrder, SellOrder, SplitOrder, TxType,
+    AssetClassification, AssetInfo, AssetType, BuyOrder, CsvRow, DividendOrder, SellOrder,
+    SplitOrder, TxType,
 };
 use crate::services::transactions;
 
@@ -48,19 +50,25 @@ pub async fn import_transactions_csv(db: &DatabaseConnection, path: &str) -> any
                         )
                     })?;
 
-                let asset_info = AssetInfo {
-                    ticker: row.ticker.clone(),
-                    name: name.to_string(),
-                    asset_type,
-                    currency: currency.to_string(),
-                };
+                if asset_repo::find_by_ticker(db, &row.ticker).await?.is_none() {
+                    let asset_info = AssetInfo {
+                        ticker: row.ticker.clone(),
+                        name: name.to_string(),
+                        asset_type,
+                        currency: currency.to_string(),
+                    };
+                    asset_repo::create(db, &asset_info, &AssetClassification::default(), None)
+                        .await
+                        .with_context(|| format!("row {row_num}"))?;
+                }
+
                 let order = BuyOrder {
                     date: date_str,
                     quantity: row.quantity,
                     price: row.price,
                     fees: row.fees,
                 };
-                transactions::buy(db, asset_info, order)
+                transactions::buy(db, row.ticker.clone(), order)
                     .await
                     .with_context(|| format!("row {row_num}"))?;
             }

@@ -224,7 +224,19 @@ async fn ensure_benchmark_prices(
     end_date: &str,
     price_fetcher: &dyn PriceFetcher,
 ) -> anyhow::Result<i32> {
-    let asset_id = asset_repo::get_or_create(db, &metrics::benchmark_asset_info()).await?;
+    let info = metrics::benchmark_asset_info();
+    let asset_id = match asset_repo::find_by_ticker(db, &info.ticker).await? {
+        Some(a) => a.id,
+        None => {
+            asset_repo::create(
+                db,
+                &info,
+                &crate::models::AssetClassification::default(),
+                None,
+            )
+            .await?
+        }
+    };
     let asset = metrics::benchmark_asset(asset_id);
 
     daily_prices::fill_prices_for_range(db, &asset, start_date, end_date, price_fetcher).await?;

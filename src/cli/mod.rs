@@ -5,7 +5,7 @@ use chrono::NaiveDate;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::constants::DISPLAY_DATE_FORMAT;
-use crate::models::AssetType;
+use crate::models::{AssetClass, AssetType, BondCredit, BondDuration, EquityStyle, Management};
 
 fn parse_date(s: &str) -> Result<NaiveDate, String> {
     let date = NaiveDate::parse_from_str(s, DISPLAY_DATE_FORMAT)
@@ -109,19 +109,11 @@ pub enum Commands {
         period: ChartPeriod,
     },
 
-    /// Record a buy transaction, creates asset if it doesn't exist (shortcut for `transaction buy`)
+    /// Record a buy transaction for an existing asset (shortcut for `transaction buy`)
     Buy {
-        /// Ticker symbol (stocks) or ISIN (funds/ETFs)
+        /// Ticker symbol (asset must already exist; create with `portfolio asset add`)
         #[arg(short, long)]
         ticker: String,
-
-        /// Full name of the asset
-        #[arg(short, long)]
-        name: String,
-
-        /// Asset type
-        #[arg(short = 'T', long = "type", value_enum)]
-        asset_type: AssetType,
 
         /// Purchase date (DD-MM-YYYY)
         #[arg(short, long, value_parser = parse_date)]
@@ -138,10 +130,6 @@ pub enum Commands {
         /// Broker commission and fees
         #[arg(short, long, default_value = "0")]
         fees: f64,
-
-        /// Transaction currency code
-        #[arg(short, long, default_value = "EUR")]
-        currency: String,
     },
 
     /// Portfolio views: overview, asset list, holdings breakdown
@@ -188,6 +176,96 @@ pub enum PortfolioCommands {
 
     /// Show portfolio holdings breakdown (stocks directly, funds/ETFs with underlying positions)
     Holdings {},
+
+    /// Manage assets: add or edit asset metadata and classification
+    Asset(AssetArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct AssetArgs {
+    #[command(subcommand)]
+    pub command: AssetCommands,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum AssetCommands {
+    /// Create an asset with its classification
+    Add {
+        /// Ticker symbol (stocks) or ISIN (funds/ETFs)
+        #[arg(short, long)]
+        ticker: String,
+
+        /// Full name of the asset
+        #[arg(short, long)]
+        name: String,
+
+        /// Vehicle type
+        #[arg(short = 'T', long = "type", value_enum)]
+        asset_type: AssetType,
+
+        /// Trading currency code
+        #[arg(short, long, default_value = "EUR")]
+        currency: String,
+
+        /// Asset class (top-level classification)
+        #[arg(long = "asset-class", value_enum)]
+        asset_class: AssetClass,
+
+        /// Equity style (for equity assets)
+        #[arg(long = "equity-style", value_enum)]
+        equity_style: Option<EquityStyle>,
+
+        /// Bond credit quality (for fixed-income assets)
+        #[arg(long = "bond-credit", value_enum)]
+        bond_credit: Option<BondCredit>,
+
+        /// Bond duration bucket (for fixed-income assets)
+        #[arg(long = "bond-duration", value_enum)]
+        bond_duration: Option<BondDuration>,
+
+        /// Management style (active vs passive)
+        #[arg(long, value_enum)]
+        management: Option<Management>,
+
+        /// Morningstar code (for funds/ETFs needing the price scraper)
+        #[arg(long = "morningstar-code")]
+        morningstar_code: Option<String>,
+    },
+
+    /// Update an existing asset's metadata or classification
+    Edit {
+        /// Ticker symbol (asset must already exist)
+        #[arg(short, long)]
+        ticker: String,
+
+        /// New name
+        #[arg(short, long)]
+        name: Option<String>,
+
+        /// Asset class
+        #[arg(long = "asset-class", value_enum)]
+        asset_class: Option<AssetClass>,
+
+        /// Equity style
+        #[arg(long = "equity-style", value_enum)]
+        equity_style: Option<EquityStyle>,
+
+        /// Bond credit quality
+        #[arg(long = "bond-credit", value_enum)]
+        bond_credit: Option<BondCredit>,
+
+        /// Bond duration bucket
+        #[arg(long = "bond-duration", value_enum)]
+        bond_duration: Option<BondDuration>,
+
+        /// Management style
+        #[arg(long, value_enum)]
+        management: Option<Management>,
+
+        /// Morningstar code
+        #[arg(long = "morningstar-code")]
+        morningstar_code: Option<String>,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -261,19 +339,11 @@ pub struct TransactionArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum TransactionCommands {
-    /// Record a buy transaction, creates asset if it doesn't exist
+    /// Record a buy transaction for an existing asset
     Buy {
-        /// Ticker symbol (stocks) or ISIN (funds/ETFs)
+        /// Ticker symbol (asset must already exist; create with `portfolio asset add`)
         #[arg(short, long)]
         ticker: String,
-
-        /// Full name of the asset
-        #[arg(short, long)]
-        name: String,
-
-        /// Asset type
-        #[arg(short = 'T', long = "type", value_enum)]
-        asset_type: AssetType,
 
         /// Purchase date (DD-MM-YYYY)
         #[arg(short, long, value_parser = parse_date)]
@@ -290,10 +360,6 @@ pub enum TransactionCommands {
         /// Broker commission and fees
         #[arg(short, long, default_value = "0")]
         fees: f64,
-
-        /// Transaction currency code
-        #[arg(short, long, default_value = "EUR")]
-        currency: String,
     },
 
     /// Record a sell transaction for an existing asset

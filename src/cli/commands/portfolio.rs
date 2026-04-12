@@ -6,6 +6,11 @@ use crate::constants::{
     format_date, DATE_FORMAT, FIVE_YEAR_DAYS, ONE_MONTH_DAYS, ONE_YEAR_DAYS, SIX_MONTH_DAYS,
     THREE_MONTH_DAYS, THREE_YEAR_DAYS,
 };
+use crate::db::repos::asset_repo;
+use crate::models::{
+    AssetClass, AssetClassification, AssetInfo, AssetType, BondCredit, BondDuration, EquityStyle,
+    Management,
+};
 use crate::services;
 use crate::services::price::PriceFetcher;
 
@@ -64,5 +69,71 @@ pub async fn list(db: &DatabaseConnection) -> anyhow::Result<()> {
 pub async fn holdings(db: &DatabaseConnection, fetcher: &dyn PriceFetcher) -> anyhow::Result<()> {
     let result = services::holdings::get_holdings(db, fetcher).await?;
     display::print_holdings(&result);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn asset_add(
+    db: &DatabaseConnection,
+    ticker: String,
+    name: String,
+    asset_type: AssetType,
+    currency: String,
+    asset_class: AssetClass,
+    equity_style: Option<EquityStyle>,
+    bond_credit: Option<BondCredit>,
+    bond_duration: Option<BondDuration>,
+    management: Option<Management>,
+    morningstar_code: Option<String>,
+) -> anyhow::Result<()> {
+    let info = AssetInfo {
+        ticker: ticker.clone(),
+        name,
+        asset_type,
+        currency,
+    };
+    let classification = AssetClassification {
+        asset_class: Some(asset_class),
+        equity_style,
+        bond_credit,
+        bond_duration,
+        management,
+    };
+    asset_repo::create(db, &info, &classification, morningstar_code.as_deref()).await?;
+    println!("Added asset {ticker}");
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn asset_edit(
+    db: &DatabaseConnection,
+    ticker: String,
+    name: Option<String>,
+    asset_class: Option<AssetClass>,
+    equity_style: Option<EquityStyle>,
+    bond_credit: Option<BondCredit>,
+    bond_duration: Option<BondDuration>,
+    management: Option<Management>,
+    morningstar_code: Option<String>,
+) -> anyhow::Result<()> {
+    let classification = AssetClassification {
+        asset_class,
+        equity_style,
+        bond_credit,
+        bond_duration,
+        management,
+    };
+    if name.is_none() && morningstar_code.is_none() && classification.is_empty() {
+        anyhow::bail!("at least one field must be provided");
+    }
+    asset_repo::update(
+        db,
+        &ticker,
+        &classification,
+        name.as_deref(),
+        morningstar_code.as_deref(),
+    )
+    .await?;
+    println!("Updated asset {ticker}");
     Ok(())
 }

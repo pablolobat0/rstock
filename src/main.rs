@@ -8,7 +8,8 @@ mod utils;
 
 use clap::Parser;
 
-use cli::{Cli, Commands, DataCommands, PortfolioCommands, TransactionCommands};
+use cli::{AssetCommands, Cli, Commands, DataCommands, PortfolioCommands, TransactionCommands};
+use sea_orm::DatabaseConnection;
 use services::price::RealPriceFetcher;
 
 #[tokio::main]
@@ -25,19 +26,11 @@ async fn main() -> anyhow::Result<()> {
         Commands::Get { period } => cli::commands::portfolio::get(&db, &fetcher, period).await,
         Commands::Buy {
             ticker,
-            name,
-            asset_type,
             date,
             quantity,
             price,
             fees,
-            currency,
-        } => {
-            cli::commands::transactions::buy(
-                &db, ticker, name, asset_type, date, quantity, price, fees, currency,
-            )
-            .await
-        }
+        } => cli::commands::transactions::buy(&db, ticker, date, quantity, price, fees).await,
         Commands::Portfolio(args) => match args.command {
             PortfolioCommands::Get { period } => {
                 cli::commands::portfolio::get(&db, &fetcher, period).await
@@ -46,23 +39,18 @@ async fn main() -> anyhow::Result<()> {
             PortfolioCommands::Holdings {} => {
                 cli::commands::portfolio::holdings(&db, &fetcher).await
             }
+            PortfolioCommands::Asset(asset_args) => {
+                run_asset_command(&db, asset_args.command).await
+            }
         },
         Commands::Transaction(args) => match args.command {
             TransactionCommands::Buy {
                 ticker,
-                name,
-                asset_type,
                 date,
                 quantity,
                 price,
                 fees,
-                currency,
-            } => {
-                cli::commands::transactions::buy(
-                    &db, ticker, name, asset_type, date, quantity, price, fees, currency,
-                )
-                .await
-            }
+            } => cli::commands::transactions::buy(&db, ticker, date, quantity, price, fees).await,
             TransactionCommands::Sell {
                 ticker,
                 date,
@@ -101,5 +89,60 @@ async fn main() -> anyhow::Result<()> {
             cli::commands::analyze::run(&db, &fetcher, target, period).await
         }
         Commands::Monitor(args) => cli::commands::monitor::run(&db, &fetcher, args).await,
+    }
+}
+
+async fn run_asset_command(db: &DatabaseConnection, cmd: AssetCommands) -> anyhow::Result<()> {
+    match cmd {
+        AssetCommands::Add {
+            ticker,
+            name,
+            asset_type,
+            currency,
+            asset_class,
+            equity_style,
+            bond_credit,
+            bond_duration,
+            management,
+            morningstar_code,
+        } => {
+            cli::commands::portfolio::asset_add(
+                db,
+                ticker,
+                name,
+                asset_type,
+                currency,
+                asset_class,
+                equity_style,
+                bond_credit,
+                bond_duration,
+                management,
+                morningstar_code,
+            )
+            .await
+        }
+        AssetCommands::Edit {
+            ticker,
+            name,
+            asset_class,
+            equity_style,
+            bond_credit,
+            bond_duration,
+            management,
+            morningstar_code,
+        } => {
+            cli::commands::portfolio::asset_edit(
+                db,
+                ticker,
+                name,
+                asset_class,
+                equity_style,
+                bond_credit,
+                bond_duration,
+                management,
+                morningstar_code,
+            )
+            .await
+        }
     }
 }

@@ -4,35 +4,25 @@ use sea_orm::DatabaseConnection;
 use crate::cli::display::format_transaction_detail;
 use crate::constants::format_date;
 use crate::db::repos::{asset_repo, transaction_repo};
-use crate::models::{AssetInfo, AssetType, BuyOrder, DividendOrder, SellOrder, SplitOrder};
+use crate::models::{BuyOrder, DividendOrder, SellOrder, SplitOrder};
 use crate::services;
 use crate::utils::confirm_action;
 
-#[allow(clippy::too_many_arguments)]
 pub async fn buy(
     db: &DatabaseConnection,
     ticker: String,
-    name: String,
-    asset_type: AssetType,
     date: NaiveDate,
     quantity: f64,
     price: f64,
     fees: f64,
-    currency: String,
 ) -> anyhow::Result<()> {
-    let asset = AssetInfo {
-        ticker,
-        name,
-        asset_type,
-        currency,
-    };
     let order = BuyOrder {
         date: format_date(date),
         quantity,
         price,
         fees,
     };
-    services::transactions::buy(db, asset, order).await
+    services::transactions::buy(db, ticker, order).await
 }
 
 pub async fn sell(

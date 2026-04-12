@@ -12,11 +12,11 @@
 
 ## Code Review
 
-- [ ] Review and improve project structure
+- [x] Review and improve project structure
 - [ ] Review and improve tests — coverage, quality, correctness
 - [ ] Review and improve code quality and comments
 - [x] Review CLAUDE.md — reduce token usage while keeping essential info
-- [ ] Improve and extend analysis feature
+- [ ] Improve and extend analysis feature, study the portfolio with type of assets and passive vs active, type of fixe income. Get region, market cap, sector and other metrics/labels of stocks and fund's stocks and calculate mean/median and stadistics of the portfolio, also other analysis metrics. 
 - [x] Improve and change CLI structure
 - [x] Review metrics calculus, adapt method to not use models of the code, just enter numbers. Move database access out of metrics service. Chech that trading days are the same as returns
 

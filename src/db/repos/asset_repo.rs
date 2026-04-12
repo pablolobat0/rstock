@@ -3,7 +3,7 @@ use sea_orm::{
 };
 
 use crate::db::entities::asset;
-use crate::models::{Asset, AssetInfo};
+use crate::models::{enum_to_db, Asset, AssetClassification, AssetInfo};
 
 pub async fn find_by_ticker(
     db: &DatabaseConnection,
@@ -36,7 +36,19 @@ pub async fn find_all(db: &DatabaseConnection) -> anyhow::Result<Vec<Asset>> {
     Ok(results.into_iter().map(Asset::from).collect())
 }
 
-pub async fn create(db: &DatabaseConnection, info: &AssetInfo) -> anyhow::Result<i32> {
+pub async fn create(
+    db: &DatabaseConnection,
+    info: &AssetInfo,
+    classification: &AssetClassification,
+    morningstar_code: Option<&str>,
+) -> anyhow::Result<i32> {
+    if find_by_ticker(db, &info.ticker).await?.is_some() {
+        anyhow::bail!(
+            "asset with ticker '{}' already exists; use `portfolio asset edit` to update it",
+            info.ticker
+        );
+    }
+
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let new_asset = asset::ActiveModel {
         ticker: Set(info.ticker.clone()),
@@ -44,15 +56,53 @@ pub async fn create(db: &DatabaseConnection, info: &AssetInfo) -> anyhow::Result
         asset_type: Set(info.asset_type.to_string()),
         currency: Set(info.currency.clone()),
         created_at: Set(now),
+        morningstar_code: Set(morningstar_code.map(str::to_owned)),
+        asset_class: Set(classification.asset_class.as_ref().map(enum_to_db)),
+        equity_style: Set(classification.equity_style.as_ref().map(enum_to_db)),
+        bond_credit: Set(classification.bond_credit.as_ref().map(enum_to_db)),
+        bond_duration: Set(classification.bond_duration.as_ref().map(enum_to_db)),
+        management: Set(classification.management.as_ref().map(enum_to_db)),
         ..Default::default()
     };
     let result = new_asset.insert(db).await?;
     Ok(result.id)
 }
 
-pub async fn get_or_create(db: &DatabaseConnection, info: &AssetInfo) -> anyhow::Result<i32> {
-    if let Some(existing) = find_by_ticker(db, &info.ticker).await? {
-        return Ok(existing.id);
+pub async fn update(
+    db: &DatabaseConnection,
+    ticker: &str,
+    classification: &AssetClassification,
+    name: Option<&str>,
+    morningstar_code: Option<&str>,
+) -> anyhow::Result<()> {
+    let existing = asset::Entity::find()
+        .filter(asset::Column::Ticker.eq(ticker))
+        .one(db)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("asset with ticker '{ticker}' not found"))?;
+
+    let mut active: asset::ActiveModel = existing.into();
+    if let Some(n) = name {
+        active.name = Set(n.to_owned());
     }
-    create(db, info).await
+    if let Some(code) = morningstar_code {
+        active.morningstar_code = Set(Some(code.to_owned()));
+    }
+    if let Some(v) = classification.asset_class.as_ref() {
+        active.asset_class = Set(Some(enum_to_db(v)));
+    }
+    if let Some(v) = classification.equity_style.as_ref() {
+        active.equity_style = Set(Some(enum_to_db(v)));
+    }
+    if let Some(v) = classification.bond_credit.as_ref() {
+        active.bond_credit = Set(Some(enum_to_db(v)));
+    }
+    if let Some(v) = classification.bond_duration.as_ref() {
+        active.bond_duration = Set(Some(enum_to_db(v)));
+    }
+    if let Some(v) = classification.management.as_ref() {
+        active.management = Set(Some(enum_to_db(v)));
+    }
+    active.update(db).await?;
+    Ok(())
 }
