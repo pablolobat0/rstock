@@ -34,7 +34,7 @@ pub async fn get_holdings(
             }
             AssetType::Fund | AssetType::Etf => {
                 let (holdings, error) = match pos.morningstar_code.as_deref() {
-                    Some(code) => match fetch_fund_holdings(code).await {
+                    Some(code) => match fetch_fund_holdings(code, 30).await {
                         Ok(h) => (h, None),
                         Err(e) => (Vec::new(), Some(format!("{e:#}"))),
                     },
@@ -66,7 +66,7 @@ pub async fn get_holdings(
     })
 }
 
-async fn fetch_fund_holdings(identifier: &str) -> anyhow::Result<Vec<FundHolding>> {
+pub async fn fetch_fund_holdings(identifier: &str, limit: u32) -> anyhow::Result<Vec<FundHolding>> {
     let scripts_dir = resolve_scripts_dir()?;
     let script = scripts_dir.join("get_fund_holdings.py");
 
@@ -74,6 +74,7 @@ async fn fetch_fund_holdings(identifier: &str) -> anyhow::Result<Vec<FundHolding
         .arg("run")
         .arg(&script)
         .arg(identifier)
+        .arg(limit.to_string())
         .output()
         .await
         .context("failed to run get_fund_holdings.py via uv")?;
@@ -94,6 +95,7 @@ async fn fetch_fund_holdings(identifier: &str) -> anyhow::Result<Vec<FundHolding
             weighting: entry["weighting"].as_f64().unwrap_or(0.0),
             ticker: entry["ticker"].as_str().map(str::to_owned),
             sector: entry["sector"].as_str().map(str::to_owned),
+            country: entry["country"].as_str().map(str::to_owned),
         })
         .collect();
 

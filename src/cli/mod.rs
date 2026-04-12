@@ -63,11 +63,6 @@ pub enum CorrelationPeriod {
 }
 
 #[derive(ValueEnum, Clone, Debug)]
-pub enum AnalysisTarget {
-    Portfolio,
-}
-
-#[derive(ValueEnum, Clone, Debug)]
 pub enum ChartPeriod {
     #[value(name = "1m")]
     OneMonth,
@@ -141,19 +136,30 @@ pub enum Commands {
     /// Import or export transactions as CSV
     Data(DataArgs),
 
-    /// Analyze portfolio correlations across holdings
-    Analyze {
-        /// What to analyze
-        #[arg(value_enum)]
-        target: AnalysisTarget,
+    /// Analyze portfolio: composition breakdown, correlations
+    Analyze(AnalyzeArgs),
 
+    /// Monitor a stock: fundamentals, momentum, and sector comparison
+    Monitor(MonitorArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct AnalyzeArgs {
+    #[command(subcommand)]
+    pub command: AnalyzeCommands,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum AnalyzeCommands {
+    /// Portfolio composition: fund type, sector, country, and market cap breakdown
+    Composition {},
+
+    /// Correlation matrix between portfolio assets
+    Correlation {
         /// Time period for correlation calculation
         #[arg(short, long, value_enum, default_value = "1y")]
         period: CorrelationPeriod,
     },
-
-    /// Monitor a stock: fundamentals, momentum, and sector comparison
-    Monitor(MonitorArgs),
 }
 
 #[derive(Debug, Args)]

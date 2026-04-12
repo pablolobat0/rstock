@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 
 use crate::constants::{
-    ANNUAL_RISK_FREE_RATE, MIN_DATA_POINTS, TRADING_DAYS_PER_YEAR, ZERO_RETURN_THRESHOLD,
+    ANNUAL_RISK_FREE_RATE, BENCHMARK_CURRENCY, BENCHMARK_NAME, BENCHMARK_TICKER, MIN_DATA_POINTS,
+    TRADING_DAYS_PER_YEAR, ZERO_RETURN_THRESHOLD,
 };
-use crate::models::{AssetInfo, AssetType};
+use crate::models::{Asset, AssetInfo, AssetType};
 
 /// Computes annualized volatility from pre-filtered daily log returns (trading days only).
 /// Returns `None` if fewer than 2 returns.
@@ -164,7 +165,6 @@ pub fn align_return_series(
 }
 
 pub fn benchmark_asset_info() -> AssetInfo {
-    use crate::constants::{BENCHMARK_CURRENCY, BENCHMARK_NAME, BENCHMARK_TICKER};
     AssetInfo {
         ticker: BENCHMARK_TICKER.to_owned(),
         name: BENCHMARK_NAME.to_owned(),
@@ -173,14 +173,16 @@ pub fn benchmark_asset_info() -> AssetInfo {
     }
 }
 
-pub fn benchmark_asset(id: i32) -> crate::models::Asset {
-    use crate::constants::{BENCHMARK_CURRENCY, BENCHMARK_NAME, BENCHMARK_TICKER};
-    crate::models::Asset {
+pub fn benchmark_asset(id: i32) -> Asset {
+    Asset {
         id,
         ticker: BENCHMARK_TICKER.to_owned(),
         name: BENCHMARK_NAME.to_owned(),
         asset_type: AssetType::Stock,
         currency: BENCHMARK_CURRENCY.to_owned(),
         morningstar_code: None,
+        asset_class: None,
+        equity_style: None,
+        management: None,
     }
 }

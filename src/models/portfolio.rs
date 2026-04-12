@@ -90,6 +90,7 @@ pub struct FundHolding {
     pub weighting: f64,
     pub ticker: Option<String>,
     pub sector: Option<String>,
+    pub country: Option<String>,
 }
 
 pub struct DirectHolding {
@@ -114,4 +115,49 @@ pub struct HoldingsResult {
     pub stocks: Vec<DirectHolding>,
     pub funds: Vec<FundWithHoldings>,
     pub total_portfolio_value: f64,
+}
+
+// --- Composition analysis models ---
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum MarketCapCategory {
+    Large,
+    Mid,
+    Small,
+}
+
+impl std::fmt::Display for MarketCapCategory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MarketCapCategory::Large => write!(f, "Large Cap"),
+            MarketCapCategory::Mid => write!(f, "Mid Cap"),
+            MarketCapCategory::Small => write!(f, "Small Cap"),
+        }
+    }
+}
+
+pub struct AllocationEntry {
+    pub label: String,
+    /// Weight as a percentage (0–100)
+    pub weight: f64,
+}
+
+pub struct TopHolding {
+    pub name: String,
+    pub ticker: Option<String>,
+    /// Weight as a percentage (0–100) of the equity portfolio
+    pub weight: f64,
+    pub country: Option<String>,
+    pub sector: Option<String>,
+}
+
+pub struct CompositionResult {
+    pub asset_class_breakdown: Vec<AllocationEntry>,
+    pub equity_style_breakdown: Vec<AllocationEntry>,
+    pub management_breakdown: Vec<AllocationEntry>,
+    pub sector_breakdown: Vec<AllocationEntry>,
+    pub country_breakdown: Vec<AllocationEntry>,
+    pub market_cap_breakdown: Vec<AllocationEntry>,
+    pub top_holdings: Vec<TopHolding>,
+    pub warnings: Vec<String>,
 }

@@ -177,10 +177,15 @@ async fn fetch_stock_info(ticker: &str) -> anyhow::Result<StockInfo> {
     let eps_ttm = info.eps_ttm.as_ref().map(money_to_f64);
 
     let profile_result = profile::load_profile(&client, ticker).await.ok();
-    let (sector, industry, name_from_profile) = match &profile_result {
-        Some(Profile::Company(c)) => (c.sector.clone(), c.industry.clone(), Some(c.name.clone())),
-        Some(Profile::Fund(f)) => (None, None, Some(f.name.clone())),
-        None => (None, None, None),
+    let (sector, industry, country, name_from_profile) = match &profile_result {
+        Some(Profile::Company(c)) => (
+            c.sector.clone(),
+            c.industry.clone(),
+            c.address.as_ref().and_then(|a| a.country.clone()),
+            Some(c.name.clone()),
+        ),
+        Some(Profile::Fund(f)) => (None, None, None, Some(f.name.clone())),
+        None => (None, None, None, None),
     };
 
     let name = info.name.clone().or(name_from_profile);
@@ -202,5 +207,6 @@ async fn fetch_stock_info(ticker: &str) -> anyhow::Result<StockInfo> {
         dividend_yield: info.dividend_yield,
         sector,
         industry,
+        country,
     })
 }

@@ -8,7 +8,10 @@ mod utils;
 
 use clap::Parser;
 
-use cli::{AssetCommands, Cli, Commands, DataCommands, PortfolioCommands, TransactionCommands};
+use cli::{
+    AnalyzeCommands, AssetCommands, Cli, Commands, DataCommands, PortfolioCommands,
+    TransactionCommands,
+};
 use sea_orm::DatabaseConnection;
 use services::price::RealPriceFetcher;
 
@@ -85,9 +88,14 @@ async fn main() -> anyhow::Result<()> {
             DataCommands::Export { output } => cli::commands::export::run(&db, output).await,
             DataCommands::Import { input } => cli::commands::import::run(&db, input).await,
         },
-        Commands::Analyze { target, period } => {
-            cli::commands::analyze::run(&db, &fetcher, target, period).await
-        }
+        Commands::Analyze(args) => match args.command {
+            AnalyzeCommands::Composition {} => {
+                cli::commands::analyze::composition(&db, &fetcher).await
+            }
+            AnalyzeCommands::Correlation { period } => {
+                cli::commands::analyze::correlation(&db, &fetcher, period).await
+            }
+        },
         Commands::Monitor(args) => cli::commands::monitor::run(&db, &fetcher, args).await,
     }
 }

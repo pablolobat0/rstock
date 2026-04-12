@@ -15,6 +15,7 @@ pub struct StockInfo {
     pub dividend_yield: Option<f64>,
     pub sector: Option<String>,
     pub industry: Option<String>,
+    pub country: Option<String>,
 }
 
 pub struct MomentumIndicators {

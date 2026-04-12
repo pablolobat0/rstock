@@ -57,6 +57,20 @@ pub struct DirectHoldingRow {
 }
 
 #[derive(Tabled)]
+pub struct TopHoldingRow {
+    #[tabled(rename = "Company")]
+    pub name: String,
+    #[tabled(rename = "Ticker")]
+    pub ticker: String,
+    #[tabled(rename = "Weight")]
+    pub weight: String,
+    #[tabled(rename = "Country")]
+    pub country: String,
+    #[tabled(rename = "Sector")]
+    pub sector: String,
+}
+
+#[derive(Tabled)]
 pub struct FundHoldingRow {
     #[tabled(rename = "Name")]
     pub name: String,
@@ -64,6 +78,8 @@ pub struct FundHoldingRow {
     pub weighting: String,
     #[tabled(rename = "Ticker")]
     pub ticker: String,
+    #[tabled(rename = "Country")]
+    pub country: String,
     #[tabled(rename = "Sector")]
     pub sector: String,
 }

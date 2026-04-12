@@ -162,6 +162,9 @@ async fn test_process_day_transactions_dividend_pure() {
         asset_type: rstock::models::AssetType::Stock,
         currency: "EUR".to_owned(),
         morningstar_code: None,
+        asset_class: None,
+        equity_style: None,
+        management: None,
     };
     let asset_map: HashMap<i32, &rstock::models::Asset> = HashMap::from([(1, &asset)]);
     let day_rates: HashMap<String, f64> = HashMap::new();

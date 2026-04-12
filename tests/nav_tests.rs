@@ -556,6 +556,9 @@ async fn test_process_day_transactions_pure() {
         asset_type: AssetType::Stock,
         currency: "EUR".to_owned(),
         morningstar_code: None,
+        asset_class: None,
+        equity_style: None,
+        management: None,
     };
     let asset_map: HashMap<i32, &Asset> = [(1, &asset)].into_iter().collect();
     let day_rates: HashMap<String, f64> = HashMap::new();
@@ -974,6 +977,9 @@ async fn test_process_day_transactions_sell_pure() {
         asset_type: AssetType::Stock,
         currency: "EUR".to_owned(),
         morningstar_code: None,
+        asset_class: None,
+        equity_style: None,
+        management: None,
     };
     let asset_map: HashMap<i32, &Asset> = [(1, &asset)].into_iter().collect();
     let day_rates: HashMap<String, f64> = HashMap::new();
@@ -1244,6 +1250,9 @@ async fn test_process_day_transactions_split_pure() {
         asset_type: AssetType::Stock,
         currency: "EUR".to_owned(),
         morningstar_code: None,
+        asset_class: None,
+        equity_style: None,
+        management: None,
     };
     let asset_map: HashMap<i32, &Asset> = [(1, &asset)].into_iter().collect();
     let day_rates: HashMap<String, f64> = HashMap::new();

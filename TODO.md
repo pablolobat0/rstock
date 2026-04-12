@@ -49,3 +49,7 @@
 - [ ] Benchmark comparison chart — overlay portfolio NAV against benchmark (ACWI) on same chart
 - [ ] Sector/country/asset type allocation breakdown
 - [ ] Rebalancing alerts — target allocation vs. current weights
+
+
+- Analyze mutual funds, number of holdings, sectors, all positions, percentages, store history if it changed
+- Evaluate how to have portfolio analysis, holdings analysis and fund analysis.

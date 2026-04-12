@@ -10,8 +10,9 @@ pub use classification::{
     enum_to_db, AssetClass, AssetClassification, BondCredit, BondDuration, EquityStyle, Management,
 };
 pub use portfolio::{
-    AssetSnapshot, CorrelationMatrix, DirectHolding, FundHolding, FundWithHoldings, HoldingsResult,
-    PeriodMetrics, PortfolioResult, PortfolioSnapshot,
+    AllocationEntry, AssetSnapshot, CompositionResult, CorrelationMatrix, DirectHolding,
+    FundHolding, FundWithHoldings, HoldingsResult, MarketCapCategory, PeriodMetrics,
+    PortfolioResult, PortfolioSnapshot, TopHolding,
 };
 pub use transaction::{
     cents_to_f64, f64_to_cents, BuyOrder, CsvRow, DividendOrder, SellOrder, SplitOrder,

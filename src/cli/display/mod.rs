@@ -1,3 +1,4 @@
+mod composition;
 mod correlation;
 mod helpers;
 mod holdings;
@@ -7,6 +8,7 @@ mod simple;
 mod transaction;
 mod types;
 
+pub use composition::print_composition;
 pub use correlation::print_correlation_matrix;
 pub use holdings::print_holdings;
 pub use monitor::print_monitor_report;

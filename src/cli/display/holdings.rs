@@ -71,6 +71,7 @@ pub fn print_holdings(result: &HoldingsResult) {
                     name: h.name.clone(),
                     weighting: format_eu(&format!("{:.2}%", h.weighting)),
                     ticker: h.ticker.clone().unwrap_or_default(),
+                    country: h.country.clone().unwrap_or_default(),
                     sector: h.sector.clone().unwrap_or_default(),
                 })
                 .collect();
