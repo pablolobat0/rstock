@@ -16,7 +16,7 @@ use crate::models::{
 };
 use crate::services::nav;
 use crate::services::price::PriceFetcher;
-use crate::services::{analytics, daily_prices, exchange_rates};
+use crate::services::{analytics, daily_prices, exchange_rates, metrics};
 
 pub async fn get_portfolio(
     db: &DatabaseConnection,
@@ -45,11 +45,34 @@ pub async fn get_portfolio(
     let (ytd_date, one_year_date, three_year_date, five_year_date) =
         compute_period_returns_dates(today);
 
-    let ytd_return = calc_return(db, current_nav, &ytd_date, true, None).await?;
-    let one_year_return = calc_return(db, current_nav, &one_year_date, false, None).await?;
-    let three_year_return =
-        calc_return(db, current_nav, &three_year_date, false, Some(3.0)).await?;
-    let five_year_return = calc_return(db, current_nav, &five_year_date, false, Some(5.0)).await?;
+    let ytd_return = calc_return(db, &snapshot_date, current_nav, &ytd_date, true, false).await?;
+    let one_year_return = calc_return(
+        db,
+        &snapshot_date,
+        current_nav,
+        &one_year_date,
+        false,
+        false,
+    )
+    .await?;
+    let three_year_return = calc_return(
+        db,
+        &snapshot_date,
+        current_nav,
+        &three_year_date,
+        false,
+        true,
+    )
+    .await?;
+    let five_year_return = calc_return(
+        db,
+        &snapshot_date,
+        current_nav,
+        &five_year_date,
+        false,
+        true,
+    )
+    .await?;
 
     let (ytd_metrics, one_year_metrics, three_year_metrics, five_year_metrics) =
         analytics::compute_all_period_metrics(
@@ -243,10 +266,11 @@ fn compute_period_returns_dates(today: NaiveDate) -> (String, String, String, St
 
 async fn calc_return(
     db: &DatabaseConnection,
+    current_date: &str,
     current_nav: f64,
     target_date: &str,
     fallback_to_inception: bool,
-    annualize_years: Option<f64>,
+    annualize: bool,
 ) -> anyhow::Result<Option<f64>> {
     let snapshot = match portfolio_history_repo::find_at_or_before(db, target_date).await? {
         Some(s) => s,
@@ -257,14 +281,12 @@ async fn calc_return(
         None => return Ok(None),
     };
     if snapshot.nav > 0.0 {
-        let ret = match annualize_years {
-            Some(years) if years > 0.0 => {
-                let ratio = current_nav / snapshot.nav;
-                (ratio.powf(1.0 / years) - 1.0) * 100.0
-            }
-            _ => ((current_nav - snapshot.nav) / snapshot.nav) * 100.0,
+        let ret = if annualize {
+            metrics::compute_cagr(&snapshot.date, current_date, snapshot.nav, current_nav)
+        } else {
+            Some(((current_nav - snapshot.nav) / snapshot.nav) * 100.0)
         };
-        Ok(Some(ret))
+        Ok(ret)
     } else {
         Ok(None)
     }

@@ -9,6 +9,16 @@ use crate::services::price::PriceFetcher;
 use super::super::display;
 use super::super::CorrelationPeriod;
 
+pub async fn fund(
+    db: &DatabaseConnection,
+    fetcher: &dyn PriceFetcher,
+    code: String,
+) -> anyhow::Result<()> {
+    let result = services::fund_analysis::compute_fund_analysis(db, fetcher, &code).await?;
+    display::print_fund_analysis(&result);
+    Ok(())
+}
+
 pub async fn composition(
     db: &DatabaseConnection,
     fetcher: &dyn PriceFetcher,

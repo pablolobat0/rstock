@@ -1,70 +1,7 @@
 use anyhow::Context;
-use sea_orm::DatabaseConnection;
 
-use crate::models::{AssetType, DirectHolding, FundHolding, FundWithHoldings, HoldingsResult};
-use crate::services::portfolio::get_asset_positions;
-use crate::services::price::PriceFetcher;
+use crate::models::FundHolding;
 use crate::utils::resolve_scripts_dir;
-
-pub async fn get_holdings(
-    db: &DatabaseConnection,
-    price_fetcher: &dyn PriceFetcher,
-) -> anyhow::Result<HoldingsResult> {
-    let portfolio = get_asset_positions(db, price_fetcher).await?;
-    let total_value = portfolio.total_current_value;
-
-    let mut stocks = Vec::new();
-    let mut funds = Vec::new();
-
-    for pos in &portfolio.rows {
-        let weight = if total_value > 0.0 {
-            (pos.current_value / total_value) * 100.0
-        } else {
-            0.0
-        };
-
-        match pos.asset_type {
-            AssetType::Stock => {
-                stocks.push(DirectHolding {
-                    ticker: pos.ticker.clone(),
-                    name: pos.name.clone(),
-                    portfolio_weight: weight,
-                    current_value: pos.current_value,
-                });
-            }
-            AssetType::Fund | AssetType::Etf => {
-                let (holdings, error) = match pos.morningstar_code.as_deref() {
-                    Some(code) => match fetch_fund_holdings(code, 30).await {
-                        Ok(h) => (h, None),
-                        Err(e) => (Vec::new(), Some(format!("{e:#}"))),
-                    },
-                    None => (
-                        Vec::new(),
-                        Some(
-                            "no morningstar_code set for this fund; \
-                             set it in the assets table to fetch holdings"
-                                .to_owned(),
-                        ),
-                    ),
-                };
-                funds.push(FundWithHoldings {
-                    ticker: pos.ticker.clone(),
-                    name: pos.name.clone(),
-                    portfolio_weight: weight,
-                    current_value: pos.current_value,
-                    holdings,
-                    error,
-                });
-            }
-        }
-    }
-
-    Ok(HoldingsResult {
-        stocks,
-        funds,
-        total_portfolio_value: total_value,
-    })
-}
 
 pub async fn fetch_fund_holdings(identifier: &str, limit: u32) -> anyhow::Result<Vec<FundHolding>> {
     let scripts_dir = resolve_scripts_dir()?;
@@ -96,6 +33,7 @@ pub async fn fetch_fund_holdings(identifier: &str, limit: u32) -> anyhow::Result
             ticker: entry["ticker"].as_str().map(str::to_owned),
             sector: entry["sector"].as_str().map(str::to_owned),
             country: entry["country"].as_str().map(str::to_owned),
+            currency: entry["currency"].as_str().map(str::to_owned),
         })
         .collect();
 

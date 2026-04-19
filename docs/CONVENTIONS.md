@@ -34,12 +34,11 @@ Within each file, order functions top-to-bottom like a book: if function A calls
 - `exists()` — Check existence
 
 **Service functions** use verb-first naming:
-- `get_portfolio()`, `get_portfolio_summary()`
+- `get_portfolio()`, `compute_fund_analysis()`
 - `buy()`, `sell()`, `dividend()`, `split()`
 - `rebuild_portfolio_history()`
 - `fill_prices_for_range()`, `get_closing_price()`
-- `compute_risk_metrics()`, `compute_correlation_matrix()`
-- `get_holdings()`
+- `compute_breakdown()`, `compute_correlation_data()`
 - `generate_monitor_report()`
 - `export_transactions_csv()`
 
@@ -51,7 +50,7 @@ Three categories of model structs:
 |----------|----------|---------|
 | Input structs | `AssetInfo`, `BuyOrder`, `SellOrder`, `DividendOrder`, `SplitOrder` | Data from CLI/caller, pre-persistence |
 | DB-backed structs | `Asset`, `Transaction` | Domain objects with id, converted from entity::Model |
-| Display structs | `AssetPosition`, `PortfolioRow`, `PortfolioResult`, `CorrelationMatrix`, `HoldingsResult`, `MonitorReport` | Computed values ready for rendering |
+| Display structs | `AssetPosition`, `PortfolioResult`, `CorrelationMatrix`, `CompositionResult`, `FundAnalysisResult`, `MonitorReport` | Computed values ready for rendering |
 
 ### General
 
@@ -103,11 +102,11 @@ All test utilities are in `tests/common/mod.rs`:
 
 ## How To: Add a New CLI Command
 
-1. **Define the command** — Add a new variant to the `Commands` enum in `src/cli.rs` with clap attributes for all flags
+1. **Define the command** — Add a new variant to the appropriate clap enum in `src/cli/mod.rs` with attributes for all flags
 2. **Add dispatch** — Add a match arm in `src/main.rs` that calls the appropriate service function
 3. **Implement service logic** — Create or update a function in `src/services/`. Follow the verb-first naming pattern
 4. **Add repo functions** — If new database operations are needed, add them to the relevant repo in `src/db/repos/`
-5. **Add display output** — If the command produces terminal output, add a function in `src/display.rs`
+5. **Add display output** — If the command produces terminal output, add a function under `src/cli/display/`
 6. **Write tests** — Add integration tests in `tests/` using the common test utilities
 
 ## How To: Add a New Database Table

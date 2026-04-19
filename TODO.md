@@ -1,42 +1,15 @@
 # rstock — TODO
 
-## Bugs / Code Quality
+## Code Quality
 
-- [x] Reject buy/sell with quantity <= 0 — currently accepts zero-quantity transactions
-- [x] Inspect why stock prices are not in real time
-
-
-## Structural Improvements
-
-- [x] Add structured logging — replace `eprintln!()` warnings
-
-## Code Review
-
-- [x] Review and improve project structure
 - [ ] Review and improve tests — coverage, quality, correctness
 - [ ] Review and improve code quality and comments
-- [x] Review CLAUDE.md — reduce token usage while keeping essential info
-- [ ] Improve and extend analysis feature, study the portfolio with type of assets and passive vs active, type of fixe income. Get region, market cap, sector and other metrics/labels of stocks and fund's stocks and calculate mean/median and stadistics of the portfolio, also other analysis metrics. 
-- [x] Improve and change CLI structure
-- [x] Review metrics calculus, adapt method to not use models of the code, just enter numbers. Move database access out of metrics service. Chech that trading days are the same as returns
-
 
 ## Display
-- [x] Use , for decimals separator and . for the others
-- [ ] Improve graphs
-- [x] Review green and red color in tables
 
-## Monitor Improvements
-
-- [ ] Add color to monitor performance graph — distinguish stock vs sector ETF lines with color
+- [ ] Improve graphs — NAV chart and other visualizations
+- [ ] Add color to monitor performance graph — distinguish stock vs sector ETF lines
 - [ ] Redesign monitor display layout — improve readability and visual presentation
-
-
-## New Commands
-
-- [x] `edit` — edit a transaction by ID (with confirmation prompt)
-- [x] `delete` — remove a transaction by ID (with confirmation prompt)
-- [x] `import` — bulk import transactions from broker CSV exports
 
 ## Analysis Features
 
@@ -46,10 +19,8 @@
 
 ## Portfolio Features
 
-- [ ] Benchmark comparison chart — overlay portfolio NAV against benchmark (ACWI) on same chart
-- [ ] Sector/country/asset type allocation breakdown
-- [ ] Rebalancing alerts — target allocation vs. current weights
-
-
-- Analyze mutual funds, number of holdings, sectors, all positions, percentages, store history if it changed
-- Evaluate how to have portfolio analysis, holdings analysis and fund analysis.
+- [ ] Benchmark comparison chart — overlay portfolio NAV against benchmark (e.g. ACWI) on same chart
+- [ ] Rebalancing alerts — target allocation vs. current weights with drift thresholds
+- [ ] Replace `holdings` command with a full fund analysis: number of holdings, all positions with sectors and percentages, store snapshots and detect changes over time
+- [ ] Combine the last todo with remove monitor command and combine with analyze in the case of stocks
+- [ ] Think what to do with all the holdings of a fund, like call yahoo finance, analyze correlations, momentum, other metrics useful

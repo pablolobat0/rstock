@@ -154,6 +154,13 @@ pub enum AnalyzeCommands {
     /// Portfolio composition: fund type, sector, country, and market cap breakdown
     Composition {},
 
+    /// Deep-dive analysis of a fund: performance, holdings, sector/country/currency breakdowns
+    Fund {
+        /// Morningstar security code (e.g. F00000YN5R)
+        #[arg(short, long)]
+        code: String,
+    },
+
     /// Correlation matrix between portfolio assets
     Correlation {
         /// Time period for correlation calculation
@@ -179,9 +186,6 @@ pub enum PortfolioCommands {
 
     /// List all assets in the portfolio
     List {},
-
-    /// Show portfolio holdings breakdown (stocks directly, funds/ETFs with underlying positions)
-    Holdings {},
 
     /// Manage assets: add or edit asset metadata and classification
     Asset(AssetArgs),

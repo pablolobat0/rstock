@@ -84,6 +84,7 @@ pub struct CorrelationMatrix {
 
 // --- Holdings report models ---
 
+#[derive(Clone)]
 pub struct FundHolding {
     pub name: String,
     /// Weight within the fund (0–100 percentage)
@@ -91,30 +92,7 @@ pub struct FundHolding {
     pub ticker: Option<String>,
     pub sector: Option<String>,
     pub country: Option<String>,
-}
-
-pub struct DirectHolding {
-    pub ticker: String,
-    pub name: String,
-    /// Weight in the total portfolio (0–100 percentage)
-    pub portfolio_weight: f64,
-    pub current_value: f64,
-}
-
-pub struct FundWithHoldings {
-    pub ticker: String,
-    pub name: String,
-    /// Weight of this fund in the total portfolio (0–100 percentage)
-    pub portfolio_weight: f64,
-    pub current_value: f64,
-    pub holdings: Vec<FundHolding>,
-    pub error: Option<String>,
-}
-
-pub struct HoldingsResult {
-    pub stocks: Vec<DirectHolding>,
-    pub funds: Vec<FundWithHoldings>,
-    pub total_portfolio_value: f64,
+    pub currency: Option<String>,
 }
 
 // --- Composition analysis models ---

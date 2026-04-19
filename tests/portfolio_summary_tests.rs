@@ -2,6 +2,7 @@ mod common;
 
 use rstock::db::entities::portfolio_history;
 use rstock::db::repos::portfolio_history_repo;
+use rstock::services::metrics::compute_cagr;
 use sea_orm::{EntityTrait, Set};
 
 async fn insert_snapshot(
@@ -115,9 +116,7 @@ async fn test_snapshot_at_or_before_finds_closest() {
 async fn test_cagr_formula() {
     let start_nav = 100.0_f64;
     let end_nav = 200.0_f64;
-    let years = 3.0_f64;
-
-    let cagr = ((end_nav / start_nav).powf(1.0 / years) - 1.0) * 100.0;
+    let cagr = compute_cagr("2023-01-01", "2026-01-01", start_nav, end_nav).unwrap();
     // 2^(1/3) - 1 ~ 0.2599 -> 25.99%
     assert!((cagr - 25.99).abs() < 0.1);
 
@@ -132,9 +131,7 @@ async fn test_cagr_formula() {
 async fn test_cagr_no_growth() {
     let start_nav = 100.0_f64;
     let end_nav = 100.0_f64;
-    let years = 5.0_f64;
-
-    let cagr = ((end_nav / start_nav).powf(1.0 / years) - 1.0) * 100.0;
+    let cagr = compute_cagr("2021-01-01", "2026-01-01", start_nav, end_nav).unwrap();
     assert!(cagr.abs() < 0.01);
 }
 
@@ -143,9 +140,7 @@ async fn test_cagr_no_growth() {
 async fn test_cagr_with_loss() {
     let start_nav = 100.0_f64;
     let end_nav = 50.0_f64;
-    let years = 5.0_f64;
-
-    let cagr = ((end_nav / start_nav).powf(1.0 / years) - 1.0) * 100.0;
+    let cagr = compute_cagr("2021-01-01", "2026-01-01", start_nav, end_nav).unwrap();
     // 0.5^(1/5) - 1 ~ -0.1294 -> -12.94%
     assert!((cagr - (-12.94)).abs() < 0.1);
 }

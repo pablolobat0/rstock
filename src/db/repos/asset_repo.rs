@@ -16,6 +16,17 @@ pub async fn find_by_ticker(
     Ok(result.map(Asset::from))
 }
 
+pub async fn find_by_morningstar_code(
+    db: &DatabaseConnection,
+    code: &str,
+) -> anyhow::Result<Option<Asset>> {
+    let result = asset::Entity::find()
+        .filter(asset::Column::MorningstarCode.eq(code))
+        .one(db)
+        .await?;
+    Ok(result.map(Asset::from))
+}
+
 pub async fn find_by_ids(
     db: &DatabaseConnection,
     ids: impl IntoIterator<Item = i32>,

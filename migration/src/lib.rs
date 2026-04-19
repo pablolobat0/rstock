@@ -8,6 +8,7 @@ mod m20260330_000001_create_watchlist;
 mod m20260401_000001_drop_isin;
 mod m20260411_000001_add_morningstar_code;
 mod m20260412_000001_add_asset_classification;
+mod m20260413_000001_create_fund_holdings_snapshots;
 
 pub struct Migrator;
 
@@ -23,6 +24,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260401_000001_drop_isin::Migration),
             Box::new(m20260411_000001_add_morningstar_code::Migration),
             Box::new(m20260412_000001_add_asset_classification::Migration),
+            Box::new(m20260413_000001_create_fund_holdings_snapshots::Migration),
         ]
     }
 }

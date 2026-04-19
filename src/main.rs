@@ -39,9 +39,6 @@ async fn main() -> anyhow::Result<()> {
                 cli::commands::portfolio::get(&db, &fetcher, period).await
             }
             PortfolioCommands::List {} => cli::commands::portfolio::list(&db).await,
-            PortfolioCommands::Holdings {} => {
-                cli::commands::portfolio::holdings(&db, &fetcher).await
-            }
             PortfolioCommands::Asset(asset_args) => {
                 run_asset_command(&db, asset_args.command).await
             }
@@ -91,6 +88,9 @@ async fn main() -> anyhow::Result<()> {
         Commands::Analyze(args) => match args.command {
             AnalyzeCommands::Composition {} => {
                 cli::commands::analyze::composition(&db, &fetcher).await
+            }
+            AnalyzeCommands::Fund { code } => {
+                cli::commands::analyze::fund(&db, &fetcher, code).await
             }
             AnalyzeCommands::Correlation { period } => {
                 cli::commands::analyze::correlation(&db, &fetcher, period).await

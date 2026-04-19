@@ -66,12 +66,6 @@ pub async fn list(db: &DatabaseConnection) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub async fn holdings(db: &DatabaseConnection, fetcher: &dyn PriceFetcher) -> anyhow::Result<()> {
-    let result = services::holdings::get_holdings(db, fetcher).await?;
-    display::print_holdings(&result);
-    Ok(())
-}
-
 #[allow(clippy::too_many_arguments)]
 pub async fn asset_add(
     db: &DatabaseConnection,

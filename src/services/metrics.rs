@@ -1,8 +1,10 @@
 use std::collections::HashMap;
 
+use chrono::NaiveDate;
+
 use crate::constants::{
-    ANNUAL_RISK_FREE_RATE, BENCHMARK_CURRENCY, BENCHMARK_NAME, BENCHMARK_TICKER, MIN_DATA_POINTS,
-    TRADING_DAYS_PER_YEAR, ZERO_RETURN_THRESHOLD,
+    ANNUAL_RISK_FREE_RATE, BENCHMARK_CURRENCY, BENCHMARK_NAME, BENCHMARK_TICKER, DATE_FORMAT,
+    MIN_DATA_POINTS, TRADING_DAYS_PER_YEAR, ZERO_RETURN_THRESHOLD,
 };
 use crate::models::{Asset, AssetInfo, AssetType};
 
@@ -140,6 +142,29 @@ pub fn compute_log_returns(prices: &[(String, f64)]) -> HashMap<String, f64> {
         }
     }
     returns
+}
+
+/// Computes CAGR from start/end values using the actual elapsed days between two dates.
+/// Returns `None` when values are invalid or the elapsed window is shorter than 1 year.
+pub fn compute_cagr(
+    start_date: &str,
+    end_date: &str,
+    start_value: f64,
+    end_value: f64,
+) -> Option<f64> {
+    if start_value <= 0.0 || end_value <= 0.0 {
+        return None;
+    }
+
+    let start = NaiveDate::parse_from_str(start_date, DATE_FORMAT).ok()?;
+    let end = NaiveDate::parse_from_str(end_date, DATE_FORMAT).ok()?;
+    let elapsed_days = (end - start).num_days();
+    if elapsed_days < 365 {
+        return None;
+    }
+
+    let years = elapsed_days as f64 / 365.25;
+    Some(((end_value / start_value).powf(1.0 / years) - 1.0) * 100.0)
 }
 
 /// Aligns two return series by date intersection, filtering out zero-return days.
