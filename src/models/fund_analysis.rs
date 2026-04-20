@@ -25,6 +25,7 @@ pub struct FundPeriodMetrics {
     pub cagr: Option<f64>,
     pub volatility: Option<f64>,
     pub sharpe: Option<f64>,
+    pub sortino: Option<f64>,
     pub max_drawdown: Option<f64>,
     pub beta: Option<f64>,
 }

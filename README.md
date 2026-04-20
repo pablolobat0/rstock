@@ -15,7 +15,7 @@ rstock tracks your investment portfolio from the terminal. It records buy/sell t
 - **Multi-source price fetching** — Stocks via Yahoo Finance (`yfinance-rs`), funds/ETFs via Morningstar-backed Python scripts
 - **Price caching** — Historical prices stored in SQLite with forward-fill for weekends/holidays
 - **Multi-currency support** — All portfolio values converted to EUR base currency with cached FX rates
-- **Performance tracking** — Portfolio and fund metrics including total return, CAGR, volatility, max drawdown, beta, and Sharpe ratio
+- **Performance tracking** — Portfolio and fund metrics including total return, CAGR, volatility, max drawdown, beta, Sharpe ratio, and Sortino ratio
 - **ASCII NAV chart** — Terminal-rendered portfolio performance chart via `textplots`
 - **Colored portfolio table** — Per-asset breakdown with gain/loss highlighting and dividend tracking
 - **Portfolio composition** — Asset class, style, management, sector, country, and market-cap breakdowns with top holdings
@@ -116,8 +116,9 @@ rstock data import --input txns.csv         # Import transactions from CSV
 
 ```bash
 rstock analyze composition                  # Portfolio composition breakdown
-rstock analyze correlation                  # 1Y asset correlation matrix (default)
-rstock analyze correlation --period 30d    # 30-day correlations
+rstock analyze correlation matrix           # 1Y asset correlation matrix (default)
+rstock analyze correlation matrix --period 30d
+rstock analyze correlation rolling AAPL MSFT --period 1y
 rstock analyze fund --code F00000YN5R      # Deep-dive fund analysis by Morningstar code
 ```
 
@@ -157,7 +158,7 @@ src/
 │   ├── daily_prices.rs # Price caching with forward-fill
 │   ├── exchange_rates.rs # FX rate caching (EUR base)
 │   ├── price.rs        # PriceFetcher trait + Real/Mock implementations
-│   ├── metrics.rs      # Beta, Sharpe, volatility, drawdown, CAGR, correlations
+│   ├── metrics.rs      # Beta, Sharpe, Sortino, volatility, drawdown, CAGR, correlations
 │   ├── fund_analysis.rs# Deep-dive fund analysis and snapshot diffing
 │   ├── holdings.rs     # Fund/ETF holdings fetch helpers
 │   ├── monitor.rs      # Stock analysis with momentum indicators

@@ -4,7 +4,7 @@ use chrono::NaiveDate;
 
 use crate::constants::{
     ANNUAL_RISK_FREE_RATE, BENCHMARK_CURRENCY, BENCHMARK_NAME, BENCHMARK_TICKER, DATE_FORMAT,
-    MIN_DATA_POINTS, TRADING_DAYS_PER_YEAR, ZERO_RETURN_THRESHOLD,
+    MIN_DATA_POINTS, ROLLING_CORRELATION_WINDOW_DAYS, TRADING_DAYS_PER_YEAR, ZERO_RETURN_THRESHOLD,
 };
 use crate::models::{Asset, AssetInfo, AssetType};
 
@@ -74,6 +74,38 @@ pub fn compute_sharpe(daily_returns: &[f64]) -> Option<f64> {
 
     if std > 0.0 {
         Some((mean_excess / std) * TRADING_DAYS_PER_YEAR.sqrt())
+    } else {
+        Some(0.0)
+    }
+}
+
+/// Computes annualized Sortino ratio from daily log returns.
+/// Returns `None` if fewer than `MIN_DATA_POINTS` returns.
+pub fn compute_sortino(daily_returns: &[f64]) -> Option<f64> {
+    if daily_returns.len() < MIN_DATA_POINTS {
+        return None;
+    }
+
+    let n = daily_returns.len() as f64;
+    let daily_rf = (1.0 + ANNUAL_RISK_FREE_RATE).powf(1.0 / TRADING_DAYS_PER_YEAR) - 1.0;
+
+    let excess_returns: Vec<f64> = daily_returns.iter().map(|r| r - daily_rf).collect();
+    let mean_excess = excess_returns.iter().sum::<f64>() / n;
+    let downside_returns: Vec<f64> = excess_returns
+        .iter()
+        .copied()
+        .filter(|r| *r < 0.0)
+        .collect();
+
+    if downside_returns.is_empty() {
+        return Some(0.0);
+    }
+
+    let downside_var = downside_returns.iter().map(|r| r.powi(2)).sum::<f64>() / n;
+    let downside_deviation = downside_var.sqrt();
+
+    if downside_deviation > 0.0 {
+        Some((mean_excess / downside_deviation) * TRADING_DAYS_PER_YEAR.sqrt())
     } else {
         Some(0.0)
     }
@@ -173,20 +205,68 @@ pub fn align_return_series(
     a: &HashMap<String, f64>,
     b: &HashMap<String, f64>,
 ) -> (Vec<f64>, Vec<f64>) {
-    let mut aligned_a = Vec::new();
-    let mut aligned_b = Vec::new();
+    let aligned = align_return_series_with_dates(a, b);
+    let aligned_a = aligned.iter().map(|(_, ret_a, _)| *ret_a).collect();
+    let aligned_b = aligned.iter().map(|(_, _, ret_b)| *ret_b).collect();
+    (aligned_a, aligned_b)
+}
 
-    for (date, &ret_a) in a {
-        if let Some(&ret_b) = b.get(date) {
+#[allow(clippy::implicit_hasher)]
+pub fn align_return_series_with_dates(
+    a: &HashMap<String, f64>,
+    b: &HashMap<String, f64>,
+) -> Vec<(String, f64, f64)> {
+    let mut aligned: Vec<(String, f64, f64)> = a
+        .iter()
+        .filter_map(|(date, &ret_a)| {
+            let &ret_b = b.get(date)?;
             if ret_a.abs() < ZERO_RETURN_THRESHOLD && ret_b.abs() < ZERO_RETURN_THRESHOLD {
-                continue;
+                return None;
             }
-            aligned_a.push(ret_a);
-            aligned_b.push(ret_b);
-        }
+            Some((date.clone(), ret_a, ret_b))
+        })
+        .collect();
+
+    aligned.sort_by(|a, b| a.0.cmp(&b.0));
+    aligned
+}
+
+pub fn compute_rolling_correlation(aligned_returns: &[(String, f64, f64)]) -> Vec<(String, f64)> {
+    if aligned_returns.len() < ROLLING_CORRELATION_WINDOW_DAYS.max(MIN_DATA_POINTS) {
+        return Vec::new();
     }
 
-    (aligned_a, aligned_b)
+    let mut result = Vec::new();
+
+    for window in aligned_returns.windows(ROLLING_CORRELATION_WINDOW_DAYS) {
+        let left: Vec<f64> = window.iter().map(|(_, ret_a, _)| *ret_a).collect();
+        let right: Vec<f64> = window.iter().map(|(_, _, ret_b)| *ret_b).collect();
+        let correlation = pearson_correlation(&left, &right);
+        let end_date = window
+            .last()
+            .expect("rolling window always has at least one item")
+            .0
+            .clone();
+        result.push((end_date, correlation));
+    }
+
+    result
+}
+
+pub fn summarize_rolling_correlation(
+    points: &[(String, f64)],
+) -> (Option<f64>, Option<f64>, Option<f64>, Option<f64>) {
+    if points.is_empty() {
+        return (None, None, None, None);
+    }
+
+    let values: Vec<f64> = points.iter().map(|(_, value)| *value).collect();
+    let latest = values.last().copied();
+    let min = values.iter().copied().reduce(f64::min);
+    let max = values.iter().copied().reduce(f64::max);
+    let average = Some(values.iter().sum::<f64>() / values.len() as f64);
+
+    (latest, min, max, average)
 }
 
 pub fn benchmark_asset_info() -> AssetInfo {

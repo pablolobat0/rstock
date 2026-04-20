@@ -49,6 +49,7 @@ pub struct PeriodMetrics {
     pub max_drawdown: Option<f64>,
     pub beta: Option<f64>,
     pub sharpe: Option<f64>,
+    pub sortino: Option<f64>,
 }
 
 pub struct PortfolioResult {
@@ -80,6 +81,18 @@ pub struct CorrelationMatrix {
     pub matrix: Vec<Vec<Option<f64>>>,
     /// Names with insufficient data for the requested period
     pub warnings: Vec<String>,
+}
+
+pub struct RollingCorrelationResult {
+    pub left_name: String,
+    pub right_name: String,
+    pub period_label: String,
+    pub window_label: String,
+    pub points: Vec<(String, f64)>,
+    pub latest: Option<f64>,
+    pub min: Option<f64>,
+    pub max: Option<f64>,
+    pub average: Option<f64>,
 }
 
 // --- Holdings report models ---

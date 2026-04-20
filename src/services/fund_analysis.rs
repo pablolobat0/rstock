@@ -202,8 +202,7 @@ fn is_equity_holding(holding: &FundHolding) -> bool {
     holding
         .ticker
         .as_deref()
-        .map(|ticker| !ticker.trim().is_empty())
-        .unwrap_or(false)
+        .is_some_and(|ticker| !ticker.trim().is_empty())
 }
 
 fn compute_period_metrics(
@@ -249,6 +248,7 @@ fn compute_period_metrics(
 
     let volatility = metrics::compute_volatility(&daily_returns);
     let sharpe = metrics::compute_sharpe(&daily_returns);
+    let sortino = metrics::compute_sortino(&daily_returns);
     let max_drawdown = metrics::compute_max_drawdown(&nav_values);
 
     let (aligned_fund, aligned_bench) =
@@ -260,6 +260,7 @@ fn compute_period_metrics(
         cagr,
         volatility,
         sharpe,
+        sortino,
         max_drawdown,
         beta,
     })
@@ -363,10 +364,10 @@ async fn compute_snapshot_diff(
     let (holdings_changed, last_snapshot_date, holding_diff) = match &previous {
         Some(prev) => {
             let changed = prev.fingerprint != fingerprint || prev.snapshot_date != snapshot_date;
-            let diff = if prev.fingerprint != fingerprint {
-                compute_holding_diff(&prev.holdings_json, holdings)?
-            } else {
+            let diff = if prev.fingerprint == fingerprint {
                 Vec::new()
+            } else {
+                compute_holding_diff(&prev.holdings_json, holdings)?
             };
             (changed, Some(prev.snapshot_date.clone()), diff)
         }

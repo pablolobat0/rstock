@@ -52,7 +52,7 @@
 - **`portfolio`** — Portfolio views and asset metadata management
 - **`transaction`** — Record, edit, or delete transactions
 - **`data`** — Import or export transactions as CSV
-- **`analyze`** — Composition, fund analysis, and portfolio correlation matrix
+- **`analyze`** — Composition, fund analysis, static correlation matrix, and rolling pair correlation
 - **`monitor`** — Subcommand group: add/remove/list/view stocks in a watchlist with momentum indicators
 
 `main.rs` dispatches commands to service functions. It also handles chart period date-range calculation and date validation (rejects future dates).
@@ -85,7 +85,7 @@ All business logic lives here. Key modules:
 
 **`price.rs`** — Defines the `PriceFetcher` async trait with two methods: `get_historical_prices()` and `get_historical_exchange_rates()`. `RealPriceFetcher` implements it using `yfinance-rs` for stocks and `uv run scripts/get_fund_price_history.py` for funds/ETFs.
 
-**`metrics.rs`** — Shared math helpers for volatility, max drawdown, Sharpe, beta, Pearson correlation, log returns, return alignment, and CAGR. Uses daily log returns, 252 trading days/year, 3% annual risk-free rate, and actual elapsed dates for CAGR.
+**`metrics.rs`** — Shared math helpers for volatility, max drawdown, Sharpe, Sortino, beta, Pearson correlation, log returns, return alignment, and CAGR. Uses daily log returns, 252 trading days/year, 3% annual risk-free rate, and actual elapsed dates for CAGR.
 
 **`fund_analysis.rs`** — `compute_fund_analysis()` builds a deep-dive report for any Morningstar fund code, including performance, holdings, equity-only allocation tables, and holdings snapshot diffs. Snapshot persistence is keyed by Morningstar's reported portfolio date, so repeated runs against the same Morningstar snapshot do not create duplicate history rows.
 
@@ -127,13 +127,13 @@ Domain structs organized by concept:
 - `PortfolioSnapshot` — Daily NAV snapshot (date, asset_value, total_value, outstanding_shares, nav)
 - `AssetSnapshot` — Per-asset daily position (quantity, closing_price, market_value, exchange_rate)
 - `PortfolioResult` — Query result with asset rows and aggregated totals (including total_dividends)
-- `PeriodMetrics` — Per-period volatility, max drawdown, beta, and Sharpe ratio
+- `PeriodMetrics` — Per-period volatility, max drawdown, beta, Sharpe ratio, and Sortino ratio
 - `CorrelationMatrix` — N×N asset correlation matrix with labels and warnings
 - `AllocationEntry`, `TopHolding`, `CompositionResult`, `FundHolding` — Composition and holdings models
 
 **`fund_analysis.rs`**:
 - `FundAnalysisResult` — Full fund report including top holdings, allocations, period metrics, and holdings snapshot diff
-- `FundPeriodMetrics` — Total return, CAGR, volatility, max drawdown, beta, and Sharpe
+- `FundPeriodMetrics` — Total return, CAGR, volatility, max drawdown, beta, Sharpe, and Sortino
 - `HoldingChange`, `HoldingChangeType`, `FundData` — Snapshot diff and Morningstar payload models
 
 **`monitor.rs`**:
@@ -330,7 +330,7 @@ main.rs
         │     ├─> exchange_rates::fill_rates_for_range() (for each currency)
         │     └─> Day-by-day NAV computation loop
         ├─> Compute return metrics (YTD, 1Y, 3Y, 5Y)
-        └─> metrics::compute_risk_metrics() (beta, Sharpe)
+        └─> metrics::compute_risk_metrics() (beta, Sharpe, Sortino)
   └─> portfolio::get_portfolio()
         ├─> Load latest portfolio_asset_history
         ├─> For each position: compute avg cost, gain/loss
@@ -409,7 +409,7 @@ main.rs
   └─> display::print_composition()
 ```
 
-### `analyze correlation`
+### `analyze correlation matrix`
 
 ```
 main.rs
@@ -420,6 +420,20 @@ main.rs
   └─> display::print_correlation_matrix()
 ```
 
+### `analyze correlation rolling`
+
+```
+main.rs
+  └─> analytics::compute_rolling_correlation_data()
+        ├─> Resolve the two requested tickers (tracked asset or ACWI)
+        ├─> Fill price / FX cache for the selected period
+        ├─> Convert both price series to EUR
+        ├─> metrics::align_return_series_with_dates()
+        ├─> metrics::compute_rolling_correlation() over trailing 90-day windows
+        └─> Return dated rolling series + summary stats
+  └─> display::print_rolling_correlation()
+```
+
 ### `analyze fund`
 
 ```
@@ -428,7 +442,7 @@ main.rs
         ├─> asset_repo::find_by_morningstar_code()
         ├─> Run scripts/get_fund_data.py
         ├─> fetcher.get_historical_prices() for fund + benchmark
-        ├─> metrics::compute_cagr(), beta, Sharpe, volatility, max drawdown
+        ├─> metrics::compute_cagr(), beta, Sharpe, Sortino, volatility, max drawdown
         ├─> Build trailing 1Y/3Y/5Y windows from trading-day history
         ├─> Filter allocation rows to holdings with ticker
         └─> fund_holdings_snapshot_repo compare/store by Morningstar portfolio date

@@ -55,7 +55,16 @@ fn print_metrics_table(periods: &[(&str, Option<f64>, &Option<PeriodMetrics>)]) 
     );
     builder.push_record(row);
 
-    // Beta (row 5)
+    // Sortino (row 5)
+    let mut row = vec!["Sortino".to_string()];
+    row.extend(
+        periods
+            .iter()
+            .map(|(_, _, m)| format_plain(m.as_ref().and_then(|m| m.sortino))),
+    );
+    builder.push_record(row);
+
+    // Beta (row 6)
     let mut row = vec!["Beta".to_string()];
     row.extend(
         periods
@@ -90,6 +99,11 @@ fn print_metrics_table(periods: &[(&str, Option<f64>, &Option<PeriodMetrics>)]) 
         // Sharpe
         if let Some(v) = metrics.as_ref().and_then(|m| m.sharpe) {
             table.modify(Cell::new(4, col), color_for_value(v));
+        }
+
+        // Sortino
+        if let Some(v) = metrics.as_ref().and_then(|m| m.sortino) {
+            table.modify(Cell::new(5, col), color_for_value(v));
         }
     }
 

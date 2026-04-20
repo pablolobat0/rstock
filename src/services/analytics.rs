@@ -7,7 +7,9 @@ use crate::db::repos::{
     asset_repo, daily_price_repo, exchange_rate_repo, portfolio_asset_history_repo,
     portfolio_history_repo,
 };
-use crate::models::{Asset, CorrelationMatrix, PeriodMetrics, PortfolioSnapshot};
+use crate::models::{
+    Asset, CorrelationMatrix, PeriodMetrics, PortfolioSnapshot, RollingCorrelationResult,
+};
 use crate::services::price::PriceFetcher;
 use crate::services::{daily_prices, exchange_rates, metrics, price_cache};
 
@@ -98,6 +100,48 @@ pub async fn compute_correlation_data(
     })
 }
 
+pub async fn compute_rolling_correlation_data(
+    db: &DatabaseConnection,
+    start_date: &str,
+    end_date: &str,
+    ticker_a: &str,
+    ticker_b: &str,
+    period_label: &str,
+    price_fetcher: &dyn PriceFetcher,
+) -> anyhow::Result<RollingCorrelationResult> {
+    if ticker_a == ticker_b {
+        anyhow::bail!("tickers must be different");
+    }
+
+    let left_asset =
+        resolve_correlation_asset(db, ticker_a, start_date, end_date, price_fetcher).await?;
+    let right_asset =
+        resolve_correlation_asset(db, ticker_b, start_date, end_date, price_fetcher).await?;
+
+    let left_prices =
+        get_eur_price_series(db, &left_asset, start_date, end_date, price_fetcher).await?;
+    let right_prices =
+        get_eur_price_series(db, &right_asset, start_date, end_date, price_fetcher).await?;
+
+    let left_returns = metrics::compute_log_returns(&left_prices);
+    let right_returns = metrics::compute_log_returns(&right_prices);
+    let aligned = metrics::align_return_series_with_dates(&left_returns, &right_returns);
+    let points = metrics::compute_rolling_correlation(&aligned);
+    let (latest, min, max, average) = metrics::summarize_rolling_correlation(&points);
+
+    Ok(RollingCorrelationResult {
+        left_name: left_asset.name,
+        right_name: right_asset.name,
+        period_label: period_label.to_owned(),
+        window_label: "90D rolling".to_string(),
+        points,
+        latest,
+        min,
+        max,
+        average,
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn compute_all_period_metrics(
     db: &DatabaseConnection,
@@ -163,12 +207,14 @@ pub async fn compute_all_period_metrics(
         let max_drawdown = metrics::compute_max_drawdown(&trading_day_navs);
         let beta = metrics::compute_beta(&portfolio_returns, &benchmark_returns);
         let sharpe = metrics::compute_sharpe(&portfolio_returns);
+        let sortino = metrics::compute_sortino(&portfolio_returns);
 
         results.push(Some(PeriodMetrics {
             volatility,
             max_drawdown,
             beta,
             sharpe,
+            sortino,
         }));
     }
 
@@ -242,4 +288,64 @@ async fn ensure_benchmark_prices(
     daily_prices::fill_prices_for_range(db, &asset, start_date, end_date, price_fetcher).await?;
 
     Ok(asset_id)
+}
+
+async fn resolve_correlation_asset(
+    db: &DatabaseConnection,
+    ticker: &str,
+    start_date: &str,
+    end_date: &str,
+    price_fetcher: &dyn PriceFetcher,
+) -> anyhow::Result<Asset> {
+    if ticker == metrics::benchmark_asset_info().ticker {
+        let asset_id = ensure_benchmark_prices(db, start_date, end_date, price_fetcher).await?;
+        return Ok(metrics::benchmark_asset(asset_id));
+    }
+
+    asset_repo::find_by_ticker(db, ticker)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("asset with ticker '{ticker}' not found"))
+}
+
+async fn get_eur_price_series(
+    db: &DatabaseConnection,
+    asset: &Asset,
+    start_date: &str,
+    end_date: &str,
+    price_fetcher: &dyn PriceFetcher,
+) -> anyhow::Result<Vec<(String, f64)>> {
+    if asset.ticker != metrics::benchmark_asset_info().ticker {
+        daily_prices::fill_prices_for_range(db, asset, start_date, end_date, price_fetcher).await?;
+    }
+
+    if asset.currency != BASE_CURRENCY {
+        let pair = exchange_rates::currency_pair(&asset.currency);
+        price_cache::fill_exchange_rates(
+            db,
+            std::slice::from_ref(&pair),
+            start_date,
+            end_date,
+            price_fetcher,
+        )
+        .await?;
+    }
+
+    let prices = daily_price_repo::find_prices_between(db, asset.id, start_date, end_date).await?;
+
+    if asset.currency == BASE_CURRENCY {
+        return Ok(prices);
+    }
+
+    let pair = exchange_rates::currency_pair(&asset.currency);
+    let rates = exchange_rate_repo::find_rates_between(db, &pair, start_date, end_date).await?;
+    let rate_map: HashMap<&str, f64> = rates.iter().map(|(d, r)| (d.as_str(), *r)).collect();
+
+    Ok(prices
+        .iter()
+        .filter_map(|(date, price)| {
+            rate_map
+                .get(date.as_str())
+                .map(|rate| (date.clone(), price * rate))
+        })
+        .collect())
 }

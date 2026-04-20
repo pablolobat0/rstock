@@ -13,7 +13,7 @@
 
 ## Analysis Features
 
-- [ ] Sortino ratio — downside deviation risk metric
+- [x] Sortino ratio — downside deviation risk metric
 - [ ] Rolling correlations — time-varying correlation windows
 - [ ] Fama-French factors — multi-factor model exposure analysis
 

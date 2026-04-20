@@ -61,6 +61,7 @@ fn print_performance(result: &FundAnalysisResult) {
         build_metric_row("CAGR", &periods, |m| format_return_plain(m.cagr)),
         build_metric_row("Volatility", &periods, |m| format_pct(m.volatility)),
         build_metric_row("Sharpe", &periods, |m| format_plain(m.sharpe)),
+        build_metric_row("Sortino", &periods, |m| format_plain(m.sortino)),
         build_metric_row("Max DD", &periods, |m| format_pct(m.max_drawdown)),
         build_metric_row("Beta", &periods, |m| format_plain(m.beta)),
     ];
@@ -170,7 +171,7 @@ fn print_snapshot_diff(result: &FundAnalysisResult) {
             );
         }
         None => {
-            println!("  Checked on: {}  |  First snapshot recorded.", today);
+            println!("  Checked on: {today}  |  First snapshot recorded.");
         }
     }
 
@@ -218,8 +219,7 @@ fn display_optional(value: Option<&str>) -> String {
     value
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(str::to_owned)
-        .unwrap_or_else(|| "—".to_string())
+        .map_or_else(|| "—".to_string(), str::to_owned)
 }
 
 fn build_metric_row(
