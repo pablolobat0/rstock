@@ -9,7 +9,7 @@ mod transaction;
 mod types;
 
 pub use composition::print_composition;
-pub use correlation::print_correlation_matrix;
+pub use correlation::{print_correlation_matrix, print_rolling_correlation};
 pub use fund_analysis::print_fund_analysis;
 pub use monitor::print_monitor_report;
 pub use portfolio::print_portfolio;

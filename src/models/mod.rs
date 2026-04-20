@@ -15,7 +15,8 @@ pub use fund_analysis::{
 };
 pub use portfolio::{
     AllocationEntry, AssetSnapshot, CompositionResult, CorrelationMatrix, FundHolding,
-    MarketCapCategory, PeriodMetrics, PortfolioResult, PortfolioSnapshot, TopHolding,
+    MarketCapCategory, PeriodMetrics, PortfolioResult, PortfolioSnapshot, RollingCorrelationResult,
+    TopHolding,
 };
 pub use transaction::{
     cents_to_f64, f64_to_cents, BuyOrder, CsvRow, DividendOrder, SellOrder, SplitOrder,

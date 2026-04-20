@@ -2,10 +2,12 @@ use tabled::builder::Builder;
 use tabled::settings::object::{Cell, Columns};
 use tabled::settings::style::{HorizontalLine, VerticalLine};
 use tabled::settings::{Alignment, Color, Style};
+use textplots::{Chart, Plot, Shape};
 
-use crate::models::CorrelationMatrix;
+use crate::constants::display_date;
+use crate::models::{CorrelationMatrix, RollingCorrelationResult};
 
-use super::helpers::format_eu;
+use super::helpers::{color_for_value, format_eu, format_plain};
 
 pub fn print_correlation_matrix(matrix: &CorrelationMatrix, period_label: &str) {
     if matrix.names.is_empty() {
@@ -77,4 +79,72 @@ pub fn print_correlation_matrix(matrix: &CorrelationMatrix, period_label: &str) 
             matrix.warnings.join(", ")
         );
     }
+}
+
+pub fn print_rolling_correlation(result: &RollingCorrelationResult) {
+    println!(
+        "\nRolling Correlation — {} vs {}  [{} | {}]\n",
+        result.left_name, result.right_name, result.period_label, result.window_label
+    );
+
+    if result.points.is_empty() {
+        println!(
+            "Not enough aligned data to compute {} rolling correlation.",
+            result.window_label
+        );
+        return;
+    }
+
+    let points: Vec<(f32, f32)> = result
+        .points
+        .iter()
+        .enumerate()
+        .map(|(i, (_, value))| (i as f32, *value as f32))
+        .collect();
+
+    let first_date = &result.points[0].0;
+    let last_date = &result.points[result.points.len() - 1].0;
+    let xmax = (points.len() - 1) as f32;
+
+    Chart::new(180, 60, 0.0, xmax)
+        .lineplot(&Shape::Lines(&points))
+        .display();
+    println!(
+        "  Requested period: {}  →  {}",
+        display_date(&result.requested_start_date),
+        display_date(&result.requested_end_date)
+    );
+    println!(
+        "  Rolling series:    {}  →  {}",
+        display_date(first_date),
+        display_date(last_date)
+    );
+
+    let mut builder = Builder::default();
+    builder.push_record(["Metric", "Value"]);
+    builder.push_record(["Latest", &format_plain(result.latest)]);
+    builder.push_record(["Min", &format_plain(result.min)]);
+    builder.push_record(["Max", &format_plain(result.max)]);
+    builder.push_record(["Average", &format_plain(result.average)]);
+
+    let mut table = builder.build();
+    table.with(
+        Style::modern()
+            .horizontals([(1, HorizontalLine::inherit(Style::modern()).horizontal('═'))])
+            .verticals([(1, VerticalLine::inherit(Style::modern()))])
+            .remove_horizontal()
+            .remove_vertical(),
+    );
+    table.modify(Columns::single(1), Alignment::right());
+
+    for (row, value) in [result.latest, result.min, result.max, result.average]
+        .iter()
+        .enumerate()
+    {
+        if let Some(value) = value {
+            table.modify(Cell::new(row + 1, 1), color_for_value(*value));
+        }
+    }
+
+    println!("\n{table}");
 }

@@ -9,8 +9,8 @@ mod utils;
 use clap::Parser;
 
 use cli::{
-    AnalyzeCommands, AssetCommands, Cli, Commands, DataCommands, PortfolioCommands,
-    TransactionCommands,
+    AnalyzeCommands, AssetCommands, Cli, Commands, CorrelationCommands, DataCommands,
+    PortfolioCommands, TransactionCommands,
 };
 use sea_orm::DatabaseConnection;
 use services::price::RealPriceFetcher;
@@ -92,9 +92,21 @@ async fn main() -> anyhow::Result<()> {
             AnalyzeCommands::Fund { code } => {
                 cli::commands::analyze::fund(&db, &fetcher, code).await
             }
-            AnalyzeCommands::Correlation { period } => {
-                cli::commands::analyze::correlation(&db, &fetcher, period).await
-            }
+            AnalyzeCommands::Correlation(args) => match args.command {
+                CorrelationCommands::Matrix { period } => {
+                    cli::commands::analyze::correlation_matrix(&db, &fetcher, period).await
+                }
+                CorrelationCommands::Rolling {
+                    ticker_a,
+                    ticker_b,
+                    period,
+                } => {
+                    cli::commands::analyze::rolling_correlation(
+                        &db, &fetcher, ticker_a, ticker_b, period,
+                    )
+                    .await
+                }
+            },
         },
         Commands::Monitor(args) => cli::commands::monitor::run(&db, &fetcher, args).await,
     }

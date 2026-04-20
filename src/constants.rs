@@ -41,6 +41,7 @@ pub const FIVE_YEAR_DAYS: i64 = 1825;
 pub const ONE_YEAR_TRADING_DAYS: usize = 252;
 pub const THREE_YEAR_TRADING_DAYS: usize = 756;
 pub const FIVE_YEAR_TRADING_DAYS: usize = 1260;
+pub const ROLLING_CORRELATION_WINDOW_DAYS: usize = 60;
 
 // --- Metrics ---
 pub const BENCHMARK_TICKER: &str = "ACWI";

@@ -4,7 +4,12 @@ use common::{
     insert_asset, insert_daily_price, insert_exchange_rate, insert_transaction, setup_test_db,
     MockPriceFetcher,
 };
-use rstock::services::analytics::compute_correlation_data;
+use rstock::models::monitor::StockInfo;
+use rstock::services::analytics::{compute_correlation_data, compute_rolling_correlation_data};
+use rstock::services::metrics::{
+    align_return_series_with_dates, align_return_series_with_dates_unfiltered,
+    compute_rolling_correlation, summarize_rolling_correlation,
+};
 use rstock::services::nav::rebuild_portfolio_history;
 
 /// Two perfectly correlated EUR assets (prices move in lockstep)
@@ -210,4 +215,269 @@ async fn test_insufficient_data_produces_warning() {
         matrix.warnings.contains(&"Fake A".to_string()),
         "Fake A should be in warnings due to insufficient data"
     );
+}
+
+#[test]
+fn test_align_return_series_with_dates_sorts_chronologically() {
+    let a = std::collections::HashMap::from([
+        ("2025-01-03".to_string(), 0.03),
+        ("2025-01-01".to_string(), 0.01),
+        ("2025-01-02".to_string(), 0.02),
+    ]);
+    let b = std::collections::HashMap::from([
+        ("2025-01-02".to_string(), 0.12),
+        ("2025-01-01".to_string(), 0.11),
+        ("2025-01-03".to_string(), 0.13),
+    ]);
+
+    let aligned = align_return_series_with_dates(&a, &b);
+    let dates: Vec<_> = aligned.iter().map(|(date, _, _)| date.as_str()).collect();
+    assert_eq!(dates, vec!["2025-01-01", "2025-01-02", "2025-01-03"]);
+}
+
+#[test]
+fn test_compute_rolling_correlation_perfect_positive() {
+    let aligned: Vec<(String, f64, f64)> = (0..65)
+        .map(|i| {
+            (
+                format!("2025-01-{:02}", i + 1),
+                0.01 + (i as f64) * 0.0001,
+                0.01 + (i as f64) * 0.0001,
+            )
+        })
+        .collect();
+
+    let points = compute_rolling_correlation(&aligned);
+    assert_eq!(points.len(), 6);
+    assert!(points.iter().all(|(_, corr)| (*corr - 1.0).abs() < 1e-9));
+}
+
+#[test]
+fn test_unfiltered_rolling_alignment_keeps_zero_return_days() {
+    let a = std::collections::HashMap::from([
+        ("2025-01-01".to_string(), 0.0),
+        ("2025-01-02".to_string(), 0.01),
+    ]);
+    let b = std::collections::HashMap::from([
+        ("2025-01-01".to_string(), 0.0),
+        ("2025-01-02".to_string(), 0.02),
+    ]);
+
+    let aligned = align_return_series_with_dates_unfiltered(&a, &b);
+    let dates: Vec<_> = aligned.iter().map(|(date, _, _)| date.as_str()).collect();
+    assert_eq!(dates, vec!["2025-01-01", "2025-01-02"]);
+}
+
+#[test]
+fn test_summarize_rolling_correlation_values() {
+    let points = vec![
+        ("2025-01-01".to_string(), 0.2),
+        ("2025-01-02".to_string(), -0.1),
+        ("2025-01-03".to_string(), 0.5),
+    ];
+
+    let (latest, min, max, average) = summarize_rolling_correlation(&points);
+    assert_eq!(latest, Some(0.5));
+    assert_eq!(min, Some(-0.1));
+    assert_eq!(max, Some(0.5));
+    assert!((average.unwrap() - 0.2).abs() < 1e-9);
+}
+
+#[tokio::test]
+async fn test_rolling_correlation_for_pair() {
+    let db = setup_test_db().await;
+    let mut fetcher = MockPriceFetcher::new();
+
+    let prices_a: Vec<(String, f64)> = (0..120)
+        .map(|i| {
+            let date = format!(
+                "{}",
+                (chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap() + chrono::Duration::days(i))
+                    .format("%Y-%m-%d")
+            );
+            let price_a = 100.0 + i as f64 * 0.5 + (i as f64 / 7.0).sin();
+            (date, price_a)
+        })
+        .collect();
+    let prices_b: Vec<(String, f64)> = (0..120)
+        .map(|i| {
+            let date = format!(
+                "{}",
+                (chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap() + chrono::Duration::days(i))
+                    .format("%Y-%m-%d")
+            );
+            let price_b = 50.0 + i as f64 * 0.25 + (i as f64 / 7.0).sin() * 0.5;
+            (date, price_b)
+        })
+        .collect();
+
+    fetcher
+        .historical_prices
+        .insert("XFAKE1".to_string(), prices_a);
+    fetcher
+        .historical_prices
+        .insert("XFAKE2".to_string(), prices_b);
+    fetcher.stock_info.insert(
+        "XFAKE1".to_string(),
+        StockInfo {
+            ticker: "XFAKE1".to_string(),
+            name: Some("Fake A".to_string()),
+            currency: Some("EUR".to_string()),
+            current_price: None,
+            previous_close: None,
+            day_range: None,
+            fifty_two_week_range: None,
+            volume: None,
+            avg_volume: None,
+            market_cap: None,
+            pe_ttm: None,
+            eps_ttm: None,
+            dividend_yield: None,
+            sector: None,
+            industry: None,
+            country: None,
+        },
+    );
+    fetcher.stock_info.insert(
+        "XFAKE2".to_string(),
+        StockInfo {
+            ticker: "XFAKE2".to_string(),
+            name: Some("Fake B".to_string()),
+            currency: Some("EUR".to_string()),
+            current_price: None,
+            previous_close: None,
+            day_range: None,
+            fifty_two_week_range: None,
+            volume: None,
+            avg_volume: None,
+            market_cap: None,
+            pe_ttm: None,
+            eps_ttm: None,
+            dividend_yield: None,
+            sector: None,
+            industry: None,
+            country: None,
+        },
+    );
+
+    let result = compute_rolling_correlation_data(
+        &db,
+        "2025-01-01",
+        "2025-04-30",
+        "XFAKE1",
+        "XFAKE2",
+        "1Y",
+        &fetcher,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result.left_name, "Fake A");
+    assert_eq!(result.right_name, "Fake B");
+    assert_eq!(result.requested_start_date, "2025-01-01");
+    assert_eq!(result.requested_end_date, "2025-04-30");
+    assert!(!result.points.is_empty());
+    assert!(result.latest.is_some());
+}
+
+#[tokio::test]
+async fn test_rolling_correlation_with_benchmark() {
+    let db = setup_test_db().await;
+    let mut fetcher = MockPriceFetcher::new();
+
+    fetcher.stock_info.insert(
+        "XFAKE1".to_string(),
+        StockInfo {
+            ticker: "XFAKE1".to_string(),
+            name: Some("Fake A".to_string()),
+            currency: Some("EUR".to_string()),
+            current_price: None,
+            previous_close: None,
+            day_range: None,
+            fifty_two_week_range: None,
+            volume: None,
+            avg_volume: None,
+            market_cap: None,
+            pe_ttm: None,
+            eps_ttm: None,
+            dividend_yield: None,
+            sector: None,
+            industry: None,
+            country: None,
+        },
+    );
+    fetcher.stock_info.insert(
+        "ACWI".to_string(),
+        StockInfo {
+            ticker: "ACWI".to_string(),
+            name: Some("MSCI ACWI Benchmark".to_string()),
+            currency: Some("USD".to_string()),
+            current_price: None,
+            previous_close: None,
+            day_range: None,
+            fifty_two_week_range: None,
+            volume: None,
+            avg_volume: None,
+            market_cap: None,
+            pe_ttm: None,
+            eps_ttm: None,
+            dividend_yield: None,
+            sector: None,
+            industry: None,
+            country: None,
+        },
+    );
+
+    let asset_prices: Vec<(String, f64)> = (0..120)
+        .map(|i| {
+            let date = (chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap()
+                + chrono::Duration::days(i))
+            .format("%Y-%m-%d")
+            .to_string();
+            (date, 100.0 + i as f64 * 0.8)
+        })
+        .collect();
+    fetcher
+        .historical_prices
+        .insert("XFAKE1".to_string(), asset_prices);
+
+    let benchmark_prices: Vec<(String, f64)> = (0..120)
+        .map(|i| {
+            let date = (chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap()
+                + chrono::Duration::days(i))
+            .format("%Y-%m-%d")
+            .to_string();
+            (date, 200.0 + i as f64)
+        })
+        .collect();
+    fetcher
+        .historical_prices
+        .insert("ACWI".to_string(), benchmark_prices);
+    let fx_rates: Vec<(String, f64)> = (0..120)
+        .map(|i| {
+            let date = (chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap()
+                + chrono::Duration::days(i))
+            .format("%Y-%m-%d")
+            .to_string();
+            (date, 0.92)
+        })
+        .collect();
+    fetcher
+        .exchange_rates
+        .insert("USDEUR".to_string(), fx_rates);
+
+    let result = compute_rolling_correlation_data(
+        &db,
+        "2025-01-01",
+        "2025-04-30",
+        "XFAKE1",
+        "ACWI",
+        "1Y",
+        &fetcher,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result.right_name, "MSCI ACWI Benchmark");
+    assert!(!result.points.is_empty());
 }

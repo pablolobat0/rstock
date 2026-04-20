@@ -8,7 +8,7 @@ use crate::db::repos::{
     portfolio_history_repo,
 };
 use crate::models::{
-    Asset, CorrelationMatrix, PeriodMetrics, PortfolioSnapshot, RollingCorrelationResult,
+    Asset, AssetType, CorrelationMatrix, PeriodMetrics, PortfolioSnapshot, RollingCorrelationResult,
 };
 use crate::services::price::PriceFetcher;
 use crate::services::{daily_prices, exchange_rates, metrics, price_cache};
@@ -101,7 +101,7 @@ pub async fn compute_correlation_data(
 }
 
 pub async fn compute_rolling_correlation_data(
-    db: &DatabaseConnection,
+    _db: &DatabaseConnection,
     start_date: &str,
     end_date: &str,
     ticker_a: &str,
@@ -113,19 +113,17 @@ pub async fn compute_rolling_correlation_data(
         anyhow::bail!("tickers must be different");
     }
 
-    let left_asset =
-        resolve_correlation_asset(db, ticker_a, start_date, end_date, price_fetcher).await?;
-    let right_asset =
-        resolve_correlation_asset(db, ticker_b, start_date, end_date, price_fetcher).await?;
+    let left_asset = fetch_rolling_asset_info(ticker_a, price_fetcher).await?;
+    let right_asset = fetch_rolling_asset_info(ticker_b, price_fetcher).await?;
 
     let left_prices =
-        get_eur_price_series(db, &left_asset, start_date, end_date, price_fetcher).await?;
+        get_direct_eur_price_series(&left_asset, start_date, end_date, price_fetcher).await?;
     let right_prices =
-        get_eur_price_series(db, &right_asset, start_date, end_date, price_fetcher).await?;
+        get_direct_eur_price_series(&right_asset, start_date, end_date, price_fetcher).await?;
 
     let left_returns = metrics::compute_log_returns(&left_prices);
     let right_returns = metrics::compute_log_returns(&right_prices);
-    let aligned = metrics::align_return_series_with_dates(&left_returns, &right_returns);
+    let aligned = metrics::align_return_series_with_dates_unfiltered(&left_returns, &right_returns);
     let points = metrics::compute_rolling_correlation(&aligned);
     let (latest, min, max, average) = metrics::summarize_rolling_correlation(&points);
 
@@ -133,7 +131,12 @@ pub async fn compute_rolling_correlation_data(
         left_name: left_asset.name,
         right_name: right_asset.name,
         period_label: period_label.to_owned(),
-        window_label: "90D rolling".to_string(),
+        window_label: format!(
+            "{}D rolling",
+            crate::constants::ROLLING_CORRELATION_WINDOW_DAYS
+        ),
+        requested_start_date: start_date.to_owned(),
+        requested_end_date: end_date.to_owned(),
         points,
         latest,
         min,
@@ -290,62 +293,95 @@ async fn ensure_benchmark_prices(
     Ok(asset_id)
 }
 
-async fn resolve_correlation_asset(
-    db: &DatabaseConnection,
+async fn fetch_rolling_asset_info(
     ticker: &str,
-    start_date: &str,
-    end_date: &str,
     price_fetcher: &dyn PriceFetcher,
 ) -> anyhow::Result<Asset> {
-    if ticker == metrics::benchmark_asset_info().ticker {
-        let asset_id = ensure_benchmark_prices(db, start_date, end_date, price_fetcher).await?;
-        return Ok(metrics::benchmark_asset(asset_id));
-    }
+    let stock_info = price_fetcher.get_stock_info(ticker).await?;
+    let name = stock_info.name.unwrap_or_else(|| ticker.to_owned());
+    let currency = stock_info
+        .currency
+        .unwrap_or_else(|| BASE_CURRENCY.to_owned());
 
-    asset_repo::find_by_ticker(db, ticker)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("asset with ticker '{ticker}' not found"))
+    Ok(Asset {
+        id: 0,
+        ticker: ticker.to_owned(),
+        name,
+        asset_type: AssetType::Stock,
+        currency,
+        morningstar_code: None,
+        asset_class: None,
+        equity_style: None,
+        management: None,
+    })
 }
 
-async fn get_eur_price_series(
-    db: &DatabaseConnection,
+async fn get_direct_eur_price_series(
     asset: &Asset,
     start_date: &str,
     end_date: &str,
     price_fetcher: &dyn PriceFetcher,
 ) -> anyhow::Result<Vec<(String, f64)>> {
-    if asset.ticker != metrics::benchmark_asset_info().ticker {
-        daily_prices::fill_prices_for_range(db, asset, start_date, end_date, price_fetcher).await?;
-    }
+    let prices = filter_fetched_series(
+        price_fetcher
+            .get_historical_prices(&asset.ticker, start_date, end_date, &AssetType::Stock)
+            .await?,
+        start_date,
+        end_date,
+    );
 
-    if asset.currency != BASE_CURRENCY {
-        let pair = exchange_rates::currency_pair(&asset.currency);
-        price_cache::fill_exchange_rates(
-            db,
-            std::slice::from_ref(&pair),
-            start_date,
-            end_date,
-            price_fetcher,
-        )
-        .await?;
+    if prices.is_empty() {
+        anyhow::bail!("no price history returned for '{}'", asset.ticker);
     }
-
-    let prices = daily_price_repo::find_prices_between(db, asset.id, start_date, end_date).await?;
 
     if asset.currency == BASE_CURRENCY {
         return Ok(prices);
     }
 
     let pair = exchange_rates::currency_pair(&asset.currency);
-    let rates = exchange_rate_repo::find_rates_between(db, &pair, start_date, end_date).await?;
-    let rate_map: HashMap<&str, f64> = rates.iter().map(|(d, r)| (d.as_str(), *r)).collect();
+    let rates = filter_fetched_series(
+        price_fetcher
+            .get_historical_exchange_rates(&pair, start_date, end_date)
+            .await?,
+        start_date,
+        end_date,
+    );
 
-    Ok(prices
+    if rates.is_empty() {
+        anyhow::bail!("no FX history returned for '{}'", pair);
+    }
+
+    let rate_map: HashMap<&str, f64> = rates
+        .iter()
+        .map(|(date, rate)| (date.as_str(), *rate))
+        .collect();
+
+    let eur_prices: Vec<(String, f64)> = prices
         .iter()
         .filter_map(|(date, price)| {
             rate_map
                 .get(date.as_str())
                 .map(|rate| (date.clone(), price * rate))
         })
-        .collect())
+        .collect();
+
+    if eur_prices.is_empty() {
+        anyhow::bail!(
+            "could not align price and FX history for '{}'",
+            asset.ticker
+        );
+    }
+
+    Ok(eur_prices)
+}
+
+fn filter_fetched_series(
+    mut series: Vec<(String, f64)>,
+    start_date: &str,
+    end_date: &str,
+) -> Vec<(String, f64)> {
+    series.retain(|(date, _)| date.as_str() >= start_date && date.as_str() <= end_date);
+    series.sort_by(|left, right| left.0.cmp(&right.0));
+    series.dedup_by(|left, right| left.0 == right.0);
+    series
 }

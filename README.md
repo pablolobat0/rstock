@@ -118,11 +118,17 @@ rstock data import --input txns.csv         # Import transactions from CSV
 rstock analyze composition                  # Portfolio composition breakdown
 rstock analyze correlation matrix           # 1Y asset correlation matrix (default)
 rstock analyze correlation matrix --period 30d
-rstock analyze correlation rolling AAPL MSFT --period 1y
+rstock analyze correlation rolling AAPL MSFT --period 1y   # 60-day rolling stock-pair correlation
 rstock analyze fund --code F00000YN5R      # Deep-dive fund analysis by Morningstar code
 ```
 
 Periods: `30d`, `6m`, `1y` (default), `3y`, `5y`.
+
+Rolling correlation notes:
+- Takes two stock tickers as positional arguments
+- Fetches historical prices on demand through `PriceFetcher`
+- Does not persist fetched prices or FX rates in the local database
+- Computes over the trading-day series returned by the fetcher
 
 ### Monitor stocks
 
@@ -181,7 +187,7 @@ tests/                         # Integration tests + common test utilities
 
 1. `src/cli` parses commands via clap derive macros
 2. `main.rs` dispatches to service functions
-3. Services fetch prices via `PriceFetcher` trait and cache in `daily_asset_prices`
+3. Services fetch prices via `PriceFetcher`; portfolio and matrix flows cache them, while rolling correlation runs on fetched in-memory series only
 4. NAV engine computes daily snapshots using unitization
 5. `src/cli/display` renders tables, charts, and reports to the terminal
 

@@ -293,6 +293,8 @@ Yahoo Finance API ──(yfinance-rs)──> Vec<(date, f64)> ──> daily_asse
 
 `RealPriceFetcher` uses `yfinance_rs::YahooFinance` with `HistoryBuilder` to fetch daily OHLCV data. Only the close price is extracted.
 
+`analyze correlation rolling` uses that fetched stock history directly in memory and does not write it to `daily_asset_prices`.
+
 ### Fund/ETF Prices
 
 ```
@@ -312,6 +314,8 @@ Yahoo Finance ──(yfinance-rs)──> "XXXEUR=X" pairs ──> daily_exchange
 ```
 
 Same mechanism as stock prices but queries currency pair symbols.
+
+`analyze correlation rolling` also fetches FX series on demand and uses them in memory only.
 
 ### Forward-Fill
 
@@ -425,11 +429,12 @@ main.rs
 ```
 main.rs
   └─> analytics::compute_rolling_correlation_data()
-        ├─> Resolve the two requested tickers (tracked asset or ACWI)
-        ├─> Fill price / FX cache for the selected period
+        ├─> Fetch stock metadata for the two requested tickers
+        ├─> Fetch stock price history directly through PriceFetcher
+        ├─> Fetch FX history directly when a ticker is not in EUR
         ├─> Convert both price series to EUR
-        ├─> metrics::align_return_series_with_dates()
-        ├─> metrics::compute_rolling_correlation() over trailing 90-day windows
+        ├─> metrics::align_return_series_with_dates_unfiltered()
+        ├─> metrics::compute_rolling_correlation() over trailing 60-day windows
         └─> Return dated rolling series + summary stats
   └─> display::print_rolling_correlation()
 ```

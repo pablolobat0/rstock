@@ -161,8 +161,33 @@ pub enum AnalyzeCommands {
         code: String,
     },
 
-    /// Correlation matrix between portfolio assets
-    Correlation {
+    /// Correlation analysis: static matrix and rolling pair correlation
+    Correlation(CorrelationArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct CorrelationArgs {
+    #[command(subcommand)]
+    pub command: CorrelationCommands,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum CorrelationCommands {
+    /// Static correlation matrix between portfolio assets
+    Matrix {
+        /// Time period for correlation calculation
+        #[arg(short, long, value_enum, default_value = "1y")]
+        period: CorrelationPeriod,
+    },
+
+    /// 60-day rolling correlation for a selected stock pair
+    Rolling {
+        /// First stock ticker symbol
+        ticker_a: String,
+
+        /// Second stock ticker symbol
+        ticker_b: String,
+
         /// Time period for correlation calculation
         #[arg(short, long, value_enum, default_value = "1y")]
         period: CorrelationPeriod,

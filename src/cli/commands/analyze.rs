@@ -29,11 +29,46 @@ pub async fn composition(
     Ok(())
 }
 
-pub async fn correlation(
+pub async fn correlation_matrix(
     db: &DatabaseConnection,
     fetcher: &dyn PriceFetcher,
     period: CorrelationPeriod,
 ) -> anyhow::Result<()> {
+    let (start_str, today_str, period_label) = correlation_date_range(period);
+
+    services::portfolio::trigger_rebuild_if_needed(db, fetcher).await?;
+    let matrix =
+        services::analytics::compute_correlation_data(db, &start_str, &today_str, fetcher).await?;
+
+    display::print_correlation_matrix(&matrix, period_label);
+    Ok(())
+}
+
+pub async fn rolling_correlation(
+    db: &DatabaseConnection,
+    fetcher: &dyn PriceFetcher,
+    ticker_a: String,
+    ticker_b: String,
+    period: CorrelationPeriod,
+) -> anyhow::Result<()> {
+    let (start_str, today_str, period_label) = correlation_date_range(period);
+
+    let result = services::analytics::compute_rolling_correlation_data(
+        db,
+        &start_str,
+        &today_str,
+        &ticker_a,
+        &ticker_b,
+        period_label,
+        fetcher,
+    )
+    .await?;
+
+    display::print_rolling_correlation(&result);
+    Ok(())
+}
+
+fn correlation_date_range(period: CorrelationPeriod) -> (String, String, &'static str) {
     let today = chrono::Local::now().date_naive();
     let today_str = format_date(today);
 
@@ -46,10 +81,5 @@ pub async fn correlation(
     };
 
     let start_str = format_date(start_date);
-    services::portfolio::trigger_rebuild_if_needed(db, fetcher).await?;
-    let matrix =
-        services::analytics::compute_correlation_data(db, &start_str, &today_str, fetcher).await?;
-
-    display::print_correlation_matrix(&matrix, period_label);
-    Ok(())
+    (start_str, today_str, period_label)
 }

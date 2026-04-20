@@ -88,6 +88,8 @@ pub struct RollingCorrelationResult {
     pub right_name: String,
     pub period_label: String,
     pub window_label: String,
+    pub requested_start_date: String,
+    pub requested_end_date: String,
     pub points: Vec<(String, f64)>,
     pub latest: Option<f64>,
     pub min: Option<f64>,

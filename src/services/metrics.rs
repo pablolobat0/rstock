@@ -231,6 +231,23 @@ pub fn align_return_series_with_dates(
     aligned
 }
 
+#[allow(clippy::implicit_hasher)]
+pub fn align_return_series_with_dates_unfiltered(
+    a: &HashMap<String, f64>,
+    b: &HashMap<String, f64>,
+) -> Vec<(String, f64, f64)> {
+    let mut aligned: Vec<(String, f64, f64)> = a
+        .iter()
+        .filter_map(|(date, &ret_a)| {
+            let &ret_b = b.get(date)?;
+            Some((date.clone(), ret_a, ret_b))
+        })
+        .collect();
+
+    aligned.sort_by(|left, right| left.0.cmp(&right.0));
+    aligned
+}
+
 pub fn compute_rolling_correlation(aligned_returns: &[(String, f64, f64)]) -> Vec<(String, f64)> {
     if aligned_returns.len() < ROLLING_CORRELATION_WINDOW_DAYS.max(MIN_DATA_POINTS) {
         return Vec::new();
