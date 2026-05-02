@@ -75,8 +75,18 @@ pub async fn fill_rates_for_range(
         .get_historical_exchange_rates(pair, start_date, end_date)
         .await;
 
+    let requested_end =
+        NaiveDate::parse_from_str(end_date, DATE_FORMAT).context("invalid end date")?;
+    let latest_completed_date = chrono::Local::now().date_naive() - chrono::Duration::days(1);
+
     let rate_map: std::collections::HashMap<String, f64> = match rates {
-        Ok(rates) => rates.into_iter().collect(),
+        Ok(rates) => rates
+            .into_iter()
+            .filter(|(date, _)| {
+                NaiveDate::parse_from_str(date, DATE_FORMAT)
+                    .is_ok_and(|date| date <= requested_end && date <= latest_completed_date)
+            })
+            .collect(),
         Err(e) => {
             tracing::warn!(%pair, error = %e, "failed to fetch exchange rates");
             return Ok(None);

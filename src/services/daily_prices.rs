@@ -98,8 +98,18 @@ pub async fn fill_prices_for_range(
         .get_historical_prices(lookup_identifier, start_date, end_date, &asset.asset_type)
         .await;
 
+    let requested_end =
+        NaiveDate::parse_from_str(end_date, DATE_FORMAT).context("invalid end date")?;
+    let latest_completed_date = chrono::Local::now().date_naive() - chrono::Duration::days(1);
+
     let price_map: std::collections::HashMap<String, f64> = match prices {
-        Ok(prices) => prices.into_iter().collect(),
+        Ok(prices) => prices
+            .into_iter()
+            .filter(|(date, _)| {
+                NaiveDate::parse_from_str(date, DATE_FORMAT)
+                    .is_ok_and(|date| date <= requested_end && date <= latest_completed_date)
+            })
+            .collect(),
         Err(e) => {
             tracing::warn!(ticker = %asset.ticker, error = %e, "failed to fetch historical prices");
             return Ok(None);
