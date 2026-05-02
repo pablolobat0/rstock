@@ -6,6 +6,7 @@ pub mod export;
 pub mod fund_analysis;
 pub mod holdings;
 pub mod import;
+pub mod market_data;
 pub mod metrics;
 pub mod monitor;
 pub mod nav;

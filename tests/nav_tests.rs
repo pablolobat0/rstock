@@ -421,36 +421,114 @@ async fn test_multiple_assets() {
     assert!((snap.asset_value - 1000.0).abs() < 0.01);
 }
 
-/// Asset has no cached price -> asset skipped in valuation.
+/// Asset has no market data -> NAV rebuild fails before writing partial snapshots.
 #[tokio::test]
-async fn test_missing_price_for_asset() {
+async fn test_missing_price_for_asset_fails_without_partial_snapshots() {
     let db = common::setup_test_db().await;
     let mock = common::MockPriceFetcher::new();
 
     let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
-    // Deliberately NOT inserting any daily price
 
     let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(
+    let result = nav::rebuild_portfolio_history(
         &db,
         start,
         NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
         None,
         &mock,
     )
-    .await
-    .unwrap();
+    .await;
 
-    let snap = common::get_portfolio_snapshot(&db, "2025-01-02")
+    let error = result.expect_err("missing asset market data should fail NAV rebuild");
+    assert!(error
+        .to_string()
+        .contains("missing required historical market data for asset XFAKE1"));
+    assert!(common::get_all_snapshots(&db).await.is_empty());
+}
+
+/// Non-EUR asset with no FX data -> NAV rebuild fails before writing partial snapshots.
+#[tokio::test]
+async fn test_missing_fx_rate_fails_without_partial_snapshots() {
+    let db = common::setup_test_db().await;
+    let mut mock = common::MockPriceFetcher::new();
+
+    let asset_id = common::insert_asset(&db, "XFAKEUSD", "US Stock", "stock", "USD").await;
+    common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 100.0, 0.0).await;
+    mock.historical_prices.insert(
+        "XFAKEUSD".to_owned(),
+        vec![("2025-01-02".to_owned(), 100.0)],
+    );
+
+    let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
+    let result = nav::rebuild_portfolio_history(
+        &db,
+        start,
+        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
+        None,
+        &mock,
+    )
+    .await;
+
+    let error = result.expect_err("missing FX market data should fail NAV rebuild");
+    assert!(error
+        .to_string()
+        .contains("missing required historical market data for FX rate USDEUR"));
+    assert!(common::get_all_snapshots(&db).await.is_empty());
+}
+
+/// Effective valuation date is the minimum latest date across required prices and FX rates.
+#[tokio::test]
+async fn test_effective_valuation_date_uses_minimum_required_market_data_date() {
+    let db = common::setup_test_db().await;
+    let mut mock = common::MockPriceFetcher::new();
+
+    let eur_id = common::insert_asset(&db, "XFAKEEUR", "EUR Stock", "stock", "EUR").await;
+    let usd_id = common::insert_asset(&db, "XFAKEUSD", "US Stock", "stock", "USD").await;
+
+    common::insert_transaction(&db, eur_id, "2025-01-02", 10.0, 50.0, 0.0).await;
+    common::insert_transaction(&db, usd_id, "2025-01-02", 5.0, 100.0, 0.0).await;
+
+    mock.historical_prices.insert(
+        "XFAKEEUR".to_owned(),
+        vec![
+            ("2025-01-02".to_owned(), 50.0),
+            ("2025-01-03".to_owned(), 50.0),
+            ("2025-01-04".to_owned(), 50.0),
+            ("2025-01-05".to_owned(), 50.0),
+        ],
+    );
+    mock.historical_prices.insert(
+        "XFAKEUSD".to_owned(),
+        vec![
+            ("2025-01-02".to_owned(), 100.0),
+            ("2025-01-03".to_owned(), 100.0),
+            ("2025-01-04".to_owned(), 100.0),
+        ],
+    );
+    mock.exchange_rates.insert(
+        "USDEUR".to_owned(),
+        vec![
+            ("2025-01-02".to_owned(), 0.90),
+            ("2025-01-03".to_owned(), 0.90),
+            ("2025-01-04".to_owned(), 0.90),
+            ("2025-01-05".to_owned(), 0.90),
+            ("2025-01-06".to_owned(), 0.90),
+        ],
+    );
+
+    let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
+    let end = NaiveDate::from_ymd_opt(2025, 1, 10).unwrap();
+    nav::rebuild_portfolio_history(&db, start, end, None, &mock)
         .await
         .unwrap();
 
-    // No price -> asset_value = 0, but outstanding_shares still set from deposit
-    assert_eq!(snap.asset_value, 0.0);
-    assert_eq!(snap.outstanding_shares, 5.0); // 500/100
-                                              // NAV = 0/5 = 0
-    assert_eq!(snap.nav, 0.0);
+    assert!(common::get_portfolio_snapshot(&db, "2025-01-04")
+        .await
+        .is_some());
+    assert!(common::get_portfolio_snapshot(&db, "2025-01-05")
+        .await
+        .is_none());
 }
 
 // ========== NEW TESTS ==========

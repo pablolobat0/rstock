@@ -3,15 +3,15 @@ use std::collections::{HashMap, HashSet};
 use chrono::NaiveDate;
 use sea_orm::DatabaseConnection;
 
-use crate::constants::{format_date, BASE_CURRENCY, DATE_FORMAT, FLOAT_EPSILON, INITIAL_NAV};
+use crate::constants::{format_date, BASE_CURRENCY, FLOAT_EPSILON, INITIAL_NAV};
 use crate::db::repos::{
     asset_repo, portfolio_asset_history_repo, portfolio_history_repo, transaction_repo,
 };
 use crate::models::{cents_to_f64, Asset, AssetSnapshot, PortfolioSnapshot, Transaction};
 use crate::services::daily_prices;
 use crate::services::exchange_rates;
+use crate::services::market_data;
 use crate::services::price::PriceFetcher;
-use crate::services::price_cache;
 
 #[allow(clippy::too_many_lines)]
 pub async fn rebuild_portfolio_history(
@@ -64,43 +64,15 @@ pub async fn rebuild_portfolio_history(
         .map(|c| exchange_rates::currency_pair(c))
         .collect();
 
-    // Fill price caches and exchange rate caches
-    let latest_cache_dates =
-        price_cache::fill_asset_prices(db, &assets, &start_str, &end_str, price_fetcher).await?;
-
-    let latest_rate_dates = if needed_currency_pairs.is_empty() {
-        HashMap::new()
-    } else {
-        price_cache::fill_exchange_rates(
-            db,
-            &needed_currency_pairs,
-            &start_str,
-            &end_str,
-            price_fetcher,
-        )
-        .await?
-    };
-
-    // Effective end date = min(end_date, min of latest cache dates for all assets and rates)
-    let min_asset_date = assets
-        .iter()
-        .filter_map(|a| {
-            latest_cache_dates
-                .get(&a.id)
-                .and_then(|d| NaiveDate::parse_from_str(d, DATE_FORMAT).ok())
-        })
-        .min();
-
-    let min_rate_date = latest_rate_dates
-        .values()
-        .filter_map(|d| NaiveDate::parse_from_str(d, DATE_FORMAT).ok())
-        .min();
-
-    let effective_end = [Some(end_date), min_asset_date, min_rate_date]
-        .into_iter()
-        .flatten()
-        .min()
-        .unwrap_or(end_date);
+    let effective_end = market_data::prepare_nav_market_data(
+        db,
+        &assets,
+        &needed_currency_pairs,
+        &start_str,
+        &end_str,
+        price_fetcher,
+    )
+    .await?;
 
     let mut tx_by_date: HashMap<String, Vec<&Transaction>> = HashMap::new();
     for tx in &transactions {
