@@ -7,8 +7,9 @@ use sea_orm::DatabaseConnection;
 use crate::constants::{BASE_CURRENCY, DATE_FORMAT};
 use crate::db::repos::{daily_price_repo, exchange_rate_repo};
 use crate::models::{
-    Asset, AssetType, MarketDataLimitation, MarketDataLimitationClassification,
-    MarketDataLimitationSource, MarketDataSubject, MarketDataValuation, NavMarketData,
+    Asset, AssetDisplayMarketData, AssetType, MarketDataLimitation,
+    MarketDataLimitationClassification, MarketDataLimitationSource, MarketDataSubject,
+    MarketDataValuation, NavMarketData,
 };
 use crate::services::daily_prices;
 use crate::services::exchange_rates;
@@ -104,6 +105,47 @@ pub async fn get_asset_valuation_data(
     }))
 }
 
+pub async fn get_asset_display_market_data(
+    db: &DatabaseConnection,
+    asset: &Asset,
+    fallback_native_price: f64,
+    fallback_price_date: &str,
+    fallback_fx_rate: f64,
+    price_fetcher: &dyn PriceFetcher,
+) -> anyhow::Result<AssetDisplayMarketData> {
+    let today = chrono::Local::now().date_naive();
+    let today_str = crate::constants::format_date(today);
+    let yesterday_str = crate::constants::format_date(today - chrono::Duration::days(1));
+
+    let (native_price, price_date) = get_display_price(
+        db,
+        asset,
+        &today_str,
+        &yesterday_str,
+        fallback_native_price,
+        fallback_price_date,
+        price_fetcher,
+    )
+    .await?;
+    let (fx_rate, limitations) = get_display_exchange_rate(
+        db,
+        asset,
+        &today_str,
+        &yesterday_str,
+        fallback_fx_rate,
+        price_fetcher,
+    )
+    .await?;
+
+    Ok(AssetDisplayMarketData {
+        native_price,
+        price_date,
+        fx_rate,
+        base_currency_price: native_price * fx_rate,
+        limitations,
+    })
+}
+
 #[allow(clippy::implicit_hasher)]
 pub fn get_asset_exchange_rate_from_prepared_rates(
     asset: &Asset,
@@ -133,6 +175,71 @@ async fn get_asset_exchange_rate(
     exchange_rates::get_exchange_rate(db, &pair, date)
         .await?
         .with_context(|| format!("missing required historical market data for FX rate {pair}"))
+}
+
+async fn get_display_price(
+    db: &DatabaseConnection,
+    asset: &Asset,
+    today: &str,
+    yesterday: &str,
+    fallback_native_price: f64,
+    fallback_price_date: &str,
+    price_fetcher: &dyn PriceFetcher,
+) -> anyhow::Result<(f64, String)> {
+    if asset.asset_type == AssetType::Stock {
+        if let Some(live_price) = daily_prices::fetch_live_price(asset, today, price_fetcher)
+            .await
+            .unwrap_or(None)
+        {
+            return Ok((live_price, today.to_owned()));
+        }
+    }
+
+    Ok(
+        match daily_prices::get_price_and_date_at_or_before(db, asset.id, yesterday).await? {
+            Some((price, date)) => (price, date),
+            None => (fallback_native_price, fallback_price_date.to_owned()),
+        },
+    )
+}
+
+async fn get_display_exchange_rate(
+    db: &DatabaseConnection,
+    asset: &Asset,
+    today: &str,
+    yesterday: &str,
+    fallback_fx_rate: f64,
+    price_fetcher: &dyn PriceFetcher,
+) -> anyhow::Result<(f64, Vec<MarketDataLimitation>)> {
+    if asset.currency == BASE_CURRENCY {
+        return Ok((1.0, Vec::new()));
+    }
+
+    let pair = exchange_rates::currency_pair(&asset.currency);
+    if let Some(live_rate) = exchange_rates::fetch_live_rate(&pair, today, price_fetcher)
+        .await
+        .unwrap_or(None)
+    {
+        return Ok((live_rate, Vec::new()));
+    }
+
+    let Some((rate, date_string)) =
+        exchange_rate_repo::find_rate_and_date_at_or_before(db, &pair, yesterday).await?
+    else {
+        return Ok((fallback_fx_rate, Vec::new()));
+    };
+    let available_on = parse_date(&date_string, "FX rate date")?;
+    let requested_end = parse_date(yesterday, "display FX end date")?;
+    let limitations = classify_fx_limitation(
+        &pair,
+        available_on,
+        requested_end,
+        MarketDataLimitationSource::CachedFallback,
+    )
+    .into_iter()
+    .collect();
+
+    Ok((rate, limitations))
 }
 
 async fn fill_nav_asset_prices(

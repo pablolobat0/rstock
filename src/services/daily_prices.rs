@@ -1,10 +1,8 @@
-use std::collections::HashMap;
-
 use anyhow::Context;
 use chrono::NaiveDate;
 use sea_orm::DatabaseConnection;
 
-use crate::constants::{format_date, is_benchmark_ticker, DATE_FORMAT};
+use crate::constants::{format_date, DATE_FORMAT};
 use crate::db::repos::daily_price_repo;
 use crate::models::{Asset, AssetType};
 use crate::services::price::PriceFetcher;
@@ -47,31 +45,6 @@ pub async fn fetch_live_price(
         .get_historical_prices(lookup, date, date, &asset.asset_type)
         .await?;
     Ok(prices.last().map(|(_, price)| *price))
-}
-
-/// Fetches live prices for all stock assets (excluding benchmarks) in parallel.
-/// Returns a map of `asset_id` -> price for assets where the fetch succeeded.
-pub async fn fetch_live_prices_batch(
-    assets: &[Asset],
-    today: &str,
-    price_fetcher: &dyn PriceFetcher,
-) -> HashMap<i32, f64> {
-    let stock_assets: Vec<_> = assets
-        .iter()
-        .filter(|a| a.asset_type == AssetType::Stock && !is_benchmark_ticker(&a.ticker))
-        .collect();
-    let futures: Vec<_> = stock_assets
-        .iter()
-        .map(|asset| async {
-            let result = fetch_live_price(asset, today, price_fetcher).await;
-            (asset.id, result)
-        })
-        .collect();
-    futures::future::join_all(futures)
-        .await
-        .into_iter()
-        .filter_map(|(id, r)| r.ok().flatten().map(|p| (id, p)))
-        .collect()
 }
 
 /// Returns the most recent price and its date on or before the given date.
