@@ -33,6 +33,12 @@ fn print_header(result: &FundAnalysisResult) {
     if let Some(total) = result.total_holdings {
         info_parts.push(format!("Total Holdings: {total}"));
     }
+    if let Some(weight) = result.top_10_weight {
+        info_parts.push(format!(
+            "Top 10 Weight: {}",
+            format_eu(&format!("{weight:.2}%"))
+        ));
+    }
     if let Some(ref date) = result.portfolio_date {
         info_parts.push(format!("Portfolio Date: {}", display_date(date)));
     }

@@ -8,6 +8,8 @@
 # Environment
 .env
 
+.scratch
+
 # Editor/IDE
 *.swp
 *.swo

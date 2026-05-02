@@ -4,7 +4,7 @@ use common::setup_test_db;
 use rstock::db::repos::fund_holdings_snapshot_repo;
 use rstock::models::{FundHolding, HoldingChangeType};
 use rstock::services::fund_analysis::{
-    compute_breakdown, compute_fingerprint, compute_holding_diff,
+    compute_breakdown, compute_fingerprint, compute_holding_diff, compute_top_n_weight,
 };
 use rstock::services::metrics::compute_cagr;
 
@@ -121,6 +121,32 @@ fn test_breakdown_excludes_non_equity_when_filtered_by_ticker() {
     assert!((breakdown[0].weight - 60.0).abs() < 0.1);
     assert_eq!(breakdown[1].label, "Auto");
     assert!((breakdown[1].weight - 40.0).abs() < 0.1);
+}
+
+#[test]
+fn test_compute_top_10_weight_uses_largest_holdings() {
+    let holdings = vec![
+        fund_holding("Small", 1.0, None, None, None),
+        fund_holding("Largest", 10.0, None, None, None),
+        fund_holding("Second", 9.0, None, None, None),
+        fund_holding("Third", 8.0, None, None, None),
+        fund_holding("Fourth", 7.0, None, None, None),
+        fund_holding("Fifth", 6.0, None, None, None),
+        fund_holding("Sixth", 5.0, None, None, None),
+        fund_holding("Seventh", 4.0, None, None, None),
+        fund_holding("Eighth", 3.0, None, None, None),
+        fund_holding("Ninth", 2.0, None, None, None),
+        fund_holding("Tenth", 1.5, None, None, None),
+    ];
+
+    let top_10_weight = compute_top_n_weight(&holdings, 10).unwrap();
+
+    assert!((top_10_weight - 55.5).abs() < 0.01);
+}
+
+#[test]
+fn test_compute_top_10_weight_none_for_no_holdings() {
+    assert!(compute_top_n_weight(&[], 10).is_none());
 }
 
 #[test]

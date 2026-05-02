@@ -19,3 +19,17 @@
 * **NAV Unitization:** Initial deposit sets NAV=100.0. Subsequent deposits issue shares at current NAV; sells redeem shares (`src/services/nav.rs`).
 * **Snapshots Invalidation:** Buy/sell transactions delete `portfolio_history` and `portfolio_asset_history` from the transaction date forward to trigger rebuilds.
 * **Database:** SQLite at `~/.rstock/rstock.db`. Auto-migrates on connection (`src/db/mod.rs`).
+
+## Agent skills
+
+### Issue tracker
+
+Issues and PRDs are tracked as local markdown files under `.scratch/`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Uses the default five-role triage vocabulary. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context repo: read root `CONTEXT.md` and `docs/adr/` when present. See `docs/agents/domain.md`.

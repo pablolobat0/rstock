@@ -34,7 +34,7 @@ pub async fn correlation_matrix(
     fetcher: &dyn PriceFetcher,
     period: CorrelationPeriod,
 ) -> anyhow::Result<()> {
-    let (start_str, today_str, period_label) = correlation_date_range(period);
+    let (start_str, today_str, period_label) = correlation_date_range(&period);
 
     services::portfolio::trigger_rebuild_if_needed(db, fetcher).await?;
     let matrix =
@@ -51,7 +51,7 @@ pub async fn rolling_correlation(
     ticker_b: String,
     period: CorrelationPeriod,
 ) -> anyhow::Result<()> {
-    let (start_str, today_str, period_label) = correlation_date_range(period);
+    let (start_str, today_str, period_label) = correlation_date_range(&period);
 
     let result = services::analytics::compute_rolling_correlation_data(
         db,
@@ -68,7 +68,7 @@ pub async fn rolling_correlation(
     Ok(())
 }
 
-fn correlation_date_range(period: CorrelationPeriod) -> (String, String, &'static str) {
+fn correlation_date_range(period: &CorrelationPeriod) -> (String, String, &'static str) {
     let today = chrono::Local::now().date_naive();
     let today_str = format_date(today);
 

@@ -348,7 +348,7 @@ async fn get_direct_eur_price_series(
     );
 
     if rates.is_empty() {
-        anyhow::bail!("no FX history returned for '{}'", pair);
+        anyhow::bail!("no FX history returned for '{pair}'");
     }
 
     let rate_map: HashMap<&str, f64> = rates

@@ -79,6 +79,7 @@ pub async fn compute_fund_analysis(
     let sector_breakdown = compute_breakdown(&equity_holdings, |h| h.sector.clone());
     let country_breakdown = compute_breakdown(&equity_holdings, |h| h.country.clone());
     let currency_breakdown = compute_breakdown(&equity_holdings, |h| h.currency.clone());
+    let top_10_weight = compute_top_n_weight(&all_holdings, 10);
 
     let (holdings_changed, last_snapshot_date, holding_diff) = compute_snapshot_diff(
         db,
@@ -98,6 +99,7 @@ pub async fn compute_fund_analysis(
         fund_currency,
         total_holdings,
         portfolio_date,
+        top_10_weight,
         top_holdings,
         sector_breakdown,
         country_breakdown,
@@ -310,6 +312,17 @@ pub fn compute_breakdown(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     entries
+}
+
+pub fn compute_top_n_weight(holdings: &[FundHolding], count: usize) -> Option<f64> {
+    if holdings.is_empty() || count == 0 {
+        return None;
+    }
+
+    let mut weights: Vec<f64> = holdings.iter().map(|holding| holding.weighting).collect();
+    weights.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+
+    Some(weights.into_iter().take(count).sum())
 }
 
 async fn compute_snapshot_diff(

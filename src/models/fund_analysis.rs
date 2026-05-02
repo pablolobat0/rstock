@@ -6,6 +6,7 @@ pub struct FundAnalysisResult {
     pub fund_currency: Option<String>,
     pub total_holdings: Option<i32>,
     pub portfolio_date: Option<String>,
+    pub top_10_weight: Option<f64>,
     pub top_holdings: Vec<FundHolding>,
     pub sector_breakdown: Vec<AllocationEntry>,
     pub country_breakdown: Vec<AllocationEntry>,
