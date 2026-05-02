@@ -8,6 +8,13 @@ pub struct NavMarketData {
     pub limitations: Vec<MarketDataLimitation>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BenchmarkMarketData {
+    pub asset_id: i32,
+    pub effective_end: NaiveDate,
+    pub limitations: Vec<MarketDataLimitation>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct MarketDataValuation {
     pub native_price: f64,

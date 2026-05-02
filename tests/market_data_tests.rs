@@ -1,7 +1,7 @@
 mod common;
 
 use chrono::{Duration, Local, NaiveDate};
-use rstock::constants::format_date;
+use rstock::constants::{format_date, BENCHMARK_NAME, BENCHMARK_TICKER};
 use rstock::db::entities::asset;
 use rstock::db::repos::{daily_price_repo, exchange_rate_repo};
 use rstock::models::{
@@ -40,6 +40,93 @@ async fn make_fund_asset(
         .unwrap()
         .unwrap();
     Asset::from(model)
+}
+
+fn date(year: i32, month: u32, day: u32) -> NaiveDate {
+    NaiveDate::from_ymd_opt(year, month, day).unwrap()
+}
+
+#[tokio::test]
+async fn test_benchmark_market_data_prepares_prices_through_market_data() {
+    let db = common::setup_test_db().await;
+    let mut mock = common::MockPriceFetcher::new();
+
+    mock.historical_prices.insert(
+        BENCHMARK_TICKER.to_owned(),
+        vec![("2025-01-02".to_owned(), 100.0)],
+    );
+    mock.exchange_rates
+        .insert("USDEUR".to_owned(), vec![("2025-01-02".to_owned(), 0.90)]);
+
+    let benchmark_market_data =
+        market_data::prepare_benchmark_market_data(&db, "2025-01-02", "2025-01-02", &mock)
+            .await
+            .unwrap();
+
+    assert_eq!(benchmark_market_data.effective_end, date(2025, 1, 2));
+    assert_eq!(benchmark_market_data.limitations, vec![]);
+    assert_eq!(
+        daily_price_repo::find_price(&db, benchmark_market_data.asset_id, "2025-01-02")
+            .await
+            .unwrap(),
+        Some(100.0)
+    );
+}
+
+#[tokio::test]
+async fn test_benchmark_market_data_prepares_required_fx() {
+    let db = common::setup_test_db().await;
+    let mut mock = common::MockPriceFetcher::new();
+
+    mock.historical_prices.insert(
+        BENCHMARK_TICKER.to_owned(),
+        vec![("2025-01-02".to_owned(), 100.0)],
+    );
+    mock.exchange_rates
+        .insert("USDEUR".to_owned(), vec![("2025-01-02".to_owned(), 0.90)]);
+
+    market_data::prepare_benchmark_market_data(&db, "2025-01-02", "2025-01-02", &mock)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        exchange_rate_repo::find_rate(&db, "USDEUR", "2025-01-02")
+            .await
+            .unwrap(),
+        Some(0.90)
+    );
+}
+
+#[tokio::test]
+async fn test_benchmark_market_data_stays_distinct_from_holdings() {
+    let db = common::setup_test_db().await;
+    let mut mock = common::MockPriceFetcher::new();
+
+    let held_asset = make_asset(&db, "XFAKE1", "Held Stock", "stock", "EUR").await;
+    common::insert_transaction(&db, held_asset.id, "2025-01-02", 1.0, 10.0, 0.0).await;
+    mock.historical_prices.insert(
+        BENCHMARK_TICKER.to_owned(),
+        vec![("2025-01-02".to_owned(), 100.0)],
+    );
+    mock.exchange_rates
+        .insert("USDEUR".to_owned(), vec![("2025-01-02".to_owned(), 0.90)]);
+
+    let benchmark_market_data =
+        market_data::prepare_benchmark_market_data(&db, "2025-01-02", "2025-01-02", &mock)
+            .await
+            .unwrap();
+    let benchmark = asset::Entity::find_by_id(benchmark_market_data.asset_id)
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(benchmark.ticker, BENCHMARK_TICKER);
+    assert_eq!(benchmark.name, BENCHMARK_NAME);
+    assert_ne!(benchmark_market_data.asset_id, held_asset.id);
+    assert!(common::get_asset_snapshots(&db, "2025-01-02")
+        .await
+        .is_empty());
 }
 
 #[tokio::test]
