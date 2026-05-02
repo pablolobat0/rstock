@@ -5,19 +5,34 @@ use chrono::{Datelike, NaiveDate, Weekday};
 use sea_orm::DatabaseConnection;
 
 use crate::constants::{BASE_CURRENCY, DATE_FORMAT};
-use crate::db::repos::{daily_price_repo, exchange_rate_repo};
+use crate::db::repos::{asset_repo, daily_price_repo, exchange_rate_repo};
 use crate::models::{
-    Asset, AssetDisplayMarketData, AssetType, MarketDataLimitation,
-    MarketDataLimitationClassification, MarketDataLimitationSource, MarketDataSubject,
-    MarketDataValuation, NavMarketData,
+    Asset, AssetClassification, AssetDisplayMarketData, AssetType, BenchmarkMarketData,
+    MarketDataLimitation, MarketDataLimitationClassification, MarketDataLimitationSource,
+    MarketDataSubject, MarketDataValuation, NavMarketData,
 };
 use crate::services::daily_prices;
 use crate::services::exchange_rates;
+use crate::services::metrics;
 use crate::services::price::PriceFetcher;
 
 struct LatestMarketDataDate {
     date: String,
     source: MarketDataLimitationSource,
+}
+
+enum HistoricalMarketDataPurpose {
+    Nav,
+    Benchmark,
+}
+
+impl HistoricalMarketDataPurpose {
+    fn error_prefix(&self) -> &'static str {
+        match self {
+            Self::Nav => "NAV",
+            Self::Benchmark => "benchmark",
+        }
+    }
 }
 
 pub async fn prepare_nav_market_data(
@@ -28,7 +43,64 @@ pub async fn prepare_nav_market_data(
     end_date: &str,
     price_fetcher: &dyn PriceFetcher,
 ) -> anyhow::Result<NavMarketData> {
-    let requested_end = parse_date(end_date, "NAV end date")?;
+    prepare_historical_market_data(
+        db,
+        assets,
+        currency_pairs,
+        start_date,
+        end_date,
+        price_fetcher,
+        HistoricalMarketDataPurpose::Nav,
+    )
+    .await
+}
+
+pub async fn prepare_benchmark_market_data(
+    db: &DatabaseConnection,
+    start_date: &str,
+    end_date: &str,
+    price_fetcher: &dyn PriceFetcher,
+) -> anyhow::Result<BenchmarkMarketData> {
+    let info = metrics::benchmark_asset_info();
+    let asset_id = match asset_repo::find_by_ticker(db, &info.ticker).await? {
+        Some(asset) => asset.id,
+        None => asset_repo::create(db, &info, &AssetClassification::default(), None).await?,
+    };
+    let benchmark = metrics::benchmark_asset(asset_id);
+    let currency_pairs = if benchmark.currency == BASE_CURRENCY {
+        Vec::new()
+    } else {
+        vec![exchange_rates::currency_pair(&benchmark.currency)]
+    };
+
+    let market_data = prepare_historical_market_data(
+        db,
+        std::slice::from_ref(&benchmark),
+        &currency_pairs,
+        start_date,
+        end_date,
+        price_fetcher,
+        HistoricalMarketDataPurpose::Benchmark,
+    )
+    .await?;
+
+    Ok(BenchmarkMarketData {
+        asset_id,
+        effective_end: market_data.effective_end,
+        limitations: market_data.limitations,
+    })
+}
+
+async fn prepare_historical_market_data(
+    db: &DatabaseConnection,
+    assets: &[Asset],
+    currency_pairs: &[String],
+    start_date: &str,
+    end_date: &str,
+    price_fetcher: &dyn PriceFetcher,
+    purpose: HistoricalMarketDataPurpose,
+) -> anyhow::Result<NavMarketData> {
+    let requested_end = parse_date(end_date, "historical market data end date")?;
     let latest_asset_dates =
         fill_nav_asset_prices(db, assets, start_date, end_date, price_fetcher).await?;
     let latest_rate_dates = if currency_pairs.is_empty() {
@@ -77,10 +149,12 @@ pub async fn prepare_nav_market_data(
         }
     }
 
-    let effective_end = latest_required_dates
-        .into_iter()
-        .min()
-        .context("NAV market data preparation had no date requirements")?;
+    let effective_end = latest_required_dates.into_iter().min().with_context(|| {
+        format!(
+            "{} market data preparation had no date requirements",
+            purpose.error_prefix()
+        )
+    })?;
 
     Ok(NavMarketData {
         effective_end,

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use sea_orm::DatabaseConnection;
 
-use crate::constants::{BASE_CURRENCY, BENCHMARK_CURRENCY, MIN_DATA_POINTS, ZERO_RETURN_THRESHOLD};
+use crate::constants::{BASE_CURRENCY, MIN_DATA_POINTS, ZERO_RETURN_THRESHOLD};
 use crate::db::repos::{
     asset_repo, daily_price_repo, exchange_rate_repo, portfolio_asset_history_repo,
     portfolio_history_repo,
@@ -11,7 +11,7 @@ use crate::models::{
     Asset, AssetType, CorrelationMatrix, PeriodMetrics, PortfolioSnapshot, RollingCorrelationResult,
 };
 use crate::services::price::PriceFetcher;
-use crate::services::{daily_prices, exchange_rates, metrics, price_cache};
+use crate::services::{exchange_rates, market_data, metrics};
 
 pub async fn compute_correlation_data(
     db: &DatabaseConnection,
@@ -28,15 +28,11 @@ pub async fn compute_correlation_data(
     let asset_ids: Vec<i32> = held_assets.iter().map(|s| s.asset_id).collect();
     let assets = asset_repo::find_by_ids(db, asset_ids.into_iter()).await?;
 
-    let benchmark_asset_id =
-        ensure_benchmark_prices(db, start_date, end_date, price_fetcher).await?;
-    if BENCHMARK_CURRENCY != BASE_CURRENCY {
-        let pair = exchange_rates::currency_pair(BENCHMARK_CURRENCY);
-        price_cache::fill_exchange_rates(db, &[pair], start_date, end_date, price_fetcher).await?;
-    }
+    let benchmark_market_data =
+        market_data::prepare_benchmark_market_data(db, start_date, end_date, price_fetcher).await?;
 
     let mut all_assets: Vec<Asset> = assets;
-    all_assets.push(metrics::benchmark_asset(benchmark_asset_id));
+    all_assets.push(metrics::benchmark_asset(benchmark_market_data.asset_id));
 
     let mut return_series: Vec<(String, HashMap<String, f64>)> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
@@ -171,11 +167,16 @@ pub async fn compute_all_period_metrics(
         return Ok((None, None, None, None));
     }
 
-    let benchmark_asset_id =
-        ensure_benchmark_prices(db, widest_start, snapshot_date, price_fetcher).await?;
-    let benchmark_prices =
-        daily_price_repo::find_prices_between(db, benchmark_asset_id, widest_start, snapshot_date)
+    let benchmark_market_data =
+        market_data::prepare_benchmark_market_data(db, widest_start, snapshot_date, price_fetcher)
             .await?;
+    let benchmark_prices = daily_price_repo::find_prices_between(
+        db,
+        benchmark_market_data.asset_id,
+        widest_start,
+        snapshot_date,
+    )
+    .await?;
     let benchmark_map: HashMap<&str, f64> = benchmark_prices
         .iter()
         .map(|(d, p)| (d.as_str(), *p))
@@ -265,40 +266,6 @@ fn filter_trading_days(
     }
 
     (portfolio_returns, benchmark_returns, trading_day_navs)
-}
-
-async fn ensure_benchmark_prices(
-    db: &DatabaseConnection,
-    start_date: &str,
-    end_date: &str,
-    price_fetcher: &dyn PriceFetcher,
-) -> anyhow::Result<i32> {
-    let info = metrics::benchmark_asset_info();
-    let asset_id = match asset_repo::find_by_ticker(db, &info.ticker).await? {
-        Some(a) => a.id,
-        None => {
-            asset_repo::create(
-                db,
-                &info,
-                &crate::models::AssetClassification::default(),
-                None,
-            )
-            .await?
-        }
-    };
-    let asset = metrics::benchmark_asset(asset_id);
-
-    daily_prices::fill_prices_for_range(
-        db,
-        &asset,
-        &asset.ticker,
-        start_date,
-        end_date,
-        price_fetcher,
-    )
-    .await?;
-
-    Ok(asset_id)
 }
 
 async fn fetch_rolling_asset_info(

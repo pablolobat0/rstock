@@ -15,8 +15,9 @@ pub use fund_analysis::{
     FundAnalysisResult, FundData, FundPeriodMetrics, HoldingChange, HoldingChangeType,
 };
 pub use market_data::{
-    AssetDisplayMarketData, MarketDataLimitation, MarketDataLimitationClassification,
-    MarketDataLimitationSource, MarketDataSubject, MarketDataValuation, NavMarketData,
+    AssetDisplayMarketData, BenchmarkMarketData, MarketDataLimitation,
+    MarketDataLimitationClassification, MarketDataLimitationSource, MarketDataSubject,
+    MarketDataValuation, NavMarketData,
 };
 pub use portfolio::{
     AllocationEntry, AssetSnapshot, CompositionResult, CorrelationMatrix, FundHolding,

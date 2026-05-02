@@ -4,6 +4,7 @@ use common::{
     insert_asset, insert_daily_price, insert_exchange_rate, insert_transaction, setup_test_db,
     MockPriceFetcher,
 };
+use rstock::constants::BENCHMARK_TICKER;
 use rstock::models::monitor::StockInfo;
 use rstock::services::analytics::{compute_correlation_data, compute_rolling_correlation_data};
 use rstock::services::metrics::{
@@ -12,12 +13,41 @@ use rstock::services::metrics::{
 };
 use rstock::services::nav::rebuild_portfolio_history;
 
+fn seed_benchmark_market_data(fetcher: &mut MockPriceFetcher, days: usize) {
+    let benchmark_prices: Vec<(String, f64)> = (0..days)
+        .map(|i| {
+            let date = (chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap()
+                + chrono::Duration::days(i as i64))
+            .format("%Y-%m-%d")
+            .to_string();
+            (date, 200.0 + i as f64)
+        })
+        .collect();
+    let benchmark_fx: Vec<(String, f64)> = (0..days)
+        .map(|i| {
+            let date = (chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap()
+                + chrono::Duration::days(i as i64))
+            .format("%Y-%m-%d")
+            .to_string();
+            (date, 0.92)
+        })
+        .collect();
+
+    fetcher
+        .historical_prices
+        .insert(BENCHMARK_TICKER.to_owned(), benchmark_prices);
+    fetcher
+        .exchange_rates
+        .insert("USDEUR".to_owned(), benchmark_fx);
+}
+
 /// Two perfectly correlated EUR assets (prices move in lockstep)
 /// should have correlation = 1.0
 #[tokio::test]
 async fn test_perfectly_correlated_assets() {
     let db = setup_test_db().await;
-    let fetcher = MockPriceFetcher::new();
+    let mut fetcher = MockPriceFetcher::new();
+    seed_benchmark_market_data(&mut fetcher, 25);
 
     let id_a = insert_asset(&db, "XFAKE1", "Fake A", "stock", "EUR").await;
     let id_b = insert_asset(&db, "XFAKE2", "Fake B", "stock", "EUR").await;
@@ -65,7 +95,8 @@ async fn test_perfectly_correlated_assets() {
 #[tokio::test]
 async fn test_negatively_correlated_assets() {
     let db = setup_test_db().await;
-    let fetcher = MockPriceFetcher::new();
+    let mut fetcher = MockPriceFetcher::new();
+    seed_benchmark_market_data(&mut fetcher, 25);
 
     let id_a = insert_asset(&db, "XFAKE1", "Fake A", "stock", "EUR").await;
     let id_b = insert_asset(&db, "XFAKE2", "Fake B", "stock", "EUR").await;
@@ -116,7 +147,8 @@ async fn test_negatively_correlated_assets() {
 #[tokio::test]
 async fn test_diagonal_is_one() {
     let db = setup_test_db().await;
-    let fetcher = MockPriceFetcher::new();
+    let mut fetcher = MockPriceFetcher::new();
+    seed_benchmark_market_data(&mut fetcher, 25);
 
     let id_a = insert_asset(&db, "XFAKE1", "Fake A", "stock", "EUR").await;
     insert_transaction(&db, id_a, "2025-01-01", 1.0, 100.0, 0.0).await;
@@ -147,7 +179,8 @@ async fn test_diagonal_is_one() {
 #[tokio::test]
 async fn test_usd_asset_uses_eur_conversion() {
     let db = setup_test_db().await;
-    let fetcher = MockPriceFetcher::new();
+    let mut fetcher = MockPriceFetcher::new();
+    seed_benchmark_market_data(&mut fetcher, 25);
 
     // One EUR asset, one USD asset with same percentage moves
     let id_eur = insert_asset(&db, "XFAKE1", "Fake EUR", "stock", "EUR").await;
@@ -190,7 +223,8 @@ async fn test_usd_asset_uses_eur_conversion() {
 #[tokio::test]
 async fn test_insufficient_data_produces_warning() {
     let db = setup_test_db().await;
-    let fetcher = MockPriceFetcher::new();
+    let mut fetcher = MockPriceFetcher::new();
+    seed_benchmark_market_data(&mut fetcher, 5);
 
     let id_a = insert_asset(&db, "XFAKE1", "Fake A", "stock", "EUR").await;
     insert_transaction(&db, id_a, "2025-01-01", 1.0, 100.0, 0.0).await;
