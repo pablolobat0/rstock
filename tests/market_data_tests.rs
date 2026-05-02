@@ -4,7 +4,9 @@ use chrono::{Duration, Local, NaiveDate};
 use rstock::constants::format_date;
 use rstock::db::entities::asset;
 use rstock::db::repos::{daily_price_repo, exchange_rate_repo};
-use rstock::models::Asset;
+use rstock::models::{
+    Asset, MarketDataLimitationClassification, MarketDataLimitationSource, MarketDataSubject,
+};
 use rstock::services::market_data;
 use sea_orm::EntityTrait;
 
@@ -16,6 +18,22 @@ async fn make_asset(
     currency: &str,
 ) -> Asset {
     let id = common::insert_asset(db, ticker, name, asset_type, currency).await;
+    let model = asset::Entity::find_by_id(id)
+        .one(db)
+        .await
+        .unwrap()
+        .unwrap();
+    Asset::from(model)
+}
+
+async fn make_fund_asset(
+    db: &sea_orm::DatabaseConnection,
+    ticker: &str,
+    name: &str,
+    currency: &str,
+    morningstar_code: &str,
+) -> Asset {
+    let id = common::insert_fund_asset(db, ticker, name, currency, morningstar_code).await;
     let model = asset::Entity::find_by_id(id)
         .one(db)
         .await
@@ -44,7 +62,7 @@ async fn test_nav_market_data_does_not_persist_same_day_asset_or_fx_data() {
         vec![(yesterday_str.clone(), 0.90), (today_str.clone(), 0.91)],
     );
 
-    let effective_end = market_data::prepare_nav_market_data(
+    let nav_market_data = market_data::prepare_nav_market_data(
         &db,
         std::slice::from_ref(&asset),
         &["USDEUR".to_owned()],
@@ -55,7 +73,7 @@ async fn test_nav_market_data_does_not_persist_same_day_asset_or_fx_data() {
     .await
     .unwrap();
 
-    assert_eq!(effective_end, yesterday);
+    assert_eq!(nav_market_data.effective_end, yesterday);
     assert_eq!(
         daily_price_repo::find_price(&db, asset.id, &today_str)
             .await
@@ -84,7 +102,7 @@ async fn test_nav_market_data_persists_asset_forward_fill_between_source_observa
         ],
     );
 
-    let effective_end = market_data::prepare_nav_market_data(
+    let nav_market_data = market_data::prepare_nav_market_data(
         &db,
         std::slice::from_ref(&asset),
         &[],
@@ -95,7 +113,10 @@ async fn test_nav_market_data_persists_asset_forward_fill_between_source_observa
     .await
     .unwrap();
 
-    assert_eq!(effective_end, NaiveDate::from_ymd_opt(2025, 1, 5).unwrap());
+    assert_eq!(
+        nav_market_data.effective_end,
+        NaiveDate::from_ymd_opt(2025, 1, 5).unwrap()
+    );
     assert_eq!(
         daily_price_repo::find_price(&db, asset.id, "2025-01-03")
             .await
@@ -134,7 +155,7 @@ async fn test_nav_market_data_persists_fx_forward_fill_between_source_observatio
         ],
     );
 
-    let effective_end = market_data::prepare_nav_market_data(
+    let nav_market_data = market_data::prepare_nav_market_data(
         &db,
         std::slice::from_ref(&asset),
         &["USDEUR".to_owned()],
@@ -145,7 +166,10 @@ async fn test_nav_market_data_persists_fx_forward_fill_between_source_observatio
     .await
     .unwrap();
 
-    assert_eq!(effective_end, NaiveDate::from_ymd_opt(2025, 1, 5).unwrap());
+    assert_eq!(
+        nav_market_data.effective_end,
+        NaiveDate::from_ymd_opt(2025, 1, 5).unwrap()
+    );
     assert_eq!(
         exchange_rate_repo::find_rate(&db, "USDEUR", "2025-01-03")
             .await
@@ -163,5 +187,131 @@ async fn test_nav_market_data_persists_fx_forward_fill_between_source_observatio
             .await
             .unwrap(),
         None
+    );
+}
+
+#[tokio::test]
+async fn test_nav_market_data_returns_stale_cached_asset_limitation() {
+    let db = common::setup_test_db().await;
+    let mock = common::MockPriceFetcher::new();
+
+    let asset = make_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
+    common::insert_daily_price(&db, asset.id, "2025-01-03", 10.0, false).await;
+
+    let nav_market_data = market_data::prepare_nav_market_data(
+        &db,
+        std::slice::from_ref(&asset),
+        &[],
+        "2025-01-06",
+        "2025-01-06",
+        &mock,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        nav_market_data.effective_end,
+        NaiveDate::from_ymd_opt(2025, 1, 3).unwrap()
+    );
+    assert_eq!(nav_market_data.limitations.len(), 1);
+    assert_eq!(
+        nav_market_data.limitations[0].classification,
+        MarketDataLimitationClassification::ActionableStaleData
+    );
+    assert_eq!(
+        nav_market_data.limitations[0].source,
+        MarketDataLimitationSource::CachedFallback
+    );
+}
+
+#[tokio::test]
+async fn test_nav_market_data_classifies_reporting_lag() {
+    let db = common::setup_test_db().await;
+    let mut mock = common::MockPriceFetcher::new();
+
+    let acceptable = make_fund_asset(&db, "XFAKEF1", "Test Fund 1", "EUR", "FUND1").await;
+    let excessive = make_fund_asset(&db, "XFAKEF2", "Test Fund 2", "EUR", "FUND2").await;
+    mock.historical_prices
+        .insert("FUND1".to_owned(), vec![("2025-01-03".to_owned(), 10.0)]);
+    mock.historical_prices
+        .insert("FUND2".to_owned(), vec![("2025-01-02".to_owned(), 20.0)]);
+
+    let nav_market_data = market_data::prepare_nav_market_data(
+        &db,
+        &[acceptable, excessive],
+        &[],
+        "2025-01-02",
+        "2025-01-10",
+        &mock,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(nav_market_data.limitations.len(), 2);
+    assert!(nav_market_data.limitations.iter().any(|limitation| {
+        limitation.classification == MarketDataLimitationClassification::AcceptableReportingLag
+    }));
+    assert!(nav_market_data.limitations.iter().any(|limitation| {
+        limitation.classification == MarketDataLimitationClassification::ActionableReportingLag
+    }));
+}
+
+#[tokio::test]
+async fn test_nav_market_data_stock_stale_limitations_ignore_weekends() {
+    let db = common::setup_test_db().await;
+    let mut mock = common::MockPriceFetcher::new();
+
+    let asset = make_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
+    mock.historical_prices
+        .insert("XFAKE1".to_owned(), vec![("2025-01-03".to_owned(), 10.0)]);
+
+    let nav_market_data = market_data::prepare_nav_market_data(
+        &db,
+        std::slice::from_ref(&asset),
+        &[],
+        "2025-01-03",
+        "2025-01-05",
+        &mock,
+    )
+    .await
+    .unwrap();
+
+    assert!(nav_market_data.limitations.is_empty());
+}
+
+#[tokio::test]
+async fn test_nav_market_data_returns_fx_completed_weekday_stale_limitation() {
+    let db = common::setup_test_db().await;
+    let mut mock = common::MockPriceFetcher::new();
+
+    let asset = make_asset(&db, "XFAKEUSD", "US Stock", "stock", "USD").await;
+    mock.historical_prices.insert(
+        "XFAKEUSD".to_owned(),
+        vec![("2025-01-06".to_owned(), 100.0)],
+    );
+    mock.exchange_rates
+        .insert("USDEUR".to_owned(), vec![("2025-01-03".to_owned(), 0.90)]);
+
+    let nav_market_data = market_data::prepare_nav_market_data(
+        &db,
+        std::slice::from_ref(&asset),
+        &["USDEUR".to_owned()],
+        "2025-01-03",
+        "2025-01-06",
+        &mock,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(nav_market_data.limitations.len(), 1);
+    assert_eq!(
+        nav_market_data.limitations[0].classification,
+        MarketDataLimitationClassification::ActionableStaleData
+    );
+    assert_eq!(
+        nav_market_data.limitations[0].subject,
+        MarketDataSubject::FxRate {
+            pair: "USDEUR".to_owned()
+        }
     );
 }

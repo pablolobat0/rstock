@@ -64,7 +64,7 @@ pub async fn rebuild_portfolio_history(
         .map(|c| exchange_rates::currency_pair(c))
         .collect();
 
-    let effective_end = market_data::prepare_nav_market_data(
+    let nav_market_data = market_data::prepare_nav_market_data(
         db,
         &assets,
         &needed_currency_pairs,
@@ -73,6 +73,7 @@ pub async fn rebuild_portfolio_history(
         price_fetcher,
     )
     .await?;
+    let effective_end = nav_market_data.effective_end;
 
     let mut tx_by_date: HashMap<String, Vec<&Transaction>> = HashMap::new();
     for tx in &transactions {

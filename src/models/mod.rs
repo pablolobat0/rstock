@@ -1,6 +1,7 @@
 mod asset;
 mod classification;
 mod fund_analysis;
+mod market_data;
 pub mod monitor;
 mod portfolio;
 mod transaction;
@@ -12,6 +13,10 @@ pub use classification::{
 };
 pub use fund_analysis::{
     FundAnalysisResult, FundData, FundPeriodMetrics, HoldingChange, HoldingChangeType,
+};
+pub use market_data::{
+    MarketDataLimitation, MarketDataLimitationClassification, MarketDataLimitationSource,
+    MarketDataSubject, NavMarketData,
 };
 pub use portfolio::{
     AllocationEntry, AssetSnapshot, CompositionResult, CorrelationMatrix, FundHolding,
