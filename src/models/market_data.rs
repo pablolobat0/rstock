@@ -8,6 +8,13 @@ pub struct NavMarketData {
     pub limitations: Vec<MarketDataLimitation>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct MarketDataValuation {
+    pub native_price: f64,
+    pub fx_rate: f64,
+    pub base_currency_price: f64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MarketDataLimitation {
     pub subject: MarketDataSubject,

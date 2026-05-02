@@ -4,11 +4,11 @@ use anyhow::{bail, Context};
 use chrono::{Datelike, NaiveDate, Weekday};
 use sea_orm::DatabaseConnection;
 
-use crate::constants::DATE_FORMAT;
+use crate::constants::{BASE_CURRENCY, DATE_FORMAT};
 use crate::db::repos::{daily_price_repo, exchange_rate_repo};
 use crate::models::{
     Asset, AssetType, MarketDataLimitation, MarketDataLimitationClassification,
-    MarketDataLimitationSource, MarketDataSubject, NavMarketData,
+    MarketDataLimitationSource, MarketDataSubject, MarketDataValuation, NavMarketData,
 };
 use crate::services::daily_prices;
 use crate::services::exchange_rates;
@@ -85,6 +85,54 @@ pub async fn prepare_nav_market_data(
         effective_end,
         limitations,
     })
+}
+
+pub async fn get_asset_valuation_data(
+    db: &DatabaseConnection,
+    asset: &Asset,
+    date: &str,
+) -> anyhow::Result<Option<MarketDataValuation>> {
+    let Some(native_price) = daily_prices::get_closing_price(db, asset, date).await? else {
+        return Ok(None);
+    };
+    let fx_rate = get_asset_exchange_rate(db, asset, date).await?;
+
+    Ok(Some(MarketDataValuation {
+        native_price,
+        fx_rate,
+        base_currency_price: native_price * fx_rate,
+    }))
+}
+
+#[allow(clippy::implicit_hasher)]
+pub fn get_asset_exchange_rate_from_prepared_rates(
+    asset: &Asset,
+    day_rates: &HashMap<String, f64>,
+) -> anyhow::Result<f64> {
+    if asset.currency == BASE_CURRENCY {
+        return Ok(1.0);
+    }
+
+    let pair = exchange_rates::currency_pair(&asset.currency);
+    day_rates
+        .get(&pair)
+        .copied()
+        .with_context(|| format!("missing required historical market data for FX rate {pair}"))
+}
+
+async fn get_asset_exchange_rate(
+    db: &DatabaseConnection,
+    asset: &Asset,
+    date: &str,
+) -> anyhow::Result<f64> {
+    if asset.currency == BASE_CURRENCY {
+        return Ok(1.0);
+    }
+
+    let pair = exchange_rates::currency_pair(&asset.currency);
+    exchange_rates::get_exchange_rate(db, &pair, date)
+        .await?
+        .with_context(|| format!("missing required historical market data for FX rate {pair}"))
 }
 
 async fn fill_nav_asset_prices(

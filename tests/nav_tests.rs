@@ -749,7 +749,8 @@ async fn test_process_day_transactions_pure() {
     let txs: Vec<&Transaction> = vec![&tx1];
 
     let (os, nav_val, _div) =
-        nav::process_day_transactions(&txs, &mut holdings, 0.0, 100.0, &asset_map, &day_rates);
+        nav::process_day_transactions(&txs, &mut holdings, 0.0, 100.0, &asset_map, &day_rates)
+            .unwrap();
 
     // First buy: deposit=500, NAV=100, shares=5
     assert!((os - 5.0).abs() < 0.01);
@@ -769,7 +770,8 @@ async fn test_process_day_transactions_pure() {
 
     let txs2: Vec<&Transaction> = vec![&tx2];
     let (os2, nav_val2, _div2) =
-        nav::process_day_transactions(&txs2, &mut holdings, os, nav_val, &asset_map, &day_rates);
+        nav::process_day_transactions(&txs2, &mut holdings, os, nav_val, &asset_map, &day_rates)
+            .unwrap();
 
     // Second buy: deposit=300, shares_issued=300/100=3, outstanding=5+3=8
     assert!((os2 - 8.0).abs() < 0.01);
@@ -1185,7 +1187,8 @@ async fn test_process_day_transactions_sell_pure() {
         100.0,
         &asset_map,
         &day_rates,
-    );
+    )
+    .unwrap();
     assert!((os - 5.0).abs() < 0.01);
     assert_eq!(*holdings.get(&1).unwrap(), 10.0);
 
@@ -1207,7 +1210,8 @@ async fn test_process_day_transactions_sell_pure() {
         nav_val,
         &asset_map,
         &day_rates,
-    );
+    )
+    .unwrap();
 
     // withdrawal = 5*50 = 250, redeemed = 250/100 = 2.5, os = 5-2.5 = 2.5
     assert!((os2 - 2.5).abs() < 0.01);
@@ -1443,7 +1447,8 @@ async fn test_process_day_transactions_split_pure() {
     let txs: Vec<&Transaction> = vec![&split_tx];
 
     let (os, nav_val, div) =
-        nav::process_day_transactions(&txs, &mut holdings, 5.0, 100.0, &asset_map, &day_rates);
+        nav::process_day_transactions(&txs, &mut holdings, 5.0, 100.0, &asset_map, &day_rates)
+            .unwrap();
 
     // Split should not change outstanding_shares, nav, or dividends
     assert!((os - 5.0).abs() < 0.01);

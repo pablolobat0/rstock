@@ -8,7 +8,6 @@ use crate::db::repos::{
     asset_repo, portfolio_asset_history_repo, portfolio_history_repo, transaction_repo,
 };
 use crate::models::{cents_to_f64, Asset, AssetSnapshot, PortfolioSnapshot, Transaction};
-use crate::services::daily_prices;
 use crate::services::exchange_rates;
 use crate::services::market_data;
 use crate::services::price::PriceFetcher;
@@ -103,7 +102,7 @@ pub async fn rebuild_portfolio_history(
                 nav,
                 &asset_map,
                 &day_rates,
-            );
+            )?;
             outstanding_shares = new_shares;
             nav = new_nav;
             accumulated_cash += dividend_income;
@@ -123,7 +122,7 @@ pub async fn rebuild_portfolio_history(
 
         // Compute EOD values (aggregate + per-asset) with currency conversion
         let (asset_value, asset_values) =
-            compute_day_asset_values(db, &holdings, &asset_map, &date_str, &day_rates).await?;
+            compute_day_asset_values(db, &holdings, &asset_map, &date_str).await?;
 
         let total_value = asset_value + accumulated_cash;
         if outstanding_shares > 0.0 {
@@ -171,7 +170,7 @@ pub fn process_day_transactions(
     nav: f64,
     asset_map: &HashMap<i32, &Asset>,
     day_rates: &HashMap<String, f64>,
-) -> (f64, f64, f64) {
+) -> anyhow::Result<(f64, f64, f64)> {
     let mut os = outstanding_shares;
     let mut current_nav = nav;
     let mut dividend_income = 0.0;
@@ -180,9 +179,8 @@ pub fn process_day_transactions(
         // Convert to base currency
         let rate = asset_map
             .get(&tx.asset_id)
-            .filter(|a| a.currency != BASE_CURRENCY)
-            .and_then(|a| day_rates.get(&exchange_rates::currency_pair(&a.currency)))
-            .copied()
+            .map(|asset| market_data::get_asset_exchange_rate_from_prepared_rates(asset, day_rates))
+            .transpose()?
             .unwrap_or(1.0);
 
         if tx.is_split() {
@@ -224,7 +222,7 @@ pub fn process_day_transactions(
         }
     }
 
-    (os, current_nav, dividend_income)
+    Ok((os, current_nav, dividend_income))
 }
 
 async fn compute_day_asset_values(
@@ -232,7 +230,6 @@ async fn compute_day_asset_values(
     holdings: &HashMap<i32, f64>,
     asset_map: &HashMap<i32, &Asset>,
     date: &str,
-    day_rates: &HashMap<String, f64>,
 ) -> anyhow::Result<(f64, Vec<AssetSnapshot>)> {
     let existing_rows = portfolio_asset_history_repo::find_by_date(db, date).await?;
     let existing_map: HashMap<i32, AssetSnapshot> =
@@ -246,17 +243,18 @@ async fn compute_day_asset_values(
             continue;
         }
 
-        let rate = asset_map
-            .get(&asset_id)
-            .filter(|a| a.currency != BASE_CURRENCY)
-            .and_then(|a| day_rates.get(&exchange_rates::currency_pair(&a.currency)))
-            .copied()
-            .unwrap_or(1.0);
+        let Some(asset_model) = asset_map.get(&asset_id) else {
+            continue;
+        };
+        let Some(valuation) = market_data::get_asset_valuation_data(db, asset_model, date).await?
+        else {
+            continue;
+        };
 
         // Reuse existing row if quantity and exchange rate match
         if let Some(existing) = existing_map.get(&asset_id) {
             if (existing.quantity - qty).abs() < FLOAT_EPSILON
-                && (existing.exchange_rate - rate).abs() < FLOAT_EPSILON
+                && (existing.exchange_rate - valuation.fx_rate).abs() < FLOAT_EPSILON
             {
                 total_asset_value += existing.market_value;
                 asset_values.push(AssetSnapshot {
@@ -271,22 +269,16 @@ async fn compute_day_asset_values(
             }
         }
 
-        if let Some(asset_model) = asset_map.get(&asset_id) {
-            if let Some(closing_price) =
-                daily_prices::get_closing_price(db, asset_model, date).await?
-            {
-                let market_value = qty * closing_price * rate;
-                total_asset_value += market_value;
-                asset_values.push(AssetSnapshot {
-                    date: date.to_owned(),
-                    asset_id,
-                    quantity: qty,
-                    closing_price,
-                    market_value,
-                    exchange_rate: rate,
-                });
-            }
-        }
+        let market_value = qty * valuation.base_currency_price;
+        total_asset_value += market_value;
+        asset_values.push(AssetSnapshot {
+            date: date.to_owned(),
+            asset_id,
+            quantity: qty,
+            closing_price: valuation.native_price,
+            market_value,
+            exchange_rate: valuation.fx_rate,
+        });
     }
 
     Ok((total_asset_value, asset_values))

@@ -315,3 +315,51 @@ async fn test_nav_market_data_returns_fx_completed_weekday_stale_limitation() {
         }
     );
 }
+
+#[tokio::test]
+async fn test_asset_valuation_data_uses_implicit_base_currency_fx_rate() {
+    let db = common::setup_test_db().await;
+    let asset = make_asset(&db, "XFAKEEUR", "EUR Stock", "stock", "EUR").await;
+    common::insert_daily_price(&db, asset.id, "2025-01-02", 25.0, false).await;
+
+    let valuation = market_data::get_asset_valuation_data(&db, &asset, "2025-01-02")
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(valuation.native_price, 25.0);
+    assert_eq!(valuation.fx_rate, 1.0);
+    assert_eq!(valuation.base_currency_price, 25.0);
+}
+
+#[tokio::test]
+async fn test_asset_valuation_data_uses_required_non_base_currency_fx_rate() {
+    let db = common::setup_test_db().await;
+    let asset = make_asset(&db, "XFAKEUSD", "US Stock", "stock", "USD").await;
+    common::insert_daily_price(&db, asset.id, "2025-01-02", 100.0, false).await;
+    common::insert_exchange_rate(&db, "USDEUR", "2025-01-02", 0.90).await;
+
+    let valuation = market_data::get_asset_valuation_data(&db, &asset, "2025-01-02")
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(valuation.native_price, 100.0);
+    assert_eq!(valuation.fx_rate, 0.90);
+    assert_eq!(valuation.base_currency_price, 90.0);
+}
+
+#[tokio::test]
+async fn test_asset_valuation_data_requires_non_base_currency_fx_rate() {
+    let db = common::setup_test_db().await;
+    let asset = make_asset(&db, "XFAKEUSD", "US Stock", "stock", "USD").await;
+    common::insert_daily_price(&db, asset.id, "2025-01-02", 100.0, false).await;
+
+    let error = market_data::get_asset_valuation_data(&db, &asset, "2025-01-02")
+        .await
+        .unwrap_err();
+
+    assert!(error
+        .to_string()
+        .contains("missing required historical market data for FX rate USDEUR"));
+}

@@ -187,7 +187,8 @@ async fn test_process_day_transactions_dividend_pure() {
         100.0,
         &asset_map,
         &day_rates,
-    );
+    )
+    .unwrap();
     assert!((os - 10.0).abs() < 0.01); // 1000/100 = 10
     assert!((div_income).abs() < 0.01); // no dividend
 
@@ -208,7 +209,8 @@ async fn test_process_day_transactions_dividend_pure() {
         nav_val,
         &asset_map,
         &day_rates,
-    );
+    )
+    .unwrap();
 
     // Outstanding shares unchanged
     assert!((os2 - os).abs() < 0.01);
