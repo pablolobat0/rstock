@@ -16,7 +16,7 @@ use crate::models::{
 };
 use crate::services::nav;
 use crate::services::price::PriceFetcher;
-use crate::services::{analytics, daily_prices, exchange_rates, metrics};
+use crate::services::{analytics, exchange_rates, market_data, metrics};
 
 pub async fn get_portfolio(
     db: &DatabaseConnection,
@@ -303,18 +303,9 @@ async fn compute_asset_positions(
         return Ok(Vec::new());
     }
 
-    let today = chrono::Local::now().date_naive();
-    let today_str = format_date(today);
-    let yesterday = format_date(today - chrono::Duration::days(1));
-
     let asset_ids: Vec<i32> = asset_snapshots.iter().map(|s| s.asset_id).collect();
     let assets = asset_repo::find_by_ids(db, asset_ids).await?;
     let asset_map: HashMap<i32, _> = assets.iter().map(|a| (a.id, a)).collect();
-
-    let live_prices =
-        daily_prices::fetch_live_prices_batch(&assets, &today_str, price_fetcher).await;
-    let live_rates =
-        exchange_rates::fetch_live_rates_batch(&assets, &today_str, price_fetcher).await;
 
     let mut rows: Vec<AssetPosition> = Vec::new();
 
@@ -327,18 +318,16 @@ async fn compute_asset_positions(
             continue;
         }
 
-        let exchange_rate = if asset_model.currency == BASE_CURRENCY {
-            1.0
-        } else {
-            let pair = exchange_rates::currency_pair(&asset_model.currency);
-            if let Some(&live_rate) = live_rates.get(&pair) {
-                live_rate
-            } else {
-                exchange_rates::get_exchange_rate(db, &pair, &yesterday)
-                    .await?
-                    .unwrap_or(snap.exchange_rate)
-            }
-        };
+        let display_market_data = market_data::get_asset_display_market_data(
+            db,
+            asset_model,
+            snap.closing_price,
+            &snap.date,
+            snap.exchange_rate,
+            price_fetcher,
+        )
+        .await?;
+        let exchange_rate = display_market_data.fx_rate;
 
         let transactions = transaction_repo::find_by_asset_id(db, snap.asset_id).await?;
 
@@ -383,17 +372,8 @@ async fn compute_asset_positions(
             }
         }
 
-        let (current_price, price_date) = if let Some(&live_price) = live_prices.get(&snap.asset_id)
-        {
-            (live_price, today_str.clone())
-        } else {
-            match daily_prices::get_price_and_date_at_or_before(db, snap.asset_id, &yesterday)
-                .await?
-            {
-                Some((price, date)) => (price, date),
-                None => (snap.closing_price, snap.date.clone()),
-            }
-        };
+        let current_price = display_market_data.native_price;
+        let price_date = display_market_data.price_date;
 
         let current_value = snap.quantity * current_price * exchange_rate;
         let total_invested_for_asset = net_qty * avg_cost;

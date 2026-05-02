@@ -363,3 +363,98 @@ async fn test_asset_valuation_data_requires_non_base_currency_fx_rate() {
         .to_string()
         .contains("missing required historical market data for FX rate USDEUR"));
 }
+
+#[tokio::test]
+async fn test_asset_display_market_data_uses_non_persisted_live_stock_and_fx_quotes() {
+    let db = common::setup_test_db().await;
+    let mut mock = common::MockPriceFetcher::new();
+
+    let asset = make_asset(&db, "XFAKEUSD", "US Stock", "stock", "USD").await;
+    let today = Local::now().date_naive();
+    let today_str = format_date(today);
+    mock.historical_prices
+        .insert("XFAKEUSD".to_owned(), vec![(today_str.clone(), 101.0)]);
+    mock.exchange_rates
+        .insert("USDEUR".to_owned(), vec![(today_str.clone(), 0.91)]);
+
+    let display_data =
+        market_data::get_asset_display_market_data(&db, &asset, 100.0, "2025-01-02", 0.90, &mock)
+            .await
+            .unwrap();
+
+    assert_eq!(display_data.native_price, 101.0);
+    assert_eq!(display_data.price_date, today_str);
+    assert_eq!(display_data.fx_rate, 0.91);
+    assert!(display_data.limitations.is_empty());
+    assert_eq!(
+        daily_price_repo::find_price(&db, asset.id, &today_str)
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        exchange_rate_repo::find_rate(&db, "USDEUR", &today_str)
+            .await
+            .unwrap(),
+        None
+    );
+}
+
+#[tokio::test]
+async fn test_asset_display_market_data_does_not_use_live_quotes_for_funds() {
+    let db = common::setup_test_db().await;
+    let mut mock = common::MockPriceFetcher::new();
+
+    let asset = make_fund_asset(&db, "XFAKEF1", "Test Fund", "EUR", "FUND1").await;
+    let today = Local::now().date_naive();
+    let yesterday_str = format_date(today - Duration::days(1));
+    common::insert_daily_price(&db, asset.id, &yesterday_str, 100.0, false).await;
+    mock.historical_prices
+        .insert("FUND1".to_owned(), vec![(format_date(today), 120.0)]);
+
+    let display_data =
+        market_data::get_asset_display_market_data(&db, &asset, 95.0, "2025-01-02", 1.0, &mock)
+            .await
+            .unwrap();
+
+    assert_eq!(display_data.native_price, 100.0);
+    assert_eq!(display_data.price_date, yesterday_str);
+    assert_eq!(display_data.fx_rate, 1.0);
+}
+
+#[tokio::test]
+async fn test_asset_display_market_data_combines_live_stock_with_stale_cached_fx_limitation() {
+    let db = common::setup_test_db().await;
+    let mut mock = common::MockPriceFetcher::new();
+
+    let asset = make_asset(&db, "XFAKEUSD", "US Stock", "stock", "USD").await;
+    let today = Local::now().date_naive();
+    let yesterday = today - Duration::days(1);
+    let stale_fx_date = yesterday - Duration::days(7);
+    mock.historical_prices
+        .insert("XFAKEUSD".to_owned(), vec![(format_date(today), 101.0)]);
+    common::insert_exchange_rate(&db, "USDEUR", &format_date(stale_fx_date), 0.89).await;
+
+    let display_data =
+        market_data::get_asset_display_market_data(&db, &asset, 100.0, "2025-01-02", 0.90, &mock)
+            .await
+            .unwrap();
+
+    assert_eq!(display_data.native_price, 101.0);
+    assert_eq!(display_data.fx_rate, 0.89);
+    assert_eq!(display_data.limitations.len(), 1);
+    assert_eq!(
+        display_data.limitations[0].classification,
+        MarketDataLimitationClassification::ActionableStaleData
+    );
+    assert_eq!(
+        display_data.limitations[0].source,
+        MarketDataLimitationSource::CachedFallback
+    );
+    assert_eq!(
+        display_data.limitations[0].subject,
+        MarketDataSubject::FxRate {
+            pair: "USDEUR".to_owned()
+        }
+    );
+}

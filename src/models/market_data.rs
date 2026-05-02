@@ -15,6 +15,15 @@ pub struct MarketDataValuation {
     pub base_currency_price: f64,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct AssetDisplayMarketData {
+    pub native_price: f64,
+    pub price_date: String,
+    pub fx_rate: f64,
+    pub base_currency_price: f64,
+    pub limitations: Vec<MarketDataLimitation>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MarketDataLimitation {
     pub subject: MarketDataSubject,
