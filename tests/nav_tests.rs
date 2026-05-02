@@ -531,6 +531,110 @@ async fn test_effective_valuation_date_uses_minimum_required_market_data_date() 
         .is_none());
 }
 
+#[tokio::test]
+async fn test_nav_market_data_uses_stock_ticker_for_price_lookup() {
+    let db = common::setup_test_db().await;
+    let mut mock = common::MockPriceFetcher::new();
+
+    let asset_id = common::insert_asset(&db, "XFAKESTOCK", "Test Stock", "stock", "EUR").await;
+    common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
+    mock.historical_prices.insert(
+        "XFAKESTOCK".to_owned(),
+        vec![("2025-01-02".to_owned(), 50.0)],
+    );
+
+    nav::rebuild_portfolio_history(
+        &db,
+        NaiveDate::from_ymd_opt(2025, 1, 2).unwrap(),
+        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
+        None,
+        &mock,
+    )
+    .await
+    .unwrap();
+
+    assert!(common::get_portfolio_snapshot(&db, "2025-01-02")
+        .await
+        .is_some());
+}
+
+#[tokio::test]
+async fn test_nav_market_data_uses_fund_morningstar_code_for_price_lookup() {
+    let db = common::setup_test_db().await;
+    let mut mock = common::MockPriceFetcher::new();
+
+    let asset_id =
+        common::insert_fund_asset(&db, "XFAKEFUND", "Test Fund", "EUR", "MSTARFUND").await;
+    common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
+    mock.historical_prices.insert(
+        "MSTARFUND".to_owned(),
+        vec![("2025-01-02".to_owned(), 50.0)],
+    );
+
+    nav::rebuild_portfolio_history(
+        &db,
+        NaiveDate::from_ymd_opt(2025, 1, 2).unwrap(),
+        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
+        None,
+        &mock,
+    )
+    .await
+    .unwrap();
+
+    assert!(common::get_portfolio_snapshot(&db, "2025-01-02")
+        .await
+        .is_some());
+}
+
+#[tokio::test]
+async fn test_nav_market_data_uses_etf_morningstar_code_for_price_lookup() {
+    let db = common::setup_test_db().await;
+    let mut mock = common::MockPriceFetcher::new();
+
+    let asset_id = common::insert_etf_asset(&db, "XFAKEETF", "Test ETF", "EUR", "MSTARETF").await;
+    common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
+    mock.historical_prices
+        .insert("MSTARETF".to_owned(), vec![("2025-01-02".to_owned(), 50.0)]);
+
+    nav::rebuild_portfolio_history(
+        &db,
+        NaiveDate::from_ymd_opt(2025, 1, 2).unwrap(),
+        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
+        None,
+        &mock,
+    )
+    .await
+    .unwrap();
+
+    assert!(common::get_portfolio_snapshot(&db, "2025-01-02")
+        .await
+        .is_some());
+}
+
+#[tokio::test]
+async fn test_nav_market_data_fails_when_fund_morningstar_code_is_missing() {
+    let db = common::setup_test_db().await;
+    let mock = common::MockPriceFetcher::new();
+
+    let asset_id = common::insert_asset(&db, "XFAKEFUND", "Test Fund", "fund", "EUR").await;
+    common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
+
+    let result = nav::rebuild_portfolio_history(
+        &db,
+        NaiveDate::from_ymd_opt(2025, 1, 2).unwrap(),
+        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
+        None,
+        &mock,
+    )
+    .await;
+
+    let error = result.expect_err("missing Morningstar code should fail NAV preparation");
+    assert!(error
+        .to_string()
+        .contains("missing Morningstar code for required fund XFAKEFUND (Test Fund)"));
+    assert!(common::get_all_snapshots(&db).await.is_empty());
+}
+
 // ========== NEW TESTS ==========
 
 /// After rebuild, portfolio_asset_history rows exist with correct values.

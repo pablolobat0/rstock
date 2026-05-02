@@ -9,16 +9,6 @@ use crate::db::repos::daily_price_repo;
 use crate::models::{Asset, AssetType};
 use crate::services::price::PriceFetcher;
 
-/// Returns the identifier to pass to the price fetcher for this asset.
-/// Stocks use their ticker. Funds/ETFs use their Morningstar code, and
-/// return `None` if it hasn't been set yet.
-fn price_lookup_identifier(asset: &Asset) -> Option<&str> {
-    match asset.asset_type {
-        AssetType::Stock => Some(&asset.ticker),
-        AssetType::Fund | AssetType::Etf => asset.morningstar_code.as_deref(),
-    }
-}
-
 pub async fn get_closing_price(
     db: &DatabaseConnection,
     asset: &Asset,
@@ -40,12 +30,18 @@ pub async fn fetch_live_price(
     date: &str,
     price_fetcher: &dyn PriceFetcher,
 ) -> anyhow::Result<Option<f64>> {
-    let Some(lookup) = price_lookup_identifier(asset) else {
-        tracing::warn!(
-            ticker = %asset.ticker,
-            "skipping price fetch: fund/ETF has no morningstar_code set"
-        );
-        return Ok(None);
+    let lookup = match asset.asset_type {
+        AssetType::Stock => asset.ticker.as_str(),
+        AssetType::Fund | AssetType::Etf => {
+            let Some(code) = asset.morningstar_code.as_deref() else {
+                tracing::warn!(
+                    ticker = %asset.ticker,
+                    "skipping price fetch: fund/ETF has no morningstar_code set"
+                );
+                return Ok(None);
+            };
+            code
+        }
     };
     let prices = price_fetcher
         .get_historical_prices(lookup, date, date, &asset.asset_type)
@@ -93,19 +89,13 @@ pub async fn get_price_and_date_at_or_before(
 pub async fn fill_prices_for_range(
     db: &DatabaseConnection,
     asset: &Asset,
+    lookup_identifier: &str,
     start_date: &str,
     end_date: &str,
     price_fetcher: &dyn PriceFetcher,
 ) -> anyhow::Result<Option<String>> {
-    let Some(lookup) = price_lookup_identifier(asset) else {
-        tracing::warn!(
-            ticker = %asset.ticker,
-            "skipping price fill: fund/ETF has no morningstar_code set"
-        );
-        return Ok(None);
-    };
     let prices = price_fetcher
-        .get_historical_prices(lookup, start_date, end_date, &asset.asset_type)
+        .get_historical_prices(lookup_identifier, start_date, end_date, &asset.asset_type)
         .await;
 
     let price_map: std::collections::HashMap<String, f64> = match prices {

@@ -288,7 +288,15 @@ async fn ensure_benchmark_prices(
     };
     let asset = metrics::benchmark_asset(asset_id);
 
-    daily_prices::fill_prices_for_range(db, &asset, start_date, end_date, price_fetcher).await?;
+    daily_prices::fill_prices_for_range(
+        db,
+        &asset,
+        &asset.ticker,
+        start_date,
+        end_date,
+        price_fetcher,
+    )
+    .await?;
 
     Ok(asset_id)
 }
