@@ -1,9 +1,16 @@
 mod common;
 
+use chrono::Duration;
 use rstock::db::entities::portfolio_history;
 use rstock::db::repos::portfolio_history_repo;
 use rstock::services::metrics::compute_cagr;
+use rstock::services::portfolio;
 use sea_orm::{EntityTrait, Set};
+
+fn date_string(days_before_yesterday: i64) -> String {
+    let yesterday = chrono::Local::now().date_naive() - Duration::days(1);
+    rstock::constants::format_date(yesterday - Duration::days(days_before_yesterday))
+}
 
 async fn insert_snapshot(
     db: &sea_orm::DatabaseConnection,
@@ -143,4 +150,71 @@ async fn test_cagr_with_loss() {
     let cagr = compute_cagr("2021-01-01", "2026-01-01", start_nav, end_nav).unwrap();
     // 0.5^(1/5) - 1 ~ -0.1294 -> -12.94%
     assert!((cagr - (-12.94)).abs() < 0.1);
+}
+
+#[tokio::test]
+async fn test_portfolio_suppresses_acceptable_morningstar_lag_warning() {
+    let db = common::setup_test_db().await;
+    let price_date = date_string(6);
+    let asset_id = common::insert_fund_asset(&db, "XFAKEF1", "Fake Fund", "EUR", "F000FAKE").await;
+    common::insert_transaction(&db, asset_id, &price_date, 10.0, 100.0, 0.0).await;
+    common::insert_daily_price(&db, asset_id, &price_date, 100.0, false).await;
+
+    let result = portfolio::get_asset_positions(&db, &common::MockPriceFetcher::new())
+        .await
+        .unwrap();
+
+    assert!(result.market_data_warnings.is_empty());
+}
+
+#[tokio::test]
+async fn test_portfolio_surfaces_excessive_morningstar_lag_warning() {
+    let db = common::setup_test_db().await;
+    let price_date = date_string(8);
+    let asset_id =
+        common::insert_fund_asset(&db, "XFAKEF2", "Delayed Fund", "EUR", "F000DELAY").await;
+    common::insert_transaction(&db, asset_id, &price_date, 10.0, 100.0, 0.0).await;
+    common::insert_daily_price(&db, asset_id, &price_date, 100.0, false).await;
+
+    let result = portfolio::get_asset_positions(&db, &common::MockPriceFetcher::new())
+        .await
+        .unwrap();
+
+    assert_eq!(result.market_data_warnings.len(), 1);
+    assert!(result.market_data_warnings[0].contains("fund XFAKEF2 (Delayed Fund)"));
+}
+
+#[tokio::test]
+async fn test_portfolio_surfaces_stock_stale_data_warning() {
+    let db = common::setup_test_db().await;
+    let price_date = date_string(8);
+    let asset_id = common::insert_asset(&db, "XFAKES1", "Stale Stock", "stock", "EUR").await;
+    common::insert_transaction(&db, asset_id, &price_date, 10.0, 100.0, 0.0).await;
+    common::insert_daily_price(&db, asset_id, &price_date, 100.0, false).await;
+
+    let result = portfolio::get_asset_positions(&db, &common::MockPriceFetcher::new())
+        .await
+        .unwrap();
+
+    assert_eq!(result.market_data_warnings.len(), 1);
+    assert!(result.market_data_warnings[0].contains("stock XFAKES1 (Stale Stock)"));
+}
+
+#[tokio::test]
+async fn test_portfolio_surfaces_fx_stale_data_warning() {
+    let db = common::setup_test_db().await;
+    let stale_fx_date = date_string(8);
+    let fresh_price_date = date_string(0);
+    let asset_id = common::insert_asset(&db, "XFAKES2", "USD Stock", "stock", "USD").await;
+    common::insert_transaction(&db, asset_id, &stale_fx_date, 10.0, 100.0, 0.0).await;
+    common::insert_daily_price(&db, asset_id, &stale_fx_date, 100.0, false).await;
+    common::insert_daily_price(&db, asset_id, &fresh_price_date, 110.0, false).await;
+    common::insert_exchange_rate(&db, "USDEUR", &stale_fx_date, 0.90).await;
+
+    let result = portfolio::get_asset_positions(&db, &common::MockPriceFetcher::new())
+        .await
+        .unwrap();
+
+    assert_eq!(result.market_data_warnings.len(), 1);
+    assert!(result.market_data_warnings[0].contains("FX rate USDEUR"));
 }

@@ -72,6 +72,7 @@ pub struct PortfolioResult {
     pub one_year_metrics: Option<PeriodMetrics>,
     pub three_year_metrics: Option<PeriodMetrics>,
     pub five_year_metrics: Option<PeriodMetrics>,
+    pub market_data_warnings: Vec<String>,
 }
 
 pub struct CorrelationMatrix {

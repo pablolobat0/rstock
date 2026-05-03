@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::Context;
 use chrono::{Datelike, Duration, NaiveDate};
@@ -97,6 +97,7 @@ pub async fn get_portfolio(
     } else {
         (total_gain_loss / total_invested) * 100.0
     };
+    let market_data_warnings = collect_market_data_warnings(&rows);
 
     Ok(PortfolioResult {
         rows,
@@ -118,6 +119,7 @@ pub async fn get_portfolio(
         one_year_metrics,
         three_year_metrics,
         five_year_metrics,
+        market_data_warnings,
     })
 }
 
@@ -144,6 +146,7 @@ pub async fn get_asset_positions(
     } else {
         (total_gain_loss / total_invested) * 100.0
     };
+    let market_data_warnings = collect_market_data_warnings(&rows);
 
     Ok(PortfolioResult {
         rows,
@@ -165,6 +168,7 @@ pub async fn get_asset_positions(
         one_year_metrics: None,
         three_year_metrics: None,
         five_year_metrics: None,
+        market_data_warnings,
     })
 }
 
@@ -236,7 +240,25 @@ fn empty_result() -> PortfolioResult {
         one_year_metrics: None,
         three_year_metrics: None,
         five_year_metrics: None,
+        market_data_warnings: Vec::new(),
     }
+}
+
+fn collect_market_data_warnings(rows: &[AssetPosition]) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut warnings = Vec::new();
+
+    for row in rows {
+        for limitation in &row.market_data_limitations {
+            if let Some(warning) = market_data::user_facing_market_data_warning(limitation) {
+                if seen.insert(warning.clone()) {
+                    warnings.push(warning);
+                }
+            }
+        }
+    }
+
+    warnings
 }
 
 async fn compute_daily_change(
@@ -402,6 +424,7 @@ async fn compute_asset_positions(
             dividends_received,
             gain_loss,
             gain_loss_pct,
+            market_data_limitations: display_market_data.limitations,
         });
     }
 

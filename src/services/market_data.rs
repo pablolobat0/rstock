@@ -4,7 +4,7 @@ use anyhow::{bail, Context};
 use chrono::{Datelike, NaiveDate, Weekday};
 use sea_orm::DatabaseConnection;
 
-use crate::constants::{BASE_CURRENCY, DATE_FORMAT};
+use crate::constants::{display_date, BASE_CURRENCY, DATE_FORMAT};
 use crate::db::repos::{asset_repo, daily_price_repo, exchange_rate_repo};
 use crate::models::{
     Asset, AssetClassification, AssetDisplayMarketData, AssetType, BenchmarkMarketData,
@@ -191,7 +191,7 @@ pub async fn get_asset_display_market_data(
     let today_str = crate::constants::format_date(today);
     let yesterday_str = crate::constants::format_date(today - chrono::Duration::days(1));
 
-    let (native_price, price_date) = get_display_price(
+    let (native_price, price_date, price_limitation) = get_display_price(
         db,
         asset,
         &today_str,
@@ -201,7 +201,7 @@ pub async fn get_asset_display_market_data(
         price_fetcher,
     )
     .await?;
-    let (fx_rate, limitations) = get_display_exchange_rate(
+    let (fx_rate, mut limitations) = get_display_exchange_rate(
         db,
         asset,
         &today_str,
@@ -210,6 +210,9 @@ pub async fn get_asset_display_market_data(
         price_fetcher,
     )
     .await?;
+    if let Some(limitation) = price_limitation {
+        limitations.push(limitation);
+    }
 
     Ok(AssetDisplayMarketData {
         native_price,
@@ -259,22 +262,61 @@ async fn get_display_price(
     fallback_native_price: f64,
     fallback_price_date: &str,
     price_fetcher: &dyn PriceFetcher,
-) -> anyhow::Result<(f64, String)> {
+) -> anyhow::Result<(f64, String, Option<MarketDataLimitation>)> {
     if asset.asset_type == AssetType::Stock {
         if let Some(live_price) = daily_prices::fetch_live_price(asset, today, price_fetcher)
             .await
             .unwrap_or(None)
         {
-            return Ok((live_price, today.to_owned()));
+            return Ok((live_price, today.to_owned(), None));
         }
     }
 
-    Ok(
+    let (price, date) =
         match daily_prices::get_price_and_date_at_or_before(db, asset.id, yesterday).await? {
             Some((price, date)) => (price, date),
             None => (fallback_native_price, fallback_price_date.to_owned()),
-        },
-    )
+        };
+    let available_on = parse_date(&date, "asset price date")?;
+    let requested_end = parse_date(yesterday, "display asset price end date")?;
+    let limitation = classify_asset_limitation(
+        asset,
+        available_on,
+        requested_end,
+        MarketDataLimitationSource::CachedFallback,
+    );
+
+    Ok((price, date, limitation))
+}
+
+pub fn user_facing_market_data_warning(limitation: &MarketDataLimitation) -> Option<String> {
+    if limitation.classification == MarketDataLimitationClassification::AcceptableReportingLag {
+        return None;
+    }
+
+    let latest_available_date = display_date(&crate::constants::format_date(
+        limitation.latest_available_date,
+    ));
+    let requested_end_date = display_date(&crate::constants::format_date(
+        limitation.requested_end_date,
+    ));
+    let source = match limitation.source {
+        MarketDataLimitationSource::CachedFallback => "using cached data",
+        MarketDataLimitationSource::SourceLag => "source data is delayed",
+    };
+
+    Some(match &limitation.subject {
+        MarketDataSubject::Asset {
+            ticker,
+            name,
+            asset_type,
+        } => format!(
+            "Market data limitation: {asset_type} {ticker} ({name}) has latest price from {latest_available_date}; requested through {requested_end_date}; {source}."
+        ),
+        MarketDataSubject::FxRate { pair } => format!(
+            "Market data limitation: FX rate {pair} has latest rate from {latest_available_date}; requested through {requested_end_date}; {source}."
+        ),
+    })
 }
 
 async fn get_display_exchange_rate(

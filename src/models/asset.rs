@@ -5,6 +5,8 @@ use clap::ValueEnum;
 
 use crate::db::entities::asset;
 
+use super::MarketDataLimitation;
+
 #[derive(ValueEnum, Clone, Debug, PartialEq, Eq)]
 pub enum AssetType {
     Stock,
@@ -89,4 +91,5 @@ pub struct AssetPosition {
     pub dividends_received: f64,
     pub gain_loss: f64,
     pub gain_loss_pct: f64,
+    pub market_data_limitations: Vec<MarketDataLimitation>,
 }

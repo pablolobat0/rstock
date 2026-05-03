@@ -283,4 +283,12 @@ pub fn print_portfolio(result: &PortfolioResult) {
 
         print_metrics_table(&periods);
     }
+
+    if !result.market_data_warnings.is_empty() {
+        println!();
+        println!("Market data limitations:");
+        for warning in &result.market_data_warnings {
+            println!("- {warning}");
+        }
+    }
 }
