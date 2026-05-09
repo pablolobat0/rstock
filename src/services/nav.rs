@@ -8,7 +8,6 @@ use crate::db::repos::{
     asset_repo, portfolio_asset_history_repo, portfolio_history_repo, transaction_repo,
 };
 use crate::models::{cents_to_f64, Asset, AssetSnapshot, PortfolioSnapshot, Transaction};
-use crate::services::exchange_rates;
 use crate::services::market_data;
 use crate::services::price::PriceFetcher;
 
@@ -60,7 +59,7 @@ pub async fn rebuild_portfolio_history(
         .filter(|c| c.as_str() != BASE_CURRENCY)
         .collect::<HashSet<_>>()
         .into_iter()
-        .map(|c| exchange_rates::currency_pair(c))
+        .map(|c| market_data::currency_pair(c))
         .collect();
 
     let nav_market_data = market_data::prepare_nav_market_data(
@@ -154,7 +153,7 @@ async fn get_day_rates(
 ) -> anyhow::Result<HashMap<String, f64>> {
     let mut rates = HashMap::new();
     for pair in pairs {
-        if let Some(rate) = exchange_rates::get_exchange_rate(db, pair, date).await? {
+        if let Some(rate) = market_data::get_exchange_rate(db, pair, date).await? {
             rates.insert(pair.clone(), rate);
         }
     }

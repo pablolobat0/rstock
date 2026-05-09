@@ -11,7 +11,7 @@ use crate::models::{
     Asset, AssetType, CorrelationMatrix, PeriodMetrics, PortfolioSnapshot, RollingCorrelationResult,
 };
 use crate::services::price::PriceFetcher;
-use crate::services::{exchange_rates, market_data, metrics};
+use crate::services::{market_data, metrics};
 
 pub async fn compute_correlation_data(
     db: &DatabaseConnection,
@@ -41,7 +41,7 @@ pub async fn compute_correlation_data(
         let fx_pair = if asset.currency == BASE_CURRENCY {
             None
         } else {
-            Some(exchange_rates::currency_pair(&asset.currency))
+            Some(market_data::currency_pair(&asset.currency))
         };
 
         let prices =
@@ -313,7 +313,7 @@ async fn get_direct_eur_price_series(
         return Ok(prices);
     }
 
-    let pair = exchange_rates::currency_pair(&asset.currency);
+    let pair = market_data::currency_pair(&asset.currency);
     let rates = filter_fetched_series(
         price_fetcher
             .get_historical_exchange_rates(&pair, start_date, end_date)
