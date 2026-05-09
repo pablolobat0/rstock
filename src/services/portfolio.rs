@@ -16,7 +16,7 @@ use crate::models::{
 };
 use crate::services::nav;
 use crate::services::price::PriceFetcher;
-use crate::services::{analytics, exchange_rates, market_data, metrics};
+use crate::services::{analytics, market_data, metrics};
 
 pub async fn get_portfolio(
     db: &DatabaseConnection,
@@ -366,8 +366,8 @@ async fn compute_asset_positions(
             if asset_model.currency == BASE_CURRENCY {
                 total_buy_cost_eur += tx_cost;
             } else {
-                let pair = exchange_rates::currency_pair(&asset_model.currency);
-                let tx_rate = exchange_rates::get_exchange_rate(db, &pair, &t.date)
+                let pair = market_data::currency_pair(&asset_model.currency);
+                let tx_rate = market_data::get_exchange_rate(db, &pair, &t.date)
                     .await?
                     .unwrap_or(exchange_rate);
                 total_buy_cost_eur += tx_cost * tx_rate;
@@ -386,8 +386,8 @@ async fn compute_asset_positions(
             if asset_model.currency == BASE_CURRENCY {
                 dividends_received += div_amount;
             } else {
-                let pair = exchange_rates::currency_pair(&asset_model.currency);
-                let tx_rate = exchange_rates::get_exchange_rate(db, &pair, &t.date)
+                let pair = market_data::currency_pair(&asset_model.currency);
+                let tx_rate = market_data::get_exchange_rate(db, &pair, &t.date)
                     .await?
                     .unwrap_or(exchange_rate);
                 dividends_received += div_amount * tx_rate;

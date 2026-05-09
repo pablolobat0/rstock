@@ -2,7 +2,7 @@ mod common;
 
 use rstock::db::entities::{asset, daily_asset_price};
 use rstock::models::Asset;
-use rstock::services::daily_prices;
+use rstock::services::market_data;
 use sea_orm::{EntityTrait, Set};
 
 async fn make_asset(db: &sea_orm::DatabaseConnection) -> Asset {
@@ -23,7 +23,7 @@ async fn test_cached_price_returned() {
 
     common::insert_daily_price(&db, asset.id, "2025-01-02", 42.5, false).await;
 
-    let price = daily_prices::get_closing_price(&db, &asset, "2025-01-02")
+    let price = market_data::get_closing_price(&db, &asset, "2025-01-02")
         .await
         .unwrap();
     assert_eq!(price, Some(42.5));
@@ -39,7 +39,7 @@ async fn test_forward_fill_from_previous() {
     common::insert_daily_price(&db, asset.id, "2025-01-06", 55.0, false).await;
 
     // Tuesday query should forward-fill
-    let price = daily_prices::get_closing_price(&db, &asset, "2025-01-07")
+    let price = market_data::get_closing_price(&db, &asset, "2025-01-07")
         .await
         .unwrap();
     assert_eq!(price, Some(55.0));
@@ -51,7 +51,7 @@ async fn test_no_price_returns_none() {
     let db = common::setup_test_db().await;
     let asset = make_asset(&db).await;
 
-    let price = daily_prices::get_closing_price(&db, &asset, "2025-01-02")
+    let price = market_data::get_closing_price(&db, &asset, "2025-01-02")
         .await
         .unwrap();
     assert_eq!(price, None);
@@ -69,7 +69,7 @@ async fn test_api_failure_entry_skipped() {
     common::insert_daily_price(&db, asset.id, "2025-01-07", 0.0, true).await;
 
     // Query Tuesday — should skip failure, forward-fill from Monday
-    let price = daily_prices::get_closing_price(&db, &asset, "2025-01-07")
+    let price = market_data::get_closing_price(&db, &asset, "2025-01-07")
         .await
         .unwrap();
     assert_eq!(price, Some(50.0));
@@ -84,7 +84,7 @@ async fn test_forward_fill_prefers_recent() {
     common::insert_daily_price(&db, asset.id, "2025-01-01", 10.0, false).await;
     common::insert_daily_price(&db, asset.id, "2025-01-05", 20.0, false).await;
 
-    let price = daily_prices::get_closing_price(&db, &asset, "2025-01-03")
+    let price = market_data::get_closing_price(&db, &asset, "2025-01-03")
         .await
         .unwrap();
     // Should return day 1's price (most recent on or before day 3)
@@ -104,7 +104,7 @@ async fn test_upsert_overwrites_failure() {
     common::insert_daily_price(&db, asset.id, "2025-01-02", 0.0, true).await;
 
     // Verify failure entry exists
-    let price = daily_prices::get_closing_price(&db, &asset, "2025-01-02")
+    let price = market_data::get_closing_price(&db, &asset, "2025-01-02")
         .await
         .unwrap();
     assert_eq!(price, None); // Failure entries are skipped
@@ -127,7 +127,7 @@ async fn test_upsert_overwrites_failure() {
         .unwrap();
 
     // Now it should return the good price
-    let price = daily_prices::get_closing_price(&db, &asset, "2025-01-02")
+    let price = market_data::get_closing_price(&db, &asset, "2025-01-02")
         .await
         .unwrap();
     assert_eq!(price, Some(75.0));
