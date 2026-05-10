@@ -283,14 +283,14 @@ async fn test_nav_market_data_returns_stale_cached_asset_limitation() {
     let mock = common::MockPriceFetcher::new();
 
     let asset = make_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
-    common::insert_daily_price(&db, asset.id, "2025-01-03", 10.0, false).await;
+    common::insert_daily_price(&db, asset.id, "2025-01-01", 10.0, false).await;
 
     let nav_market_data = market_data::prepare_nav_market_data(
         &db,
         std::slice::from_ref(&asset),
         &[],
-        "2025-01-06",
-        "2025-01-06",
+        "2025-01-07",
+        "2025-01-07",
         &mock,
     )
     .await
@@ -298,7 +298,7 @@ async fn test_nav_market_data_returns_stale_cached_asset_limitation() {
 
     assert_eq!(
         nav_market_data.effective_end,
-        NaiveDate::from_ymd_opt(2025, 1, 3).unwrap()
+        NaiveDate::from_ymd_opt(2025, 1, 1).unwrap()
     );
     assert_eq!(nav_market_data.limitations.len(), 1);
     assert_eq!(
@@ -374,17 +374,17 @@ async fn test_nav_market_data_returns_fx_completed_weekday_stale_limitation() {
     let asset = make_asset(&db, "XFAKEUSD", "US Stock", "stock", "USD").await;
     mock.historical_prices.insert(
         "XFAKEUSD".to_owned(),
-        vec![("2025-01-06".to_owned(), 100.0)],
+        vec![("2025-01-07".to_owned(), 100.0)],
     );
     mock.exchange_rates
-        .insert("USDEUR".to_owned(), vec![("2025-01-03".to_owned(), 0.90)]);
+        .insert("USDEUR".to_owned(), vec![("2025-01-01".to_owned(), 0.90)]);
 
     let nav_market_data = market_data::prepare_nav_market_data(
         &db,
         std::slice::from_ref(&asset),
         &["USDEUR".to_owned()],
-        "2025-01-03",
-        "2025-01-06",
+        "2025-01-01",
+        "2025-01-07",
         &mock,
     )
     .await

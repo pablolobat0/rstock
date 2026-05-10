@@ -19,6 +19,8 @@ struct LatestMarketDataDate {
     source: MarketDataLimitationSource,
 }
 
+const STALE_COMPLETED_WEEKDAY_WARNING_THRESHOLD: u32 = 4;
+
 enum HistoricalMarketDataPurpose {
     Nav,
     Benchmark,
@@ -704,7 +706,9 @@ fn classify_asset_limitation(
             }
         }
         AssetType::Stock => {
-            if completed_weekdays_between(latest_date, requested_end) == 0 {
+            if completed_weekdays_between(latest_date, requested_end)
+                < STALE_COMPLETED_WEEKDAY_WARNING_THRESHOLD
+            {
                 return None;
             }
             MarketDataLimitationClassification::ActionableStaleData
@@ -730,7 +734,10 @@ fn classify_fx_limitation(
     requested_end: NaiveDate,
     source: MarketDataLimitationSource,
 ) -> Option<MarketDataLimitation> {
-    if latest_date >= requested_end || completed_weekdays_between(latest_date, requested_end) == 0 {
+    if latest_date >= requested_end
+        || completed_weekdays_between(latest_date, requested_end)
+            < STALE_COMPLETED_WEEKDAY_WARNING_THRESHOLD
+    {
         return None;
     }
 
