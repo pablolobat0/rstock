@@ -8,7 +8,6 @@
 # Environment
 .env
 
-.scratch/*
 .worktrees
 
 # Editor/IDE
