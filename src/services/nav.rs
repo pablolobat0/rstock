@@ -52,9 +52,16 @@ pub async fn rebuild_portfolio_history(
     }
     let assets = asset_repo::find_by_ids(db, needed_ids).await?;
 
+    let nav_assets: Vec<Asset> = assets
+        .iter()
+        .filter(|asset| !asset.is_monetary())
+        .cloned()
+        .collect();
+
     // Determine needed currency pairs
     let needed_currency_pairs: Vec<String> = assets
         .iter()
+        .filter(|asset| !asset.is_monetary())
         .map(|a| &a.currency)
         .filter(|c| c.as_str() != BASE_CURRENCY)
         .collect::<HashSet<_>>()
@@ -64,7 +71,7 @@ pub async fn rebuild_portfolio_history(
 
     let nav_market_data = market_data::prepare_nav_market_data(
         db,
-        &assets,
+        &nav_assets,
         &needed_currency_pairs,
         &start_str,
         &end_str,
@@ -175,6 +182,13 @@ pub fn process_day_transactions(
     let mut dividend_income = 0.0;
 
     for tx in day_txs {
+        if asset_map
+            .get(&tx.asset_id)
+            .is_some_and(|asset| asset.is_monetary())
+        {
+            continue;
+        }
+
         // Convert to base currency
         let rate = asset_map
             .get(&tx.asset_id)
@@ -245,6 +259,9 @@ async fn compute_day_asset_values(
         let Some(asset_model) = asset_map.get(&asset_id) else {
             continue;
         };
+        if asset_model.is_monetary() {
+            continue;
+        }
         let Some(valuation) = market_data::get_asset_valuation_data(db, asset_model, date).await?
         else {
             continue;

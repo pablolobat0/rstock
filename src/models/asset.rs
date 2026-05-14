@@ -45,6 +45,7 @@ pub struct AssetInfo {
 }
 
 #[allow(clippy::struct_field_names)]
+#[derive(Clone)]
 pub struct Asset {
     pub id: i32,
     pub ticker: String,
@@ -73,6 +74,14 @@ impl From<asset::Model> for Asset {
     }
 }
 
+impl Asset {
+    pub fn is_monetary(&self) -> bool {
+        self.asset_class
+            .as_deref()
+            .is_some_and(|asset_class| asset_class.eq_ignore_ascii_case("monetary"))
+    }
+}
+
 pub struct AssetPosition {
     pub ticker: String,
     pub name: String,
@@ -92,4 +101,12 @@ pub struct AssetPosition {
     pub gain_loss: f64,
     pub gain_loss_pct: f64,
     pub market_data_limitations: Vec<MarketDataLimitation>,
+}
+
+impl AssetPosition {
+    pub fn is_monetary(&self) -> bool {
+        self.asset_class
+            .as_deref()
+            .is_some_and(|asset_class| asset_class.eq_ignore_ascii_case("monetary"))
+    }
 }

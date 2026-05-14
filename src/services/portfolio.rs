@@ -88,15 +88,13 @@ pub async fn get_portfolio(
 
     let rows = compute_asset_positions(db, &snapshot_date, price_fetcher).await?;
 
-    let total_current_value: f64 = rows.iter().map(|r| r.current_value).sum();
-    let total_invested: f64 = rows.iter().map(|r| r.total_invested).sum();
-    let total_dividends: f64 = rows.iter().map(|r| r.dividends_received).sum();
-    let total_gain_loss = total_current_value + total_dividends - total_invested;
-    let total_gain_loss_pct = if total_invested == 0.0 {
-        0.0
-    } else {
-        (total_gain_loss / total_invested) * 100.0
-    };
+    let (
+        total_current_value,
+        total_invested,
+        total_dividends,
+        total_gain_loss,
+        total_gain_loss_pct,
+    ) = compute_non_monetary_totals(&rows);
     let market_data_warnings = collect_market_data_warnings(&rows);
 
     Ok(PortfolioResult {
@@ -137,15 +135,13 @@ pub async fn get_asset_positions(
 
     let rows = compute_asset_positions(db, &snapshot_date, price_fetcher).await?;
 
-    let total_current_value: f64 = rows.iter().map(|r| r.current_value).sum();
-    let total_invested: f64 = rows.iter().map(|r| r.total_invested).sum();
-    let total_dividends: f64 = rows.iter().map(|r| r.dividends_received).sum();
-    let total_gain_loss = total_current_value + total_dividends - total_invested;
-    let total_gain_loss_pct = if total_invested == 0.0 {
-        0.0
-    } else {
-        (total_gain_loss / total_invested) * 100.0
-    };
+    let (
+        total_current_value,
+        total_invested,
+        total_dividends,
+        total_gain_loss,
+        total_gain_loss_pct,
+    ) = compute_non_monetary_totals(&rows);
     let market_data_warnings = collect_market_data_warnings(&rows);
 
     Ok(PortfolioResult {
@@ -259,6 +255,27 @@ fn collect_market_data_warnings(rows: &[AssetPosition]) -> Vec<String> {
     }
 
     warnings
+}
+
+fn compute_non_monetary_totals(rows: &[AssetPosition]) -> (f64, f64, f64, f64, f64) {
+    let included_rows = rows.iter().filter(|row| !row.is_monetary());
+    let total_current_value: f64 = included_rows.clone().map(|r| r.current_value).sum();
+    let total_invested: f64 = included_rows.clone().map(|r| r.total_invested).sum();
+    let total_dividends: f64 = included_rows.map(|r| r.dividends_received).sum();
+    let total_gain_loss = total_current_value + total_dividends - total_invested;
+    let total_gain_loss_pct = if total_invested == 0.0 {
+        0.0
+    } else {
+        (total_gain_loss / total_invested) * 100.0
+    };
+
+    (
+        total_current_value,
+        total_invested,
+        total_dividends,
+        total_gain_loss,
+        total_gain_loss_pct,
+    )
 }
 
 async fn compute_daily_change(
