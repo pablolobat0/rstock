@@ -1,6 +1,6 @@
 # Refresh Portfolio-First CLI Documentation
 
-Status: needs-triage
+Status: ready-for-agent
 
 ## Parent
 
@@ -23,7 +23,4 @@ Refresh project documentation so future maintainers and agents see the portfolio
 
 ## Blocked by
 
-- .scratch/portfolio-first-cli-refactor/issues/01-reshape-transaction-ledger-cli.md
-- .scratch/portfolio-first-cli-refactor/issues/02-require-classified-tracked-assets-across-manual-and-csv-workflows.md
-- .scratch/portfolio-first-cli-refactor/issues/03-protect-tracked-asset-identity-while-allowing-metadata-correction.md
-- .scratch/portfolio-first-cli-refactor/issues/04-constrain-analysis-to-portfolio-relevant-paths.md
+None - can start immediately

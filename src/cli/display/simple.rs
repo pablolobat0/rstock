@@ -1,44 +1,7 @@
-use tabled::settings::style::{HorizontalLine, VerticalLine};
-use tabled::settings::Style;
-use tabled::Table;
 use textplots::{Chart, Plot, Shape};
 
 use crate::constants::display_date;
-use crate::models::{Asset, AssetType, PortfolioSnapshot, WatchlistItem};
-
-use super::types::AssetRow;
-
-pub fn print_asset_list(assets: &[Asset]) {
-    if assets.is_empty() {
-        println!("No assets found.");
-        return;
-    }
-
-    let rows: Vec<AssetRow> = assets
-        .iter()
-        .map(|a| AssetRow {
-            ticker: if a.asset_type == AssetType::Stock {
-                a.ticker.clone()
-            } else {
-                String::new()
-            },
-            name: a.name.clone(),
-            asset_type: a.asset_type.to_string(),
-            currency: a.currency.clone(),
-        })
-        .collect();
-
-    let mut table = Table::new(&rows);
-    table.with(
-        Style::modern()
-            .horizontals([(1, HorizontalLine::inherit(Style::modern()).horizontal('═'))])
-            .verticals([(1, VerticalLine::inherit(Style::modern()))])
-            .remove_horizontal()
-            .remove_vertical(),
-    );
-    println!("{table}");
-    println!("\nTotal: {} assets", assets.len());
-}
+use crate::models::PortfolioSnapshot;
 
 pub fn print_nav_chart(snapshots: &[PortfolioSnapshot], period_label: &str) {
     if snapshots.len() < 2 {
@@ -67,16 +30,4 @@ pub fn print_nav_chart(snapshots: &[PortfolioSnapshot], period_label: &str) {
         display_date(first_date),
         display_date(last_date)
     );
-}
-
-pub fn print_watchlist(items: &[WatchlistItem]) {
-    if items.is_empty() {
-        println!("Watchlist is empty.");
-        return;
-    }
-
-    for item in items {
-        println!("  {} → Sector ETF: {}", item.ticker, item.sector_etf_ticker);
-    }
-    println!("\nTotal: {} stocks", items.len());
 }

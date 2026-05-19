@@ -1,12 +1,18 @@
 use chrono::NaiveDate;
 use sea_orm::DatabaseConnection;
 
-use crate::cli::display::format_transaction_detail;
+use crate::cli::display::{format_transaction_detail, print_transaction_list};
 use crate::constants::format_date;
 use crate::db::repos::{asset_repo, transaction_repo};
 use crate::models::{BuyOrder, DividendOrder, SellOrder, SplitOrder};
 use crate::services;
 use crate::utils::confirm_action;
+
+pub async fn list(db: &DatabaseConnection) -> anyhow::Result<()> {
+    let items = services::transactions::list(db).await?;
+    print_transaction_list(&items);
+    Ok(())
+}
 
 pub async fn buy(
     db: &DatabaseConnection,

@@ -1,18 +1,38 @@
 use anyhow::{bail, Context};
 use chrono::NaiveDate;
+use clap::ValueEnum;
 use sea_orm::DatabaseConnection;
 
 use crate::constants::{format_date, DISPLAY_DATE_FORMAT};
 use crate::db::repos::asset_repo;
 use crate::models::{
-    AssetClassification, AssetInfo, AssetType, BuyOrder, CsvRow, DividendOrder, SellOrder,
-    SplitOrder, TxType,
+    AssetClass, AssetClassification, AssetInfo, AssetType, BondCredit, BondDuration, BuyOrder,
+    CsvRow, DividendOrder, EquityStyle, Management, SellOrder, SplitOrder, TxType,
 };
-use crate::services::transactions;
+use crate::services::{assets, transactions};
+
+const EXPECTED_HEADERS: [&str; 15] = [
+    "Date",
+    "Ticker",
+    "Name",
+    "AssetType",
+    "Currency",
+    "MorningstarCode",
+    "AssetClass",
+    "EquityStyle",
+    "BondCredit",
+    "BondDuration",
+    "Management",
+    "Type",
+    "Quantity",
+    "Price",
+    "Fees",
+];
 
 pub async fn import_transactions_csv(db: &DatabaseConnection, path: &str) -> anyhow::Result<usize> {
     let mut rdr =
         csv::Reader::from_path(path).with_context(|| format!("failed to open CSV file: {path}"))?;
+    validate_headers(rdr.headers()?)?;
 
     let mut rows = Vec::new();
     for (i, result) in rdr.records().enumerate() {
@@ -57,9 +77,14 @@ pub async fn import_transactions_csv(db: &DatabaseConnection, path: &str) -> any
                         asset_type,
                         currency: currency.to_string(),
                     };
-                    asset_repo::create(db, &asset_info, &AssetClassification::default(), None)
-                        .await
-                        .with_context(|| format!("row {row_num}"))?;
+                    assets::create_tracked_asset(
+                        db,
+                        &asset_info,
+                        &row.classification,
+                        row.morningstar_code.as_deref(),
+                    )
+                    .await
+                    .map_err(|e| anyhow::anyhow!("row {row_num}: {e}"))?;
                 }
 
                 let order = BuyOrder {
@@ -109,8 +134,12 @@ pub async fn import_transactions_csv(db: &DatabaseConnection, path: &str) -> any
 }
 
 fn parse_row(record: &csv::StringRecord, row_num: usize) -> anyhow::Result<CsvRow> {
-    if record.len() != 9 {
-        bail!("row {row_num}: expected 9 fields, got {}", record.len());
+    if record.len() != EXPECTED_HEADERS.len() {
+        bail!(
+            "row {row_num}: expected {} fields for classified transaction CSV schema, got {}",
+            EXPECTED_HEADERS.len(),
+            record.len()
+        );
     }
 
     let date = NaiveDate::parse_from_str(record[0].trim(), DISPLAY_DATE_FORMAT)
@@ -135,26 +164,36 @@ fn parse_row(record: &csv::StringRecord, row_num: usize) -> anyhow::Result<CsvRo
         .transpose()
         .with_context(|| format!("row {row_num}: invalid asset type '{}'", &record[3]))?;
     let currency = parse_optional(&record[4]);
+    let morningstar_code = parse_optional(&record[5]);
+    let classification = AssetClassification {
+        asset_class: parse_optional_enum::<AssetClass>(&record[6], row_num, "AssetClass")?,
+        equity_style: parse_optional_enum::<EquityStyle>(&record[7], row_num, "EquityStyle")?,
+        bond_credit: parse_optional_enum::<BondCredit>(&record[8], row_num, "BondCredit")?,
+        bond_duration: parse_optional_enum::<BondDuration>(&record[9], row_num, "BondDuration")?,
+        management: parse_optional_enum::<Management>(&record[10], row_num, "Management")?,
+    };
 
-    let tx_type = record[5]
+    let tx_type = record[11]
         .trim()
         .parse::<TxType>()
-        .with_context(|| format!("row {row_num}: invalid transaction type '{}'", &record[5]))?;
+        .with_context(|| format!("row {row_num}: invalid transaction type '{}'", &record[11]))?;
 
-    let quantity = record[6]
+    let quantity = record[12]
         .trim()
         .parse::<f64>()
-        .with_context(|| format!("row {row_num}: invalid quantity '{}'", &record[6]))?;
+        .with_context(|| format!("row {row_num}: invalid quantity '{}'", &record[12]))?;
 
-    let price = record[7]
+    let price = record[13]
         .trim()
         .parse::<f64>()
-        .with_context(|| format!("row {row_num}: invalid price '{}'", &record[7]))?;
+        .with_context(|| format!("row {row_num}: invalid price '{}'", &record[13]))?;
 
-    let fees = record[8]
+    let fees = record[14]
         .trim()
         .parse::<f64>()
-        .with_context(|| format!("row {row_num}: invalid fees '{}'", &record[8]))?;
+        .with_context(|| format!("row {row_num}: invalid fees '{}'", &record[14]))?;
+
+    validate_numeric_fields(row_num, &tx_type, quantity, price, fees)?;
 
     Ok(CsvRow {
         source_row: row_num,
@@ -163,11 +202,59 @@ fn parse_row(record: &csv::StringRecord, row_num: usize) -> anyhow::Result<CsvRo
         name,
         asset_type,
         currency,
+        morningstar_code,
+        classification,
         tx_type,
         quantity,
         price,
         fees,
     })
+}
+
+fn validate_numeric_fields(
+    row_num: usize,
+    tx_type: &TxType,
+    quantity: f64,
+    price: f64,
+    fees: f64,
+) -> anyhow::Result<()> {
+    if fees < 0.0 {
+        bail!("row {row_num}: fees must be non-negative");
+    }
+
+    match tx_type {
+        TxType::Buy | TxType::Sell => {
+            if quantity <= 0.0 {
+                bail!("row {row_num}: quantity must be positive");
+            }
+            if price <= 0.0 {
+                bail!("row {row_num}: price must be positive");
+            }
+        }
+        TxType::Dividend => {
+            if price <= 0.0 {
+                bail!("row {row_num}: dividend amount must be positive");
+            }
+        }
+        TxType::Split => {
+            if quantity <= 0.0 {
+                bail!("row {row_num}: split ratio must be positive");
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_headers(headers: &csv::StringRecord) -> anyhow::Result<()> {
+    let actual: Vec<&str> = headers.iter().map(str::trim).collect();
+    if actual != EXPECTED_HEADERS {
+        bail!(
+            "transaction CSV must use classified schema header: {}",
+            EXPECTED_HEADERS.join(",")
+        );
+    }
+    Ok(())
 }
 
 fn parse_optional(s: &str) -> Option<String> {
@@ -177,4 +264,16 @@ fn parse_optional(s: &str) -> Option<String> {
     } else {
         Some(trimmed.to_string())
     }
+}
+
+fn parse_optional_enum<E>(s: &str, row_num: usize, field: &str) -> anyhow::Result<Option<E>>
+where
+    E: ValueEnum,
+{
+    parse_optional(s)
+        .map(|value| {
+            E::from_str(&value, true)
+                .map_err(|_| anyhow::anyhow!("row {row_num}: invalid {field} '{value}'"))
+        })
+        .transpose()
 }

@@ -141,9 +141,10 @@ pub async fn fetch_direct_base_currency_price_series(
     end_date: &str,
     price_fetcher: &dyn PriceFetcher,
 ) -> anyhow::Result<Vec<(String, f64)>> {
+    let lookup_identifier = lookup_identifier(asset)?;
     let prices = filter_fetched_series(
         price_fetcher
-            .get_historical_prices(&asset.ticker, start_date, end_date, &AssetType::Stock)
+            .get_historical_prices(lookup_identifier, start_date, end_date, &asset.asset_type)
             .await?,
         start_date,
         end_date,

@@ -9,8 +9,8 @@ mod utils;
 use clap::Parser;
 
 use cli::{
-    AnalyzeCommands, AssetCommands, Cli, Commands, CorrelationCommands, DataCommands,
-    PortfolioCommands, TransactionCommands,
+    AnalyzeCommands, AssetCommands, Cli, Commands, CorrelationCommands, PortfolioCommands,
+    TransactionCommands,
 };
 use sea_orm::DatabaseConnection;
 use services::price::RealPriceFetcher;
@@ -27,23 +27,16 @@ async fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Commands::Get { period } => cli::commands::portfolio::get(&db, &fetcher, period).await,
-        Commands::Buy {
-            ticker,
-            date,
-            quantity,
-            price,
-            fees,
-        } => cli::commands::transactions::buy(&db, ticker, date, quantity, price, fees).await,
         Commands::Portfolio(args) => match args.command {
             PortfolioCommands::Get { period } => {
                 cli::commands::portfolio::get(&db, &fetcher, period).await
             }
-            PortfolioCommands::List {} => cli::commands::portfolio::list(&db).await,
             PortfolioCommands::Asset(asset_args) => {
                 run_asset_command(&db, asset_args.command).await
             }
         },
         Commands::Transaction(args) => match args.command {
+            TransactionCommands::List {} => cli::commands::transactions::list(&db).await,
             TransactionCommands::Buy {
                 ticker,
                 date,
@@ -80,10 +73,8 @@ async fn main() -> anyhow::Result<()> {
             TransactionCommands::Delete { id, yes } => {
                 cli::commands::transactions::delete(&db, id, yes).await
             }
-        },
-        Commands::Data(args) => match args.command {
-            DataCommands::Export { output } => cli::commands::export::run(&db, output).await,
-            DataCommands::Import { input } => cli::commands::import::run(&db, input).await,
+            TransactionCommands::Export { output } => cli::commands::export::run(&db, output).await,
+            TransactionCommands::Import { input } => cli::commands::import::run(&db, input).await,
         },
         Commands::Analyze(args) => match args.command {
             AnalyzeCommands::Composition {} => {
@@ -97,18 +88,21 @@ async fn main() -> anyhow::Result<()> {
                     cli::commands::analyze::correlation_matrix(&db, &fetcher, period).await
                 }
                 CorrelationCommands::Rolling {
-                    ticker_a,
-                    ticker_b,
+                    identifier_a,
+                    identifier_b,
                     period,
                 } => {
                     cli::commands::analyze::rolling_correlation(
-                        &db, &fetcher, ticker_a, ticker_b, period,
+                        &db,
+                        &fetcher,
+                        identifier_a,
+                        identifier_b,
+                        period,
                     )
                     .await
                 }
             },
         },
-        Commands::Monitor(args) => cli::commands::monitor::run(&db, &fetcher, args).await,
     }
 }
 

@@ -2,11 +2,13 @@ mod common;
 
 use std::io::Write;
 
-use rstock::db::repos::transaction_repo;
+use rstock::db::repos::{asset_repo, transaction_repo};
 use rstock::models::TxType;
 use rstock::services::export::export_transactions_csv;
 use rstock::services::import::import_transactions_csv;
 use tempfile::NamedTempFile;
+
+const CSV_HEADER: &str = "Date,Ticker,Name,AssetType,Currency,MorningstarCode,AssetClass,EquityStyle,BondCredit,BondDuration,Management,Type,Quantity,Price,Fees\n";
 
 fn write_csv(content: &str) -> NamedTempFile {
     let mut file = NamedTempFile::new().expect("failed to create temp file");
@@ -16,17 +18,23 @@ fn write_csv(content: &str) -> NamedTempFile {
     file
 }
 
+fn classified_stock_row(tx_type: &str, quantity: &str, price: &str, fees: &str) -> String {
+    format!(
+        "01-01-2025,XFAKE1,Fake Stock,stock,EUR,,equity,blend,,,passive,{tx_type},{quantity},{price},{fees}\n"
+    )
+}
+
 #[tokio::test]
 async fn test_import_buy_sell_dividend_split() {
     let db = common::setup_test_db().await;
 
-    let csv = write_csv(
-        "Date,Ticker,Name,AssetType,Currency,Type,Quantity,Price,Fees\n\
-         01-01-2025,XFAKE1,Fake Stock,stock,EUR,buy,10,100.00,5.00\n\
-         15-01-2025,XFAKE1,,,EUR,sell,2,110.00,3.00\n\
-         20-01-2025,XFAKE1,,,EUR,dividend,1,50.00,5.00\n\
-         25-01-2025,XFAKE1,,,EUR,split,2,0.00,0.00\n",
-    );
+    let csv = write_csv(&format!(
+        "{CSV_HEADER}\
+         01-01-2025,XFAKE1,Fake Stock,stock,EUR,,equity,blend,,,passive,buy,10,100.00,5.00\n\
+         15-01-2025,XFAKE1,,,EUR,,,,,,,sell,2,110.00,3.00\n\
+         20-01-2025,XFAKE1,,,EUR,,,,,,,dividend,1,50.00,5.00\n\
+         25-01-2025,XFAKE1,,,EUR,,,,,,,split,2,0.00,0.00\n"
+    ));
 
     let count = import_transactions_csv(&db, csv.path().to_str().unwrap())
         .await
@@ -40,12 +48,9 @@ async fn test_import_buy_sell_dividend_split() {
 
     assert_eq!(txns[0].tx_type, TxType::Buy);
     assert_eq!(txns[0].quantity, 10.0);
-
     assert_eq!(txns[1].tx_type, TxType::Sell);
     assert_eq!(txns[1].quantity, 2.0);
-
     assert_eq!(txns[2].tx_type, TxType::Dividend);
-
     assert_eq!(txns[3].tx_type, TxType::Split);
     assert_eq!(txns[3].quantity, 2.0);
 }
@@ -53,11 +58,9 @@ async fn test_import_buy_sell_dividend_split() {
 #[tokio::test]
 async fn test_import_invalid_date() {
     let db = common::setup_test_db().await;
-
-    let csv = write_csv(
-        "Date,Ticker,Name,AssetType,Currency,Type,Quantity,Price,Fees\n\
-         2025-01-01,XFAKE1,Fake Stock,stock,EUR,buy,10,100.00,5.00\n",
-    );
+    let csv = write_csv(&format!(
+        "{CSV_HEADER}2025-01-01,XFAKE1,Fake Stock,stock,EUR,,equity,blend,,,passive,buy,10,100.00,5.00\n"
+    ));
 
     let result = import_transactions_csv(&db, csv.path().to_str().unwrap()).await;
     assert!(result.is_err());
@@ -69,13 +72,28 @@ async fn test_import_invalid_date() {
 }
 
 #[tokio::test]
-async fn test_import_sell_nonexistent_asset() {
+async fn test_import_rejects_old_schema() {
     let db = common::setup_test_db().await;
-
     let csv = write_csv(
         "Date,Ticker,Name,AssetType,Currency,Type,Quantity,Price,Fees\n\
-         01-01-2025,XFAKE1,,,EUR,sell,5,100.00,0.00\n",
+         01-01-2025,XFAKE1,Fake Stock,stock,EUR,buy,10,100.00,5.00\n",
     );
+
+    let result = import_transactions_csv(&db, csv.path().to_str().unwrap()).await;
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("classified schema"),
+        "error should mention classified schema: {err}"
+    );
+}
+
+#[tokio::test]
+async fn test_import_sell_nonexistent_asset() {
+    let db = common::setup_test_db().await;
+    let csv = write_csv(&format!(
+        "{CSV_HEADER}01-01-2025,XFAKE1,,,EUR,,,,,,,sell,5,100.00,0.00\n"
+    ));
 
     let result = import_transactions_csv(&db, csv.path().to_str().unwrap()).await;
     assert!(result.is_err());
@@ -84,11 +102,9 @@ async fn test_import_sell_nonexistent_asset() {
 #[tokio::test]
 async fn test_import_buy_missing_name() {
     let db = common::setup_test_db().await;
-
-    let csv = write_csv(
-        "Date,Ticker,Name,AssetType,Currency,Type,Quantity,Price,Fees\n\
-         01-01-2025,XFAKE1,,stock,EUR,buy,10,100.00,5.00\n",
-    );
+    let csv = write_csv(&format!(
+        "{CSV_HEADER}01-01-2025,XFAKE1,,stock,EUR,,equity,blend,,,passive,buy,10,100.00,5.00\n"
+    ));
 
     let result = import_transactions_csv(&db, csv.path().to_str().unwrap()).await;
     assert!(result.is_err());
@@ -99,11 +115,9 @@ async fn test_import_buy_missing_name() {
 #[tokio::test]
 async fn test_import_buy_missing_asset_type() {
     let db = common::setup_test_db().await;
-
-    let csv = write_csv(
-        "Date,Ticker,Name,AssetType,Currency,Type,Quantity,Price,Fees\n\
-         01-01-2025,XFAKE1,Fake Stock,,EUR,buy,10,100.00,5.00\n",
-    );
+    let csv = write_csv(&format!(
+        "{CSV_HEADER}01-01-2025,XFAKE1,Fake Stock,,EUR,,equity,blend,,,passive,buy,10,100.00,5.00\n"
+    ));
 
     let result = import_transactions_csv(&db, csv.path().to_str().unwrap()).await;
     assert!(result.is_err());
@@ -115,14 +129,161 @@ async fn test_import_buy_missing_asset_type() {
 }
 
 #[tokio::test]
+async fn test_import_rejects_missing_classification_for_new_asset() {
+    let db = common::setup_test_db().await;
+    let csv = write_csv(&format!(
+        "{CSV_HEADER}01-01-2025,XFAKE1,Fake Stock,stock,EUR,,,,,,,buy,10,100.00,5.00\n"
+    ));
+
+    let result = import_transactions_csv(&db, csv.path().to_str().unwrap()).await;
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("classification"),
+        "error should mention classification: {err}"
+    );
+}
+
+#[tokio::test]
+async fn test_import_rejects_inconsistent_classification_for_new_asset() {
+    let db = common::setup_test_db().await;
+    let csv = write_csv(&format!(
+        "{CSV_HEADER}01-01-2025,XFAKE1,Fake Stock,stock,EUR,,monetary,blend,,,passive,buy,10,100.00,5.00\n"
+    ));
+
+    let result = import_transactions_csv(&db, csv.path().to_str().unwrap()).await;
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("equity style"),
+        "error should mention equity style: {err}"
+    );
+}
+
+#[tokio::test]
+async fn test_import_rejects_fund_without_morningstar_code() {
+    let db = common::setup_test_db().await;
+    let csv = write_csv(&format!(
+        "{CSV_HEADER}01-01-2025,IE00FAKE,Fake Fund,fund,EUR,,equity,blend,,,passive,buy,10,100.00,5.00\n"
+    ));
+
+    let result = import_transactions_csv(&db, csv.path().to_str().unwrap()).await;
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("Morningstar code"),
+        "error should mention Morningstar code: {err}"
+    );
+}
+
+#[tokio::test]
+async fn test_import_creates_classified_asset_with_morningstar_code() {
+    let db = common::setup_test_db().await;
+    let csv = write_csv(&format!(
+        "{CSV_HEADER}01-01-2025,IE00FAKE,Fake ETF,etf,EUR,F000FAKE,equity,blend,,,passive,buy,10,100.00,5.00\n"
+    ));
+
+    import_transactions_csv(&db, csv.path().to_str().unwrap())
+        .await
+        .expect("import should succeed");
+
+    let asset = asset_repo::find_by_ticker(&db, "IE00FAKE")
+        .await
+        .expect("asset query should succeed")
+        .expect("asset should exist");
+    assert_eq!(asset.morningstar_code.as_deref(), Some("F000FAKE"));
+    assert_eq!(asset.asset_class.as_deref(), Some("equity"));
+    assert_eq!(asset.equity_style.as_deref(), Some("blend"));
+    assert_eq!(asset.management.as_deref(), Some("passive"));
+}
+
+#[tokio::test]
+async fn test_import_rejects_non_positive_buy_quantity() {
+    let db = common::setup_test_db().await;
+    let csv = write_csv(&format!(
+        "{CSV_HEADER}{}",
+        classified_stock_row("buy", "0", "100.00", "5.00")
+    ));
+
+    let result = import_transactions_csv(&db, csv.path().to_str().unwrap()).await;
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("quantity"),
+        "error should mention quantity: {err}"
+    );
+}
+
+#[tokio::test]
+async fn test_import_rejects_non_positive_buy_price() {
+    let db = common::setup_test_db().await;
+    let csv = write_csv(&format!(
+        "{CSV_HEADER}{}",
+        classified_stock_row("buy", "1", "0", "5.00")
+    ));
+
+    let result = import_transactions_csv(&db, csv.path().to_str().unwrap()).await;
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(err.contains("price"), "error should mention price: {err}");
+}
+
+#[tokio::test]
+async fn test_import_rejects_non_positive_dividend_amount() {
+    let db = common::setup_test_db().await;
+    let csv = write_csv(&format!(
+        "{CSV_HEADER}{}",
+        classified_stock_row("dividend", "1", "0", "0")
+    ));
+
+    let result = import_transactions_csv(&db, csv.path().to_str().unwrap()).await;
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("dividend amount"),
+        "error should mention amount: {err}"
+    );
+}
+
+#[tokio::test]
+async fn test_import_rejects_non_positive_split_ratio() {
+    let db = common::setup_test_db().await;
+    let csv = write_csv(&format!(
+        "{CSV_HEADER}{}",
+        classified_stock_row("split", "0", "0", "0")
+    ));
+
+    let result = import_transactions_csv(&db, csv.path().to_str().unwrap()).await;
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("split ratio"),
+        "error should mention ratio: {err}"
+    );
+}
+
+#[tokio::test]
+async fn test_import_rejects_negative_fees() {
+    let db = common::setup_test_db().await;
+    let csv = write_csv(&format!(
+        "{CSV_HEADER}{}",
+        classified_stock_row("buy", "1", "100", "-1")
+    ));
+
+    let result = import_transactions_csv(&db, csv.path().to_str().unwrap()).await;
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(err.contains("fees"), "error should mention fees: {err}");
+}
+
+#[tokio::test]
 async fn test_import_export_roundtrip() {
     let db1 = common::setup_test_db().await;
-
-    let buy_csv = write_csv(
-        "Date,Ticker,Name,AssetType,Currency,Type,Quantity,Price,Fees\n\
-         01-01-2025,XFAKE1,Fake Stock,stock,EUR,buy,10,100.00,5.00\n\
-         10-01-2025,XFAKE1,,,EUR,sell,3,120.00,2.00\n",
-    );
+    let buy_csv = write_csv(&format!(
+        "{CSV_HEADER}\
+         01-01-2025,XFAKE1,Fake Stock,stock,EUR,,equity,blend,,,passive,buy,10,100.00,5.00\n\
+         10-01-2025,XFAKE1,,,EUR,,,,,,,sell,3,120.00,2.00\n"
+    ));
 
     import_transactions_csv(&db1, buy_csv.path().to_str().unwrap())
         .await
@@ -133,6 +294,10 @@ async fn test_import_export_roundtrip() {
     export_transactions_csv(&db1, export_path)
         .await
         .expect("export should succeed");
+
+    let exported = std::fs::read_to_string(export_path).expect("failed to read export");
+    assert!(exported.starts_with(CSV_HEADER));
+    assert!(exported.contains("equity,blend,,,passive"));
 
     let db2 = common::setup_test_db().await;
     import_transactions_csv(&db2, export_path)

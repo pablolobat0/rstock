@@ -2,12 +2,12 @@ use std::collections::HashMap;
 
 use sea_orm::DatabaseConnection;
 
-use crate::constants::{BASE_CURRENCY, MIN_DATA_POINTS, ZERO_RETURN_THRESHOLD};
+use crate::constants::{MIN_DATA_POINTS, ZERO_RETURN_THRESHOLD};
 use crate::db::repos::{
     asset_repo, daily_price_repo, portfolio_asset_history_repo, portfolio_history_repo,
 };
 use crate::models::{
-    Asset, AssetClassification, AssetType, CorrelationMatrix, PeriodMetrics, PortfolioSnapshot,
+    Asset, AssetClassification, CorrelationMatrix, PeriodMetrics, PortfolioSnapshot,
     RollingCorrelationResult,
 };
 use crate::services::price::PriceFetcher;
@@ -81,20 +81,20 @@ pub async fn compute_correlation_data(
 }
 
 pub async fn compute_rolling_correlation_data(
-    _db: &DatabaseConnection,
+    db: &DatabaseConnection,
     start_date: &str,
     end_date: &str,
-    ticker_a: &str,
-    ticker_b: &str,
+    identifier_a: &str,
+    identifier_b: &str,
     period_label: &str,
     price_fetcher: &dyn PriceFetcher,
 ) -> anyhow::Result<RollingCorrelationResult> {
-    if ticker_a == ticker_b {
-        anyhow::bail!("tickers must be different");
+    if identifier_a == identifier_b {
+        anyhow::bail!("tracked asset identifiers must be different");
     }
 
-    let left_asset = fetch_rolling_asset_info(ticker_a, price_fetcher).await?;
-    let right_asset = fetch_rolling_asset_info(ticker_b, price_fetcher).await?;
+    let left_asset = find_tracked_asset(db, identifier_a).await?;
+    let right_asset = find_tracked_asset(db, identifier_b).await?;
 
     let left_prices = historical_market_data::fetch_direct_base_currency_price_series(
         &left_asset,
@@ -274,25 +274,8 @@ fn filter_trading_days(
     (portfolio_returns, benchmark_returns, trading_day_navs)
 }
 
-async fn fetch_rolling_asset_info(
-    ticker: &str,
-    price_fetcher: &dyn PriceFetcher,
-) -> anyhow::Result<Asset> {
-    let stock_info = price_fetcher.get_stock_info(ticker).await?;
-    let name = stock_info.name.unwrap_or_else(|| ticker.to_owned());
-    let currency = stock_info
-        .currency
-        .unwrap_or_else(|| BASE_CURRENCY.to_owned());
-
-    Ok(Asset {
-        id: 0,
-        ticker: ticker.to_owned(),
-        name,
-        asset_type: AssetType::Stock,
-        currency,
-        morningstar_code: None,
-        asset_class: None,
-        equity_style: None,
-        management: None,
-    })
+async fn find_tracked_asset(db: &DatabaseConnection, identifier: &str) -> anyhow::Result<Asset> {
+    asset_repo::find_by_ticker(db, identifier)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("tracked asset '{identifier}' not found"))
 }

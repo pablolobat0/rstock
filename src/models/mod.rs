@@ -2,10 +2,9 @@ mod asset;
 mod classification;
 mod fund_analysis;
 mod market_data;
-pub mod monitor;
 mod portfolio;
+mod stock_info;
 mod transaction;
-mod watchlist;
 
 pub use asset::{Asset, AssetInfo, AssetPosition, AssetType};
 pub use classification::{
@@ -23,8 +22,8 @@ pub use portfolio::{
     MarketCapCategory, PeriodMetrics, PortfolioResult, PortfolioSnapshot, RollingCorrelationResult,
     TopHolding,
 };
+pub use stock_info::StockInfo;
 pub use transaction::{
     cents_to_f64, f64_to_cents, BuyOrder, CsvRow, DividendOrder, SellOrder, SplitOrder,
-    Transaction, TxType,
+    Transaction, TransactionListItem, TxType,
 };
-pub use watchlist::WatchlistItem;

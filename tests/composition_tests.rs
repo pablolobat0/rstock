@@ -1,6 +1,6 @@
 mod common;
 
-use rstock::models::monitor::StockInfo;
+use rstock::models::StockInfo;
 use rstock::services::composition::compute_composition;
 use sea_orm::{EntityTrait, Set};
 

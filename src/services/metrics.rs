@@ -305,6 +305,8 @@ pub fn benchmark_asset(id: i32) -> Asset {
         morningstar_code: None,
         asset_class: None,
         equity_style: None,
+        bond_credit: None,
+        bond_duration: None,
         management: None,
     }
 }

@@ -5,7 +5,29 @@ use crate::db::repos::{
     asset_repo, daily_price_repo, portfolio_asset_history_repo, portfolio_history_repo,
     transaction_repo,
 };
-use crate::models::{f64_to_cents, BuyOrder, DividendOrder, SellOrder, SplitOrder, Transaction};
+use crate::models::{
+    f64_to_cents, BuyOrder, DividendOrder, SellOrder, SplitOrder, Transaction, TransactionListItem,
+};
+
+pub async fn list(db: &DatabaseConnection) -> anyhow::Result<Vec<TransactionListItem>> {
+    let transactions = transaction_repo::find_all_ordered_by_date(db, None, None).await?;
+    let asset_ids = transactions.iter().map(|tx| tx.asset_id);
+    let assets = asset_repo::find_by_ids(db, asset_ids).await?;
+
+    let items = transactions
+        .into_iter()
+        .map(|transaction| {
+            let asset = assets.iter().find(|asset| asset.id == transaction.asset_id);
+            TransactionListItem {
+                transaction,
+                ticker: asset.map_or_else(|| "unknown".to_string(), |asset| asset.ticker.clone()),
+                asset_name: asset.map_or_else(|| "unknown".to_string(), |asset| asset.name.clone()),
+            }
+        })
+        .collect();
+
+    Ok(items)
+}
 
 pub async fn buy(db: &DatabaseConnection, ticker: String, order: BuyOrder) -> anyhow::Result<()> {
     let asset = asset_repo::find_by_ticker(db, &ticker).await?.ok_or_else(|| {
@@ -163,10 +185,6 @@ pub async fn split(
     let asset = asset_repo::find_by_ticker(db, &ticker)
         .await?
         .ok_or_else(|| anyhow::anyhow!("Asset with ticker '{ticker}' not found"))?;
-
-    if order.ratio <= 0.0 {
-        anyhow::bail!("Split ratio must be positive, got {}", order.ratio);
-    }
 
     // Validate holdings at split date (accounts for prior splits)
     let transactions = transaction_repo::find_by_asset_id(db, asset.id).await?;

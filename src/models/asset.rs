@@ -55,6 +55,8 @@ pub struct Asset {
     pub morningstar_code: Option<String>,
     pub asset_class: Option<String>,
     pub equity_style: Option<String>,
+    pub bond_credit: Option<String>,
+    pub bond_duration: Option<String>,
     pub management: Option<String>,
 }
 
@@ -69,6 +71,8 @@ impl From<asset::Model> for Asset {
             morningstar_code: m.morningstar_code,
             asset_class: m.asset_class,
             equity_style: m.equity_style,
+            bond_credit: m.bond_credit,
+            bond_duration: m.bond_duration,
             management: m.management,
         }
     }

@@ -6,7 +6,6 @@ use crate::constants::{
     format_date, DATE_FORMAT, FIVE_YEAR_DAYS, ONE_MONTH_DAYS, ONE_YEAR_DAYS, SIX_MONTH_DAYS,
     THREE_MONTH_DAYS, THREE_YEAR_DAYS,
 };
-use crate::db::repos::asset_repo;
 use crate::models::{
     AssetClass, AssetClassification, AssetInfo, AssetType, BondCredit, BondDuration, EquityStyle,
     Management,
@@ -60,12 +59,6 @@ pub async fn get(
     Ok(())
 }
 
-pub async fn list(db: &DatabaseConnection) -> anyhow::Result<()> {
-    let assets = services::portfolio::list_assets(db).await?;
-    display::print_asset_list(&assets);
-    Ok(())
-}
-
 #[allow(clippy::too_many_arguments)]
 pub async fn asset_add(
     db: &DatabaseConnection,
@@ -93,7 +86,8 @@ pub async fn asset_add(
         bond_duration,
         management,
     };
-    asset_repo::create(db, &info, &classification, morningstar_code.as_deref()).await?;
+    services::assets::create_tracked_asset(db, &info, &classification, morningstar_code.as_deref())
+        .await?;
     println!("Added asset {ticker}");
     Ok(())
 }
@@ -120,7 +114,7 @@ pub async fn asset_edit(
     if name.is_none() && morningstar_code.is_none() && classification.is_empty() {
         anyhow::bail!("at least one field must be provided");
     }
-    asset_repo::update(
+    services::assets::update_tracked_asset(
         db,
         &ticker,
         &classification,

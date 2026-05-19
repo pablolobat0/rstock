@@ -767,6 +767,8 @@ async fn test_process_day_transactions_pure() {
         morningstar_code: None,
         asset_class: None,
         equity_style: None,
+        bond_credit: None,
+        bond_duration: None,
         management: None,
     };
     let asset_map: HashMap<i32, &Asset> = [(1, &asset)].into_iter().collect();
@@ -1190,6 +1192,8 @@ async fn test_process_day_transactions_sell_pure() {
         morningstar_code: None,
         asset_class: None,
         equity_style: None,
+        bond_credit: None,
+        bond_duration: None,
         management: None,
     };
     let asset_map: HashMap<i32, &Asset> = [(1, &asset)].into_iter().collect();
@@ -1465,6 +1469,8 @@ async fn test_process_day_transactions_split_pure() {
         morningstar_code: None,
         asset_class: None,
         equity_style: None,
+        bond_credit: None,
+        bond_duration: None,
         management: None,
     };
     let asset_map: HashMap<i32, &Asset> = [(1, &asset)].into_iter().collect();

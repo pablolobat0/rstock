@@ -1,6 +1,6 @@
 # Protect Tracked Asset Identity While Allowing Metadata Correction
 
-Status: needs-triage
+Status: done
 
 ## Parent
 
@@ -24,4 +24,4 @@ Keep the user-facing identity, vehicle type, and currency of a Tracked asset sta
 
 ## Blocked by
 
-- .scratch/portfolio-first-cli-refactor/issues/02-require-classified-tracked-assets-across-manual-and-csv-workflows.md
+None - can start immediately

@@ -18,6 +18,12 @@ pub async fn export_transactions_csv(db: &DatabaseConnection, path: &str) -> any
         "Name",
         "AssetType",
         "Currency",
+        "MorningstarCode",
+        "AssetClass",
+        "EquityStyle",
+        "BondCredit",
+        "BondDuration",
+        "Management",
         "Type",
         "Quantity",
         "Price",
@@ -31,6 +37,14 @@ pub async fn export_transactions_csv(db: &DatabaseConnection, path: &str) -> any
         let name = asset.map_or("", |a| a.name.as_str());
         let asset_type = asset.map(|a| a.asset_type.to_string()).unwrap_or_default();
         let currency = asset.map_or("", |a| a.currency.as_str());
+        let morningstar_code = asset
+            .and_then(|a| a.morningstar_code.as_deref())
+            .unwrap_or("");
+        let asset_class = asset.and_then(|a| a.asset_class.as_deref()).unwrap_or("");
+        let equity_style = asset.and_then(|a| a.equity_style.as_deref()).unwrap_or("");
+        let bond_credit = asset.and_then(|a| a.bond_credit.as_deref()).unwrap_or("");
+        let bond_duration = asset.and_then(|a| a.bond_duration.as_deref()).unwrap_or("");
+        let management = asset.and_then(|a| a.management.as_deref()).unwrap_or("");
         let tx_type = tx.tx_type.to_string();
         wtr.write_record([
             &display_date(&tx.date),
@@ -38,6 +52,12 @@ pub async fn export_transactions_csv(db: &DatabaseConnection, path: &str) -> any
             name,
             asset_type.as_str(),
             currency,
+            morningstar_code,
+            asset_class,
+            equity_style,
+            bond_credit,
+            bond_duration,
+            management,
             tx_type.as_str(),
             &format!("{}", tx.quantity),
             &format!("{:.decimals$}", cents_to_f64(tx.price_cents)),

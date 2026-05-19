@@ -77,6 +77,8 @@ pub struct CsvRow {
     pub name: Option<String>,
     pub asset_type: Option<super::AssetType>,
     pub currency: Option<String>,
+    pub morningstar_code: Option<String>,
+    pub classification: super::AssetClassification,
     pub tx_type: TxType,
     pub quantity: f64,
     pub price: f64,
@@ -91,6 +93,12 @@ pub struct Transaction {
     pub quantity: f64,
     pub price_cents: i64,
     pub fees_cents: i64,
+}
+
+pub struct TransactionListItem {
+    pub transaction: Transaction,
+    pub ticker: String,
+    pub asset_name: String,
 }
 
 impl Transaction {

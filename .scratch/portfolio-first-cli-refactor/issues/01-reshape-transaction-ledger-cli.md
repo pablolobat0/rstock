@@ -1,6 +1,6 @@
 # Reshape Transaction Ledger CLI
 
-Status: needs-triage
+Status: done
 
 ## Parent
 

@@ -1,6 +1,6 @@
 # Constrain Analysis To Portfolio-Relevant Paths
 
-Status: needs-triage
+Status: done
 
 ## Parent
 
@@ -26,4 +26,4 @@ Constrain read-only analysis commands to portfolio-relevant analysis. Keep top-l
 
 ## Blocked by
 
-- .scratch/portfolio-first-cli-refactor/issues/02-require-classified-tracked-assets-across-manual-and-csv-workflows.md
+None - can start immediately

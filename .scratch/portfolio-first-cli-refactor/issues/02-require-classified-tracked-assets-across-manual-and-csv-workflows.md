@@ -1,6 +1,6 @@
 # Require Classified Tracked Assets Across Manual And CSV Workflows
 
-Status: needs-triage
+Status: done
 
 ## Parent
 
@@ -26,4 +26,4 @@ Require Tracked assets to enter rstock with valid Asset classification from both
 
 ## Blocked by
 
-- .scratch/portfolio-first-cli-refactor/issues/01-reshape-transaction-ledger-cli.md
+None - can start immediately

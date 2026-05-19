@@ -5,4 +5,3 @@ pub mod fund_holdings_snapshot;
 pub mod portfolio_asset_history;
 pub mod portfolio_history;
 pub mod transaction;
-pub mod watchlist;

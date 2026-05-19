@@ -1,5 +1,7 @@
 use clap::ValueEnum;
 
+use super::AssetType;
+
 #[derive(ValueEnum, Clone, Debug, PartialEq, Eq)]
 pub enum AssetClass {
     Equity,
@@ -56,6 +58,37 @@ impl AssetClassification {
             && self.bond_credit.is_none()
             && self.bond_duration.is_none()
             && self.management.is_none()
+    }
+
+    pub fn validate_for_asset(
+        &self,
+        asset_type: &AssetType,
+        morningstar_code: Option<&str>,
+    ) -> anyhow::Result<()> {
+        let asset_class = self
+            .asset_class
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("asset classification is required"))?;
+
+        if self.equity_style.is_some() && asset_class != &AssetClass::Equity {
+            anyhow::bail!("equity style is only valid for equity assets");
+        }
+
+        if self.bond_credit.is_some() && asset_class != &AssetClass::FixedIncome {
+            anyhow::bail!("bond credit is only valid for fixed-income assets");
+        }
+
+        if self.bond_duration.is_some() && asset_class != &AssetClass::FixedIncome {
+            anyhow::bail!("bond duration is only valid for fixed-income assets");
+        }
+
+        if matches!(asset_type, AssetType::Fund | AssetType::Etf)
+            && morningstar_code.is_none_or(|code| code.trim().is_empty())
+        {
+            anyhow::bail!("fund and ETF assets require a Morningstar code");
+        }
+
+        Ok(())
     }
 }
 

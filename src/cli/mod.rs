@@ -29,6 +29,18 @@ fn parse_positive_f64(s: &str) -> Result<f64, String> {
     }
 }
 
+fn parse_non_negative_f64(s: &str) -> Result<f64, String> {
+    let val: f64 = s
+        .parse()
+        .map_err(|_| format!("'{s}' is not a valid number"))?;
+
+    if val >= 0.0 {
+        Ok(val)
+    } else {
+        Err("value must be greater than or equal to 0".to_string())
+    }
+}
+
 #[derive(Parser)]
 #[command(
     name = "rstock",
@@ -36,7 +48,7 @@ fn parse_positive_f64(s: &str) -> Result<f64, String> {
     about = "Personal investment portfolio manager",
     long_about = "Personal investment portfolio manager.\n\n\
         Track purchases, sales, dividends, and splits. View portfolio \
-        performance, analyze correlations, and monitor individual stocks.",
+        performance and analyze portfolio-relevant data.",
     after_help = "Use 'rstock <command> --help' for more information about a specific command."
 )]
 pub struct Cli {
@@ -80,21 +92,6 @@ pub enum ChartPeriod {
     All,
 }
 
-impl ChartPeriod {
-    pub fn label(&self) -> &'static str {
-        match self {
-            Self::OneMonth => "1M",
-            Self::ThreeMonths => "3M",
-            Self::SixMonths => "6M",
-            Self::Ytd => "YTD",
-            Self::OneYear => "1Y",
-            Self::ThreeYears => "3Y",
-            Self::FiveYears => "5Y",
-            Self::All => "All",
-        }
-    }
-}
-
 #[derive(Debug, Subcommand)]
 pub enum Commands {
     /// Show portfolio overview with NAV chart and key metrics (shortcut for `portfolio get`)
@@ -104,43 +101,14 @@ pub enum Commands {
         period: ChartPeriod,
     },
 
-    /// Record a buy transaction for an existing asset (shortcut for `transaction buy`)
-    Buy {
-        /// Ticker symbol (asset must already exist; create with `portfolio asset add`)
-        #[arg(short, long)]
-        ticker: String,
-
-        /// Purchase date (DD-MM-YYYY)
-        #[arg(short, long, value_parser = parse_date)]
-        date: NaiveDate,
-
-        /// Number of shares/units
-        #[arg(short, long, value_parser = parse_positive_f64)]
-        quantity: f64,
-
-        /// Price per unit (e.g. 150.25)
-        #[arg(short, long, value_parser = parse_positive_f64)]
-        price: f64,
-
-        /// Broker commission and fees
-        #[arg(short, long, default_value = "0")]
-        fees: f64,
-    },
-
-    /// Portfolio views: overview, asset list, holdings breakdown
+    /// Portfolio dashboard and asset metadata management
     Portfolio(PortfolioArgs),
 
-    /// Record, edit, or delete transactions (buy, sell, dividend, split, edit, delete)
+    /// Maintain the Transaction ledger
     Transaction(TransactionArgs),
 
-    /// Import or export transactions as CSV
-    Data(DataArgs),
-
-    /// Analyze portfolio: composition breakdown, correlations
+    /// Analyze portfolio-relevant data: composition, fund candidates, correlations
     Analyze(AnalyzeArgs),
-
-    /// Monitor a stock: fundamentals, momentum, and sector comparison
-    Monitor(MonitorArgs),
 }
 
 #[derive(Debug, Args)]
@@ -180,13 +148,13 @@ pub enum CorrelationCommands {
         period: CorrelationPeriod,
     },
 
-    /// 60-day rolling correlation for a selected stock pair
+    /// 60-day rolling correlation for two Tracked assets
     Rolling {
-        /// First stock ticker symbol
-        ticker_a: String,
+        /// First Tracked asset ticker/ISIN
+        identifier_a: String,
 
-        /// Second stock ticker symbol
-        ticker_b: String,
+        /// Second Tracked asset ticker/ISIN
+        identifier_b: String,
 
         /// Time period for correlation calculation
         #[arg(short, long, value_enum, default_value = "1y")]
@@ -208,9 +176,6 @@ pub enum PortfolioCommands {
         #[arg(short, long, value_enum, default_value = "1y")]
         period: ChartPeriod,
     },
-
-    /// List all assets in the portfolio
-    List {},
 
     /// Manage assets: add or edit asset metadata and classification
     Asset(AssetArgs),
@@ -304,69 +269,6 @@ pub enum AssetCommands {
 }
 
 #[derive(Debug, Args)]
-pub struct DataArgs {
-    #[command(subcommand)]
-    pub command: DataCommands,
-}
-
-#[derive(Debug, Subcommand)]
-pub enum DataCommands {
-    /// Export all transactions to a CSV file
-    Export {
-        /// Output file path (e.g. transactions.csv)
-        #[arg(long, short)]
-        output: String,
-    },
-
-    /// Import transactions from a CSV file
-    Import {
-        /// Input CSV file path (e.g. transactions.csv)
-        #[arg(long, short)]
-        input: String,
-    },
-}
-
-#[derive(Debug, Args)]
-pub struct MonitorArgs {
-    #[command(subcommand)]
-    pub command: MonitorCommands,
-}
-
-#[derive(Debug, Subcommand)]
-pub enum MonitorCommands {
-    /// Add a stock to the watchlist with its sector ETF
-    Add {
-        /// Ticker symbol
-        #[arg(short, long)]
-        ticker: String,
-
-        /// Sector ETF ticker to compare against
-        #[arg(short, long)]
-        sector_etf: String,
-    },
-
-    /// Remove a stock from the watchlist
-    Remove {
-        /// Ticker symbol
-        #[arg(short, long)]
-        ticker: String,
-    },
-
-    /// List all monitored stocks
-    List {},
-
-    /// View analysis for a monitored stock
-    View {
-        /// Ticker symbol (must be in watchlist)
-        ticker: String,
-
-        /// Time period for analysis
-        #[arg(short, long, value_enum, default_value = "1y")]
-        period: ChartPeriod,
-    },
-}
-
-#[derive(Debug, Args)]
 pub struct TransactionArgs {
     #[command(subcommand)]
     pub command: TransactionCommands,
@@ -374,6 +276,9 @@ pub struct TransactionArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum TransactionCommands {
+    /// List transactions with IDs for edit/delete workflows
+    List {},
+
     /// Record a buy transaction for an existing asset
     Buy {
         /// Ticker symbol (asset must already exist; create with `portfolio asset add`)
@@ -393,7 +298,7 @@ pub enum TransactionCommands {
         price: f64,
 
         /// Broker commission and fees
-        #[arg(short, long, default_value = "0")]
+        #[arg(short, long, default_value = "0", value_parser = parse_non_negative_f64)]
         fees: f64,
     },
 
@@ -416,7 +321,7 @@ pub enum TransactionCommands {
         price: f64,
 
         /// Broker commission and fees
-        #[arg(short, long, default_value = "0")]
+        #[arg(short, long, default_value = "0", value_parser = parse_non_negative_f64)]
         fees: f64,
     },
 
@@ -431,11 +336,11 @@ pub enum TransactionCommands {
         date: NaiveDate,
 
         /// Total dividend amount received
-        #[arg(short, long)]
+        #[arg(short, long, value_parser = parse_positive_f64)]
         amount: f64,
 
         /// Withholding tax or fees
-        #[arg(short, long, default_value = "0")]
+        #[arg(short, long, default_value = "0", value_parser = parse_non_negative_f64)]
         fees: f64,
     },
 
@@ -450,7 +355,7 @@ pub enum TransactionCommands {
         date: NaiveDate,
 
         /// Split ratio: new shares per old share (e.g. 2 for 2:1 split, 0.25 for 1:4 reverse split)
-        #[arg(short, long)]
+        #[arg(short, long, value_parser = parse_positive_f64)]
         ratio: f64,
     },
 
@@ -472,7 +377,7 @@ pub enum TransactionCommands {
         price: Option<f64>,
 
         /// New fees
-        #[arg(short, long)]
+        #[arg(short, long, value_parser = parse_non_negative_f64)]
         fees: Option<f64>,
 
         /// Skip confirmation prompt
@@ -488,5 +393,19 @@ pub enum TransactionCommands {
         /// Skip confirmation prompt
         #[arg(short = 'y', long)]
         yes: bool,
+    },
+
+    /// Export all transactions to a CSV file
+    Export {
+        /// Output file path (e.g. transactions.csv)
+        #[arg(long, short)]
+        output: String,
+    },
+
+    /// Import transactions from a CSV file
+    Import {
+        /// Input CSV file path (e.g. transactions.csv)
+        #[arg(long, short)]
+        input: String,
     },
 }

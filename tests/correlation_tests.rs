@@ -1,11 +1,11 @@
 mod common;
 
 use common::{
-    insert_asset, insert_daily_price, insert_exchange_rate, insert_transaction, setup_test_db,
-    MockPriceFetcher,
+    insert_asset, insert_daily_price, insert_etf_asset, insert_exchange_rate, insert_fund_asset,
+    insert_transaction, setup_test_db, MockPriceFetcher,
 };
 use rstock::constants::BENCHMARK_TICKER;
-use rstock::models::monitor::StockInfo;
+use rstock::models::StockInfo;
 use rstock::services::analytics::{compute_correlation_data, compute_rolling_correlation_data};
 use rstock::services::metrics::{
     align_return_series_with_dates, align_return_series_with_dates_unfiltered,
@@ -321,6 +321,8 @@ fn test_summarize_rolling_correlation_values() {
 async fn test_rolling_correlation_for_pair() {
     let db = setup_test_db().await;
     let mut fetcher = MockPriceFetcher::new();
+    insert_asset(&db, "XFAKE1", "Fake A", "stock", "EUR").await;
+    insert_asset(&db, "XFAKE2", "Fake B", "stock", "EUR").await;
 
     let prices_a: Vec<(String, f64)> = (0..120)
         .map(|i| {
@@ -415,54 +417,12 @@ async fn test_rolling_correlation_for_pair() {
 }
 
 #[tokio::test]
-async fn test_rolling_correlation_with_benchmark() {
+async fn test_rolling_correlation_rejects_unknown_identifier() {
     let db = setup_test_db().await;
     let mut fetcher = MockPriceFetcher::new();
+    insert_asset(&db, "XFAKE1", "Fake A", "stock", "EUR").await;
 
-    fetcher.stock_info.insert(
-        "XFAKE1".to_string(),
-        StockInfo {
-            ticker: "XFAKE1".to_string(),
-            name: Some("Fake A".to_string()),
-            currency: Some("EUR".to_string()),
-            current_price: None,
-            previous_close: None,
-            day_range: None,
-            fifty_two_week_range: None,
-            volume: None,
-            avg_volume: None,
-            market_cap: None,
-            pe_ttm: None,
-            eps_ttm: None,
-            dividend_yield: None,
-            sector: None,
-            industry: None,
-            country: None,
-        },
-    );
-    fetcher.stock_info.insert(
-        "ACWI".to_string(),
-        StockInfo {
-            ticker: "ACWI".to_string(),
-            name: Some("MSCI ACWI Benchmark".to_string()),
-            currency: Some("USD".to_string()),
-            current_price: None,
-            previous_close: None,
-            day_range: None,
-            fifty_two_week_range: None,
-            volume: None,
-            avg_volume: None,
-            market_cap: None,
-            pe_ttm: None,
-            eps_ttm: None,
-            dividend_yield: None,
-            sector: None,
-            industry: None,
-            country: None,
-        },
-    );
-
-    let asset_prices: Vec<(String, f64)> = (0..120)
+    let prices: Vec<(String, f64)> = (0..120)
         .map(|i| {
             let date = (chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap()
                 + chrono::Duration::days(i))
@@ -473,45 +433,72 @@ async fn test_rolling_correlation_with_benchmark() {
         .collect();
     fetcher
         .historical_prices
-        .insert("XFAKE1".to_string(), asset_prices);
-
-    let benchmark_prices: Vec<(String, f64)> = (0..120)
-        .map(|i| {
-            let date = (chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap()
-                + chrono::Duration::days(i))
-            .format("%Y-%m-%d")
-            .to_string();
-            (date, 200.0 + i as f64)
-        })
-        .collect();
-    fetcher
-        .historical_prices
-        .insert("ACWI".to_string(), benchmark_prices);
-    let fx_rates: Vec<(String, f64)> = (0..120)
-        .map(|i| {
-            let date = (chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap()
-                + chrono::Duration::days(i))
-            .format("%Y-%m-%d")
-            .to_string();
-            (date, 0.92)
-        })
-        .collect();
-    fetcher
-        .exchange_rates
-        .insert("USDEUR".to_string(), fx_rates);
+        .insert("XFAKE1".to_string(), prices);
 
     let result = compute_rolling_correlation_data(
         &db,
         "2025-01-01",
         "2025-04-30",
         "XFAKE1",
-        "ACWI",
+        "XUNKNOWN",
+        "1Y",
+        &fetcher,
+    )
+    .await;
+    let Err(err) = result else {
+        panic!("unknown tracked asset should be rejected");
+    };
+
+    assert!(err
+        .to_string()
+        .contains("tracked asset 'XUNKNOWN' not found"));
+}
+
+#[tokio::test]
+async fn test_rolling_correlation_uses_morningstar_code_for_funds_and_etfs() {
+    let db = setup_test_db().await;
+    let mut fetcher = MockPriceFetcher::new();
+    insert_fund_asset(&db, "IE00XFAKE1", "Fake Fund", "EUR", "F00000FUND").await;
+    insert_etf_asset(&db, "IE00XFAKE2", "Fake ETF", "EUR", "F00000ETF").await;
+
+    let fund_prices: Vec<(String, f64)> = (0..120)
+        .map(|i| {
+            let date = (chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap()
+                + chrono::Duration::days(i))
+            .format("%Y-%m-%d")
+            .to_string();
+            (date, 100.0 + i as f64 * 0.5)
+        })
+        .collect();
+    let etf_prices: Vec<(String, f64)> = (0..120)
+        .map(|i| {
+            let date = (chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap()
+                + chrono::Duration::days(i))
+            .format("%Y-%m-%d")
+            .to_string();
+            (date, 50.0 + i as f64 * 0.25)
+        })
+        .collect();
+    fetcher
+        .historical_prices
+        .insert("F00000FUND".to_string(), fund_prices);
+    fetcher
+        .historical_prices
+        .insert("F00000ETF".to_string(), etf_prices);
+
+    let result = compute_rolling_correlation_data(
+        &db,
+        "2025-01-01",
+        "2025-04-30",
+        "IE00XFAKE1",
+        "IE00XFAKE2",
         "1Y",
         &fetcher,
     )
     .await
     .unwrap();
 
-    assert_eq!(result.right_name, "MSCI ACWI Benchmark");
+    assert_eq!(result.left_name, "Fake Fund");
+    assert_eq!(result.right_name, "Fake ETF");
     assert!(!result.points.is_empty());
 }

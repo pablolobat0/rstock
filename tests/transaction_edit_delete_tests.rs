@@ -99,6 +99,26 @@ async fn test_insert_buy_returns_id() {
 }
 
 #[tokio::test]
+async fn test_service_list_returns_identifying_transaction_details_in_date_order() {
+    let db = setup_test_db().await;
+    let asset_a = insert_asset(&db, "XFAKE1", "Fake Stock One", "stock", "EUR").await;
+    let asset_b = insert_asset(&db, "XFAKE2", "Fake Stock Two", "stock", "EUR").await;
+    insert_transaction(&db, asset_b, "2025-01-03", 3.0, 30.0, 0.0).await;
+    insert_transaction(&db, asset_a, "2025-01-02", 2.0, 20.0, 1.0).await;
+
+    let transactions = services::transactions::list(&db).await.unwrap();
+
+    assert_eq!(transactions.len(), 2);
+    assert_eq!(transactions[0].transaction.id, 2);
+    assert_eq!(transactions[0].transaction.date, "2025-01-02");
+    assert_eq!(transactions[0].ticker, "XFAKE1");
+    assert_eq!(transactions[0].asset_name, "Fake Stock One");
+    assert_eq!(transactions[1].transaction.id, 1);
+    assert_eq!(transactions[1].transaction.date, "2025-01-03");
+    assert_eq!(transactions[1].ticker, "XFAKE2");
+}
+
+#[tokio::test]
 async fn test_service_delete_invalidates_snapshots() {
     let db = setup_test_db().await;
     let asset_id = insert_asset(&db, "XFAKE1", "Fake Stock", "stock", "EUR").await;

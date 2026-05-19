@@ -9,8 +9,7 @@ use rstock::db::entities::{
     asset, daily_asset_price, daily_exchange_rate, portfolio_asset_history, portfolio_history,
     transaction,
 };
-use rstock::models::monitor::StockInfo;
-use rstock::models::{f64_to_cents, AssetType};
+use rstock::models::{f64_to_cents, AssetType, StockInfo};
 use rstock::services::price::PriceFetcher;
 
 pub async fn setup_test_db() -> DatabaseConnection {

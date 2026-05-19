@@ -55,18 +55,6 @@ pub fn is_benchmark_ticker(ticker: &str) -> bool {
     ticker == BENCHMARK_TICKER
 }
 
-// --- Monitor / Momentum indicators ---
-pub const RSI_PERIOD: usize = 14;
-pub const SMA_SHORT: usize = 50;
-pub const SMA_LONG: usize = 200;
-pub const MACD_FAST: usize = 12;
-pub const MACD_SLOW: usize = 26;
-pub const MACD_SIGNAL_PERIOD: usize = 9;
-pub const RSI_OVERBOUGHT: f64 = 70.0;
-pub const RSI_OVERSOLD: f64 = 30.0;
-/// Extra trading days of history to fetch for SMA200 warmup
-pub const MONITOR_WARMUP_DAYS: i64 = 300;
-
 // --- Monetary precision ---
 /// Prices stored as i64 with 4 decimal places of precision.
 pub const MONETARY_MULTIPLIER: f64 = 10_000.0;

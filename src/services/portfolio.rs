@@ -12,7 +12,7 @@ use crate::db::repos::{
     asset_repo, portfolio_asset_history_repo, portfolio_history_repo, transaction_repo,
 };
 use crate::models::{
-    cents_to_f64, Asset, AssetPosition, MarketDataLimitation, PortfolioResult, PortfolioSnapshot,
+    cents_to_f64, AssetPosition, MarketDataLimitation, PortfolioResult, PortfolioSnapshot,
     Transaction,
 };
 use crate::services::nav;
@@ -195,10 +195,6 @@ pub async fn trigger_rebuild_if_needed(
         }
     }
     Ok(())
-}
-
-pub async fn list_assets(db: &DatabaseConnection) -> anyhow::Result<Vec<Asset>> {
-    asset_repo::find_all(db).await
 }
 
 pub async fn get_nav_snapshots(

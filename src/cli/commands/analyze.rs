@@ -47,8 +47,8 @@ pub async fn correlation_matrix(
 pub async fn rolling_correlation(
     db: &DatabaseConnection,
     fetcher: &dyn PriceFetcher,
-    ticker_a: String,
-    ticker_b: String,
+    identifier_a: String,
+    identifier_b: String,
     period: CorrelationPeriod,
 ) -> anyhow::Result<()> {
     let (start_str, today_str, period_label) = correlation_date_range(&period);
@@ -57,8 +57,8 @@ pub async fn rolling_correlation(
         db,
         &start_str,
         &today_str,
-        &ticker_a,
-        &ticker_b,
+        &identifier_a,
+        &identifier_b,
         period_label,
         fetcher,
     )

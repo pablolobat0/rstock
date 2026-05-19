@@ -35,7 +35,9 @@ pub async fn find_all_ordered_by_date(
     start_date: Option<&str>,
     end_date: Option<&str>,
 ) -> anyhow::Result<Vec<Transaction>> {
-    let mut query = transaction::Entity::find().order_by_asc(transaction::Column::Date);
+    let mut query = transaction::Entity::find()
+        .order_by_asc(transaction::Column::Date)
+        .order_by_asc(transaction::Column::Id);
 
     if let Some(start) = start_date {
         query = query.filter(transaction::Column::Date.gte(start.to_string()));

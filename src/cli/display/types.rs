@@ -1,15 +1,23 @@
 use tabled::Tabled;
 
 #[derive(Tabled)]
-pub struct AssetRow {
+pub struct TransactionRow {
+    #[tabled(rename = "ID")]
+    pub id: i32,
+    #[tabled(rename = "Date")]
+    pub date: String,
+    #[tabled(rename = "Type")]
+    pub tx_type: String,
     #[tabled(rename = "Ticker")]
     pub ticker: String,
     #[tabled(rename = "Name")]
-    pub name: String,
-    #[tabled(rename = "Type")]
-    pub asset_type: String,
-    #[tabled(rename = "Currency")]
-    pub currency: String,
+    pub asset_name: String,
+    #[tabled(rename = "Quantity")]
+    pub quantity: String,
+    #[tabled(rename = "Price/Amount")]
+    pub price: String,
+    #[tabled(rename = "Fees")]
+    pub fees: String,
 }
 
 #[derive(Tabled)]

@@ -1,4 +1,5 @@
 pub mod analytics;
+pub mod assets;
 pub mod composition;
 pub mod export;
 pub mod fund_analysis;
@@ -8,9 +9,7 @@ pub mod import;
 pub mod individual_price;
 pub(crate) mod market_data_policy;
 pub mod metrics;
-pub mod monitor;
 pub mod nav;
 pub mod portfolio;
 pub mod price;
 pub mod transactions;
-pub mod watchlist;

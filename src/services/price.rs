@@ -7,8 +7,7 @@ use yfinance_rs::ticker::Ticker;
 use yfinance_rs::YfClient;
 
 use crate::constants::DATE_FORMAT;
-use crate::models::monitor::StockInfo;
-use crate::models::AssetType;
+use crate::models::{AssetType, StockInfo};
 use crate::utils::resolve_scripts_dir;
 
 #[async_trait::async_trait]

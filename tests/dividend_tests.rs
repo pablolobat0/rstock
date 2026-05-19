@@ -164,6 +164,8 @@ async fn test_process_day_transactions_dividend_pure() {
         morningstar_code: None,
         asset_class: None,
         equity_style: None,
+        bond_credit: None,
+        bond_duration: None,
         management: None,
     };
     let asset_map: HashMap<i32, &rstock::models::Asset> = HashMap::from([(1, &asset)]);
