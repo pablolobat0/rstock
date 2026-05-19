@@ -1,6 +1,6 @@
 # Route Benchmark Analytics Through Historical Market Data as Supplied Asset
 
-Status: needs-triage
+Status: done
 
 Type: AFK
 
@@ -23,4 +23,4 @@ Move benchmark asset lookup or creation out of Historical market data and into a
 
 ## Blocked by
 
-- `.scratch/deepen-historical-market-data/issues/02-infer-fx-inside-historical-market-data-preparation.md`
+None - can start immediately

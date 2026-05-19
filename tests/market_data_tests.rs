@@ -1,13 +1,12 @@
 mod common;
 
 use chrono::{Duration, Local, NaiveDate};
-use rstock::constants::{format_date, BENCHMARK_NAME, BENCHMARK_TICKER};
+use rstock::constants::{format_date, BENCHMARK_CURRENCY, BENCHMARK_NAME, BENCHMARK_TICKER};
 use rstock::db::entities::asset;
 use rstock::db::repos::{daily_price_repo, exchange_rate_repo};
-use rstock::models::{
-    Asset, MarketDataLimitationClassification, MarketDataLimitationSource, MarketDataSubject,
-};
-use rstock::services::market_data;
+use rstock::models::{Asset, MarketDataLimitationClassification, MarketDataSubject};
+use rstock::services::metrics;
+use rstock::services::{historical_market_data, individual_price};
 use sea_orm::EntityTrait;
 
 async fn make_asset(
@@ -46,6 +45,18 @@ fn date(year: i32, month: u32, day: u32) -> NaiveDate {
     NaiveDate::from_ymd_opt(year, month, day).unwrap()
 }
 
+async fn make_benchmark_asset(db: &sea_orm::DatabaseConnection) -> Asset {
+    let id = common::insert_asset(
+        db,
+        BENCHMARK_TICKER,
+        BENCHMARK_NAME,
+        "stock",
+        BENCHMARK_CURRENCY,
+    )
+    .await;
+    metrics::benchmark_asset(id)
+}
+
 #[tokio::test]
 async fn test_benchmark_market_data_prepares_prices_through_market_data() {
     let db = common::setup_test_db().await;
@@ -57,11 +68,17 @@ async fn test_benchmark_market_data_prepares_prices_through_market_data() {
     );
     mock.exchange_rates
         .insert("USDEUR".to_owned(), vec![("2025-01-02".to_owned(), 0.90)]);
+    let benchmark = make_benchmark_asset(&db).await;
 
-    let benchmark_market_data =
-        market_data::prepare_benchmark_market_data(&db, "2025-01-02", "2025-01-02", &mock)
-            .await
-            .unwrap();
+    let benchmark_market_data = historical_market_data::prepare_benchmark_market_data(
+        &db,
+        &benchmark,
+        "2025-01-02",
+        "2025-01-02",
+        &mock,
+    )
+    .await
+    .unwrap();
 
     assert_eq!(benchmark_market_data.effective_end, date(2025, 1, 2));
     assert_eq!(benchmark_market_data.limitations, vec![]);
@@ -84,10 +101,17 @@ async fn test_benchmark_market_data_prepares_required_fx() {
     );
     mock.exchange_rates
         .insert("USDEUR".to_owned(), vec![("2025-01-02".to_owned(), 0.90)]);
+    let benchmark = make_benchmark_asset(&db).await;
 
-    market_data::prepare_benchmark_market_data(&db, "2025-01-02", "2025-01-02", &mock)
-        .await
-        .unwrap();
+    historical_market_data::prepare_benchmark_market_data(
+        &db,
+        &benchmark,
+        "2025-01-02",
+        "2025-01-02",
+        &mock,
+    )
+    .await
+    .unwrap();
 
     assert_eq!(
         exchange_rate_repo::find_rate(&db, "USDEUR", "2025-01-02")
@@ -110,11 +134,17 @@ async fn test_benchmark_market_data_stays_distinct_from_holdings() {
     );
     mock.exchange_rates
         .insert("USDEUR".to_owned(), vec![("2025-01-02".to_owned(), 0.90)]);
+    let benchmark = make_benchmark_asset(&db).await;
 
-    let benchmark_market_data =
-        market_data::prepare_benchmark_market_data(&db, "2025-01-02", "2025-01-02", &mock)
-            .await
-            .unwrap();
+    let benchmark_market_data = historical_market_data::prepare_benchmark_market_data(
+        &db,
+        &benchmark,
+        "2025-01-02",
+        "2025-01-02",
+        &mock,
+    )
+    .await
+    .unwrap();
     let benchmark = asset::Entity::find_by_id(benchmark_market_data.asset_id)
         .one(&db)
         .await
@@ -149,10 +179,9 @@ async fn test_nav_market_data_does_not_persist_same_day_asset_or_fx_data() {
         vec![(yesterday_str.clone(), 0.90), (today_str.clone(), 0.91)],
     );
 
-    let nav_market_data = market_data::prepare_nav_market_data(
+    let nav_market_data = historical_market_data::prepare_nav_market_data(
         &db,
         std::slice::from_ref(&asset),
-        &["USDEUR".to_owned()],
         &yesterday_str,
         &today_str,
         &mock,
@@ -189,10 +218,9 @@ async fn test_nav_market_data_persists_asset_forward_fill_between_source_observa
         ],
     );
 
-    let nav_market_data = market_data::prepare_nav_market_data(
+    let nav_market_data = historical_market_data::prepare_nav_market_data(
         &db,
         std::slice::from_ref(&asset),
-        &[],
         "2025-01-02",
         "2025-01-10",
         &mock,
@@ -225,6 +253,34 @@ async fn test_nav_market_data_persists_asset_forward_fill_between_source_observa
 }
 
 #[tokio::test]
+async fn test_nav_market_data_uses_implicit_base_currency_fx() {
+    let db = common::setup_test_db().await;
+    let mut mock = common::MockPriceFetcher::new();
+
+    let asset = make_asset(&db, "XFAKEEUR", "EUR Stock", "stock", "EUR").await;
+    mock.historical_prices
+        .insert("XFAKEEUR".to_owned(), vec![("2025-01-02".to_owned(), 10.0)]);
+
+    let nav_market_data = historical_market_data::prepare_nav_market_data(
+        &db,
+        std::slice::from_ref(&asset),
+        "2025-01-02",
+        "2025-01-02",
+        &mock,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(nav_market_data.effective_end, date(2025, 1, 2));
+    assert_eq!(
+        exchange_rate_repo::find_rate(&db, "EUREUR", "2025-01-02")
+            .await
+            .unwrap(),
+        None
+    );
+}
+
+#[tokio::test]
 async fn test_nav_market_data_persists_fx_forward_fill_between_source_observations_only() {
     let db = common::setup_test_db().await;
     let mut mock = common::MockPriceFetcher::new();
@@ -242,10 +298,9 @@ async fn test_nav_market_data_persists_fx_forward_fill_between_source_observatio
         ],
     );
 
-    let nav_market_data = market_data::prepare_nav_market_data(
+    let nav_market_data = historical_market_data::prepare_nav_market_data(
         &db,
         std::slice::from_ref(&asset),
-        &["USDEUR".to_owned()],
         "2025-01-02",
         "2025-01-10",
         &mock,
@@ -285,10 +340,9 @@ async fn test_nav_market_data_returns_stale_cached_asset_limitation() {
     let asset = make_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
     common::insert_daily_price(&db, asset.id, "2025-01-01", 10.0, false).await;
 
-    let nav_market_data = market_data::prepare_nav_market_data(
+    let nav_market_data = historical_market_data::prepare_nav_market_data(
         &db,
         std::slice::from_ref(&asset),
-        &[],
         "2025-01-07",
         "2025-01-07",
         &mock,
@@ -305,14 +359,10 @@ async fn test_nav_market_data_returns_stale_cached_asset_limitation() {
         nav_market_data.limitations[0].classification,
         MarketDataLimitationClassification::ActionableStaleData
     );
-    assert_eq!(
-        nav_market_data.limitations[0].source,
-        MarketDataLimitationSource::CachedFallback
-    );
 }
 
 #[tokio::test]
-async fn test_nav_market_data_classifies_reporting_lag() {
+async fn test_nav_market_data_returns_only_actionable_reporting_lag() {
     let db = common::setup_test_db().await;
     let mut mock = common::MockPriceFetcher::new();
 
@@ -323,10 +373,9 @@ async fn test_nav_market_data_classifies_reporting_lag() {
     mock.historical_prices
         .insert("FUND2".to_owned(), vec![("2025-01-02".to_owned(), 20.0)]);
 
-    let nav_market_data = market_data::prepare_nav_market_data(
+    let nav_market_data = historical_market_data::prepare_nav_market_data(
         &db,
         &[acceptable, excessive],
-        &[],
         "2025-01-02",
         "2025-01-10",
         &mock,
@@ -334,13 +383,19 @@ async fn test_nav_market_data_classifies_reporting_lag() {
     .await
     .unwrap();
 
-    assert_eq!(nav_market_data.limitations.len(), 2);
-    assert!(nav_market_data.limitations.iter().any(|limitation| {
-        limitation.classification == MarketDataLimitationClassification::AcceptableReportingLag
-    }));
-    assert!(nav_market_data.limitations.iter().any(|limitation| {
-        limitation.classification == MarketDataLimitationClassification::ActionableReportingLag
-    }));
+    assert_eq!(nav_market_data.limitations.len(), 1);
+    assert_eq!(
+        nav_market_data.limitations[0].classification,
+        MarketDataLimitationClassification::ActionableReportingLag
+    );
+    assert_eq!(
+        nav_market_data.limitations[0].subject,
+        MarketDataSubject::Asset {
+            ticker: "XFAKEF2".to_owned(),
+            name: "Test Fund 2".to_owned(),
+            asset_type: rstock::models::AssetType::Fund,
+        }
+    );
 }
 
 #[tokio::test]
@@ -352,10 +407,9 @@ async fn test_nav_market_data_stock_stale_limitations_ignore_weekends() {
     mock.historical_prices
         .insert("XFAKE1".to_owned(), vec![("2025-01-03".to_owned(), 10.0)]);
 
-    let nav_market_data = market_data::prepare_nav_market_data(
+    let nav_market_data = historical_market_data::prepare_nav_market_data(
         &db,
         std::slice::from_ref(&asset),
-        &[],
         "2025-01-03",
         "2025-01-05",
         &mock,
@@ -379,10 +433,9 @@ async fn test_nav_market_data_returns_fx_completed_weekday_stale_limitation() {
     mock.exchange_rates
         .insert("USDEUR".to_owned(), vec![("2025-01-01".to_owned(), 0.90)]);
 
-    let nav_market_data = market_data::prepare_nav_market_data(
+    let nav_market_data = historical_market_data::prepare_nav_market_data(
         &db,
         std::slice::from_ref(&asset),
-        &["USDEUR".to_owned()],
         "2025-01-01",
         "2025-01-07",
         &mock,
@@ -390,6 +443,7 @@ async fn test_nav_market_data_returns_fx_completed_weekday_stale_limitation() {
     .await
     .unwrap();
 
+    assert_eq!(nav_market_data.effective_end, date(2025, 1, 1));
     assert_eq!(nav_market_data.limitations.len(), 1);
     assert_eq!(
         nav_market_data.limitations[0].classification,
@@ -398,7 +452,7 @@ async fn test_nav_market_data_returns_fx_completed_weekday_stale_limitation() {
     assert_eq!(
         nav_market_data.limitations[0].subject,
         MarketDataSubject::FxRate {
-            pair: "USDEUR".to_owned()
+            currency: "USD".to_owned()
         }
     );
 }
@@ -409,7 +463,7 @@ async fn test_asset_valuation_data_uses_implicit_base_currency_fx_rate() {
     let asset = make_asset(&db, "XFAKEEUR", "EUR Stock", "stock", "EUR").await;
     common::insert_daily_price(&db, asset.id, "2025-01-02", 25.0, false).await;
 
-    let valuation = market_data::get_asset_valuation_data(&db, &asset, "2025-01-02")
+    let valuation = historical_market_data::get_asset_valuation_data(&db, &asset, "2025-01-02")
         .await
         .unwrap()
         .unwrap();
@@ -426,7 +480,7 @@ async fn test_asset_valuation_data_uses_required_non_base_currency_fx_rate() {
     common::insert_daily_price(&db, asset.id, "2025-01-02", 100.0, false).await;
     common::insert_exchange_rate(&db, "USDEUR", "2025-01-02", 0.90).await;
 
-    let valuation = market_data::get_asset_valuation_data(&db, &asset, "2025-01-02")
+    let valuation = historical_market_data::get_asset_valuation_data(&db, &asset, "2025-01-02")
         .await
         .unwrap()
         .unwrap();
@@ -442,13 +496,43 @@ async fn test_asset_valuation_data_requires_non_base_currency_fx_rate() {
     let asset = make_asset(&db, "XFAKEUSD", "US Stock", "stock", "USD").await;
     common::insert_daily_price(&db, asset.id, "2025-01-02", 100.0, false).await;
 
-    let error = market_data::get_asset_valuation_data(&db, &asset, "2025-01-02")
+    let error = historical_market_data::get_asset_valuation_data(&db, &asset, "2025-01-02")
         .await
         .unwrap_err();
 
+    assert!(error.to_string().contains(
+        "missing required historical market data for FX rate for asset XFAKEUSD (US Stock)"
+    ));
+}
+
+#[tokio::test]
+async fn test_required_asset_valuation_data_fails_when_price_is_missing() {
+    let db = common::setup_test_db().await;
+    let asset = make_asset(&db, "XFAKEEUR", "EUR Stock", "stock", "EUR").await;
+
+    let error =
+        historical_market_data::get_required_asset_valuation_data(&db, &asset, "2025-01-02")
+            .await
+            .unwrap_err();
+
     assert!(error
         .to_string()
-        .contains("missing required historical market data for FX rate USDEUR"));
+        .contains("missing required historical market data for asset XFAKEEUR (EUR Stock)"));
+}
+
+#[tokio::test]
+async fn test_required_asset_exchange_rate_fails_when_rate_is_missing() {
+    let db = common::setup_test_db().await;
+    let asset = make_asset(&db, "XFAKEUSD", "US Stock", "stock", "USD").await;
+
+    let error =
+        historical_market_data::get_required_asset_exchange_rates(&db, &[asset], "2025-01-02")
+            .await
+            .unwrap_err();
+
+    assert!(error.to_string().contains(
+        "missing required historical market data for FX rate for asset XFAKEUSD (US Stock)"
+    ));
 }
 
 #[tokio::test]
@@ -464,10 +548,16 @@ async fn test_asset_display_market_data_uses_non_persisted_live_stock_and_fx_quo
     mock.exchange_rates
         .insert("USDEUR".to_owned(), vec![(today_str.clone(), 0.91)]);
 
-    let display_data =
-        market_data::get_asset_display_market_data(&db, &asset, 100.0, "2025-01-02", 0.90, &mock)
-            .await
-            .unwrap();
+    let display_data = individual_price::get_asset_display_market_data(
+        &db,
+        &asset,
+        100.0,
+        "2025-01-02",
+        0.90,
+        &mock,
+    )
+    .await
+    .unwrap();
 
     assert_eq!(display_data.native_price, 101.0);
     assert_eq!(display_data.price_date, today_str);
@@ -499,10 +589,16 @@ async fn test_asset_display_market_data_does_not_use_live_quotes_for_funds() {
     mock.historical_prices
         .insert("FUND1".to_owned(), vec![(format_date(today), 120.0)]);
 
-    let display_data =
-        market_data::get_asset_display_market_data(&db, &asset, 95.0, "2025-01-02", 1.0, &mock)
-            .await
-            .unwrap();
+    let display_data = individual_price::get_asset_display_market_data(
+        &db,
+        &asset,
+        95.0,
+        "2025-01-02",
+        1.0,
+        &mock,
+    )
+    .await
+    .unwrap();
 
     assert_eq!(display_data.native_price, 100.0);
     assert_eq!(display_data.price_date, yesterday_str);
@@ -522,10 +618,16 @@ async fn test_asset_display_market_data_combines_live_stock_with_stale_cached_fx
         .insert("XFAKEUSD".to_owned(), vec![(format_date(today), 101.0)]);
     common::insert_exchange_rate(&db, "USDEUR", &format_date(stale_fx_date), 0.89).await;
 
-    let display_data =
-        market_data::get_asset_display_market_data(&db, &asset, 100.0, "2025-01-02", 0.90, &mock)
-            .await
-            .unwrap();
+    let display_data = individual_price::get_asset_display_market_data(
+        &db,
+        &asset,
+        100.0,
+        "2025-01-02",
+        0.90,
+        &mock,
+    )
+    .await
+    .unwrap();
 
     assert_eq!(display_data.native_price, 101.0);
     assert_eq!(display_data.fx_rate, 0.89);
@@ -535,13 +637,9 @@ async fn test_asset_display_market_data_combines_live_stock_with_stale_cached_fx
         MarketDataLimitationClassification::ActionableStaleData
     );
     assert_eq!(
-        display_data.limitations[0].source,
-        MarketDataLimitationSource::CachedFallback
-    );
-    assert_eq!(
         display_data.limitations[0].subject,
         MarketDataSubject::FxRate {
-            pair: "USDEUR".to_owned()
+            currency: "USD".to_owned()
         }
     );
 }

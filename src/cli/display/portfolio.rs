@@ -6,8 +6,10 @@ use tabled::settings::style::{HorizontalLine, VerticalLine};
 use tabled::settings::{Alignment, Color, Style};
 use tabled::Table;
 
-use crate::constants::display_date;
-use crate::models::{AssetType, PeriodMetrics, PortfolioResult};
+use crate::constants::{display_date, format_date};
+use crate::models::{
+    AssetType, MarketDataLimitation, MarketDataSubject, PeriodMetrics, PortfolioResult,
+};
 
 use super::types::PortfolioRow;
 
@@ -284,11 +286,30 @@ pub fn print_portfolio(result: &PortfolioResult) {
         print_metrics_table(&periods);
     }
 
-    if !result.market_data_warnings.is_empty() {
+    if !result.market_data_limitations.is_empty() {
         println!();
         println!("Market data limitations:");
-        for warning in &result.market_data_warnings {
+        for limitation in &result.market_data_limitations {
+            let warning = format_market_data_limitation_warning(limitation);
             println!("- {warning}");
         }
+    }
+}
+
+fn format_market_data_limitation_warning(limitation: &MarketDataLimitation) -> String {
+    let latest_available_date = display_date(&format_date(limitation.latest_available_date));
+    let requested_end_date = display_date(&format_date(limitation.requested_end_date));
+
+    match &limitation.subject {
+        MarketDataSubject::Asset {
+            ticker,
+            name,
+            asset_type,
+        } => format!(
+            "Market data limitation: {asset_type} {ticker} ({name}) has latest price from {latest_available_date}; requested through {requested_end_date}."
+        ),
+        MarketDataSubject::FxRate { currency } => format!(
+            "Market data limitation: FX rate {currency} has latest rate from {latest_available_date}; requested through {requested_end_date}."
+        ),
     }
 }

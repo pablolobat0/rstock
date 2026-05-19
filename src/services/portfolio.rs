@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use anyhow::Context;
 use chrono::{Datelike, Duration, NaiveDate};
@@ -12,11 +12,12 @@ use crate::db::repos::{
     asset_repo, portfolio_asset_history_repo, portfolio_history_repo, transaction_repo,
 };
 use crate::models::{
-    cents_to_f64, Asset, AssetPosition, PortfolioResult, PortfolioSnapshot, Transaction,
+    cents_to_f64, Asset, AssetPosition, MarketDataLimitation, PortfolioResult, PortfolioSnapshot,
+    Transaction,
 };
 use crate::services::nav;
 use crate::services::price::PriceFetcher;
-use crate::services::{analytics, market_data, metrics};
+use crate::services::{analytics, historical_market_data, individual_price, metrics};
 
 pub async fn get_portfolio(
     db: &DatabaseConnection,
@@ -95,7 +96,7 @@ pub async fn get_portfolio(
         total_gain_loss,
         total_gain_loss_pct,
     ) = compute_non_monetary_totals(&rows);
-    let market_data_warnings = collect_market_data_warnings(&rows);
+    let market_data_limitations = collect_market_data_limitations(&rows);
 
     Ok(PortfolioResult {
         rows,
@@ -117,7 +118,7 @@ pub async fn get_portfolio(
         one_year_metrics,
         three_year_metrics,
         five_year_metrics,
-        market_data_warnings,
+        market_data_limitations,
     })
 }
 
@@ -142,7 +143,7 @@ pub async fn get_asset_positions(
         total_gain_loss,
         total_gain_loss_pct,
     ) = compute_non_monetary_totals(&rows);
-    let market_data_warnings = collect_market_data_warnings(&rows);
+    let market_data_limitations = collect_market_data_limitations(&rows);
 
     Ok(PortfolioResult {
         rows,
@@ -164,7 +165,7 @@ pub async fn get_asset_positions(
         one_year_metrics: None,
         three_year_metrics: None,
         five_year_metrics: None,
-        market_data_warnings,
+        market_data_limitations,
     })
 }
 
@@ -236,25 +237,22 @@ fn empty_result() -> PortfolioResult {
         one_year_metrics: None,
         three_year_metrics: None,
         five_year_metrics: None,
-        market_data_warnings: Vec::new(),
+        market_data_limitations: Vec::new(),
     }
 }
 
-fn collect_market_data_warnings(rows: &[AssetPosition]) -> Vec<String> {
-    let mut seen = HashSet::new();
-    let mut warnings = Vec::new();
+fn collect_market_data_limitations(rows: &[AssetPosition]) -> Vec<MarketDataLimitation> {
+    let mut limitations = Vec::new();
 
     for row in rows {
         for limitation in &row.market_data_limitations {
-            if let Some(warning) = market_data::user_facing_market_data_warning(limitation) {
-                if seen.insert(warning.clone()) {
-                    warnings.push(warning);
-                }
+            if !limitations.contains(limitation) {
+                limitations.push(limitation.clone());
             }
         }
     }
 
-    warnings
+    limitations
 }
 
 fn compute_non_monetary_totals(rows: &[AssetPosition]) -> (f64, f64, f64, f64, f64) {
@@ -357,7 +355,7 @@ async fn compute_asset_positions(
             continue;
         }
 
-        let display_market_data = market_data::get_asset_display_market_data(
+        let display_market_data = individual_price::get_asset_display_market_data(
             db,
             asset_model,
             snap.closing_price,
@@ -383,10 +381,10 @@ async fn compute_asset_positions(
             if asset_model.currency == BASE_CURRENCY {
                 total_buy_cost_eur += tx_cost;
             } else {
-                let pair = market_data::currency_pair(&asset_model.currency);
-                let tx_rate = market_data::get_exchange_rate(db, &pair, &t.date)
-                    .await?
-                    .unwrap_or(exchange_rate);
+                let tx_rate =
+                    historical_market_data::get_exchange_rate_for_asset(db, asset_model, &t.date)
+                        .await?
+                        .unwrap_or(exchange_rate);
                 total_buy_cost_eur += tx_cost * tx_rate;
             }
         }
@@ -403,10 +401,10 @@ async fn compute_asset_positions(
             if asset_model.currency == BASE_CURRENCY {
                 dividends_received += div_amount;
             } else {
-                let pair = market_data::currency_pair(&asset_model.currency);
-                let tx_rate = market_data::get_exchange_rate(db, &pair, &t.date)
-                    .await?
-                    .unwrap_or(exchange_rate);
+                let tx_rate =
+                    historical_market_data::get_exchange_rate_for_asset(db, asset_model, &t.date)
+                        .await?
+                        .unwrap_or(exchange_rate);
                 dividends_received += div_amount * tx_rate;
             }
         }

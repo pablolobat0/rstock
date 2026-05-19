@@ -4,14 +4,14 @@ use sea_orm::DatabaseConnection;
 
 use crate::constants::{BASE_CURRENCY, MIN_DATA_POINTS, ZERO_RETURN_THRESHOLD};
 use crate::db::repos::{
-    asset_repo, daily_price_repo, exchange_rate_repo, portfolio_asset_history_repo,
-    portfolio_history_repo,
+    asset_repo, daily_price_repo, portfolio_asset_history_repo, portfolio_history_repo,
 };
 use crate::models::{
-    Asset, AssetType, CorrelationMatrix, PeriodMetrics, PortfolioSnapshot, RollingCorrelationResult,
+    Asset, AssetClassification, AssetType, CorrelationMatrix, PeriodMetrics, PortfolioSnapshot,
+    RollingCorrelationResult,
 };
 use crate::services::price::PriceFetcher;
-use crate::services::{market_data, metrics};
+use crate::services::{historical_market_data, metrics};
 
 pub async fn compute_correlation_data(
     db: &DatabaseConnection,
@@ -28,42 +28,26 @@ pub async fn compute_correlation_data(
     let asset_ids: Vec<i32> = held_assets.iter().map(|s| s.asset_id).collect();
     let assets = asset_repo::find_by_ids(db, asset_ids.into_iter()).await?;
 
-    let benchmark_market_data =
-        market_data::prepare_benchmark_market_data(db, start_date, end_date, price_fetcher).await?;
+    let benchmark = get_or_create_benchmark_asset(db).await?;
+    historical_market_data::prepare_benchmark_market_data(
+        db,
+        &benchmark,
+        start_date,
+        end_date,
+        price_fetcher,
+    )
+    .await?;
 
     let mut all_assets: Vec<Asset> = assets;
-    all_assets.push(metrics::benchmark_asset(benchmark_market_data.asset_id));
+    all_assets.push(benchmark);
 
     let mut return_series: Vec<(String, HashMap<String, f64>)> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
 
     for asset in &all_assets {
-        let fx_pair = if asset.currency == BASE_CURRENCY {
-            None
-        } else {
-            Some(market_data::currency_pair(&asset.currency))
-        };
-
-        let prices =
-            daily_price_repo::find_prices_between(db, asset.id, start_date, end_date).await?;
-
-        let eur_prices = if let Some(ref pair) = fx_pair {
-            let rates =
-                exchange_rate_repo::find_rates_between(db, pair, start_date, end_date).await?;
-            let rate_map: HashMap<&str, f64> =
-                rates.iter().map(|(d, r)| (d.as_str(), *r)).collect();
-
-            prices
-                .iter()
-                .filter_map(|(date, price)| {
-                    rate_map
-                        .get(date.as_str())
-                        .map(|rate| (date.clone(), price * rate))
-                })
-                .collect::<Vec<_>>()
-        } else {
-            prices
-        };
+        let eur_prices =
+            historical_market_data::get_base_currency_price_series(db, asset, start_date, end_date)
+                .await?;
 
         let returns = metrics::compute_log_returns(&eur_prices);
         if returns.len() < MIN_DATA_POINTS {
@@ -112,10 +96,20 @@ pub async fn compute_rolling_correlation_data(
     let left_asset = fetch_rolling_asset_info(ticker_a, price_fetcher).await?;
     let right_asset = fetch_rolling_asset_info(ticker_b, price_fetcher).await?;
 
-    let left_prices =
-        get_direct_eur_price_series(&left_asset, start_date, end_date, price_fetcher).await?;
-    let right_prices =
-        get_direct_eur_price_series(&right_asset, start_date, end_date, price_fetcher).await?;
+    let left_prices = historical_market_data::fetch_direct_base_currency_price_series(
+        &left_asset,
+        start_date,
+        end_date,
+        price_fetcher,
+    )
+    .await?;
+    let right_prices = historical_market_data::fetch_direct_base_currency_price_series(
+        &right_asset,
+        start_date,
+        end_date,
+        price_fetcher,
+    )
+    .await?;
 
     let left_returns = metrics::compute_log_returns(&left_prices);
     let right_returns = metrics::compute_log_returns(&right_prices);
@@ -167,16 +161,18 @@ pub async fn compute_all_period_metrics(
         return Ok((None, None, None, None));
     }
 
-    let benchmark_market_data =
-        market_data::prepare_benchmark_market_data(db, widest_start, snapshot_date, price_fetcher)
-            .await?;
-    let benchmark_prices = daily_price_repo::find_prices_between(
+    let benchmark = get_or_create_benchmark_asset(db).await?;
+    historical_market_data::prepare_benchmark_market_data(
         db,
-        benchmark_market_data.asset_id,
+        &benchmark,
         widest_start,
         snapshot_date,
+        price_fetcher,
     )
     .await?;
+    let benchmark_prices =
+        daily_price_repo::find_prices_between(db, benchmark.id, widest_start, snapshot_date)
+            .await?;
     let benchmark_map: HashMap<&str, f64> = benchmark_prices
         .iter()
         .map(|(d, p)| (d.as_str(), *p))
@@ -228,6 +224,16 @@ pub async fn compute_all_period_metrics(
         results[2].take(),
         results[3].take(),
     ))
+}
+
+async fn get_or_create_benchmark_asset(db: &DatabaseConnection) -> anyhow::Result<Asset> {
+    let info = metrics::benchmark_asset_info();
+    if let Some(asset) = asset_repo::find_by_ticker(db, &info.ticker).await? {
+        return Ok(asset);
+    }
+
+    let id = asset_repo::create(db, &info, &AssetClassification::default(), None).await?;
+    Ok(metrics::benchmark_asset(id))
 }
 
 fn filter_trading_days(
@@ -289,74 +295,4 @@ async fn fetch_rolling_asset_info(
         equity_style: None,
         management: None,
     })
-}
-
-async fn get_direct_eur_price_series(
-    asset: &Asset,
-    start_date: &str,
-    end_date: &str,
-    price_fetcher: &dyn PriceFetcher,
-) -> anyhow::Result<Vec<(String, f64)>> {
-    let prices = filter_fetched_series(
-        price_fetcher
-            .get_historical_prices(&asset.ticker, start_date, end_date, &AssetType::Stock)
-            .await?,
-        start_date,
-        end_date,
-    );
-
-    if prices.is_empty() {
-        anyhow::bail!("no price history returned for '{}'", asset.ticker);
-    }
-
-    if asset.currency == BASE_CURRENCY {
-        return Ok(prices);
-    }
-
-    let pair = market_data::currency_pair(&asset.currency);
-    let rates = filter_fetched_series(
-        price_fetcher
-            .get_historical_exchange_rates(&pair, start_date, end_date)
-            .await?,
-        start_date,
-        end_date,
-    );
-
-    if rates.is_empty() {
-        anyhow::bail!("no FX history returned for '{pair}'");
-    }
-
-    let rate_map: HashMap<&str, f64> = rates
-        .iter()
-        .map(|(date, rate)| (date.as_str(), *rate))
-        .collect();
-
-    let eur_prices: Vec<(String, f64)> = prices
-        .iter()
-        .filter_map(|(date, price)| {
-            rate_map
-                .get(date.as_str())
-                .map(|rate| (date.clone(), price * rate))
-        })
-        .collect();
-
-    if eur_prices.is_empty() {
-        anyhow::bail!(
-            "could not align price and FX history for '{}'",
-            asset.ticker
-        );
-    }
-
-    Ok(eur_prices)
-}
-
-fn filter_fetched_series(
-    mut series: Vec<(String, f64)>,
-    start_date: &str,
-    end_date: &str,
-) -> Vec<(String, f64)> {
-    series.retain(|(date, _)| date.as_str() >= start_date && date.as_str() <= end_date);
-    series.sort_by(|left, right| left.0.cmp(&right.0));
-    series.dedup_by(|left, right| left.0 == right.0);
-    series
 }

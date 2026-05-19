@@ -164,7 +164,7 @@ async fn test_portfolio_suppresses_acceptable_morningstar_lag_warning() {
         .await
         .unwrap();
 
-    assert!(result.market_data_warnings.is_empty());
+    assert!(result.market_data_limitations.is_empty());
 }
 
 #[tokio::test]
@@ -180,8 +180,15 @@ async fn test_portfolio_surfaces_excessive_morningstar_lag_warning() {
         .await
         .unwrap();
 
-    assert_eq!(result.market_data_warnings.len(), 1);
-    assert!(result.market_data_warnings[0].contains("fund XFAKEF2 (Delayed Fund)"));
+    assert_eq!(result.market_data_limitations.len(), 1);
+    assert_eq!(
+        result.market_data_limitations[0].subject,
+        rstock::models::MarketDataSubject::Asset {
+            ticker: "XFAKEF2".to_owned(),
+            name: "Delayed Fund".to_owned(),
+            asset_type: rstock::models::AssetType::Fund,
+        }
+    );
 }
 
 #[tokio::test]
@@ -196,8 +203,15 @@ async fn test_portfolio_surfaces_stock_stale_data_warning() {
         .await
         .unwrap();
 
-    assert_eq!(result.market_data_warnings.len(), 1);
-    assert!(result.market_data_warnings[0].contains("stock XFAKES1 (Stale Stock)"));
+    assert_eq!(result.market_data_limitations.len(), 1);
+    assert_eq!(
+        result.market_data_limitations[0].subject,
+        rstock::models::MarketDataSubject::Asset {
+            ticker: "XFAKES1".to_owned(),
+            name: "Stale Stock".to_owned(),
+            asset_type: rstock::models::AssetType::Stock,
+        }
+    );
 }
 
 #[tokio::test]
@@ -215,6 +229,11 @@ async fn test_portfolio_surfaces_fx_stale_data_warning() {
         .await
         .unwrap();
 
-    assert_eq!(result.market_data_warnings.len(), 1);
-    assert!(result.market_data_warnings[0].contains("FX rate USDEUR"));
+    assert_eq!(result.market_data_limitations.len(), 1);
+    assert_eq!(
+        result.market_data_limitations[0].subject,
+        rstock::models::MarketDataSubject::FxRate {
+            currency: "USD".to_owned(),
+        }
+    );
 }

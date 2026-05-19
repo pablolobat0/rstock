@@ -1,6 +1,6 @@
 # Infer FX Inside Historical Market Data Preparation
 
-Status: needs-triage
+Status: done
 
 Type: AFK
 
@@ -23,4 +23,4 @@ Change Historical market data preparation so callers supply required assets and 
 
 ## Blocked by
 
-- `.scratch/deepen-historical-market-data/issues/01-make-market-data-limitation-actionable-only.md`
+None - can start immediately

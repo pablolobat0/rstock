@@ -1,14 +1,15 @@
 use std::collections::{HashMap, HashSet};
 
+use anyhow::Context;
 use chrono::NaiveDate;
 use sea_orm::DatabaseConnection;
 
-use crate::constants::{format_date, BASE_CURRENCY, FLOAT_EPSILON, INITIAL_NAV};
+use crate::constants::{format_date, FLOAT_EPSILON, INITIAL_NAV};
 use crate::db::repos::{
     asset_repo, portfolio_asset_history_repo, portfolio_history_repo, transaction_repo,
 };
 use crate::models::{cents_to_f64, Asset, AssetSnapshot, PortfolioSnapshot, Transaction};
-use crate::services::market_data;
+use crate::services::historical_market_data;
 use crate::services::price::PriceFetcher;
 
 #[allow(clippy::too_many_lines)]
@@ -58,21 +59,9 @@ pub async fn rebuild_portfolio_history(
         .cloned()
         .collect();
 
-    // Determine needed currency pairs
-    let needed_currency_pairs: Vec<String> = assets
-        .iter()
-        .filter(|asset| !asset.is_monetary())
-        .map(|a| &a.currency)
-        .filter(|c| c.as_str() != BASE_CURRENCY)
-        .collect::<HashSet<_>>()
-        .into_iter()
-        .map(|c| market_data::currency_pair(c))
-        .collect();
-
-    let nav_market_data = market_data::prepare_nav_market_data(
+    let nav_market_data = historical_market_data::prepare_nav_market_data(
         db,
         &nav_assets,
-        &needed_currency_pairs,
         &start_str,
         &end_str,
         price_fetcher,
@@ -92,12 +81,9 @@ pub async fn rebuild_portfolio_history(
     while current <= effective_end {
         let date_str = format_date(current);
 
-        // Build day's exchange rates
-        let day_rates = if needed_currency_pairs.is_empty() {
-            HashMap::new()
-        } else {
-            get_day_rates(db, &needed_currency_pairs, &date_str).await?
-        };
+        let day_asset_exchange_rates =
+            historical_market_data::get_required_asset_exchange_rates(db, &nav_assets, &date_str)
+                .await?;
 
         // Process transactions for this day
         if let Some(day_txs) = tx_by_date.get(&date_str) {
@@ -107,18 +93,11 @@ pub async fn rebuild_portfolio_history(
                 outstanding_shares,
                 nav,
                 &asset_map,
-                &day_rates,
+                &day_asset_exchange_rates,
             )?;
             outstanding_shares = new_shares;
             nav = new_nav;
             accumulated_cash += dividend_income;
-        }
-
-        // First-ever transaction day: store a seed snapshot for (day - 1) with NAV=100
-        if is_fresh_portfolio && outstanding_shares > 0.0 {
-            let seed_date = format_date(current - chrono::Duration::days(1));
-            store_daily_snapshot(db, &seed_date, 0.0, 0.0, 0.0, INITIAL_NAV, &[]).await?;
-            is_fresh_portfolio = false;
         }
 
         if outstanding_shares == 0.0 && is_fresh_portfolio {
@@ -133,6 +112,13 @@ pub async fn rebuild_portfolio_history(
         let total_value = asset_value + accumulated_cash;
         if outstanding_shares > 0.0 {
             nav = total_value / outstanding_shares;
+        }
+
+        // First-ever transaction day: store a seed snapshot only after required valuations succeed.
+        if is_fresh_portfolio && outstanding_shares > 0.0 {
+            let seed_date = format_date(current - chrono::Duration::days(1));
+            store_daily_snapshot(db, &seed_date, 0.0, 0.0, 0.0, INITIAL_NAV, &[]).await?;
+            is_fresh_portfolio = false;
         }
 
         store_daily_snapshot(
@@ -152,21 +138,6 @@ pub async fn rebuild_portfolio_history(
     Ok(())
 }
 
-/// Build a map of currency pair → exchange rate for a specific date.
-async fn get_day_rates(
-    db: &DatabaseConnection,
-    pairs: &[String],
-    date: &str,
-) -> anyhow::Result<HashMap<String, f64>> {
-    let mut rates = HashMap::new();
-    for pair in pairs {
-        if let Some(rate) = market_data::get_exchange_rate(db, pair, date).await? {
-            rates.insert(pair.clone(), rate);
-        }
-    }
-    Ok(rates)
-}
-
 /// Returns `(outstanding_shares, nav, dividend_income_eur)`.
 #[allow(clippy::implicit_hasher)]
 pub fn process_day_transactions(
@@ -175,7 +146,7 @@ pub fn process_day_transactions(
     outstanding_shares: f64,
     nav: f64,
     asset_map: &HashMap<i32, &Asset>,
-    day_rates: &HashMap<String, f64>,
+    day_asset_exchange_rates: &HashMap<i32, f64>,
 ) -> anyhow::Result<(f64, f64, f64)> {
     let mut os = outstanding_shares;
     let mut current_nav = nav;
@@ -192,7 +163,17 @@ pub fn process_day_transactions(
         // Convert to base currency
         let rate = asset_map
             .get(&tx.asset_id)
-            .map(|asset| market_data::get_asset_exchange_rate_from_prepared_rates(asset, day_rates))
+            .map(|asset| {
+                day_asset_exchange_rates
+                    .get(&asset.id)
+                    .copied()
+                    .with_context(|| {
+                        format!(
+                            "missing prepared historical exchange rate for asset {} ({})",
+                            asset.ticker, asset.name
+                        )
+                    })
+            })
             .transpose()?
             .unwrap_or(1.0);
 
@@ -262,10 +243,9 @@ async fn compute_day_asset_values(
         if asset_model.is_monetary() {
             continue;
         }
-        let Some(valuation) = market_data::get_asset_valuation_data(db, asset_model, date).await?
-        else {
-            continue;
-        };
+        let valuation =
+            historical_market_data::get_required_asset_valuation_data(db, asset_model, date)
+                .await?;
 
         // Reuse existing row if quantity and exchange rate match
         if let Some(existing) = existing_map.get(&asset_id) {

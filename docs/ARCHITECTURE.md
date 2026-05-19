@@ -69,19 +69,19 @@ Verbosity mapping: default=WARN, `-v`=INFO, `-vv`=DEBUG, `-vvv`=TRACE.
 
 All business logic lives here. Key modules:
 
-**`nav.rs`** — Core NAV unitization engine. `rebuild_portfolio_history()` iterates calendar days from a start date to the effective end date, computing daily portfolio snapshots. `process_day_transactions()` handles share issuance (buys) and redemption (sells). `compute_day_asset_values()` calculates end-of-day portfolio value with currency conversion.
+**`nav.rs`** — Core NAV unitization engine. `rebuild_portfolio_history()` iterates calendar days from a start date to the effective end date, computing daily portfolio snapshots. `process_day_transactions()` handles share issuance (buys) and redemption (sells). `compute_day_asset_values()` calculates end-of-day portfolio value through strict Historical market data valuation reads.
 
-**`portfolio.rs`** — `get_portfolio()` builds the current position table (per-asset quantity, avg cost, gain/loss) and computes return metrics for the portfolio view.
+**`historical_market_data.rs`** — Prepares reproducible Historical market data for NAV and benchmark analytics. It fetches and caches required asset prices, infers required FX from supplied assets, hides provider-specific FX pair construction from external callers, calculates the Effective valuation date, returns actionable Market data limitation values, and exposes strict valuation reads for required asset and FX data.
+
+**`individual_price.rs`** — Computes display-time Individual price values for portfolio rows. Stocks and FX may use non-persisted Live quote values, funds and ETFs use cached Historical market data semantics, and snapshot fallback preserves row rendering when current display data is unavailable.
+
+**`portfolio.rs`** — `get_portfolio()` builds the current position table (per-asset quantity, avg cost, gain/loss) and computes return metrics for the portfolio view. Portfolio rows use `individual_price.rs` for display values and carry Market data limitation values to display formatting.
 
 **`analytics.rs`** — Computes correlation and risk-metric inputs from portfolio history and benchmark prices.
 
 **`composition.rs`** — Builds portfolio composition analytics with look-through aggregation and top holdings.
 
 **`transactions.rs`** — `buy()` records a purchase and invalidates snapshots from the buy date forward. `sell()` validates holdings (cannot sell more than owned), records the sale, and invalidates snapshots. `dividend()` records a dividend payment. `split()` records a stock split, adjusting quantity via the split ratio.
-
-**`daily_prices.rs`** — `fill_prices_for_range()` fetches prices from the API, caches them, and forward-fills gaps for weekends/holidays. Never fills beyond the last API date. `get_closing_price()` is the main lookup function.
-
-**`exchange_rates.rs`** — Same caching pattern as daily_prices. All rates convert to EUR (base currency). Pairs stored as `XXXEUR` format (e.g., `USDEUR`).
 
 **`price.rs`** — Defines the `PriceFetcher` async trait with two methods: `get_historical_prices()` and `get_historical_exchange_rates()`. `RealPriceFetcher` implements it using `yfinance-rs` for stocks and `uv run scripts/get_fund_price_history.py` for funds/ETFs.
 
@@ -100,7 +100,7 @@ All business logic lives here. Key modules:
 Pure output formatting with no business logic, split into submodules:
 
 - **`helpers.rs`** — Shared formatting utilities (price, quantity, percentage, color helpers)
-- **`portfolio.rs`** — `print_portfolio()` renders per-asset table and summary (NAV, returns, risk metrics) using `tabled` with green/red coloring via `colored`
+- **`portfolio.rs`** — `print_portfolio()` renders per-asset table, summary (NAV, returns, risk metrics), and user-facing Market data limitation warning text using `tabled` with green/red coloring via `colored`
 - **`simple.rs`** — `print_asset_list()` lists all tracked assets, `print_nav_chart()` renders ASCII NAV chart via `textplots`, `print_watchlist()` lists monitored stocks
 - **`correlation.rs`** — `print_correlation_matrix()` renders N×N correlation matrix with color-coded values
 - **`composition.rs`** — `print_composition()` renders composition breakdowns and top holdings
@@ -319,7 +319,7 @@ Same mechanism as stock prices but queries currency pair symbols.
 
 ### Forward-Fill
 
-After caching API responses, gaps between dates (weekends, holidays) are filled with the last known price. The fill never extends beyond the last date returned by the API.
+Historical market data preparation caches source observations and fills gaps between dates (weekends, holidays) with the last known price or FX rate. The fill never extends beyond the last date returned by the source.
 
 ## Data Flow by Command
 
@@ -330,15 +330,15 @@ main.rs
   └─> portfolio::get_portfolio()
         ├─> Check if NAV snapshots are stale (last snapshot < yesterday)
         ├─> If stale: nav::rebuild_portfolio_history()
-        │     ├─> daily_prices::fill_prices_for_range() (for each asset)
-        │     ├─> exchange_rates::fill_rates_for_range() (for each currency)
-        │     └─> Day-by-day NAV computation loop
+        │     ├─> historical_market_data::prepare_nav_market_data()
+        │     └─> Day-by-day NAV computation loop using strict valuation reads
         ├─> Compute return metrics (YTD, 1Y, 3Y, 5Y)
         └─> metrics::compute_risk_metrics() (beta, Sharpe, Sortino)
   └─> portfolio::get_portfolio()
         ├─> Load latest portfolio_asset_history
-        ├─> For each position: compute avg cost, gain/loss
-        └─> Aggregate totals
+        ├─> For each position: individual_price::get_asset_display_market_data()
+        ├─> Compute avg cost, gain/loss
+        └─> Aggregate totals and Market data limitation values
   └─> display::print_portfolio()
   └─> display::print_nav_chart()
 ```

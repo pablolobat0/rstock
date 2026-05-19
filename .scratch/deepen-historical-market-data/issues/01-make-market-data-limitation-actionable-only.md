@@ -1,6 +1,6 @@
 # Make Market data limitation Actionable-Only
 
-Status: needs-triage
+Status: done
 
 Type: AFK
 

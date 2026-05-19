@@ -1,6 +1,6 @@
 use crate::db::entities::{portfolio_asset_history, portfolio_history};
 
-use super::AssetPosition;
+use super::{AssetPosition, MarketDataLimitation};
 
 pub struct PortfolioSnapshot {
     pub date: String,
@@ -72,7 +72,7 @@ pub struct PortfolioResult {
     pub one_year_metrics: Option<PeriodMetrics>,
     pub three_year_metrics: Option<PeriodMetrics>,
     pub five_year_metrics: Option<PeriodMetrics>,
-    pub market_data_warnings: Vec<String>,
+    pub market_data_limitations: Vec<MarketDataLimitation>,
 }
 
 pub struct CorrelationMatrix {

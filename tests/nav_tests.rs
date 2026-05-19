@@ -447,6 +447,33 @@ async fn test_missing_price_for_asset_fails_without_partial_snapshots() {
     assert!(common::get_all_snapshots(&db).await.is_empty());
 }
 
+#[tokio::test]
+async fn test_missing_first_day_asset_valuation_fails_without_seed_snapshot() {
+    let db = common::setup_test_db().await;
+    let mut mock = common::MockPriceFetcher::new();
+
+    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
+    common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
+    mock.historical_prices
+        .insert("XFAKE1".to_owned(), vec![("2025-01-03".to_owned(), 50.0)]);
+
+    let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
+    let result = nav::rebuild_portfolio_history(
+        &db,
+        start,
+        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
+        None,
+        &mock,
+    )
+    .await;
+
+    let error = result.expect_err("missing first-day valuation should fail NAV rebuild");
+    assert!(error
+        .to_string()
+        .contains("missing required historical market data for asset XFAKE1"));
+    assert!(common::get_all_snapshots(&db).await.is_empty());
+}
+
 /// Non-EUR asset with no FX data -> NAV rebuild fails before writing partial snapshots.
 #[tokio::test]
 async fn test_missing_fx_rate_fails_without_partial_snapshots() {
@@ -743,7 +770,7 @@ async fn test_process_day_transactions_pure() {
         management: None,
     };
     let asset_map: HashMap<i32, &Asset> = [(1, &asset)].into_iter().collect();
-    let day_rates: HashMap<String, f64> = HashMap::new();
+    let day_rates: HashMap<i32, f64> = [(1, 1.0)].into_iter().collect();
 
     let mut holdings: HashMap<i32, f64> = HashMap::new();
     let txs: Vec<&Transaction> = vec![&tx1];
@@ -1166,7 +1193,7 @@ async fn test_process_day_transactions_sell_pure() {
         management: None,
     };
     let asset_map: HashMap<i32, &Asset> = [(1, &asset)].into_iter().collect();
-    let day_rates: HashMap<String, f64> = HashMap::new();
+    let day_rates: HashMap<i32, f64> = [(1, 1.0)].into_iter().collect();
 
     // First: buy 10 @ $50
     let buy_tx = Transaction {
@@ -1441,7 +1468,7 @@ async fn test_process_day_transactions_split_pure() {
         management: None,
     };
     let asset_map: HashMap<i32, &Asset> = [(1, &asset)].into_iter().collect();
-    let day_rates: HashMap<String, f64> = HashMap::new();
+    let day_rates: HashMap<i32, f64> = [(1, 1.0)].into_iter().collect();
 
     let mut holdings: HashMap<i32, f64> = [(1, 10.0)].into_iter().collect();
     let txs: Vec<&Transaction> = vec![&split_tx];

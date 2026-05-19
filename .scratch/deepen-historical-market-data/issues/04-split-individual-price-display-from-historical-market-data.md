@@ -1,6 +1,6 @@
 # Split Individual Price Display from Historical Market Data
 
-Status: needs-triage
+Status: done
 
 Type: AFK
 
@@ -25,4 +25,4 @@ Move Individual price display behaviour into a separate domain-named Module. Por
 
 ## Blocked by
 
-- `.scratch/deepen-historical-market-data/issues/01-make-market-data-limitation-actionable-only.md`
+None - can start immediately

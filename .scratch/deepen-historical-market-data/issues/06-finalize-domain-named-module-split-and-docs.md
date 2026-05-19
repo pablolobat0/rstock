@@ -1,6 +1,6 @@
 # Finalize Domain-Named Module Split and Docs
 
-Status: needs-triage
+Status: done
 
 Type: AFK
 
@@ -24,6 +24,4 @@ Complete the architecture deepening by finalizing the Historical market data and
 
 ## Blocked by
 
-- `.scratch/deepen-historical-market-data/issues/03-enforce-strict-historical-market-data-valuation-reads-in-nav.md`
-- `.scratch/deepen-historical-market-data/issues/04-split-individual-price-display-from-historical-market-data.md`
-- `.scratch/deepen-historical-market-data/issues/05-route-benchmark-analytics-through-historical-market-data-as-supplied-asset.md`
+None - can start immediately

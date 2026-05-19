@@ -37,7 +37,6 @@ pub struct MarketDataLimitation {
     pub latest_available_date: NaiveDate,
     pub requested_end_date: NaiveDate,
     pub classification: MarketDataLimitationClassification,
-    pub source: MarketDataLimitationSource,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,19 +47,12 @@ pub enum MarketDataSubject {
         asset_type: AssetType,
     },
     FxRate {
-        pair: String,
+        currency: String,
     },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MarketDataLimitationClassification {
-    AcceptableReportingLag,
     ActionableReportingLag,
     ActionableStaleData,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MarketDataLimitationSource {
-    CachedFallback,
-    SourceLag,
 }

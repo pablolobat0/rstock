@@ -167,7 +167,7 @@ async fn test_process_day_transactions_dividend_pure() {
         management: None,
     };
     let asset_map: HashMap<i32, &rstock::models::Asset> = HashMap::from([(1, &asset)]);
-    let day_rates: HashMap<String, f64> = HashMap::new();
+    let day_rates: HashMap<i32, f64> = [(1, 1.0)].into_iter().collect();
 
     // First buy to establish holdings and shares
     let buy_tx = Transaction {

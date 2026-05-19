@@ -1,6 +1,6 @@
 # Enforce Strict Historical Market Data Valuation Reads in NAV
 
-Status: needs-triage
+Status: done
 
 Type: AFK
 
@@ -24,4 +24,4 @@ Route NAV rebuild through strict Historical market data valuation service functi
 
 ## Blocked by
 
-- `.scratch/deepen-historical-market-data/issues/02-infer-fx-inside-historical-market-data-preparation.md`
+None - can start immediately
