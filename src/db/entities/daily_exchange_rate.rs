@@ -5,7 +5,8 @@ use sea_orm::entity::prelude::*;
 pub struct Model {
     #[sea_orm(primary_key)]
     pub id: i32,
-    pub pair: String,
+    pub from_currency: String,
+    pub to_currency: String,
     pub date: String,
     pub rate: f64,
 }

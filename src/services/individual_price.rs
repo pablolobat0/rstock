@@ -103,8 +103,13 @@ async fn get_display_exchange_rate(
         return Ok((live_rate, Vec::new()));
     }
 
-    let Some((rate, date_string)) =
-        exchange_rate_repo::find_rate_and_date_at_or_before(db, &pair, yesterday).await?
+    let Some((rate, date_string)) = exchange_rate_repo::find_rate_and_date_at_or_before(
+        db,
+        &asset.currency,
+        BASE_CURRENCY,
+        yesterday,
+    )
+    .await?
     else {
         return Ok((fallback_fx_rate, Vec::new()));
     };

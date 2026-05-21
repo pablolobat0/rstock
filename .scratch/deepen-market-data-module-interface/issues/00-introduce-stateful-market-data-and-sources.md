@@ -27,4 +27,4 @@ Introduce a stateful market data Module value and the injected `MarketDataSource
 
 ## Blocked by
 
-- .scratch/deepen-market-data-module-interface/issues/00a-migrate-fx-cache-to-currency-columns.md
+None - can start immediately

@@ -263,9 +263,16 @@ pub async fn get_asset_snapshots(
         .expect("failed to query portfolio_asset_history")
 }
 
-pub async fn insert_exchange_rate(db: &DatabaseConnection, pair: &str, date: &str, rate: f64) {
+pub async fn insert_exchange_rate(
+    db: &DatabaseConnection,
+    from_currency: &str,
+    to_currency: &str,
+    date: &str,
+    rate: f64,
+) {
     let record = daily_exchange_rate::ActiveModel {
-        pair: Set(pair.to_owned()),
+        from_currency: Set(from_currency.to_owned()),
+        to_currency: Set(to_currency.to_owned()),
         date: Set(date.to_owned()),
         rate: Set(rate),
         ..Default::default()

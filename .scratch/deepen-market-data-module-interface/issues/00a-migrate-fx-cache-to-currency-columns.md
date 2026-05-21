@@ -1,6 +1,6 @@
 # Migrate FX cache to currency columns
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

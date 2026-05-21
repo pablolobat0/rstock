@@ -195,7 +195,7 @@ async fn test_usd_asset_uses_eur_conversion() {
         let price = 100.0 + (i as f64);
         insert_daily_price(&db, id_eur, &date, price, false).await;
         insert_daily_price(&db, id_usd, &date, price, false).await;
-        insert_exchange_rate(&db, "USDEUR", &date, 0.92).await;
+        insert_exchange_rate(&db, "USD", "EUR", &date, 0.92).await;
     }
 
     let start = chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();

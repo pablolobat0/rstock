@@ -226,7 +226,8 @@ Current schema includes the original portfolio tables plus watchlist and fund ho
 | Column | Type | Notes |
 |--------|------|-------|
 | id | i32 PK | Auto-increment |
-| pair | String | e.g., "USDEUR" |
+| from_currency | String | Source currency, e.g., "USD" |
+| to_currency | String | Target currency, e.g., "EUR" |
 | date | String | YYYY-MM-DD |
 | rate | f64 | Conversion rate |
 
@@ -310,10 +311,10 @@ Script resolution order:
 ### Exchange Rates
 
 ```
-Yahoo Finance ──(yfinance-rs)──> "XXXEUR=X" pairs ──> daily_exchange_rates table
+Yahoo Finance ──(yfinance-rs)──> source-neutral currency columns ──> daily_exchange_rates table
 ```
 
-Same mechanism as stock prices but queries currency pair symbols.
+Same mechanism as stock prices. Provider-specific Yahoo pair symbols are constructed at fetch time and are not stored in the database.
 
 `analyze correlation rolling` also fetches FX series on demand and uses them in memory only.
 

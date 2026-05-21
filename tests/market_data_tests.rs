@@ -114,7 +114,7 @@ async fn test_benchmark_market_data_prepares_required_fx() {
     .unwrap();
 
     assert_eq!(
-        exchange_rate_repo::find_rate(&db, "USDEUR", "2025-01-02")
+        exchange_rate_repo::find_rate(&db, "USD", "EUR", "2025-01-02")
             .await
             .unwrap(),
         Some(0.90)
@@ -197,7 +197,7 @@ async fn test_nav_market_data_does_not_persist_same_day_asset_or_fx_data() {
         None
     );
     assert_eq!(
-        exchange_rate_repo::find_rate(&db, "USDEUR", &today_str)
+        exchange_rate_repo::find_rate(&db, "USD", "EUR", &today_str)
             .await
             .unwrap(),
         None
@@ -273,7 +273,7 @@ async fn test_nav_market_data_uses_implicit_base_currency_fx() {
 
     assert_eq!(nav_market_data.effective_end, date(2025, 1, 2));
     assert_eq!(
-        exchange_rate_repo::find_rate(&db, "EUREUR", "2025-01-02")
+        exchange_rate_repo::find_rate(&db, "EUR", "EUR", "2025-01-02")
             .await
             .unwrap(),
         None
@@ -313,19 +313,19 @@ async fn test_nav_market_data_persists_fx_forward_fill_between_source_observatio
         NaiveDate::from_ymd_opt(2025, 1, 5).unwrap()
     );
     assert_eq!(
-        exchange_rate_repo::find_rate(&db, "USDEUR", "2025-01-03")
+        exchange_rate_repo::find_rate(&db, "USD", "EUR", "2025-01-03")
             .await
             .unwrap(),
         Some(0.90)
     );
     assert_eq!(
-        exchange_rate_repo::find_rate(&db, "USDEUR", "2025-01-04")
+        exchange_rate_repo::find_rate(&db, "USD", "EUR", "2025-01-04")
             .await
             .unwrap(),
         Some(0.90)
     );
     assert_eq!(
-        exchange_rate_repo::find_rate(&db, "USDEUR", "2025-01-06")
+        exchange_rate_repo::find_rate(&db, "USD", "EUR", "2025-01-06")
             .await
             .unwrap(),
         None
@@ -478,7 +478,7 @@ async fn test_asset_valuation_data_uses_required_non_base_currency_fx_rate() {
     let db = common::setup_test_db().await;
     let asset = make_asset(&db, "XFAKEUSD", "US Stock", "stock", "USD").await;
     common::insert_daily_price(&db, asset.id, "2025-01-02", 100.0, false).await;
-    common::insert_exchange_rate(&db, "USDEUR", "2025-01-02", 0.90).await;
+    common::insert_exchange_rate(&db, "USD", "EUR", "2025-01-02", 0.90).await;
 
     let valuation = historical_market_data::get_asset_valuation_data(&db, &asset, "2025-01-02")
         .await
@@ -570,7 +570,7 @@ async fn test_asset_display_market_data_uses_non_persisted_live_stock_and_fx_quo
         None
     );
     assert_eq!(
-        exchange_rate_repo::find_rate(&db, "USDEUR", &today_str)
+        exchange_rate_repo::find_rate(&db, "USD", "EUR", &today_str)
             .await
             .unwrap(),
         None
@@ -616,7 +616,7 @@ async fn test_asset_display_market_data_combines_live_stock_with_stale_cached_fx
     let stale_fx_date = yesterday - Duration::days(7);
     mock.historical_prices
         .insert("XFAKEUSD".to_owned(), vec![(format_date(today), 101.0)]);
-    common::insert_exchange_rate(&db, "USDEUR", &format_date(stale_fx_date), 0.89).await;
+    common::insert_exchange_rate(&db, "USD", "EUR", &format_date(stale_fx_date), 0.89).await;
 
     let display_data = individual_price::get_asset_display_market_data(
         &db,

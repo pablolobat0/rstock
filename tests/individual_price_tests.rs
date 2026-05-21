@@ -52,7 +52,7 @@ async fn test_display_uses_live_fx_quote_for_non_base_currency_asset() {
     let asset_id = common::insert_asset(&db, "XFAKES2", "USD Stock", "stock", "USD").await;
     let cached_date = date_string(0);
     common::insert_daily_price(&db, asset_id, &cached_date, 100.0, false).await;
-    common::insert_exchange_rate(&db, "USDEUR", &cached_date, 0.80).await;
+    common::insert_exchange_rate(&db, "USD", "EUR", &cached_date, 0.80).await;
 
     let asset = asset_repo::find_by_ticker(&db, "XFAKES2")
         .await
@@ -144,7 +144,7 @@ async fn test_live_stock_with_stale_cached_fx_returns_actionable_limitation() {
     let db = common::setup_test_db().await;
     let stale_fx_date = date_string(8);
     common::insert_asset(&db, "XFAKES4", "USD Live Stock", "stock", "USD").await;
-    common::insert_exchange_rate(&db, "USDEUR", &stale_fx_date, 0.80).await;
+    common::insert_exchange_rate(&db, "USD", "EUR", &stale_fx_date, 0.80).await;
 
     let asset = asset_repo::find_by_ticker(&db, "XFAKES4")
         .await

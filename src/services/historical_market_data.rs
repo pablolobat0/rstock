@@ -88,8 +88,7 @@ pub async fn get_exchange_rate_for_asset(
         return Ok(Some(1.0));
     }
 
-    let pair = market_data_policy::currency_pair(&asset.currency);
-    get_exchange_rate(db, &pair, date).await
+    get_exchange_rate(db, &asset.currency, date).await
 }
 
 pub async fn get_required_asset_exchange_rates(
@@ -118,8 +117,14 @@ pub async fn get_base_currency_price_series(
         return Ok(prices);
     }
 
-    let pair = market_data_policy::currency_pair(&asset.currency);
-    let rates = exchange_rate_repo::find_rates_between(db, &pair, start_date, end_date).await?;
+    let rates = exchange_rate_repo::find_rates_between(
+        db,
+        &asset.currency,
+        BASE_CURRENCY,
+        start_date,
+        end_date,
+    )
+    .await?;
     let rate_map: HashMap<&str, f64> = rates
         .iter()
         .map(|(date, rate)| (date.as_str(), *rate))
@@ -196,14 +201,16 @@ pub async fn fetch_direct_base_currency_price_series(
 
 async fn get_exchange_rate(
     db: &DatabaseConnection,
-    pair: &str,
+    from_currency: &str,
     date: &str,
 ) -> anyhow::Result<Option<f64>> {
-    if let Some(rate) = exchange_rate_repo::find_rate(db, pair, date).await? {
+    if let Some(rate) =
+        exchange_rate_repo::find_rate(db, from_currency, BASE_CURRENCY, date).await?
+    {
         return Ok(Some(rate));
     }
 
-    exchange_rate_repo::find_rate_at_or_before(db, pair, date).await
+    exchange_rate_repo::find_rate_at_or_before(db, from_currency, BASE_CURRENCY, date).await
 }
 
 pub async fn get_closing_price(
@@ -227,16 +234,16 @@ async fn prepare_historical_market_data(
 ) -> anyhow::Result<NavMarketData> {
     let requested_end =
         market_data_policy::parse_market_data_date(end_date, "historical market data end date")?;
-    let currency_pairs = infer_required_currency_pairs(assets);
+    let currencies = infer_required_currencies(assets);
     let latest_asset_dates =
         fill_nav_asset_prices(db, assets, start_date, end_date, price_fetcher).await?;
-    let latest_rate_dates = if currency_pairs.is_empty() {
+    let latest_rate_dates = if currencies.is_empty() {
         HashMap::new()
     } else {
-        fill_nav_exchange_rates(db, &currency_pairs, start_date, end_date, price_fetcher).await?
+        fill_nav_exchange_rates(db, &currencies, start_date, end_date, price_fetcher).await?
     };
 
-    let mut latest_required_dates = Vec::with_capacity(assets.len() + currency_pairs.len() + 1);
+    let mut latest_required_dates = Vec::with_capacity(assets.len() + currencies.len() + 1);
     latest_required_dates.push(requested_end);
     let mut limitations = Vec::new();
 
@@ -260,16 +267,15 @@ async fn prepare_historical_market_data(
         }
     }
 
-    for pair in currency_pairs {
-        let Some(latest_date) = latest_rate_dates.get(&pair) else {
-            bail!("missing required historical market data for FX rate {pair}");
+    for currency in currencies {
+        let Some(latest_date) = latest_rate_dates.get(&currency) else {
+            bail!("missing required historical market data for FX rate {currency}{BASE_CURRENCY}");
         };
         let latest_available_date =
             market_data_policy::parse_market_data_date(&latest_date.date, "FX rate date")?;
         latest_required_dates.push(latest_available_date);
-        let currency = pair.strip_suffix(BASE_CURRENCY).unwrap_or(&pair);
         if let Some(limitation) = market_data_policy::classify_fx_limitation(
-            currency,
+            &currency,
             latest_available_date,
             requested_end,
         ) {
@@ -288,16 +294,16 @@ async fn prepare_historical_market_data(
     })
 }
 
-fn infer_required_currency_pairs(assets: &[Asset]) -> Vec<String> {
-    let mut pairs: Vec<String> = assets
+fn infer_required_currencies(assets: &[Asset]) -> Vec<String> {
+    let mut currencies: Vec<String> = assets
         .iter()
         .filter(|asset| asset.currency != BASE_CURRENCY)
-        .map(|asset| market_data_policy::currency_pair(&asset.currency))
+        .map(|asset| asset.currency.clone())
         .collect::<HashSet<_>>()
         .into_iter()
         .collect();
-    pairs.sort();
-    pairs
+    currencies.sort();
+    currencies
 }
 
 async fn get_required_exchange_rate_for_asset(
@@ -463,42 +469,47 @@ fn filter_fetched_series(
 
 async fn fill_nav_exchange_rates(
     db: &DatabaseConnection,
-    pairs: &[String],
+    currencies: &[String],
     start_date: &str,
     end_date: &str,
     price_fetcher: &dyn PriceFetcher,
 ) -> anyhow::Result<HashMap<String, LatestMarketDataDate>> {
-    tracing::debug!(pair_count = pairs.len(), %start_date, %end_date, "filling NAV exchange rate cache");
+    tracing::debug!(currency_count = currencies.len(), %start_date, %end_date, "filling NAV exchange rate cache");
 
-    let futures: Vec<_> = pairs
+    let futures: Vec<_> = currencies
         .iter()
-        .map(|pair| async move {
+        .map(|currency| async move {
             let result =
-                fill_historical_exchange_rates(db, pair, start_date, end_date, price_fetcher).await;
-            (pair, result)
+                fill_historical_exchange_rates(db, currency, start_date, end_date, price_fetcher)
+                    .await;
+            (currency, result)
         })
         .collect();
 
     let results = futures::future::join_all(futures).await;
 
     let mut latest_dates = HashMap::new();
-    for (pair, result) in results {
+    for (currency, result) in results {
         match result {
             Ok(Some(date)) => {
-                latest_dates.insert(pair.clone(), LatestMarketDataDate { date });
+                latest_dates.insert(currency.clone(), LatestMarketDataDate { date });
             }
             Ok(None) => {
-                tracing::warn!(%pair, "no new exchange rate data from API, falling back to latest cached date");
-                if let Some(cached) = exchange_rate_repo::find_latest_date(db, pair).await? {
-                    latest_dates.insert(pair.clone(), LatestMarketDataDate { date: cached });
+                tracing::warn!(%currency, to_currency = BASE_CURRENCY, "no new exchange rate data from API, falling back to latest cached date");
+                if let Some(cached) =
+                    exchange_rate_repo::find_latest_date(db, currency, BASE_CURRENCY).await?
+                {
+                    latest_dates.insert(currency.clone(), LatestMarketDataDate { date: cached });
                 } else {
-                    tracing::warn!(%pair, "no cached exchange rate data available at all");
+                    tracing::warn!(%currency, to_currency = BASE_CURRENCY, "no cached exchange rate data available at all");
                 }
             }
             Err(e) => {
-                tracing::warn!(%pair, error = %e, "failed to fill exchange rates, falling back to latest cached date");
-                if let Some(cached) = exchange_rate_repo::find_latest_date(db, pair).await? {
-                    latest_dates.insert(pair.clone(), LatestMarketDataDate { date: cached });
+                tracing::warn!(%currency, to_currency = BASE_CURRENCY, error = %e, "failed to fill exchange rates, falling back to latest cached date");
+                if let Some(cached) =
+                    exchange_rate_repo::find_latest_date(db, currency, BASE_CURRENCY).await?
+                {
+                    latest_dates.insert(currency.clone(), LatestMarketDataDate { date: cached });
                 }
             }
         }
@@ -509,13 +520,14 @@ async fn fill_nav_exchange_rates(
 
 async fn fill_historical_exchange_rates(
     db: &DatabaseConnection,
-    pair: &str,
+    from_currency: &str,
     start_date: &str,
     end_date: &str,
     price_fetcher: &dyn PriceFetcher,
 ) -> anyhow::Result<Option<String>> {
+    let pair = market_data_policy::currency_pair(from_currency);
     let rates = price_fetcher
-        .get_historical_exchange_rates(pair, start_date, end_date)
+        .get_historical_exchange_rates(&pair, start_date, end_date)
         .await;
 
     let requested_end =
@@ -531,7 +543,7 @@ async fn fill_historical_exchange_rates(
             })
             .collect(),
         Err(e) => {
-            tracing::warn!(%pair, error = %e, "failed to fetch exchange rates");
+            tracing::warn!(%from_currency, to_currency = BASE_CURRENCY, error = %e, "failed to fetch exchange rates");
             return Ok(None);
         }
     };
@@ -544,18 +556,21 @@ async fn fill_historical_exchange_rates(
     let start = market_data_policy::parse_market_data_date(start_date, "historical FX start date")?;
     let fill_end =
         market_data_policy::parse_market_data_date(&last_api_date, "last historical FX API date")?;
-    let mut last_known_rate = exchange_rate_repo::find_rate_before(db, pair, start_date).await?;
+    let mut last_known_rate =
+        exchange_rate_repo::find_rate_before(db, from_currency, BASE_CURRENCY, start_date).await?;
 
     let mut current = start;
     while current <= fill_end {
         let date_str = format_date(current);
 
         if let Some(&api_rate) = rate_map.get(&date_str) {
-            exchange_rate_repo::upsert(db, pair, &date_str, api_rate).await?;
+            exchange_rate_repo::upsert(db, from_currency, BASE_CURRENCY, &date_str, api_rate)
+                .await?;
             last_known_rate = Some(api_rate);
         } else if let Some(fill_rate) = last_known_rate {
-            if !exchange_rate_repo::exists(db, pair, &date_str).await? {
-                exchange_rate_repo::upsert(db, pair, &date_str, fill_rate).await?;
+            if !exchange_rate_repo::exists(db, from_currency, BASE_CURRENCY, &date_str).await? {
+                exchange_rate_repo::upsert(db, from_currency, BASE_CURRENCY, &date_str, fill_rate)
+                    .await?;
             }
         }
 

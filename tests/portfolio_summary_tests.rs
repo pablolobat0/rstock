@@ -223,7 +223,7 @@ async fn test_portfolio_surfaces_fx_stale_data_warning() {
     common::insert_transaction(&db, asset_id, &stale_fx_date, 10.0, 100.0, 0.0).await;
     common::insert_daily_price(&db, asset_id, &stale_fx_date, 100.0, false).await;
     common::insert_daily_price(&db, asset_id, &fresh_price_date, 110.0, false).await;
-    common::insert_exchange_rate(&db, "USDEUR", &stale_fx_date, 0.90).await;
+    common::insert_exchange_rate(&db, "USD", "EUR", &stale_fx_date, 0.90).await;
 
     let result = portfolio::get_asset_positions(&db, &common::MockPriceFetcher::new())
         .await
