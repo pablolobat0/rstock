@@ -32,6 +32,10 @@ _Avoid_: Historical market data
 A user-actionable reason market data could not support the requested valuation date.
 _Avoid_: Log message
 
+**Market data source**:
+An external origin of market data used by rstock, such as Yahoo Finance or Morningstar.
+_Avoid_: Provider, API
+
 **Base currency**:
 The currency in which portfolio values, NAV, and aggregate returns are expressed.
 _Avoid_: Local currency, reporting currency
@@ -81,6 +85,7 @@ _Avoid_: Data import, portfolio table
 - An **Individual price** display value may combine a stock **Live quote** with stale cached FX when live FX is unavailable, but that creates a **Market data limitation**.
 - A completed date is any date before today; same-day market-close calendars are intentionally not used.
 - A **Market data limitation** is part of the result of preparing market data when the limitation is user-actionable, not only diagnostic logging.
+- A **Market data source** supplies raw observations; rstock decides whether they become **Historical market data**, **Live quote**, or **Portfolio-relevant analysis** inputs.
 - Price lookup identity is part of market data: stocks use ticker; funds and ETFs use Morningstar code.
 - User-facing **Tracked asset** identity is ticker for stocks and ISIN for funds/ETFs.
 - A **Tracked asset** keeps the same user-facing identity, vehicle type, and currency after creation; descriptive classification and provider lookup metadata may be corrected.
@@ -99,6 +104,7 @@ _Avoid_: Data import, portfolio table
 - **Asset classification** attributes should be consistent with the top-level asset class; equity-specific attributes belong to equity assets, and fixed-income-specific attributes belong to fixed-income assets.
 - A **Tracked asset** may exist before, during, or after it is held in the portfolio.
 - Rolling correlation analysis compares **Tracked assets**, not arbitrary market symbols.
+- Correlation analysis uses aligned available **Base currency** series for each **Tracked asset** and benchmark; it does not force every series to one **Effective valuation date**.
 - The **Transaction ledger** is the source of truth for holdings and transaction CSV import/export.
 - **Transaction ledger** entries use positive quantities, prices, dividend amounts, and split ratios; fees are non-negative.
 - A dividend transaction records the total cash received for the asset, not the per-share dividend rate.
