@@ -3,7 +3,7 @@ use chrono::NaiveDate;
 use crate::models::AssetType;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NavMarketData {
+pub struct ValuationMarketData {
     pub effective_end: NaiveDate,
     pub limitations: Vec<MarketDataLimitation>,
 }

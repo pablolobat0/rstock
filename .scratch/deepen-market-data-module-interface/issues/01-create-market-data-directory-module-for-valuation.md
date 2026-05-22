@@ -1,6 +1,6 @@
 # Create market data directory Module for valuation
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

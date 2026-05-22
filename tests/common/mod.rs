@@ -10,7 +10,7 @@ use rstock::db::entities::{
     transaction,
 };
 use rstock::models::{f64_to_cents, AssetType, StockInfo};
-use rstock::services::market_data::{MarketDataSources, SourceObservation};
+use rstock::services::market_data::{MarketData, MarketDataSources, SourceObservation};
 use rstock::services::price::PriceFetcher;
 
 pub async fn setup_test_db() -> DatabaseConnection {
@@ -284,6 +284,7 @@ pub async fn insert_exchange_rate(
         .expect("failed to insert exchange rate");
 }
 
+#[derive(Clone)]
 pub struct MockPriceFetcher {
     pub historical_prices: HashMap<String, Vec<(String, f64)>>,
     pub exchange_rates: HashMap<String, Vec<(String, f64)>>,
@@ -298,6 +299,10 @@ impl MockPriceFetcher {
             stock_info: HashMap::new(),
         }
     }
+}
+
+pub fn market_data(sources: &MockPriceFetcher) -> MarketData {
+    MarketData::new(Box::new(sources.clone()))
 }
 
 #[async_trait::async_trait]

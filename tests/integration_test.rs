@@ -45,7 +45,7 @@ async fn test_full_buy_rebuild_summary_flow() {
         start,
         NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
         None,
-        &mock,
+        &common::market_data(&mock),
     )
     .await
     .unwrap();
@@ -123,7 +123,7 @@ async fn test_incremental_rebuild_after_second_buy() {
         start,
         NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
         None,
-        &mock,
+        &common::market_data(&mock),
     )
     .await
     .unwrap();
@@ -149,7 +149,7 @@ async fn test_incremental_rebuild_after_second_buy() {
         start_d6,
         NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
         prev_snap.as_ref(),
-        &mock,
+        &common::market_data(&mock),
     )
     .await
     .unwrap();

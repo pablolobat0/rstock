@@ -4,6 +4,7 @@ use crate::constants::{
     format_date, FIVE_YEAR_DAYS, ONE_YEAR_DAYS, SIX_MONTH_DAYS, THIRTY_DAYS, THREE_YEAR_DAYS,
 };
 use crate::services;
+use crate::services::market_data::MarketData;
 use crate::services::price::PriceFetcher;
 
 use super::super::display;
@@ -19,26 +20,24 @@ pub async fn fund(
     Ok(())
 }
 
-pub async fn composition(
-    db: &DatabaseConnection,
-    fetcher: &dyn PriceFetcher,
-) -> anyhow::Result<()> {
-    services::portfolio::trigger_rebuild_if_needed(db, fetcher).await?;
-    let result = services::composition::compute_composition(db, fetcher).await?;
+pub async fn composition(db: &DatabaseConnection, market_data: &MarketData) -> anyhow::Result<()> {
+    services::portfolio::trigger_rebuild_if_needed(db, market_data).await?;
+    let result = services::composition::compute_composition(db, market_data).await?;
     display::print_composition(&result);
     Ok(())
 }
 
 pub async fn correlation_matrix(
     db: &DatabaseConnection,
-    fetcher: &dyn PriceFetcher,
+    market_data: &MarketData,
     period: CorrelationPeriod,
 ) -> anyhow::Result<()> {
     let (start_str, today_str, period_label) = correlation_date_range(&period);
 
-    services::portfolio::trigger_rebuild_if_needed(db, fetcher).await?;
+    services::portfolio::trigger_rebuild_if_needed(db, market_data).await?;
     let matrix =
-        services::analytics::compute_correlation_data(db, &start_str, &today_str, fetcher).await?;
+        services::analytics::compute_correlation_data(db, &start_str, &today_str, market_data)
+            .await?;
 
     display::print_correlation_matrix(&matrix, period_label);
     Ok(())

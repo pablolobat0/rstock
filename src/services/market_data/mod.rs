@@ -2,9 +2,11 @@ pub mod sources;
 
 use anyhow::{bail, Context};
 use chrono::NaiveDate;
+use sea_orm::DatabaseConnection;
 
 use crate::constants::DATE_FORMAT;
-use crate::models::{AssetType, StockInfo};
+use crate::models::{Asset, AssetType, MarketDataValuation, StockInfo, ValuationMarketData};
+use crate::services::historical_market_data;
 use crate::services::price::PriceFetcher;
 
 pub use sources::{DefaultMarketDataSources, MarketDataSources, SourceObservation};
@@ -60,6 +62,37 @@ impl MarketData {
 
     pub async fn stock_info(&self, ticker: &str) -> anyhow::Result<StockInfo> {
         self.sources.stock_info(ticker).await
+    }
+
+    pub async fn prepare_valuation_market_data(
+        &self,
+        db: &DatabaseConnection,
+        assets: &[Asset],
+        start_date: &str,
+        end_date: &str,
+    ) -> anyhow::Result<ValuationMarketData> {
+        historical_market_data::prepare_valuation_market_data(
+            db, assets, start_date, end_date, self,
+        )
+        .await
+    }
+
+    pub async fn get_required_asset_exchange_rates(
+        &self,
+        db: &DatabaseConnection,
+        assets: &[Asset],
+        date: &str,
+    ) -> anyhow::Result<std::collections::HashMap<i32, f64>> {
+        historical_market_data::get_required_asset_exchange_rates(db, assets, date).await
+    }
+
+    pub async fn get_required_asset_valuation_data(
+        &self,
+        db: &DatabaseConnection,
+        asset: &Asset,
+        date: &str,
+    ) -> anyhow::Result<MarketDataValuation> {
+        historical_market_data::get_required_asset_valuation_data(db, asset, date).await
     }
 }
 

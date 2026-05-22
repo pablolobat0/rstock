@@ -9,8 +9,7 @@ use crate::db::repos::{
     asset_repo, portfolio_asset_history_repo, portfolio_history_repo, transaction_repo,
 };
 use crate::models::{cents_to_f64, Asset, AssetSnapshot, PortfolioSnapshot, Transaction};
-use crate::services::historical_market_data;
-use crate::services::price::PriceFetcher;
+use crate::services::market_data::MarketData;
 
 #[allow(clippy::too_many_lines)]
 pub async fn rebuild_portfolio_history(
@@ -18,7 +17,7 @@ pub async fn rebuild_portfolio_history(
     start_date: NaiveDate,
     end_date: NaiveDate,
     prev_snapshot: Option<&PortfolioSnapshot>,
-    price_fetcher: &dyn PriceFetcher,
+    market_data: &MarketData,
 ) -> anyhow::Result<()> {
     tracing::info!(%start_date, %end_date, "rebuilding portfolio history");
 
@@ -59,15 +58,10 @@ pub async fn rebuild_portfolio_history(
         .cloned()
         .collect();
 
-    let nav_market_data = historical_market_data::prepare_nav_market_data(
-        db,
-        &nav_assets,
-        &start_str,
-        &end_str,
-        price_fetcher,
-    )
-    .await?;
-    let effective_end = nav_market_data.effective_end;
+    let valuation_market_data = market_data
+        .prepare_valuation_market_data(db, &nav_assets, &start_str, &end_str)
+        .await?;
+    let effective_end = valuation_market_data.effective_end;
 
     let mut tx_by_date: HashMap<String, Vec<&Transaction>> = HashMap::new();
     for tx in &transactions {
@@ -81,9 +75,9 @@ pub async fn rebuild_portfolio_history(
     while current <= effective_end {
         let date_str = format_date(current);
 
-        let day_asset_exchange_rates =
-            historical_market_data::get_required_asset_exchange_rates(db, &nav_assets, &date_str)
-                .await?;
+        let day_asset_exchange_rates = market_data
+            .get_required_asset_exchange_rates(db, &nav_assets, &date_str)
+            .await?;
 
         // Process transactions for this day
         if let Some(day_txs) = tx_by_date.get(&date_str) {
@@ -107,7 +101,7 @@ pub async fn rebuild_portfolio_history(
 
         // Compute EOD values (aggregate + per-asset) with currency conversion
         let (asset_value, asset_values) =
-            compute_day_asset_values(db, &holdings, &asset_map, &date_str).await?;
+            compute_day_asset_values(db, market_data, &holdings, &asset_map, &date_str).await?;
 
         let total_value = asset_value + accumulated_cash;
         if outstanding_shares > 0.0 {
@@ -221,6 +215,7 @@ pub fn process_day_transactions(
 
 async fn compute_day_asset_values(
     db: &DatabaseConnection,
+    market_data: &MarketData,
     holdings: &HashMap<i32, f64>,
     asset_map: &HashMap<i32, &Asset>,
     date: &str,
@@ -243,9 +238,9 @@ async fn compute_day_asset_values(
         if asset_model.is_monetary() {
             continue;
         }
-        let valuation =
-            historical_market_data::get_required_asset_valuation_data(db, asset_model, date)
-                .await?;
+        let valuation = market_data
+            .get_required_asset_valuation_data(db, asset_model, date)
+            .await?;
 
         // Reuse existing row if quantity and exchange rate match
         if let Some(existing) = existing_map.get(&asset_id) {

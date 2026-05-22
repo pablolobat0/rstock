@@ -72,13 +72,18 @@ async fn test_perfectly_correlated_assets() {
     // Build portfolio history
     let start = chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
     let end = chrono::NaiveDate::from_ymd_opt(2025, 1, 25).unwrap();
-    rebuild_portfolio_history(&db, start, end, None, &fetcher)
+    rebuild_portfolio_history(&db, start, end, None, &common::market_data(&fetcher))
         .await
         .unwrap();
 
-    let matrix = compute_correlation_data(&db, "2025-01-01", "2025-01-25", &fetcher)
-        .await
-        .unwrap();
+    let matrix = compute_correlation_data(
+        &db,
+        "2025-01-01",
+        "2025-01-25",
+        &common::market_data(&fetcher),
+    )
+    .await
+    .unwrap();
 
     // Find XFAKE1 and XFAKE2 indices
     let idx_a = matrix.names.iter().position(|l| l == "Fake A").unwrap();
@@ -125,13 +130,18 @@ async fn test_negatively_correlated_assets() {
 
     let start = chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
     let end = chrono::NaiveDate::from_ymd_opt(2025, 1, 25).unwrap();
-    rebuild_portfolio_history(&db, start, end, None, &fetcher)
+    rebuild_portfolio_history(&db, start, end, None, &common::market_data(&fetcher))
         .await
         .unwrap();
 
-    let matrix = compute_correlation_data(&db, "2025-01-01", "2025-01-25", &fetcher)
-        .await
-        .unwrap();
+    let matrix = compute_correlation_data(
+        &db,
+        "2025-01-01",
+        "2025-01-25",
+        &common::market_data(&fetcher),
+    )
+    .await
+    .unwrap();
 
     let idx_a = matrix.names.iter().position(|l| l == "Fake A").unwrap();
     let idx_b = matrix.names.iter().position(|l| l == "Fake B").unwrap();
@@ -161,13 +171,18 @@ async fn test_diagonal_is_one() {
 
     let start = chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
     let end = chrono::NaiveDate::from_ymd_opt(2025, 1, 25).unwrap();
-    rebuild_portfolio_history(&db, start, end, None, &fetcher)
+    rebuild_portfolio_history(&db, start, end, None, &common::market_data(&fetcher))
         .await
         .unwrap();
 
-    let matrix = compute_correlation_data(&db, "2025-01-01", "2025-01-25", &fetcher)
-        .await
-        .unwrap();
+    let matrix = compute_correlation_data(
+        &db,
+        "2025-01-01",
+        "2025-01-25",
+        &common::market_data(&fetcher),
+    )
+    .await
+    .unwrap();
 
     for i in 0..matrix.names.len() {
         let diag = matrix.matrix[i][i];
@@ -200,13 +215,18 @@ async fn test_usd_asset_uses_eur_conversion() {
 
     let start = chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
     let end = chrono::NaiveDate::from_ymd_opt(2025, 1, 25).unwrap();
-    rebuild_portfolio_history(&db, start, end, None, &fetcher)
+    rebuild_portfolio_history(&db, start, end, None, &common::market_data(&fetcher))
         .await
         .unwrap();
 
-    let matrix = compute_correlation_data(&db, "2025-01-01", "2025-01-25", &fetcher)
-        .await
-        .unwrap();
+    let matrix = compute_correlation_data(
+        &db,
+        "2025-01-01",
+        "2025-01-25",
+        &common::market_data(&fetcher),
+    )
+    .await
+    .unwrap();
 
     let idx_eur = matrix.names.iter().position(|l| l == "Fake EUR").unwrap();
     let idx_usd = matrix.names.iter().position(|l| l == "Fake USD").unwrap();
@@ -237,13 +257,18 @@ async fn test_insufficient_data_produces_warning() {
 
     let start = chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
     let end = chrono::NaiveDate::from_ymd_opt(2025, 1, 5).unwrap();
-    rebuild_portfolio_history(&db, start, end, None, &fetcher)
+    rebuild_portfolio_history(&db, start, end, None, &common::market_data(&fetcher))
         .await
         .unwrap();
 
-    let matrix = compute_correlation_data(&db, "2025-01-01", "2025-01-05", &fetcher)
-        .await
-        .unwrap();
+    let matrix = compute_correlation_data(
+        &db,
+        "2025-01-01",
+        "2025-01-05",
+        &common::market_data(&fetcher),
+    )
+    .await
+    .unwrap();
 
     assert!(
         matrix.warnings.contains(&"Fake A".to_string()),
@@ -403,7 +428,7 @@ async fn test_rolling_correlation_for_pair() {
         "XFAKE1",
         "XFAKE2",
         "1Y",
-        &fetcher,
+        &common::market_data(&fetcher),
     )
     .await
     .unwrap();
@@ -442,7 +467,7 @@ async fn test_rolling_correlation_rejects_unknown_identifier() {
         "XFAKE1",
         "XUNKNOWN",
         "1Y",
-        &fetcher,
+        &common::market_data(&fetcher),
     )
     .await;
     let Err(err) = result else {
@@ -493,7 +518,7 @@ async fn test_rolling_correlation_uses_morningstar_code_for_funds_and_etfs() {
         "IE00XFAKE1",
         "IE00XFAKE2",
         "1Y",
-        &fetcher,
+        &common::market_data(&fetcher),
     )
     .await
     .unwrap();

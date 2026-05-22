@@ -15,15 +15,16 @@ use crate::models::{
     cents_to_f64, AssetPosition, MarketDataLimitation, PortfolioResult, PortfolioSnapshot,
     Transaction,
 };
+use crate::services::market_data::MarketData;
 use crate::services::nav;
 use crate::services::price::PriceFetcher;
 use crate::services::{analytics, historical_market_data, individual_price, metrics};
 
 pub async fn get_portfolio(
     db: &DatabaseConnection,
-    price_fetcher: &dyn PriceFetcher,
+    market_data: &MarketData,
 ) -> anyhow::Result<PortfolioResult> {
-    trigger_rebuild_if_needed(db, price_fetcher).await?;
+    trigger_rebuild_if_needed(db, market_data).await?;
 
     let latest_snapshot = portfolio_history_repo::find_latest(db).await?;
     let Some(current_snapshot) = &latest_snapshot else {
@@ -83,11 +84,11 @@ pub async fn get_portfolio(
             &one_year_date,
             &three_year_date,
             &five_year_date,
-            price_fetcher,
+            market_data,
         )
         .await?;
 
-    let rows = compute_asset_positions(db, &snapshot_date, price_fetcher).await?;
+    let rows = compute_asset_positions(db, &snapshot_date, market_data).await?;
 
     let (
         total_current_value,
@@ -124,9 +125,9 @@ pub async fn get_portfolio(
 
 pub async fn get_asset_positions(
     db: &DatabaseConnection,
-    price_fetcher: &dyn PriceFetcher,
+    market_data: &MarketData,
 ) -> anyhow::Result<PortfolioResult> {
-    trigger_rebuild_if_needed(db, price_fetcher).await?;
+    trigger_rebuild_if_needed(db, market_data).await?;
 
     let latest_snapshot = portfolio_history_repo::find_latest(db).await?;
     let snapshot_date = match &latest_snapshot {
@@ -134,7 +135,7 @@ pub async fn get_asset_positions(
         None => return Ok(empty_result()),
     };
 
-    let rows = compute_asset_positions(db, &snapshot_date, price_fetcher).await?;
+    let rows = compute_asset_positions(db, &snapshot_date, market_data).await?;
 
     let (
         total_current_value,
@@ -171,7 +172,7 @@ pub async fn get_asset_positions(
 
 pub async fn trigger_rebuild_if_needed(
     db: &DatabaseConnection,
-    price_fetcher: &dyn PriceFetcher,
+    market_data: &MarketData,
 ) -> anyhow::Result<()> {
     let yesterday = chrono::Local::now().date_naive() - Duration::days(1);
     let yesterday_str = format_date(yesterday);
@@ -183,14 +184,14 @@ pub async fn trigger_rebuild_if_needed(
             let latest_date = NaiveDate::parse_from_str(&snap.date, DATE_FORMAT)
                 .context("invalid latest snapshot date")?;
             let next_day = latest_date + chrono::Duration::days(1);
-            nav::rebuild_portfolio_history(db, next_day, yesterday, Some(snap), price_fetcher)
+            nav::rebuild_portfolio_history(db, next_day, yesterday, Some(snap), market_data)
                 .await?;
         }
         None => {
             if let Some(tx) = transaction_repo::find_earliest(db).await? {
                 let start = NaiveDate::parse_from_str(&tx.date, DATE_FORMAT)
                     .context("invalid first transaction date")?;
-                nav::rebuild_portfolio_history(db, start, yesterday, None, price_fetcher).await?;
+                nav::rebuild_portfolio_history(db, start, yesterday, None, market_data).await?;
             }
         }
     }

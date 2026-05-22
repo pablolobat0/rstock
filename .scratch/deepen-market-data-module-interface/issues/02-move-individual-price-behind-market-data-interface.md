@@ -21,4 +21,4 @@ Move display-time per-asset pricing behind the market data Module Interface usin
 
 ## Blocked by
 
-- .scratch/deepen-market-data-module-interface/issues/01-create-market-data-directory-module-for-valuation.md
+None - can start immediately

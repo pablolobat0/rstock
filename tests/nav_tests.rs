@@ -19,7 +19,7 @@ async fn test_empty_portfolio() {
         start,
         NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
         None,
-        &mock,
+        &common::market_data(&mock),
     )
     .await
     .unwrap();
@@ -46,7 +46,7 @@ async fn test_single_buy_initial_nav() {
         start,
         NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
         None,
-        &mock,
+        &common::market_data(&mock),
     )
     .await
     .unwrap();
@@ -81,7 +81,7 @@ async fn test_nav_reflects_price_change() {
         start,
         NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
         None,
-        &mock,
+        &common::market_data(&mock),
     )
     .await
     .unwrap();
@@ -131,7 +131,7 @@ async fn test_second_buy_no_nav_jump() {
         start,
         NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
         None,
-        &mock,
+        &common::market_data(&mock),
     )
     .await
     .unwrap();
@@ -177,7 +177,7 @@ async fn test_same_day_multiple_buys() {
         start,
         NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
         None,
-        &mock,
+        &common::market_data(&mock),
     )
     .await
     .unwrap();
@@ -218,7 +218,7 @@ async fn test_weekend_forward_fill() {
         start,
         NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
         None,
-        &mock,
+        &common::market_data(&mock),
     )
     .await
     .unwrap();
@@ -267,7 +267,7 @@ async fn test_rebuild_from_specific_date() {
         start,
         NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
         None,
-        &mock,
+        &common::market_data(&mock),
     )
     .await
     .unwrap();
@@ -286,7 +286,7 @@ async fn test_rebuild_from_specific_date() {
         start_d4,
         NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
         prev_snap.as_ref(),
-        &mock,
+        &common::market_data(&mock),
     )
     .await
     .unwrap();
@@ -340,7 +340,7 @@ async fn test_back_dated_buy() {
         start,
         NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
         None,
-        &mock,
+        &common::market_data(&mock),
     )
     .await
     .unwrap();
@@ -363,7 +363,7 @@ async fn test_back_dated_buy() {
         start_d3,
         NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
         prev_snap.as_ref(),
-        &mock,
+        &common::market_data(&mock),
     )
     .await
     .unwrap();
@@ -401,7 +401,7 @@ async fn test_multiple_assets() {
         start,
         NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
         None,
-        &mock,
+        &common::market_data(&mock),
     )
     .await
     .unwrap();
@@ -436,7 +436,7 @@ async fn test_missing_price_for_asset_fails_without_partial_snapshots() {
         start,
         NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
         None,
-        &mock,
+        &common::market_data(&mock),
     )
     .await;
 
@@ -463,7 +463,7 @@ async fn test_missing_first_day_asset_valuation_fails_without_seed_snapshot() {
         start,
         NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
         None,
-        &mock,
+        &common::market_data(&mock),
     )
     .await;
 
@@ -493,7 +493,7 @@ async fn test_missing_fx_rate_fails_without_partial_snapshots() {
         start,
         NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
         None,
-        &mock,
+        &common::market_data(&mock),
     )
     .await;
 
@@ -546,7 +546,7 @@ async fn test_effective_valuation_date_uses_minimum_required_market_data_date() 
 
     let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
     let end = NaiveDate::from_ymd_opt(2025, 1, 10).unwrap();
-    nav::rebuild_portfolio_history(&db, start, end, None, &mock)
+    nav::rebuild_portfolio_history(&db, start, end, None, &common::market_data(&mock))
         .await
         .unwrap();
 
@@ -575,7 +575,7 @@ async fn test_nav_market_data_uses_stock_ticker_for_price_lookup() {
         NaiveDate::from_ymd_opt(2025, 1, 2).unwrap(),
         NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
         None,
-        &mock,
+        &common::market_data(&mock),
     )
     .await
     .unwrap();
@@ -603,7 +603,7 @@ async fn test_nav_market_data_uses_fund_morningstar_code_for_price_lookup() {
         NaiveDate::from_ymd_opt(2025, 1, 2).unwrap(),
         NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
         None,
-        &mock,
+        &common::market_data(&mock),
     )
     .await
     .unwrap();
@@ -628,7 +628,7 @@ async fn test_nav_market_data_uses_etf_morningstar_code_for_price_lookup() {
         NaiveDate::from_ymd_opt(2025, 1, 2).unwrap(),
         NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
         None,
-        &mock,
+        &common::market_data(&mock),
     )
     .await
     .unwrap();
@@ -651,7 +651,7 @@ async fn test_nav_market_data_fails_when_fund_morningstar_code_is_missing() {
         NaiveDate::from_ymd_opt(2025, 1, 2).unwrap(),
         NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
         None,
-        &mock,
+        &common::market_data(&mock),
     )
     .await;
 
@@ -681,7 +681,7 @@ async fn test_per_asset_history_created() {
         start,
         NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
         None,
-        &mock,
+        &common::market_data(&mock),
     )
     .await
     .unwrap();
@@ -720,7 +720,7 @@ async fn test_per_asset_history_multiple_assets() {
         start,
         NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
         None,
-        &mock,
+        &common::market_data(&mock),
     )
     .await
     .unwrap();
@@ -830,7 +830,7 @@ async fn test_lazy_rebuild_no_history_on_buy() {
         start,
         NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
         None,
-        &mock,
+        &common::market_data(&mock),
     )
     .await
     .unwrap();
@@ -872,7 +872,7 @@ async fn test_single_usd_asset_nav() {
 
     let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
     let end = NaiveDate::from_ymd_opt(2025, 1, 3).unwrap();
-    nav::rebuild_portfolio_history(&db, start, end, None, &mock)
+    nav::rebuild_portfolio_history(&db, start, end, None, &common::market_data(&mock))
         .await
         .unwrap();
 
@@ -920,7 +920,7 @@ async fn test_mixed_currency_portfolio() {
 
     let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
     let end = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(&db, start, end, None, &mock)
+    nav::rebuild_portfolio_history(&db, start, end, None, &common::market_data(&mock))
         .await
         .unwrap();
 
@@ -969,7 +969,7 @@ async fn test_eur_only_unchanged() {
 
     let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
     let end = NaiveDate::from_ymd_opt(2025, 1, 3).unwrap();
-    nav::rebuild_portfolio_history(&db, start, end, None, &mock)
+    nav::rebuild_portfolio_history(&db, start, end, None, &common::market_data(&mock))
         .await
         .unwrap();
 
@@ -1012,7 +1012,7 @@ async fn test_sell_reduces_holdings() {
         start,
         NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
         None,
-        &mock,
+        &common::market_data(&mock),
     )
     .await
     .unwrap();
@@ -1042,7 +1042,7 @@ async fn test_sell_nav_unchanged_at_fair_value() {
         start,
         NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
         None,
-        &mock,
+        &common::market_data(&mock),
     )
     .await
     .unwrap();
@@ -1085,7 +1085,7 @@ async fn test_sell_preserves_nav_after_gain() {
         start,
         NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
         None,
-        &mock,
+        &common::market_data(&mock),
     )
     .await
     .unwrap();
@@ -1127,7 +1127,7 @@ async fn test_sell_with_fees() {
         start,
         NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
         None,
-        &mock,
+        &common::market_data(&mock),
     )
     .await
     .unwrap();
@@ -1164,7 +1164,7 @@ async fn test_full_liquidation() {
         start,
         NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
         None,
-        &mock,
+        &common::market_data(&mock),
     )
     .await
     .unwrap();
@@ -1275,7 +1275,7 @@ async fn test_sell_redeems_shares() {
         start,
         NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
         None,
-        &mock,
+        &common::market_data(&mock),
     )
     .await
     .unwrap();
@@ -1317,7 +1317,7 @@ async fn test_forward_split_doubles_holdings() {
         start,
         NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
         None,
-        &mock,
+        &common::market_data(&mock),
     )
     .await
     .unwrap();
@@ -1365,7 +1365,7 @@ async fn test_reverse_split_quarters_holdings() {
         start,
         NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
         None,
-        &mock,
+        &common::market_data(&mock),
     )
     .await
     .unwrap();
@@ -1415,7 +1415,7 @@ async fn test_split_mid_history_nav_continuity() {
         start,
         NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
         None,
-        &mock,
+        &common::market_data(&mock),
     )
     .await
     .unwrap();

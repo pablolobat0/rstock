@@ -25,7 +25,6 @@ Finish the market data architecture deepening by removing or privatizing obsolet
 
 ## Blocked by
 
-- .scratch/deepen-market-data-module-interface/issues/01-create-market-data-directory-module-for-valuation.md
 - .scratch/deepen-market-data-module-interface/issues/02-move-individual-price-behind-market-data-interface.md
 - .scratch/deepen-market-data-module-interface/issues/03-add-cache-first-correlation-market-data-interface.md
 - .scratch/deepen-market-data-module-interface/issues/04-route-remaining-analytics-through-correlation-market-data.md

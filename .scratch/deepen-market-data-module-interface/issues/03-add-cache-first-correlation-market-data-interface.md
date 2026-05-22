@@ -21,4 +21,4 @@ Add a cache-first correlation market data Interface that prepares **Base currenc
 
 ## Blocked by
 
-- .scratch/deepen-market-data-module-interface/issues/01-create-market-data-directory-module-for-valuation.md
+None - can start immediately

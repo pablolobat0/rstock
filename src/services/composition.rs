@@ -7,6 +7,7 @@ use crate::models::{
     AllocationEntry, AssetType, CompositionResult, FundHolding, MarketCapCategory, TopHolding,
 };
 use crate::services::holdings::fetch_fund_holdings;
+use crate::services::market_data::MarketData;
 use crate::services::portfolio::get_asset_positions;
 use crate::services::price::PriceFetcher;
 
@@ -16,9 +17,9 @@ const MID_CAP_THRESHOLD: f64 = 2_000_000_000.0;
 #[allow(clippy::too_many_lines)]
 pub async fn compute_composition(
     db: &DatabaseConnection,
-    price_fetcher: &dyn PriceFetcher,
+    market_data: &MarketData,
 ) -> anyhow::Result<CompositionResult> {
-    let portfolio = get_asset_positions(db, price_fetcher).await?;
+    let portfolio = get_asset_positions(db, market_data).await?;
     let total_value = portfolio.total_current_value;
 
     if total_value <= 0.0 {
@@ -167,7 +168,7 @@ pub async fn compute_composition(
 
     enrich_direct_stocks(
         &direct_stock_tickers,
-        price_fetcher,
+        market_data,
         &mut sector_map,
         &mut country_map,
         &mut market_cap_map,
@@ -240,7 +241,7 @@ fn map_to_sorted_entries(map: HashMap<String, f64>) -> Vec<AllocationEntry> {
 
 async fn enrich_direct_stocks(
     direct_stocks: &[(String, String, f64)],
-    price_fetcher: &dyn PriceFetcher,
+    market_data: &dyn PriceFetcher,
     sector_map: &mut HashMap<String, f64>,
     country_map: &mut HashMap<String, f64>,
     market_cap_map: &mut HashMap<String, f64>,
@@ -251,7 +252,7 @@ async fn enrich_direct_stocks(
         let weight = *weight;
         let name = name.clone();
         async move {
-            let info_result = price_fetcher.get_stock_info(ticker).await;
+            let info_result = market_data.get_stock_info(ticker).await;
             (ticker.clone(), name, weight, info_result)
         }
     });

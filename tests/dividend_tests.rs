@@ -27,10 +27,10 @@ async fn test_cash_dividend_increases_nav() {
     // Dividend of 50 total on day 2
     insert_dividend_transaction(&db, asset_id, "2025-01-03", 50.0, 0.0).await;
 
-    let fetcher = MockPriceFetcher::new();
+    let market_data = common::market_data(&MockPriceFetcher::new());
     let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
     let end = NaiveDate::from_ymd_opt(2025, 1, 3).unwrap();
-    nav::rebuild_portfolio_history(&db, start, end, None, &fetcher)
+    nav::rebuild_portfolio_history(&db, start, end, None, &market_data)
         .await
         .unwrap();
 
@@ -61,10 +61,10 @@ async fn test_dividend_with_fees() {
     // Dividend 50 with 10 in fees → net 40
     insert_dividend_transaction(&db, asset_id, "2025-01-03", 50.0, 10.0).await;
 
-    let fetcher = MockPriceFetcher::new();
+    let market_data = common::market_data(&MockPriceFetcher::new());
     let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
     let end = NaiveDate::from_ymd_opt(2025, 1, 3).unwrap();
-    nav::rebuild_portfolio_history(&db, start, end, None, &fetcher)
+    nav::rebuild_portfolio_history(&db, start, end, None, &market_data)
         .await
         .unwrap();
 
@@ -86,10 +86,10 @@ async fn test_dividend_does_not_change_holdings() {
 
     insert_dividend_transaction(&db, asset_id, "2025-01-03", 50.0, 0.0).await;
 
-    let fetcher = MockPriceFetcher::new();
+    let market_data = common::market_data(&MockPriceFetcher::new());
     let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
     let end = NaiveDate::from_ymd_opt(2025, 1, 3).unwrap();
-    nav::rebuild_portfolio_history(&db, start, end, None, &fetcher)
+    nav::rebuild_portfolio_history(&db, start, end, None, &market_data)
         .await
         .unwrap();
 
@@ -111,12 +111,12 @@ async fn test_incremental_rebuild_preserves_cash_balance() {
 
     insert_dividend_transaction(&db, asset_id, "2025-01-03", 50.0, 0.0).await;
 
-    let fetcher = MockPriceFetcher::new();
+    let market_data = common::market_data(&MockPriceFetcher::new());
 
     // Build up to day 2
     let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
     let end = NaiveDate::from_ymd_opt(2025, 1, 3).unwrap();
-    nav::rebuild_portfolio_history(&db, start, end, None, &fetcher)
+    nav::rebuild_portfolio_history(&db, start, end, None, &market_data)
         .await
         .unwrap();
 
@@ -127,7 +127,7 @@ async fn test_incremental_rebuild_preserves_cash_balance() {
     let prev_snap = rstock::models::PortfolioSnapshot::from(snap_day2);
     let start2 = NaiveDate::from_ymd_opt(2025, 1, 6).unwrap();
     let end2 = NaiveDate::from_ymd_opt(2025, 1, 6).unwrap();
-    nav::rebuild_portfolio_history(&db, start2, end2, Some(&prev_snap), &fetcher)
+    nav::rebuild_portfolio_history(&db, start2, end2, Some(&prev_snap), &market_data)
         .await
         .unwrap();
 

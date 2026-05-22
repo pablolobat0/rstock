@@ -156,7 +156,9 @@ async fn test_composition_direct_stocks_only() {
         ),
     );
 
-    let result = compute_composition(&db, &fetcher).await.unwrap();
+    let result = compute_composition(&db, &common::market_data(&fetcher))
+        .await
+        .unwrap();
 
     // Asset class breakdown: both are equity
     assert_eq!(result.asset_class_breakdown.len(), 1);
@@ -193,7 +195,9 @@ async fn test_composition_unclassified_asset() {
         mock_stock_info("XFAKE1", Some("Technology"), None, Some("US"), None),
     );
 
-    let result = compute_composition(&db, &fetcher).await.unwrap();
+    let result = compute_composition(&db, &common::market_data(&fetcher))
+        .await
+        .unwrap();
 
     // Unclassified asset
     assert_eq!(result.asset_class_breakdown.len(), 1);
@@ -205,7 +209,9 @@ async fn test_composition_empty_portfolio() {
     let db = setup_test_db().await;
     let fetcher = MockPriceFetcher::new();
 
-    let result = compute_composition(&db, &fetcher).await.unwrap();
+    let result = compute_composition(&db, &common::market_data(&fetcher))
+        .await
+        .unwrap();
 
     assert!(result.asset_class_breakdown.is_empty());
     assert!(!result.warnings.is_empty());
@@ -238,7 +244,9 @@ async fn test_composition_failed_stock_info() {
         .insert("XFAKE1".to_owned(), vec![("2025-01-02".to_owned(), 100.0)]);
     // No stock_info for XFAKE1 -> get_stock_info will fail
 
-    let result = compute_composition(&db, &fetcher).await.unwrap();
+    let result = compute_composition(&db, &common::market_data(&fetcher))
+        .await
+        .unwrap();
 
     // Should have a warning about failed lookup
     assert!(result.warnings.iter().any(|w| w.contains("XFAKE1")));

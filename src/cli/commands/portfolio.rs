@@ -11,17 +11,17 @@ use crate::models::{
     Management,
 };
 use crate::services;
-use crate::services::price::PriceFetcher;
+use crate::services::market_data::MarketData;
 
 use super::super::display;
 use super::super::ChartPeriod;
 
 pub async fn get(
     db: &DatabaseConnection,
-    fetcher: &dyn PriceFetcher,
+    market_data: &MarketData,
     period: ChartPeriod,
 ) -> anyhow::Result<()> {
-    let result = services::portfolio::get_portfolio(db, fetcher).await?;
+    let result = services::portfolio::get_portfolio(db, market_data).await?;
 
     display::print_portfolio(&result);
 

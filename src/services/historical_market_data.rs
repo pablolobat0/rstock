@@ -6,7 +6,9 @@ use sea_orm::DatabaseConnection;
 
 use crate::constants::{format_date, BASE_CURRENCY, DATE_FORMAT};
 use crate::db::repos::{daily_price_repo, exchange_rate_repo};
-use crate::models::{Asset, AssetType, BenchmarkMarketData, MarketDataValuation, NavMarketData};
+use crate::models::{
+    Asset, AssetType, BenchmarkMarketData, MarketDataValuation, ValuationMarketData,
+};
 use crate::services::market_data_policy;
 use crate::services::price::PriceFetcher;
 
@@ -14,13 +16,13 @@ struct LatestMarketDataDate {
     date: String,
 }
 
-pub async fn prepare_nav_market_data(
+pub(crate) async fn prepare_valuation_market_data(
     db: &DatabaseConnection,
     assets: &[Asset],
     start_date: &str,
     end_date: &str,
     price_fetcher: &dyn PriceFetcher,
-) -> anyhow::Result<NavMarketData> {
+) -> anyhow::Result<ValuationMarketData> {
     prepare_historical_market_data(db, assets, start_date, end_date, price_fetcher).await
 }
 
@@ -47,7 +49,7 @@ pub async fn prepare_benchmark_market_data(
     })
 }
 
-pub async fn get_required_asset_valuation_data(
+pub(crate) async fn get_required_asset_valuation_data(
     db: &DatabaseConnection,
     asset: &Asset,
     date: &str,
@@ -91,7 +93,7 @@ pub async fn get_exchange_rate_for_asset(
     get_exchange_rate(db, &asset.currency, date).await
 }
 
-pub async fn get_required_asset_exchange_rates(
+pub(crate) async fn get_required_asset_exchange_rates(
     db: &DatabaseConnection,
     assets: &[Asset],
     date: &str,
@@ -231,7 +233,7 @@ async fn prepare_historical_market_data(
     start_date: &str,
     end_date: &str,
     price_fetcher: &dyn PriceFetcher,
-) -> anyhow::Result<NavMarketData> {
+) -> anyhow::Result<ValuationMarketData> {
     let requested_end =
         market_data_policy::parse_market_data_date(end_date, "historical market data end date")?;
     let currencies = infer_required_currencies(assets);
@@ -288,7 +290,7 @@ async fn prepare_historical_market_data(
         .min()
         .context("historical market data preparation had no date requirements")?;
 
-    Ok(NavMarketData {
+    Ok(ValuationMarketData {
         effective_end,
         limitations,
     })
