@@ -4,7 +4,6 @@ pub mod composition;
 pub mod export;
 pub mod fund_analysis;
 pub mod historical_market_data;
-pub mod holdings;
 pub mod import;
 pub mod individual_price;
 pub mod market_data;

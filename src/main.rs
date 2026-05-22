@@ -4,6 +4,7 @@ mod db;
 mod logging;
 mod models;
 mod services;
+mod settings;
 mod utils;
 
 use clap::Parser;
@@ -23,7 +24,7 @@ async fn main() -> anyhow::Result<()> {
     tracing::debug!(command = ?cli.command, "starting rstock");
 
     let db = db::connect().await?;
-    let market_data = MarketData::new(Box::new(DefaultMarketDataSources::new()));
+    let market_data = MarketData::new(Box::new(DefaultMarketDataSources::new()?));
 
     match cli.command {
         Commands::Get { period } => cli::commands::portfolio::get(&db, &market_data, period).await,

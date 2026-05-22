@@ -29,4 +29,3 @@ Finish the market data architecture deepening by removing or privatizing obsolet
 - .scratch/deepen-market-data-module-interface/issues/02-move-individual-price-behind-market-data-interface.md
 - .scratch/deepen-market-data-module-interface/issues/03-add-cache-first-correlation-market-data-interface.md
 - .scratch/deepen-market-data-module-interface/issues/04-route-remaining-analytics-through-correlation-market-data.md
-- .scratch/deepen-market-data-module-interface/issues/06-replace-python-morningstar-with-rust-source-adapter.md

@@ -6,7 +6,7 @@ use sea_orm::DatabaseConnection;
 use crate::models::{
     AllocationEntry, AssetType, CompositionResult, FundHolding, MarketCapCategory, TopHolding,
 };
-use crate::services::holdings::fetch_fund_holdings;
+use crate::services::market_data::MarketData;
 use crate::services::portfolio::get_asset_positions;
 use crate::services::price::PriceFetcher;
 
@@ -16,9 +16,9 @@ const MID_CAP_THRESHOLD: f64 = 2_000_000_000.0;
 #[allow(clippy::too_many_lines)]
 pub async fn compute_composition(
     db: &DatabaseConnection,
-    price_fetcher: &dyn PriceFetcher,
+    market_data: &MarketData,
 ) -> anyhow::Result<CompositionResult> {
-    let portfolio = get_asset_positions(db, price_fetcher).await?;
+    let portfolio = get_asset_positions(db, market_data).await?;
     let total_value = portfolio.total_current_value;
 
     if total_value <= 0.0 {
@@ -105,8 +105,8 @@ pub async fn compute_composition(
         equity_fund_data
             .into_iter()
             .map(|(weight, code, name, ticker)| async move {
-                match fetch_fund_holdings(&code, 200).await {
-                    Ok(holdings) => (weight, Some(holdings), None::<String>),
+                match market_data.fund_data(&code, 200).await {
+                    Ok(fund_data) => (weight, Some(fund_data.holdings), None::<String>),
                     Err(e) => (
                         weight,
                         None,
@@ -167,7 +167,7 @@ pub async fn compute_composition(
 
     enrich_direct_stocks(
         &direct_stock_tickers,
-        price_fetcher,
+        market_data,
         &mut sector_map,
         &mut country_map,
         &mut market_cap_map,

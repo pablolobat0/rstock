@@ -4,7 +4,7 @@ use anyhow::{bail, Context};
 use chrono::NaiveDate;
 
 use crate::constants::DATE_FORMAT;
-use crate::models::{AssetType, StockInfo};
+use crate::models::{AssetType, FundData, StockInfo};
 use crate::services::price::PriceFetcher;
 
 pub use sources::{DefaultMarketDataSources, MarketDataSources, SourceObservation};
@@ -60,6 +60,10 @@ impl MarketData {
 
     pub async fn stock_info(&self, ticker: &str) -> anyhow::Result<StockInfo> {
         self.sources.stock_info(ticker).await
+    }
+
+    pub async fn fund_data(&self, code: &str, limit: u32) -> anyhow::Result<FundData> {
+        self.sources.fund_data(code, limit).await
     }
 }
 

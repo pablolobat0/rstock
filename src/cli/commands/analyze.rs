@@ -4,6 +4,7 @@ use crate::constants::{
     format_date, FIVE_YEAR_DAYS, ONE_YEAR_DAYS, SIX_MONTH_DAYS, THIRTY_DAYS, THREE_YEAR_DAYS,
 };
 use crate::services;
+use crate::services::market_data::MarketData;
 use crate::services::price::PriceFetcher;
 
 use super::super::display;
@@ -11,20 +12,17 @@ use super::super::CorrelationPeriod;
 
 pub async fn fund(
     db: &DatabaseConnection,
-    fetcher: &dyn PriceFetcher,
+    market_data: &MarketData,
     code: String,
 ) -> anyhow::Result<()> {
-    let result = services::fund_analysis::compute_fund_analysis(db, fetcher, &code).await?;
+    let result = services::fund_analysis::compute_fund_analysis(db, market_data, &code).await?;
     display::print_fund_analysis(&result);
     Ok(())
 }
 
-pub async fn composition(
-    db: &DatabaseConnection,
-    fetcher: &dyn PriceFetcher,
-) -> anyhow::Result<()> {
-    services::portfolio::trigger_rebuild_if_needed(db, fetcher).await?;
-    let result = services::composition::compute_composition(db, fetcher).await?;
+pub async fn composition(db: &DatabaseConnection, market_data: &MarketData) -> anyhow::Result<()> {
+    services::portfolio::trigger_rebuild_if_needed(db, market_data).await?;
+    let result = services::composition::compute_composition(db, market_data).await?;
     display::print_composition(&result);
     Ok(())
 }
