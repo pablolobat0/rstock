@@ -12,10 +12,10 @@ use super::super::CorrelationPeriod;
 
 pub async fn fund(
     db: &DatabaseConnection,
-    fetcher: &dyn PriceFetcher,
+    market_data: &MarketData,
     code: String,
 ) -> anyhow::Result<()> {
-    let result = services::fund_analysis::compute_fund_analysis(db, fetcher, &code).await?;
+    let result = services::fund_analysis::compute_fund_analysis(db, market_data, &code).await?;
     display::print_fund_analysis(&result);
     Ok(())
 }

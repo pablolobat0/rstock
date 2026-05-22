@@ -5,7 +5,9 @@ use chrono::NaiveDate;
 use sea_orm::DatabaseConnection;
 
 use crate::constants::DATE_FORMAT;
-use crate::models::{Asset, AssetType, MarketDataValuation, StockInfo, ValuationMarketData};
+use crate::models::{
+    Asset, AssetType, FundData, MarketDataValuation, StockInfo, ValuationMarketData,
+};
 use crate::services::historical_market_data;
 use crate::services::price::PriceFetcher;
 
@@ -62,6 +64,10 @@ impl MarketData {
 
     pub async fn stock_info(&self, ticker: &str) -> anyhow::Result<StockInfo> {
         self.sources.stock_info(ticker).await
+    }
+
+    pub async fn fund_data(&self, code: &str, limit: u32) -> anyhow::Result<FundData> {
+        self.sources.fund_data(code, limit).await
     }
 
     pub async fn prepare_valuation_market_data(

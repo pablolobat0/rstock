@@ -9,7 +9,7 @@ use rstock::db::entities::{
     asset, daily_asset_price, daily_exchange_rate, portfolio_asset_history, portfolio_history,
     transaction,
 };
-use rstock::models::{f64_to_cents, AssetType, StockInfo};
+use rstock::models::{f64_to_cents, AssetType, FundData, StockInfo};
 use rstock::services::market_data::{MarketData, MarketDataSources, SourceObservation};
 use rstock::services::price::PriceFetcher;
 
@@ -289,6 +289,7 @@ pub struct MockPriceFetcher {
     pub historical_prices: HashMap<String, Vec<(String, f64)>>,
     pub exchange_rates: HashMap<String, Vec<(String, f64)>>,
     pub stock_info: HashMap<String, StockInfo>,
+    pub fund_data: HashMap<String, FundData>,
 }
 
 impl MockPriceFetcher {
@@ -297,6 +298,7 @@ impl MockPriceFetcher {
             historical_prices: HashMap::new(),
             exchange_rates: HashMap::new(),
             stock_info: HashMap::new(),
+            fund_data: HashMap::new(),
         }
     }
 }
@@ -386,6 +388,13 @@ impl MarketDataSources for MockPriceFetcher {
             .get(ticker)
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("no mock stock info for {ticker}"))
+    }
+
+    async fn fund_data(&self, code: &str, _limit: u32) -> anyhow::Result<FundData> {
+        self.fund_data
+            .get(code)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("no mock fund data for {code}"))
     }
 }
 

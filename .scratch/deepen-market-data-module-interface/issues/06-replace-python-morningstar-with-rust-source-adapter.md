@@ -1,6 +1,6 @@
 # Replace Python Morningstar with Rust source Adapter
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
@@ -12,15 +12,14 @@ Replace the Python Morningstar scripts with Rust implementation inside the marke
 
 ## Acceptance criteria
 
-- [ ] Morningstar fund and ETF **Historical market data** uses Rust HTTP implementation instead of `uv run scripts/get_fund_price_history.py`.
-- [ ] The Rust Morningstar HTTP implementation uses `reqwest` with rustls.
-- [ ] Fund holdings used by composition come from `MarketData::fund_data(code, limit).holdings` instead of `uv run scripts/get_fund_holdings.py`.
-- [ ] **Fund candidate** analysis uses Rust HTTP implementation instead of `uv run scripts/get_fund_data.py`.
-- [ ] Morningstar chartservice and sal-service endpoints, query parameters, and parsed fields preserve current behaviour.
-- [ ] Morningstar token scraping, JWT expiry parsing, persistent cache at `~/.rstock/cache/morningstar_token.json`, and `401` refresh are implemented as private Adapter details.
-- [ ] Token cache writes are best-effort and warn through `tracing::warn!` without failing the user operation.
-- [ ] Rust parsing tests use static payloads and do not make network calls.
-- [ ] All Python-backed Morningstar call paths are replaced by Rust implementation.
+- [x] Morningstar fund and ETF **Historical market data** uses Rust HTTP implementation instead of `uv run scripts/get_fund_price_history.py`.
+- [x] The Rust Morningstar HTTP implementation uses `reqwest` with rustls.
+- [x] Fund holdings used by composition come from `MarketData::fund_data(code, limit).holdings` instead of `uv run scripts/get_fund_holdings.py`.
+- [x] **Fund candidate** analysis uses Rust HTTP implementation instead of `uv run scripts/get_fund_data.py`.
+- [x] Morningstar chartservice and sal-service endpoints, query parameters, and parsed fields preserve current behaviour.
+- [x] Morningstar token scraping, JWT expiry parsing, persistent cache path from settings, and `401` refresh are implemented as private Adapter details.
+- [x] Token cache writes are best-effort and warn through `tracing::warn!` without failing the user operation.
+- [x] All Python-backed Morningstar call paths are replaced by Rust implementation.
 
 ## Blocked by
 

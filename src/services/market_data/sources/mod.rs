@@ -1,32 +1,51 @@
+mod market_data_sources;
+mod morningstar;
+mod yahoo;
+
 use chrono::NaiveDate;
 
-use crate::models::StockInfo;
+use crate::models::{FundData, StockInfo};
+use crate::settings::Settings;
 
-mod production;
+pub use market_data_sources::{MarketDataSources, SourceObservation};
 
-pub use production::DefaultMarketDataSources;
+use morningstar::MorningstarAdapter;
+use yahoo::YahooFinanceAdapter;
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct SourceObservation {
-    pub date: NaiveDate,
-    pub value: f64,
+pub struct DefaultMarketDataSources {
+    yahoo: YahooFinanceAdapter,
+    morningstar: MorningstarAdapter,
+}
+
+impl DefaultMarketDataSources {
+    pub fn new() -> anyhow::Result<Self> {
+        let settings = Settings::from_env()?;
+        Ok(Self {
+            yahoo: YahooFinanceAdapter,
+            morningstar: MorningstarAdapter::new(settings),
+        })
+    }
 }
 
 #[async_trait::async_trait]
-pub trait MarketDataSources: Send + Sync {
+impl MarketDataSources for DefaultMarketDataSources {
     async fn stock_price_history(
         &self,
         ticker: &str,
         start: NaiveDate,
         end: NaiveDate,
-    ) -> anyhow::Result<Vec<SourceObservation>>;
+    ) -> anyhow::Result<Vec<SourceObservation>> {
+        self.yahoo.price_history(ticker, start, end).await
+    }
 
     async fn fund_price_history(
         &self,
         code: &str,
         start: NaiveDate,
         end: NaiveDate,
-    ) -> anyhow::Result<Vec<SourceObservation>>;
+    ) -> anyhow::Result<Vec<SourceObservation>> {
+        self.morningstar.price_history(code, start, end).await
+    }
 
     async fn exchange_rate_history(
         &self,
@@ -34,7 +53,15 @@ pub trait MarketDataSources: Send + Sync {
         to: &str,
         start: NaiveDate,
         end: NaiveDate,
-    ) -> anyhow::Result<Vec<SourceObservation>>;
+    ) -> anyhow::Result<Vec<SourceObservation>> {
+        self.yahoo.exchange_rate_history(from, to, start, end).await
+    }
 
-    async fn stock_info(&self, ticker: &str) -> anyhow::Result<StockInfo>;
+    async fn stock_info(&self, ticker: &str) -> anyhow::Result<StockInfo> {
+        self.yahoo.stock_info(ticker).await
+    }
+
+    async fn fund_data(&self, code: &str, limit: u32) -> anyhow::Result<FundData> {
+        self.morningstar.fund_data(code, limit).await
+    }
 }

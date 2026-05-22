@@ -44,6 +44,7 @@ pub enum HoldingChangeType {
     WeightChanged,
 }
 
+#[derive(Clone)]
 pub struct FundData {
     pub fund_currency: Option<String>,
     pub total_holdings: Option<i32>,

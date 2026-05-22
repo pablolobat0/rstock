@@ -6,7 +6,6 @@ use sea_orm::DatabaseConnection;
 use crate::models::{
     AllocationEntry, AssetType, CompositionResult, FundHolding, MarketCapCategory, TopHolding,
 };
-use crate::services::holdings::fetch_fund_holdings;
 use crate::services::market_data::MarketData;
 use crate::services::portfolio::get_asset_positions;
 use crate::services::price::PriceFetcher;
@@ -106,8 +105,8 @@ pub async fn compute_composition(
         equity_fund_data
             .into_iter()
             .map(|(weight, code, name, ticker)| async move {
-                match fetch_fund_holdings(&code, 200).await {
-                    Ok(holdings) => (weight, Some(holdings), None::<String>),
+                match market_data.fund_data(&code, 200).await {
+                    Ok(fund_data) => (weight, Some(fund_data.holdings), None::<String>),
                     Err(e) => (
                         weight,
                         None,

@@ -4,7 +4,7 @@ use anyhow::{bail, Context};
 use chrono::NaiveDate;
 use sea_orm::DatabaseConnection;
 
-use crate::constants::{format_date, BASE_CURRENCY, DATE_FORMAT};
+use crate::constants::{format_date, BASE_CURRENCY, DATE_FORMAT, FUND_API_PADDING_DAYS};
 use crate::db::repos::{daily_price_repo, exchange_rate_repo};
 use crate::models::{
     Asset, AssetType, BenchmarkMarketData, MarketDataValuation, ValuationMarketData,
@@ -389,8 +389,14 @@ async fn fill_historical_asset_prices(
     end_date: &str,
     price_fetcher: &dyn PriceFetcher,
 ) -> anyhow::Result<Option<String>> {
+    let source_start_date = historical_source_start_date(asset, start_date)?;
     let prices = price_fetcher
-        .get_historical_prices(lookup_identifier, start_date, end_date, &asset.asset_type)
+        .get_historical_prices(
+            lookup_identifier,
+            &source_start_date,
+            end_date,
+            &asset.asset_type,
+        )
         .await;
 
     let requested_end =
@@ -456,6 +462,19 @@ fn lookup_identifier(asset: &Asset) -> anyhow::Result<&str> {
             )
         }),
     }
+}
+
+fn historical_source_start_date(asset: &Asset, start_date: &str) -> anyhow::Result<String> {
+    if matches!(asset.asset_type, AssetType::Fund | AssetType::Etf) {
+        let start = market_data_policy::parse_market_data_date(
+            start_date,
+            "historical asset source start date",
+        )?;
+        return Ok(format_date(
+            start - chrono::Duration::days(FUND_API_PADDING_DAYS),
+        ));
+    }
+    Ok(start_date.to_owned())
 }
 
 fn filter_fetched_series(

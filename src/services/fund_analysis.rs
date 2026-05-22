@@ -10,16 +10,16 @@ use crate::constants::{
 };
 use crate::db::repos::{asset_repo, fund_holdings_snapshot_repo};
 use crate::models::{
-    AllocationEntry, AssetType, FundAnalysisResult, FundData, FundHolding, FundPeriodMetrics,
-    HoldingChange, HoldingChangeType,
+    AllocationEntry, AssetType, FundAnalysisResult, FundHolding, FundPeriodMetrics, HoldingChange,
+    HoldingChangeType,
 };
+use crate::services::market_data::MarketData;
 use crate::services::metrics;
 use crate::services::price::PriceFetcher;
-use crate::utils::resolve_scripts_dir;
 
 pub async fn compute_fund_analysis(
     db: &DatabaseConnection,
-    fetcher: &dyn PriceFetcher,
+    market_data: &MarketData,
     ms_code: &str,
 ) -> anyhow::Result<FundAnalysisResult> {
     let today = chrono::Local::now().date_naive();
@@ -29,8 +29,8 @@ pub async fn compute_fund_analysis(
     let name = asset.as_ref().map(|a| a.name.clone());
 
     let (fund_data_result, prices_result) = tokio::join!(
-        fetch_fund_data(ms_code, 200),
-        fetcher.get_historical_prices(ms_code, "2000-01-01", &today_str, &AssetType::Fund),
+        market_data.fund_data(ms_code, 200),
+        market_data.get_historical_prices(ms_code, "2000-01-01", &today_str, &AssetType::Fund),
     );
 
     let fund_data = fund_data_result?;
@@ -49,7 +49,7 @@ pub async fn compute_fund_analysis(
     let earliest_date = fund_prices
         .first()
         .map_or("2000-01-01", |(d, _)| d.as_str());
-    let benchmark_prices = fetcher
+    let benchmark_prices = market_data
         .get_historical_prices(
             BENCHMARK_TICKER,
             earliest_date,
@@ -398,53 +398,4 @@ async fn compute_snapshot_diff(
     .await?;
 
     Ok((holdings_changed, last_snapshot_date, holding_diff))
-}
-async fn fetch_fund_data(ms_code: &str, limit: u32) -> anyhow::Result<FundData> {
-    let scripts_dir = resolve_scripts_dir()?;
-    let script = scripts_dir.join("get_fund_data.py");
-
-    let output = tokio::process::Command::new("uv")
-        .arg("run")
-        .arg(&script)
-        .arg(ms_code)
-        .arg(limit.to_string())
-        .output()
-        .await
-        .context("failed to run get_fund_data.py via uv")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("get_fund_data.py failed for {ms_code}: {stderr}");
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let parsed: serde_json::Value =
-        serde_json::from_str(stdout.trim()).context("failed to parse get_fund_data.py output")?;
-
-    let fund_currency = parsed["fund_currency"].as_str().map(str::to_owned);
-    let total_holdings = parsed["total_holdings"].as_i64().map(|v| v as i32);
-    let portfolio_date = parsed["portfolio_date"].as_str().map(str::to_owned);
-
-    let holdings_arr = parsed["holdings"].as_array();
-    let holdings: Vec<FundHolding> = holdings_arr
-        .map(|arr| {
-            arr.iter()
-                .map(|entry| FundHolding {
-                    name: entry["securityName"].as_str().unwrap_or("").to_owned(),
-                    weighting: entry["weighting"].as_f64().unwrap_or(0.0),
-                    ticker: entry["ticker"].as_str().map(str::to_owned),
-                    sector: entry["sector"].as_str().map(str::to_owned),
-                    country: entry["country"].as_str().map(str::to_owned),
-                    currency: entry["currency"].as_str().map(str::to_owned),
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-
-    Ok(FundData {
-        fund_currency,
-        total_holdings,
-        portfolio_date,
-        holdings,
-    })
 }
