@@ -1,6 +1,6 @@
 # Introduce stateful MarketData and source Interface
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

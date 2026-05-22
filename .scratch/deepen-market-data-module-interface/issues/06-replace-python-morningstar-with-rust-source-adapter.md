@@ -24,4 +24,4 @@ Replace the Python Morningstar scripts with Rust implementation inside the marke
 
 ## Blocked by
 
-- .scratch/deepen-market-data-module-interface/issues/00-introduce-stateful-market-data-and-sources.md
+None - can start immediately

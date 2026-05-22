@@ -7,6 +7,7 @@ pub mod historical_market_data;
 pub mod holdings;
 pub mod import;
 pub mod individual_price;
+pub mod market_data;
 pub(crate) mod market_data_policy;
 pub mod metrics;
 pub mod nav;

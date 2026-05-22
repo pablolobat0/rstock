@@ -22,4 +22,4 @@ Route NAV valuation through the stateful market data Module public Interface. Th
 
 ## Blocked by
 
-- .scratch/deepen-market-data-module-interface/issues/00-introduce-stateful-market-data-and-sources.md
+None - can start immediately

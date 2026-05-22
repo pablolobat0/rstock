@@ -10,6 +10,7 @@ use rstock::db::entities::{
     transaction,
 };
 use rstock::models::{f64_to_cents, AssetType, StockInfo};
+use rstock::services::market_data::{MarketDataSources, SourceObservation};
 use rstock::services::price::PriceFetcher;
 
 pub async fn setup_test_db() -> DatabaseConnection {
@@ -330,4 +331,66 @@ impl PriceFetcher for MockPriceFetcher {
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("no mock stock info for {ticker}"))
     }
+}
+
+#[async_trait::async_trait]
+impl MarketDataSources for MockPriceFetcher {
+    async fn stock_price_history(
+        &self,
+        ticker: &str,
+        _start: chrono::NaiveDate,
+        _end: chrono::NaiveDate,
+    ) -> anyhow::Result<Vec<SourceObservation>> {
+        Ok(to_source_observations(
+            self.historical_prices
+                .get(ticker)
+                .cloned()
+                .unwrap_or_default(),
+        ))
+    }
+
+    async fn fund_price_history(
+        &self,
+        code: &str,
+        _start: chrono::NaiveDate,
+        _end: chrono::NaiveDate,
+    ) -> anyhow::Result<Vec<SourceObservation>> {
+        Ok(to_source_observations(
+            self.historical_prices
+                .get(code)
+                .cloned()
+                .unwrap_or_default(),
+        ))
+    }
+
+    async fn exchange_rate_history(
+        &self,
+        from: &str,
+        to: &str,
+        _start: chrono::NaiveDate,
+        _end: chrono::NaiveDate,
+    ) -> anyhow::Result<Vec<SourceObservation>> {
+        let pair = format!("{from}{to}");
+        Ok(to_source_observations(
+            self.exchange_rates.get(&pair).cloned().unwrap_or_default(),
+        ))
+    }
+
+    async fn stock_info(&self, ticker: &str) -> anyhow::Result<StockInfo> {
+        self.stock_info
+            .get(ticker)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("no mock stock info for {ticker}"))
+    }
+}
+
+fn to_source_observations(values: Vec<(String, f64)>) -> Vec<SourceObservation> {
+    values
+        .into_iter()
+        .map(|(date, value)| SourceObservation {
+            date: chrono::NaiveDate::parse_from_str(&date, rstock::constants::DATE_FORMAT)
+                .expect("mock source observation date should be valid"),
+            value,
+        })
+        .collect()
 }

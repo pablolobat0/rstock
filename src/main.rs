@@ -13,7 +13,7 @@ use cli::{
     TransactionCommands,
 };
 use sea_orm::DatabaseConnection;
-use services::price::RealPriceFetcher;
+use services::market_data::{DefaultMarketDataSources, MarketData};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -23,13 +23,13 @@ async fn main() -> anyhow::Result<()> {
     tracing::debug!(command = ?cli.command, "starting rstock");
 
     let db = db::connect().await?;
-    let fetcher = RealPriceFetcher;
+    let market_data = MarketData::new(Box::new(DefaultMarketDataSources::new()));
 
     match cli.command {
-        Commands::Get { period } => cli::commands::portfolio::get(&db, &fetcher, period).await,
+        Commands::Get { period } => cli::commands::portfolio::get(&db, &market_data, period).await,
         Commands::Portfolio(args) => match args.command {
             PortfolioCommands::Get { period } => {
-                cli::commands::portfolio::get(&db, &fetcher, period).await
+                cli::commands::portfolio::get(&db, &market_data, period).await
             }
             PortfolioCommands::Asset(asset_args) => {
                 run_asset_command(&db, asset_args.command).await
@@ -78,14 +78,14 @@ async fn main() -> anyhow::Result<()> {
         },
         Commands::Analyze(args) => match args.command {
             AnalyzeCommands::Composition {} => {
-                cli::commands::analyze::composition(&db, &fetcher).await
+                cli::commands::analyze::composition(&db, &market_data).await
             }
             AnalyzeCommands::Fund { code } => {
-                cli::commands::analyze::fund(&db, &fetcher, code).await
+                cli::commands::analyze::fund(&db, &market_data, code).await
             }
             AnalyzeCommands::Correlation(args) => match args.command {
                 CorrelationCommands::Matrix { period } => {
-                    cli::commands::analyze::correlation_matrix(&db, &fetcher, period).await
+                    cli::commands::analyze::correlation_matrix(&db, &market_data, period).await
                 }
                 CorrelationCommands::Rolling {
                     identifier_a,
@@ -94,7 +94,7 @@ async fn main() -> anyhow::Result<()> {
                 } => {
                     cli::commands::analyze::rolling_correlation(
                         &db,
-                        &fetcher,
+                        &market_data,
                         identifier_a,
                         identifier_b,
                         period,
