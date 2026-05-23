@@ -5,7 +5,7 @@ pub mod export;
 pub mod fund_analysis;
 pub mod historical_market_data;
 pub mod import;
-pub mod individual_price;
+pub(crate) mod individual_price;
 pub mod market_data;
 pub(crate) mod market_data_policy;
 pub mod metrics;
