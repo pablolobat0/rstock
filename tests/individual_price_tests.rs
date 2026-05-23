@@ -25,7 +25,7 @@ async fn test_stock_display_uses_live_quote_without_persisting_it() {
         .await
         .unwrap()
         .unwrap();
-    let mut fetcher = common::MockPriceFetcher::new();
+    let mut fetcher = common::MockMarketDataSources::new();
     fetcher
         .historical_prices
         .insert("XFAKES1".to_owned(), vec![(today_string(), 125.0)]);
@@ -60,7 +60,7 @@ async fn test_display_uses_live_fx_quote_for_non_base_currency_asset() {
         .await
         .unwrap()
         .unwrap();
-    let mut fetcher = common::MockPriceFetcher::new();
+    let mut fetcher = common::MockMarketDataSources::new();
     fetcher
         .exchange_rates
         .insert("USDEUR".to_owned(), vec![(today_string(), 0.90)]);
@@ -95,7 +95,7 @@ async fn test_fund_display_does_not_use_live_quote() {
         .await
         .unwrap()
         .unwrap();
-    let mut fetcher = common::MockPriceFetcher::new();
+    let mut fetcher = common::MockMarketDataSources::new();
     fetcher
         .historical_prices
         .insert("F000FAKE".to_owned(), vec![(today_string(), 125.0)]);
@@ -128,7 +128,7 @@ async fn test_snapshot_fallback_preserves_display_when_current_data_is_missing()
         .unwrap()
         .unwrap();
 
-    let result = common::market_data(&common::MockPriceFetcher::new())
+    let result = common::market_data(&common::MockMarketDataSources::new())
         .individual_price(
             &db,
             &asset,
@@ -158,7 +158,7 @@ async fn test_live_stock_with_stale_cached_fx_returns_actionable_limitation() {
         .await
         .unwrap()
         .unwrap();
-    let mut fetcher = common::MockPriceFetcher::new();
+    let mut fetcher = common::MockMarketDataSources::new();
     fetcher
         .historical_prices
         .insert("XFAKES4".to_owned(), vec![(today_string(), 120.0)]);

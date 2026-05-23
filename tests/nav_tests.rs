@@ -11,7 +11,7 @@ use rstock::services::nav;
 #[tokio::test]
 async fn test_empty_portfolio() {
     let db = common::setup_test_db().await;
-    let mock = common::MockPriceFetcher::new();
+    let mock = common::MockMarketDataSources::new();
 
     let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
     nav::rebuild_portfolio_history(
@@ -32,7 +32,7 @@ async fn test_empty_portfolio() {
 #[tokio::test]
 async fn test_single_buy_initial_nav() {
     let db = common::setup_test_db().await;
-    let mock = common::MockPriceFetcher::new();
+    let mock = common::MockMarketDataSources::new();
 
     let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
     // Buy 10 shares at $50 = $500 deposit, 0 fees
@@ -68,7 +68,7 @@ async fn test_single_buy_initial_nav() {
 #[tokio::test]
 async fn test_nav_reflects_price_change() {
     let db = common::setup_test_db().await;
-    let mock = common::MockPriceFetcher::new();
+    let mock = common::MockMarketDataSources::new();
 
     let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
@@ -106,7 +106,7 @@ async fn test_nav_reflects_price_change() {
 #[tokio::test]
 async fn test_second_buy_no_nav_jump() {
     let db = common::setup_test_db().await;
-    let mock = common::MockPriceFetcher::new();
+    let mock = common::MockMarketDataSources::new();
 
     let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
     // Day 1: buy 10 @ $50
@@ -163,7 +163,7 @@ async fn test_second_buy_no_nav_jump() {
 #[tokio::test]
 async fn test_same_day_multiple_buys() {
     let db = common::setup_test_db().await;
-    let mock = common::MockPriceFetcher::new();
+    let mock = common::MockMarketDataSources::new();
 
     let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
     // Two buys on same day
@@ -198,7 +198,7 @@ async fn test_same_day_multiple_buys() {
 #[tokio::test]
 async fn test_weekend_forward_fill() {
     let db = common::setup_test_db().await;
-    let mut mock = common::MockPriceFetcher::new();
+    let mut mock = common::MockMarketDataSources::new();
 
     let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
     // 2025-01-03 is a Friday; 2025-01-06 is the next Monday.
@@ -247,7 +247,7 @@ async fn test_weekend_forward_fill() {
 #[tokio::test]
 async fn test_rebuild_from_specific_date() {
     let db = common::setup_test_db().await;
-    let mock = common::MockPriceFetcher::new();
+    let mock = common::MockMarketDataSources::new();
 
     let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
@@ -322,7 +322,7 @@ async fn test_rebuild_from_specific_date() {
 #[tokio::test]
 async fn test_back_dated_buy() {
     let db = common::setup_test_db().await;
-    let mock = common::MockPriceFetcher::new();
+    let mock = common::MockMarketDataSources::new();
 
     let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
@@ -383,7 +383,7 @@ async fn test_back_dated_buy() {
 #[tokio::test]
 async fn test_multiple_assets() {
     let db = common::setup_test_db().await;
-    let mock = common::MockPriceFetcher::new();
+    let mock = common::MockMarketDataSources::new();
 
     let asset_a = common::insert_asset(&db, "XFAKE1", "Asset A", "stock", "EUR").await;
     let asset_b = common::insert_asset(&db, "XFAKE2", "Asset B", "stock", "EUR").await;
@@ -425,7 +425,7 @@ async fn test_multiple_assets() {
 #[tokio::test]
 async fn test_missing_price_for_asset_fails_without_partial_snapshots() {
     let db = common::setup_test_db().await;
-    let mock = common::MockPriceFetcher::new();
+    let mock = common::MockMarketDataSources::new();
 
     let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
@@ -450,7 +450,7 @@ async fn test_missing_price_for_asset_fails_without_partial_snapshots() {
 #[tokio::test]
 async fn test_missing_first_day_asset_valuation_fails_without_seed_snapshot() {
     let db = common::setup_test_db().await;
-    let mut mock = common::MockPriceFetcher::new();
+    let mut mock = common::MockMarketDataSources::new();
 
     let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
@@ -478,7 +478,7 @@ async fn test_missing_first_day_asset_valuation_fails_without_seed_snapshot() {
 #[tokio::test]
 async fn test_missing_fx_rate_fails_without_partial_snapshots() {
     let db = common::setup_test_db().await;
-    let mut mock = common::MockPriceFetcher::new();
+    let mut mock = common::MockMarketDataSources::new();
 
     let asset_id = common::insert_asset(&db, "XFAKEUSD", "US Stock", "stock", "USD").await;
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 100.0, 0.0).await;
@@ -508,7 +508,7 @@ async fn test_missing_fx_rate_fails_without_partial_snapshots() {
 #[tokio::test]
 async fn test_effective_valuation_date_uses_minimum_required_market_data_date() {
     let db = common::setup_test_db().await;
-    let mut mock = common::MockPriceFetcher::new();
+    let mut mock = common::MockMarketDataSources::new();
 
     let eur_id = common::insert_asset(&db, "XFAKEEUR", "EUR Stock", "stock", "EUR").await;
     let usd_id = common::insert_asset(&db, "XFAKEUSD", "US Stock", "stock", "USD").await;
@@ -561,7 +561,7 @@ async fn test_effective_valuation_date_uses_minimum_required_market_data_date() 
 #[tokio::test]
 async fn test_nav_market_data_uses_stock_ticker_for_price_lookup() {
     let db = common::setup_test_db().await;
-    let mut mock = common::MockPriceFetcher::new();
+    let mut mock = common::MockMarketDataSources::new();
 
     let asset_id = common::insert_asset(&db, "XFAKESTOCK", "Test Stock", "stock", "EUR").await;
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
@@ -588,7 +588,7 @@ async fn test_nav_market_data_uses_stock_ticker_for_price_lookup() {
 #[tokio::test]
 async fn test_nav_market_data_uses_fund_morningstar_code_for_price_lookup() {
     let db = common::setup_test_db().await;
-    let mut mock = common::MockPriceFetcher::new();
+    let mut mock = common::MockMarketDataSources::new();
 
     let asset_id =
         common::insert_fund_asset(&db, "XFAKEFUND", "Test Fund", "EUR", "MSTARFUND").await;
@@ -616,7 +616,7 @@ async fn test_nav_market_data_uses_fund_morningstar_code_for_price_lookup() {
 #[tokio::test]
 async fn test_nav_market_data_uses_etf_morningstar_code_for_price_lookup() {
     let db = common::setup_test_db().await;
-    let mut mock = common::MockPriceFetcher::new();
+    let mut mock = common::MockMarketDataSources::new();
 
     let asset_id = common::insert_etf_asset(&db, "XFAKEETF", "Test ETF", "EUR", "MSTARETF").await;
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
@@ -641,7 +641,7 @@ async fn test_nav_market_data_uses_etf_morningstar_code_for_price_lookup() {
 #[tokio::test]
 async fn test_nav_market_data_fails_when_fund_morningstar_code_is_missing() {
     let db = common::setup_test_db().await;
-    let mock = common::MockPriceFetcher::new();
+    let mock = common::MockMarketDataSources::new();
 
     let asset_id = common::insert_asset(&db, "XFAKEFUND", "Test Fund", "fund", "EUR").await;
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
@@ -668,7 +668,7 @@ async fn test_nav_market_data_fails_when_fund_morningstar_code_is_missing() {
 #[tokio::test]
 async fn test_per_asset_history_created() {
     let db = common::setup_test_db().await;
-    let mock = common::MockPriceFetcher::new();
+    let mock = common::MockMarketDataSources::new();
 
     let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
@@ -703,7 +703,7 @@ async fn test_per_asset_history_created() {
 #[tokio::test]
 async fn test_per_asset_history_multiple_assets() {
     let db = common::setup_test_db().await;
-    let mock = common::MockPriceFetcher::new();
+    let mock = common::MockMarketDataSources::new();
 
     let asset_a = common::insert_asset(&db, "XFAKE1", "Asset A", "stock", "EUR").await;
     let asset_b = common::insert_asset(&db, "XFAKE2", "Asset B", "stock", "EUR").await;
@@ -813,7 +813,7 @@ async fn test_process_day_transactions_pure() {
 #[tokio::test]
 async fn test_lazy_rebuild_no_history_on_buy() {
     let db = common::setup_test_db().await;
-    let mock = common::MockPriceFetcher::new();
+    let mock = common::MockMarketDataSources::new();
 
     let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
@@ -854,7 +854,7 @@ async fn test_single_usd_asset_nav() {
     // Buy 10 shares @ $100 USD
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 100.0, 0.0).await;
 
-    let mut mock = common::MockPriceFetcher::new();
+    let mut mock = common::MockMarketDataSources::new();
     mock.historical_prices.insert(
         "XFAKEUSD".to_owned(),
         vec![
@@ -908,7 +908,7 @@ async fn test_mixed_currency_portfolio() {
     // Buy USD stock: 5 shares @ $200 USD
     common::insert_transaction(&db, usd_id, "2025-01-02", 5.0, 200.0, 0.0).await;
 
-    let mut mock = common::MockPriceFetcher::new();
+    let mut mock = common::MockMarketDataSources::new();
     mock.historical_prices
         .insert("XFAKEEUR".to_owned(), vec![("2025-01-02".to_owned(), 50.0)]);
     mock.historical_prices.insert(
@@ -958,7 +958,7 @@ async fn test_eur_only_unchanged() {
     let asset_id = common::insert_asset(&db, "XFAKE1", "EUR Stock", "stock", "EUR").await;
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
 
-    let mut mock = common::MockPriceFetcher::new();
+    let mut mock = common::MockMarketDataSources::new();
     mock.historical_prices.insert(
         "XFAKE1".to_owned(),
         vec![
@@ -997,7 +997,7 @@ async fn test_eur_only_unchanged() {
 #[tokio::test]
 async fn test_sell_reduces_holdings() {
     let db = common::setup_test_db().await;
-    let mock = common::MockPriceFetcher::new();
+    let mock = common::MockMarketDataSources::new();
 
     let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
@@ -1027,7 +1027,7 @@ async fn test_sell_reduces_holdings() {
 #[tokio::test]
 async fn test_sell_nav_unchanged_at_fair_value() {
     let db = common::setup_test_db().await;
-    let mock = common::MockPriceFetcher::new();
+    let mock = common::MockMarketDataSources::new();
 
     let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
@@ -1069,7 +1069,7 @@ async fn test_sell_nav_unchanged_at_fair_value() {
 #[tokio::test]
 async fn test_sell_preserves_nav_after_gain() {
     let db = common::setup_test_db().await;
-    let mock = common::MockPriceFetcher::new();
+    let mock = common::MockMarketDataSources::new();
 
     let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
@@ -1111,7 +1111,7 @@ async fn test_sell_preserves_nav_after_gain() {
 #[tokio::test]
 async fn test_sell_with_fees() {
     let db = common::setup_test_db().await;
-    let mock = common::MockPriceFetcher::new();
+    let mock = common::MockMarketDataSources::new();
 
     let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
@@ -1149,7 +1149,7 @@ async fn test_sell_with_fees() {
 #[tokio::test]
 async fn test_full_liquidation() {
     let db = common::setup_test_db().await;
-    let mock = common::MockPriceFetcher::new();
+    let mock = common::MockMarketDataSources::new();
 
     let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
@@ -1254,7 +1254,7 @@ async fn test_process_day_transactions_sell_pure() {
 #[tokio::test]
 async fn test_sell_redeems_shares() {
     let db = common::setup_test_db().await;
-    let mock = common::MockPriceFetcher::new();
+    let mock = common::MockMarketDataSources::new();
 
     let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
     // Buy 10 @ $50 = deposit 500, os = 5 (500/100)
@@ -1300,7 +1300,7 @@ async fn test_sell_redeems_shares() {
 #[tokio::test]
 async fn test_forward_split_doubles_holdings() {
     let db = common::setup_test_db().await;
-    let mock = common::MockPriceFetcher::new();
+    let mock = common::MockMarketDataSources::new();
 
     let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
     // Buy 10 shares at $100 on day 1
@@ -1348,7 +1348,7 @@ async fn test_forward_split_doubles_holdings() {
 #[tokio::test]
 async fn test_reverse_split_quarters_holdings() {
     let db = common::setup_test_db().await;
-    let mock = common::MockPriceFetcher::new();
+    let mock = common::MockMarketDataSources::new();
 
     let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
     // Buy 100 shares at $10
@@ -1392,7 +1392,7 @@ async fn test_reverse_split_quarters_holdings() {
 #[tokio::test]
 async fn test_split_mid_history_nav_continuity() {
     let db = common::setup_test_db().await;
-    let mock = common::MockPriceFetcher::new();
+    let mock = common::MockMarketDataSources::new();
 
     let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
     // Buy 10 shares at $50

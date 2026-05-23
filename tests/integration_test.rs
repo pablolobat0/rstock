@@ -10,7 +10,7 @@ use rstock::services::nav;
 #[tokio::test]
 async fn test_full_buy_rebuild_summary_flow() {
     let db = common::setup_test_db().await;
-    let mock = common::MockPriceFetcher::new();
+    let mock = common::MockMarketDataSources::new();
 
     let asset_id = common::insert_asset(&db, "XFAKE1", "Fake Corp", "stock", "EUR").await;
 
@@ -98,7 +98,7 @@ async fn test_full_buy_rebuild_summary_flow() {
 #[tokio::test]
 async fn test_incremental_rebuild_after_second_buy() {
     let db = common::setup_test_db().await;
-    let mock = common::MockPriceFetcher::new();
+    let mock = common::MockMarketDataSources::new();
 
     let asset_id = common::insert_asset(&db, "XFAKE1", "Fake Corp", "stock", "EUR").await;
 

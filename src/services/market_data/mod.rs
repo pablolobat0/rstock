@@ -1,19 +1,18 @@
+mod historical;
+mod individual_price;
+mod policy;
 pub mod sources;
 
-use anyhow::{bail, Context};
+use anyhow::bail;
 use chrono::NaiveDate;
 use sea_orm::DatabaseConnection;
 
-use crate::constants::DATE_FORMAT;
 use crate::db::repos::asset_repo;
 use crate::models::{
-    Asset, AssetClassification, AssetType, CorrelationMarketData, CorrelationMarketDataSeries,
-    FundData, IndividualPrice, IndividualPriceFallback, MarketDataValuation, StockInfo,
-    ValuationMarketData,
+    Asset, AssetClassification, CorrelationMarketData, CorrelationMarketDataSeries, FundData,
+    IndividualPrice, IndividualPriceFallback, MarketDataValuation, StockInfo, ValuationMarketData,
 };
 use crate::services::metrics;
-use crate::services::price::PriceFetcher;
-use crate::services::{historical_market_data, individual_price};
 
 pub use sources::{DefaultMarketDataSources, MarketDataSources, SourceObservation};
 
@@ -26,7 +25,7 @@ impl MarketData {
         Self { sources }
     }
 
-    pub async fn stock_price_history(
+    pub(crate) async fn stock_price_history(
         &self,
         ticker: &str,
         start: NaiveDate,
@@ -35,7 +34,7 @@ impl MarketData {
         self.sources.stock_price_history(ticker, start, end).await
     }
 
-    pub async fn fund_price_history(
+    pub(crate) async fn fund_price_history(
         &self,
         code: &str,
         start: NaiveDate,
@@ -81,10 +80,7 @@ impl MarketData {
         start_date: &str,
         end_date: &str,
     ) -> anyhow::Result<ValuationMarketData> {
-        historical_market_data::prepare_valuation_market_data(
-            db, assets, start_date, end_date, self,
-        )
-        .await
+        historical::prepare_valuation_market_data(db, assets, start_date, end_date, self).await
     }
 
     pub async fn get_required_asset_exchange_rates(
@@ -93,7 +89,7 @@ impl MarketData {
         assets: &[Asset],
         date: &str,
     ) -> anyhow::Result<std::collections::HashMap<i32, f64>> {
-        historical_market_data::get_required_asset_exchange_rates(db, assets, date).await
+        historical::get_required_asset_exchange_rates(db, assets, date).await
     }
 
     pub async fn get_required_asset_valuation_data(
@@ -102,7 +98,16 @@ impl MarketData {
         asset: &Asset,
         date: &str,
     ) -> anyhow::Result<MarketDataValuation> {
-        historical_market_data::get_required_asset_valuation_data(db, asset, date).await
+        historical::get_required_asset_valuation_data(db, asset, date).await
+    }
+
+    pub async fn get_asset_exchange_rate(
+        &self,
+        db: &DatabaseConnection,
+        asset: &Asset,
+        date: &str,
+    ) -> anyhow::Result<Option<f64>> {
+        historical::get_exchange_rate_for_asset(db, asset, date).await
     }
 
     pub async fn individual_price(
@@ -185,8 +190,7 @@ async fn correlation_series(
     end_date: &str,
 ) -> anyhow::Result<CorrelationMarketDataSeries> {
     let prices: crate::models::BaseCurrencyPriceSeries =
-        historical_market_data::get_base_currency_price_series(db, asset, start_date, end_date)
-            .await?;
+        historical::get_base_currency_price_series(db, asset, start_date, end_date).await?;
 
     Ok(CorrelationMarketDataSeries {
         asset_id: asset.id,
@@ -195,77 +199,10 @@ async fn correlation_series(
     })
 }
 
-#[async_trait::async_trait]
-impl PriceFetcher for MarketData {
-    async fn get_historical_prices(
-        &self,
-        ticker: &str,
-        start: &str,
-        end: &str,
-        asset_type: &AssetType,
-    ) -> anyhow::Result<Vec<(String, f64)>> {
-        let start_date = parse_date(start, "invalid start date")?;
-        let end_date = parse_date(end, "invalid end date")?;
-        let observations = match asset_type {
-            AssetType::Stock => {
-                self.stock_price_history(ticker, start_date, end_date)
-                    .await?
-            }
-            AssetType::Fund | AssetType::Etf => {
-                self.fund_price_history(ticker, start_date, end_date)
-                    .await?
-            }
-        };
-        Ok(format_observations(observations))
-    }
-
-    async fn get_historical_exchange_rates(
-        &self,
-        pair: &str,
-        start: &str,
-        end: &str,
-    ) -> anyhow::Result<Vec<(String, f64)>> {
-        let (from, to) = split_legacy_pair(pair)?;
-        let start_date = parse_date(start, "invalid start date")?;
-        let end_date = parse_date(end, "invalid end date")?;
-        let observations = self
-            .exchange_rate_history(from, to, start_date, end_date)
-            .await?;
-        Ok(format_observations(observations))
-    }
-
-    async fn get_stock_info(&self, ticker: &str) -> anyhow::Result<StockInfo> {
-        self.stock_info(ticker).await
-    }
-}
-
-fn parse_date(value: &str, context: &str) -> anyhow::Result<NaiveDate> {
-    NaiveDate::parse_from_str(value, DATE_FORMAT).context(context.to_owned())
-}
-
-fn split_legacy_pair(pair: &str) -> anyhow::Result<(&str, &str)> {
-    if pair.len() != 6 {
-        bail!("FX pair must contain two three-letter currencies: {pair}");
-    }
-    Ok((&pair[..3], &pair[3..]))
-}
-
 fn normalize_currency(currency: &str) -> anyhow::Result<String> {
     let normalized = currency.trim().to_ascii_uppercase();
     if normalized.len() != 3 || !normalized.chars().all(|ch| ch.is_ascii_alphabetic()) {
         bail!("currency must be a three-letter alphabetic code: {currency}");
     }
     Ok(normalized)
-}
-
-fn format_observations(observations: Vec<SourceObservation>) -> Vec<(String, f64)> {
-    observations
-        .into_iter()
-        .map(|observation| {
-            (
-                observation.date.format(DATE_FORMAT).to_string(),
-                observation.value,
-            )
-        })
-        .collect()
 }

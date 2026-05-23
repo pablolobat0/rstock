@@ -14,7 +14,7 @@
 * **Dates:** Internal/DB = `YYYY-MM-DD`. Display/CLI Input = `DD-MM-YYYY` (custom parser in `src/cli.rs`).
 
 ## System Behaviors
-* **Price Fetching:** `PriceFetcher` trait (`src/services/price.rs`). Stocks = Yahoo. Funds/ETFs = Python scripts via `uv run` in `scripts/` (override dir via `RSTOCK_SCRIPTS_DIR` env var). 
+* **Market Data:** Use the stateful `MarketData` module (`src/services/market_data/`). Yahoo and Morningstar source adapters are private implementation details behind `MarketDataSources`.
 * **Data Filling:** Forward-fill prices for weekends/holidays up to the minimum effective end date across all assets/FX.
 * **NAV Unitization:** Initial deposit sets NAV=100.0. Subsequent deposits issue shares at current NAV; sells redeem shares (`src/services/nav.rs`).
 * **Snapshots Invalidation:** Buy/sell transactions delete `portfolio_history` and `portfolio_asset_history` from the transaction date forward to trigger rebuilds.

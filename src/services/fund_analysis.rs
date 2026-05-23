@@ -10,12 +10,11 @@ use crate::constants::{
 };
 use crate::db::repos::{asset_repo, fund_holdings_snapshot_repo};
 use crate::models::{
-    AllocationEntry, AssetType, FundAnalysisResult, FundHolding, FundPeriodMetrics, HoldingChange,
+    AllocationEntry, FundAnalysisResult, FundHolding, FundPeriodMetrics, HoldingChange,
     HoldingChangeType,
 };
-use crate::services::market_data::MarketData;
+use crate::services::market_data::{MarketData, SourceObservation};
 use crate::services::metrics;
-use crate::services::price::PriceFetcher;
 
 pub async fn compute_fund_analysis(
     db: &DatabaseConnection,
@@ -30,11 +29,15 @@ pub async fn compute_fund_analysis(
 
     let (fund_data_result, prices_result) = tokio::join!(
         market_data.fund_data(ms_code, 200),
-        market_data.get_historical_prices(ms_code, "2000-01-01", &today_str, &AssetType::Fund),
+        market_data.fund_price_history(
+            ms_code,
+            NaiveDate::from_ymd_opt(2000, 1, 1).expect("literal date should be valid"),
+            today,
+        ),
     );
 
     let fund_data = fund_data_result?;
-    let fund_prices = prices_result?;
+    let fund_prices = format_source_observations(prices_result?);
 
     let fund_currency = fund_data.fund_currency.clone();
     let total_holdings = fund_data.total_holdings;
@@ -49,14 +52,12 @@ pub async fn compute_fund_analysis(
     let earliest_date = fund_prices
         .first()
         .map_or("2000-01-01", |(d, _)| d.as_str());
+    let benchmark_start =
+        NaiveDate::parse_from_str(earliest_date, DATE_FORMAT).context("invalid fund price date")?;
     let benchmark_prices = market_data
-        .get_historical_prices(
-            BENCHMARK_TICKER,
-            earliest_date,
-            &today_str,
-            &AssetType::Stock,
-        )
+        .stock_price_history(BENCHMARK_TICKER, benchmark_start, today)
         .await
+        .map(format_source_observations)
         .unwrap_or_default();
 
     let benchmark_returns = metrics::compute_log_returns(&benchmark_prices);
@@ -126,6 +127,13 @@ pub fn compute_fingerprint(holdings: &[FundHolding]) -> String {
         .map(|(name, weight)| serde_json::json!([name, weight]))
         .collect();
     serde_json::to_string(&compact).unwrap_or_default()
+}
+
+fn format_source_observations(observations: Vec<SourceObservation>) -> Vec<(String, f64)> {
+    observations
+        .into_iter()
+        .map(|observation| (format_date(observation.date), observation.value))
+        .collect()
 }
 
 pub fn compute_holding_diff(

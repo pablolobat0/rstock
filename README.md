@@ -6,13 +6,13 @@ A CLI portfolio tracker with NAV unitization, analytics, and terminal reporting.
 
 ## Overview
 
-rstock tracks your investment portfolio from the terminal. It records buy/sell transactions, dividends, and stock splits, fetches prices from Yahoo Finance and Morningstar-backed scripts, computes daily portfolio NAV using unitization, and renders portfolio and fund analysis directly in your terminal.
+rstock tracks your investment portfolio from the terminal. It records buy/sell transactions, dividends, and stock splits, fetches prices from Yahoo Finance and Morningstar, computes daily portfolio NAV using unitization, and renders portfolio and fund analysis directly in your terminal.
 
 ## Features
 
 - **Transaction recording** — Log buys, sells, dividends, and stock splits for stocks, ETFs, and funds
 - **NAV unitization** — Daily portfolio valuation using unit-based accounting (first deposit = NAV 100, subsequent deposits issue shares at previous day's NAV)
-- **Multi-source price fetching** — Stocks via Yahoo Finance (`yfinance-rs`), funds/ETFs via Morningstar-backed Python scripts
+- **Multi-source market data** — Stocks via Yahoo Finance (`yfinance-rs`), funds/ETFs via Morningstar
 - **Price caching** — Historical prices stored in SQLite with forward-fill for weekends/holidays
 - **Multi-currency support** — All portfolio values converted to EUR base currency with cached FX rates
 - **Performance tracking** — Portfolio and fund metrics including total return, CAGR, volatility, max drawdown, beta, Sharpe ratio, and Sortino ratio
@@ -29,7 +29,6 @@ rstock tracks your investment portfolio from the terminal. It records buy/sell t
 
 - **Rust** (edition 2021)
 - **SQLite** (bundled via `sqlx-sqlite`)
-- **Python 3.10+** and **[uv](https://github.com/astral-sh/uv)** — required for the Morningstar-backed fund/ETF scripts
 
 ## Installation
 
@@ -126,9 +125,9 @@ Periods: `30d`, `6m`, `1y` (default), `3y`, `5y`.
 
 Rolling correlation notes:
 - Takes two stock tickers as positional arguments
-- Fetches historical prices on demand through `PriceFetcher`
-- Does not persist fetched prices or FX rates in the local database
-- Computes over the trading-day series returned by the fetcher
+- Uses cache-first Base currency series prepared by `MarketData`
+- Preserves the distinction between tracked assets and benchmark data
+- Computes over aligned available trading-day series
 
 ### Monitor stocks
 
@@ -147,7 +146,7 @@ src/
 ├── cli/                # Clap CLI: root shortcuts + grouped commands
 ├── main.rs             # Entry point, command dispatch
 ├── constants.rs        # Centralized constants (dates, currency, metrics, thresholds)
-├── utils.rs            # Utility functions (scripts directory resolution)
+├── utils.rs            # Shared interactive helpers
 ├── lib.rs              # Public module exports
 ├── models/
 │   ├── asset.rs        # AssetType enum, AssetInfo, Asset, AssetPosition
@@ -161,12 +160,9 @@ src/
 │   ├── nav.rs          # NAV unitization engine
 │   ├── analytics.rs    # Portfolio analytics and correlation data
 │   ├── composition.rs  # Portfolio composition analysis
-│   ├── daily_prices.rs # Price caching with forward-fill
-│   ├── exchange_rates.rs # FX rate caching (EUR base)
-│   ├── price.rs        # PriceFetcher trait + Real/Mock implementations
+│   ├── market_data/    # Stateful market data module + private source adapters
 │   ├── metrics.rs      # Beta, Sharpe, Sortino, volatility, drawdown, CAGR, correlations
 │   ├── fund_analysis.rs# Deep-dive fund analysis and snapshot diffing
-│   ├── holdings.rs     # Fund/ETF holdings fetch helpers
 │   ├── monitor.rs      # Stock analysis with momentum indicators
 │   ├── import.rs       # Transaction CSV import
 │   └── export.rs       # Transaction CSV export
@@ -174,11 +170,6 @@ src/
 │   ├── mod.rs          # SQLite connection + auto-migration
 │   ├── entities/       # SeaORM generated entities
 │   └── repos/          # Repository layer (one per entity)
-scripts/
-├── get_fund_price.py          # Latest fund/ETF NAV
-├── get_fund_price_history.py  # Historical fund/ETF price / total-return series
-├── get_fund_data.py           # Fund metadata + holdings
-└── get_fund_holdings.py       # Fund/ETF underlying holdings
 migration/src/                 # SeaORM migrations
 tests/                         # Integration tests + common test utilities
 ```
@@ -187,7 +178,7 @@ tests/                         # Integration tests + common test utilities
 
 1. `src/cli` parses commands via clap derive macros
 2. `main.rs` dispatches to service functions
-3. Services fetch prices via `PriceFetcher`; portfolio and matrix flows cache them, while rolling correlation runs on fetched in-memory series only
+3. Services request valuation, Individual price, and correlation inputs through `MarketData`
 4. NAV engine computes daily snapshots using unitization
 5. `src/cli/display` renders tables, charts, and reports to the terminal
 
@@ -225,13 +216,7 @@ cargo test test_single_buy_initial_nav   # Run a single test by name
 cargo test -- --nocapture                # Show stdout/stderr output
 ```
 
-Tests use in-memory SQLite with migrations applied. The `PriceFetcher` trait enables mock-based testing without network calls. Use non-existent tickers (e.g. `XFAKE1`) to prevent real price lookups from overwriting test data.
-
-### Environment variables
-
-| Variable             | Description                                      |
-|----------------------|--------------------------------------------------|
-| `RSTOCK_SCRIPTS_DIR` | Override Python scripts directory lookup          |
+Tests use in-memory SQLite with migrations applied. `MockMarketDataSources` enables source-level testing without network calls. Use non-existent tickers (e.g. `XFAKE1`) to prevent real price lookups from interfering with test data.
 
 ## Documentation
 

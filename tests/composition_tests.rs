@@ -6,7 +6,7 @@ use sea_orm::{EntityTrait, Set};
 
 use common::{
     insert_daily_price, insert_portfolio_snapshot, insert_transaction, setup_test_db,
-    MockPriceFetcher,
+    MockMarketDataSources,
 };
 use rstock::db::entities::{asset, portfolio_asset_history};
 
@@ -128,7 +128,7 @@ async fn test_composition_direct_stocks_only() {
     insert_asset_snapshot(&db, "2025-01-02", id1, 10.0, 100.0, 1000.0).await;
     insert_asset_snapshot(&db, "2025-01-02", id2, 5.0, 200.0, 1000.0).await;
 
-    let mut fetcher = MockPriceFetcher::new();
+    let mut fetcher = MockMarketDataSources::new();
     fetcher
         .historical_prices
         .insert("XFAKE1".to_owned(), vec![("2025-01-02".to_owned(), 100.0)]);
@@ -186,7 +186,7 @@ async fn test_composition_unclassified_asset() {
     insert_portfolio_snapshot(&db, "2025-01-02", 100.0, 10.0).await;
     insert_asset_snapshot(&db, "2025-01-02", id1, 10.0, 100.0, 1000.0).await;
 
-    let mut fetcher = MockPriceFetcher::new();
+    let mut fetcher = MockMarketDataSources::new();
     fetcher
         .historical_prices
         .insert("XFAKE1".to_owned(), vec![("2025-01-02".to_owned(), 100.0)]);
@@ -207,7 +207,7 @@ async fn test_composition_unclassified_asset() {
 #[tokio::test]
 async fn test_composition_empty_portfolio() {
     let db = setup_test_db().await;
-    let fetcher = MockPriceFetcher::new();
+    let fetcher = MockMarketDataSources::new();
 
     let result = compute_composition(&db, &common::market_data(&fetcher))
         .await
@@ -238,7 +238,7 @@ async fn test_composition_failed_stock_info() {
     insert_portfolio_snapshot(&db, "2025-01-02", 100.0, 10.0).await;
     insert_asset_snapshot(&db, "2025-01-02", id1, 10.0, 100.0, 1000.0).await;
 
-    let mut fetcher = MockPriceFetcher::new();
+    let mut fetcher = MockMarketDataSources::new();
     fetcher
         .historical_prices
         .insert("XFAKE1".to_owned(), vec![("2025-01-02".to_owned(), 100.0)]);

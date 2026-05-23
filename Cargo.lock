@@ -2448,7 +2448,6 @@ dependencies = [
  "tabled",
  "tempfile",
  "textplots",
- "thiserror",
  "tokio",
  "tracing",
  "tracing-appender",

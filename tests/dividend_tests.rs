@@ -3,7 +3,7 @@ mod common;
 use chrono::NaiveDate;
 use common::{
     get_asset_snapshots, get_portfolio_snapshot, insert_asset, insert_daily_price,
-    insert_dividend_transaction, insert_transaction, MockPriceFetcher,
+    insert_dividend_transaction, insert_transaction, MockMarketDataSources,
 };
 use rstock::models::f64_to_cents;
 use rstock::services::nav;
@@ -27,7 +27,7 @@ async fn test_cash_dividend_increases_nav() {
     // Dividend of 50 total on day 2
     insert_dividend_transaction(&db, asset_id, "2025-01-03", 50.0, 0.0).await;
 
-    let market_data = common::market_data(&MockPriceFetcher::new());
+    let market_data = common::market_data(&MockMarketDataSources::new());
     let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
     let end = NaiveDate::from_ymd_opt(2025, 1, 3).unwrap();
     nav::rebuild_portfolio_history(&db, start, end, None, &market_data)
@@ -61,7 +61,7 @@ async fn test_dividend_with_fees() {
     // Dividend 50 with 10 in fees → net 40
     insert_dividend_transaction(&db, asset_id, "2025-01-03", 50.0, 10.0).await;
 
-    let market_data = common::market_data(&MockPriceFetcher::new());
+    let market_data = common::market_data(&MockMarketDataSources::new());
     let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
     let end = NaiveDate::from_ymd_opt(2025, 1, 3).unwrap();
     nav::rebuild_portfolio_history(&db, start, end, None, &market_data)
@@ -86,7 +86,7 @@ async fn test_dividend_does_not_change_holdings() {
 
     insert_dividend_transaction(&db, asset_id, "2025-01-03", 50.0, 0.0).await;
 
-    let market_data = common::market_data(&MockPriceFetcher::new());
+    let market_data = common::market_data(&MockMarketDataSources::new());
     let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
     let end = NaiveDate::from_ymd_opt(2025, 1, 3).unwrap();
     nav::rebuild_portfolio_history(&db, start, end, None, &market_data)
@@ -111,7 +111,7 @@ async fn test_incremental_rebuild_preserves_cash_balance() {
 
     insert_dividend_transaction(&db, asset_id, "2025-01-03", 50.0, 0.0).await;
 
-    let market_data = common::market_data(&MockPriceFetcher::new());
+    let market_data = common::market_data(&MockMarketDataSources::new());
 
     // Build up to day 2
     let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();

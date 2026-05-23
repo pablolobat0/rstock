@@ -17,7 +17,7 @@ use crate::models::{
 };
 use crate::services::market_data::MarketData;
 use crate::services::nav;
-use crate::services::{analytics, historical_market_data, metrics};
+use crate::services::{analytics, metrics};
 
 pub async fn get_portfolio(
     db: &DatabaseConnection,
@@ -393,10 +393,10 @@ async fn compute_asset_positions(
             if asset_model.currency == BASE_CURRENCY {
                 total_buy_cost_eur += tx_cost;
             } else {
-                let tx_rate =
-                    historical_market_data::get_exchange_rate_for_asset(db, asset_model, &t.date)
-                        .await?
-                        .unwrap_or(exchange_rate);
+                let tx_rate = market_data
+                    .get_asset_exchange_rate(db, asset_model, &t.date)
+                    .await?
+                    .unwrap_or(exchange_rate);
                 total_buy_cost_eur += tx_cost * tx_rate;
             }
         }
@@ -413,10 +413,10 @@ async fn compute_asset_positions(
             if asset_model.currency == BASE_CURRENCY {
                 dividends_received += div_amount;
             } else {
-                let tx_rate =
-                    historical_market_data::get_exchange_rate_for_asset(db, asset_model, &t.date)
-                        .await?
-                        .unwrap_or(exchange_rate);
+                let tx_rate = market_data
+                    .get_asset_exchange_rate(db, asset_model, &t.date)
+                    .await?
+                    .unwrap_or(exchange_rate);
                 dividends_received += div_amount * tx_rate;
             }
         }

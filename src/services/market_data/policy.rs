@@ -1,16 +1,12 @@
 use anyhow::Context;
 use chrono::{Datelike, NaiveDate, Weekday};
 
-use crate::constants::{BASE_CURRENCY, DATE_FORMAT};
+use crate::constants::DATE_FORMAT;
 use crate::models::{
     Asset, AssetType, MarketDataLimitation, MarketDataLimitationClassification, MarketDataSubject,
 };
 
 const STALE_COMPLETED_WEEKDAY_WARNING_THRESHOLD: u32 = 4;
-
-pub(crate) fn currency_pair(from: &str) -> String {
-    format!("{from}{BASE_CURRENCY}")
-}
 
 pub(crate) fn classify_asset_limitation(
     asset: &Asset,
