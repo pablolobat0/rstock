@@ -8,6 +8,7 @@ use crate::constants::display_date;
 use crate::models::{CorrelationMatrix, RollingCorrelationResult};
 
 use super::helpers::{color_for_value, format_eu, format_plain};
+use super::portfolio::format_market_data_limitation_warning;
 
 pub fn print_correlation_matrix(matrix: &CorrelationMatrix, period_label: &str) {
     if matrix.names.is_empty() {
@@ -79,6 +80,8 @@ pub fn print_correlation_matrix(matrix: &CorrelationMatrix, period_label: &str) 
             matrix.warnings.join(", ")
         );
     }
+
+    print_market_data_limitations(&matrix.market_data_limitations);
 }
 
 pub fn print_rolling_correlation(result: &RollingCorrelationResult) {
@@ -92,6 +95,7 @@ pub fn print_rolling_correlation(result: &RollingCorrelationResult) {
             "Not enough aligned data to compute {} rolling correlation.",
             result.window_label
         );
+        print_market_data_limitations(&result.market_data_limitations);
         return;
     }
 
@@ -147,4 +151,18 @@ pub fn print_rolling_correlation(result: &RollingCorrelationResult) {
     }
 
     println!("\n{table}");
+    print_market_data_limitations(&result.market_data_limitations);
+}
+
+fn print_market_data_limitations(limitations: &[crate::models::MarketDataLimitation]) {
+    if limitations.is_empty() {
+        return;
+    }
+
+    println!();
+    println!("Market data limitations:");
+    for limitation in limitations {
+        let warning = format_market_data_limitation_warning(limitation);
+        println!("- {warning}");
+    }
 }

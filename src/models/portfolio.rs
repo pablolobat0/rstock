@@ -82,6 +82,7 @@ pub struct CorrelationMatrix {
     pub matrix: Vec<Vec<Option<f64>>>,
     /// Names with insufficient data for the requested period
     pub warnings: Vec<String>,
+    pub market_data_limitations: Vec<MarketDataLimitation>,
 }
 
 pub struct RollingCorrelationResult {
@@ -96,6 +97,7 @@ pub struct RollingCorrelationResult {
     pub min: Option<f64>,
     pub max: Option<f64>,
     pub average: Option<f64>,
+    pub market_data_limitations: Vec<MarketDataLimitation>,
 }
 
 // --- Holdings report models ---

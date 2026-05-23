@@ -296,7 +296,7 @@ pub fn print_portfolio(result: &PortfolioResult) {
     }
 }
 
-fn format_market_data_limitation_warning(limitation: &MarketDataLimitation) -> String {
+pub(super) fn format_market_data_limitation_warning(limitation: &MarketDataLimitation) -> String {
     let latest_available_date = display_date(&format_date(limitation.latest_available_date));
     let requested_end_date = display_date(&format_date(limitation.requested_end_date));
 

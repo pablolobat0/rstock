@@ -3,16 +3,21 @@ use std::collections::HashMap;
 use sea_orm::DatabaseConnection;
 
 use crate::constants::{MIN_DATA_POINTS, ZERO_RETURN_THRESHOLD};
-use crate::db::repos::{
-    asset_repo, daily_price_repo, portfolio_asset_history_repo, portfolio_history_repo,
-};
+use crate::db::repos::{asset_repo, portfolio_asset_history_repo, portfolio_history_repo};
 use crate::models::{
-    Asset, AssetClassification, CorrelationMatrix, PeriodMetrics, PortfolioSnapshot,
+    Asset, CorrelationMatrix, MarketDataLimitation, PeriodMetrics, PortfolioSnapshot,
     RollingCorrelationResult,
 };
 use crate::services::market_data::MarketData;
-use crate::services::price::PriceFetcher;
-use crate::services::{historical_market_data, metrics};
+use crate::services::metrics;
+
+pub struct PeriodMetricsResult {
+    pub ytd: Option<PeriodMetrics>,
+    pub one_year: Option<PeriodMetrics>,
+    pub three_year: Option<PeriodMetrics>,
+    pub five_year: Option<PeriodMetrics>,
+    pub market_data_limitations: Vec<MarketDataLimitation>,
+}
 
 pub async fn compute_correlation_data(
     db: &DatabaseConnection,
@@ -69,6 +74,7 @@ pub async fn compute_correlation_data(
         names,
         matrix,
         warnings,
+        market_data_limitations: correlation_market_data.limitations,
     })
 }
 
@@ -79,7 +85,7 @@ pub async fn compute_rolling_correlation_data(
     identifier_a: &str,
     identifier_b: &str,
     period_label: &str,
-    price_fetcher: &dyn PriceFetcher,
+    market_data: &MarketData,
 ) -> anyhow::Result<RollingCorrelationResult> {
     if identifier_a == identifier_b {
         anyhow::bail!("tracked asset identifiers must be different");
@@ -88,20 +94,16 @@ pub async fn compute_rolling_correlation_data(
     let left_asset = find_tracked_asset(db, identifier_a).await?;
     let right_asset = find_tracked_asset(db, identifier_b).await?;
 
-    let left_prices = historical_market_data::fetch_direct_base_currency_price_series(
-        &left_asset,
-        start_date,
-        end_date,
-        price_fetcher,
-    )
-    .await?;
-    let right_prices = historical_market_data::fetch_direct_base_currency_price_series(
-        &right_asset,
-        start_date,
-        end_date,
-        price_fetcher,
-    )
-    .await?;
+    let (series, market_data_limitations) = market_data
+        .tracked_correlation_market_data(
+            db,
+            vec![left_asset.clone(), right_asset.clone()],
+            start_date,
+            end_date,
+        )
+        .await?;
+    let left_prices = series_prices(&series, left_asset.id)?;
+    let right_prices = series_prices(&series, right_asset.id)?;
 
     let left_returns = metrics::compute_log_returns(&left_prices);
     let right_returns = metrics::compute_log_returns(&right_prices);
@@ -124,6 +126,7 @@ pub async fn compute_rolling_correlation_data(
         min,
         max,
         average,
+        market_data_limitations,
     })
 }
 
@@ -135,13 +138,8 @@ pub async fn compute_all_period_metrics(
     one_year_date: &str,
     three_year_date: &str,
     five_year_date: &str,
-    price_fetcher: &dyn PriceFetcher,
-) -> anyhow::Result<(
-    Option<PeriodMetrics>,
-    Option<PeriodMetrics>,
-    Option<PeriodMetrics>,
-    Option<PeriodMetrics>,
-)> {
+    market_data: &MarketData,
+) -> anyhow::Result<PeriodMetricsResult> {
     let widest_start = five_year_date
         .min(three_year_date)
         .min(one_year_date)
@@ -150,22 +148,21 @@ pub async fn compute_all_period_metrics(
     let all_snapshots =
         portfolio_history_repo::find_between(db, widest_start, snapshot_date).await?;
     if all_snapshots.len() < 2 {
-        return Ok((None, None, None, None));
+        return Ok(PeriodMetricsResult {
+            ytd: None,
+            one_year: None,
+            three_year: None,
+            five_year: None,
+            market_data_limitations: Vec::new(),
+        });
     }
 
-    let benchmark = get_or_create_benchmark_asset(db).await?;
-    historical_market_data::prepare_benchmark_market_data(
-        db,
-        &benchmark,
-        widest_start,
-        snapshot_date,
-        price_fetcher,
-    )
-    .await?;
-    let benchmark_prices =
-        daily_price_repo::find_prices_between(db, benchmark.id, widest_start, snapshot_date)
-            .await?;
-    let benchmark_map: HashMap<&str, f64> = benchmark_prices
+    let benchmark_market_data = market_data
+        .correlation_market_data(db, Vec::new(), widest_start, snapshot_date)
+        .await?;
+    let benchmark_map: HashMap<&str, f64> = benchmark_market_data
+        .benchmark_series
+        .prices
         .iter()
         .map(|(d, p)| (d.as_str(), *p))
         .collect();
@@ -210,22 +207,24 @@ pub async fn compute_all_period_metrics(
         }));
     }
 
-    Ok((
-        results[0].take(),
-        results[1].take(),
-        results[2].take(),
-        results[3].take(),
-    ))
+    Ok(PeriodMetricsResult {
+        ytd: results[0].take(),
+        one_year: results[1].take(),
+        three_year: results[2].take(),
+        five_year: results[3].take(),
+        market_data_limitations: benchmark_market_data.limitations,
+    })
 }
 
-async fn get_or_create_benchmark_asset(db: &DatabaseConnection) -> anyhow::Result<Asset> {
-    let info = metrics::benchmark_asset_info();
-    if let Some(asset) = asset_repo::find_by_ticker(db, &info.ticker).await? {
-        return Ok(asset);
-    }
-
-    let id = asset_repo::create(db, &info, &AssetClassification::default(), None).await?;
-    Ok(metrics::benchmark_asset(id))
+fn series_prices(
+    series: &[crate::models::CorrelationMarketDataSeries],
+    asset_id: i32,
+) -> anyhow::Result<crate::models::BaseCurrencyPriceSeries> {
+    series
+        .iter()
+        .find(|series| series.asset_id == asset_id)
+        .map(|series| series.prices.clone())
+        .ok_or_else(|| anyhow::anyhow!("missing correlation market data for asset {asset_id}"))
 }
 
 fn filter_trading_days(
