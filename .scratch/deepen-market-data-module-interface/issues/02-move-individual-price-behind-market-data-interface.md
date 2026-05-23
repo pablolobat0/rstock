@@ -1,6 +1,6 @@
 # Move Individual price behind market data Interface
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

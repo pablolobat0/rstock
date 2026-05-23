@@ -6,10 +6,11 @@ use sea_orm::DatabaseConnection;
 
 use crate::constants::DATE_FORMAT;
 use crate::models::{
-    Asset, AssetType, FundData, MarketDataValuation, StockInfo, ValuationMarketData,
+    Asset, AssetType, FundData, IndividualPrice, IndividualPriceFallback, MarketDataValuation,
+    StockInfo, ValuationMarketData,
 };
-use crate::services::historical_market_data;
 use crate::services::price::PriceFetcher;
+use crate::services::{historical_market_data, individual_price};
 
 pub use sources::{DefaultMarketDataSources, MarketDataSources, SourceObservation};
 
@@ -99,6 +100,15 @@ impl MarketData {
         date: &str,
     ) -> anyhow::Result<MarketDataValuation> {
         historical_market_data::get_required_asset_valuation_data(db, asset, date).await
+    }
+
+    pub async fn individual_price(
+        &self,
+        db: &DatabaseConnection,
+        asset: &Asset,
+        fallback: IndividualPriceFallback,
+    ) -> anyhow::Result<IndividualPrice> {
+        individual_price::get_individual_price(db, asset, fallback, self).await
     }
 }
 

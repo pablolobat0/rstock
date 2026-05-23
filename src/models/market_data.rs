@@ -23,7 +23,14 @@ pub struct MarketDataValuation {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct AssetDisplayMarketData {
+pub struct IndividualPriceFallback {
+    pub native_price: f64,
+    pub price_date: String,
+    pub fx_rate: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct IndividualPrice {
     pub native_price: f64,
     pub price_date: String,
     pub fx_rate: f64,

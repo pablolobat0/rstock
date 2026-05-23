@@ -4,9 +4,11 @@ use chrono::{Duration, Local, NaiveDate};
 use rstock::constants::{format_date, BENCHMARK_CURRENCY, BENCHMARK_NAME, BENCHMARK_TICKER};
 use rstock::db::entities::asset;
 use rstock::db::repos::{daily_price_repo, exchange_rate_repo};
-use rstock::models::{Asset, MarketDataLimitationClassification, MarketDataSubject};
+use rstock::models::{
+    Asset, IndividualPriceFallback, MarketDataLimitationClassification, MarketDataSubject,
+};
+use rstock::services::historical_market_data;
 use rstock::services::metrics;
-use rstock::services::{historical_market_data, individual_price};
 use sea_orm::EntityTrait;
 
 async fn make_asset(
@@ -531,7 +533,7 @@ async fn test_required_asset_exchange_rate_fails_when_rate_is_missing() {
 }
 
 #[tokio::test]
-async fn test_asset_display_market_data_uses_non_persisted_live_stock_and_fx_quotes() {
+async fn test_individual_price_uses_non_persisted_live_stock_and_fx_quotes() {
     let db = common::setup_test_db().await;
     let mut mock = common::MockPriceFetcher::new();
 
@@ -543,16 +545,18 @@ async fn test_asset_display_market_data_uses_non_persisted_live_stock_and_fx_quo
     mock.exchange_rates
         .insert("USDEUR".to_owned(), vec![(today_str.clone(), 0.91)]);
 
-    let display_data = individual_price::get_asset_display_market_data(
-        &db,
-        &asset,
-        100.0,
-        "2025-01-02",
-        0.90,
-        &mock,
-    )
-    .await
-    .unwrap();
+    let display_data = common::market_data(&mock)
+        .individual_price(
+            &db,
+            &asset,
+            IndividualPriceFallback {
+                native_price: 100.0,
+                price_date: "2025-01-02".to_owned(),
+                fx_rate: 0.90,
+            },
+        )
+        .await
+        .unwrap();
 
     assert_eq!(display_data.native_price, 101.0);
     assert_eq!(display_data.price_date, today_str);
@@ -573,7 +577,7 @@ async fn test_asset_display_market_data_uses_non_persisted_live_stock_and_fx_quo
 }
 
 #[tokio::test]
-async fn test_asset_display_market_data_does_not_use_live_quotes_for_funds() {
+async fn test_individual_price_does_not_use_live_quotes_for_funds() {
     let db = common::setup_test_db().await;
     let mut mock = common::MockPriceFetcher::new();
 
@@ -584,16 +588,18 @@ async fn test_asset_display_market_data_does_not_use_live_quotes_for_funds() {
     mock.historical_prices
         .insert("FUND1".to_owned(), vec![(format_date(today), 120.0)]);
 
-    let display_data = individual_price::get_asset_display_market_data(
-        &db,
-        &asset,
-        95.0,
-        "2025-01-02",
-        1.0,
-        &mock,
-    )
-    .await
-    .unwrap();
+    let display_data = common::market_data(&mock)
+        .individual_price(
+            &db,
+            &asset,
+            IndividualPriceFallback {
+                native_price: 95.0,
+                price_date: "2025-01-02".to_owned(),
+                fx_rate: 1.0,
+            },
+        )
+        .await
+        .unwrap();
 
     assert_eq!(display_data.native_price, 100.0);
     assert_eq!(display_data.price_date, yesterday_str);
@@ -601,7 +607,7 @@ async fn test_asset_display_market_data_does_not_use_live_quotes_for_funds() {
 }
 
 #[tokio::test]
-async fn test_asset_display_market_data_combines_live_stock_with_stale_cached_fx_limitation() {
+async fn test_individual_price_combines_live_stock_with_stale_cached_fx_limitation() {
     let db = common::setup_test_db().await;
     let mut mock = common::MockPriceFetcher::new();
 
@@ -613,16 +619,18 @@ async fn test_asset_display_market_data_combines_live_stock_with_stale_cached_fx
         .insert("XFAKEUSD".to_owned(), vec![(format_date(today), 101.0)]);
     common::insert_exchange_rate(&db, "USD", "EUR", &format_date(stale_fx_date), 0.89).await;
 
-    let display_data = individual_price::get_asset_display_market_data(
-        &db,
-        &asset,
-        100.0,
-        "2025-01-02",
-        0.90,
-        &mock,
-    )
-    .await
-    .unwrap();
+    let display_data = common::market_data(&mock)
+        .individual_price(
+            &db,
+            &asset,
+            IndividualPriceFallback {
+                native_price: 100.0,
+                price_date: "2025-01-02".to_owned(),
+                fx_rate: 0.90,
+            },
+        )
+        .await
+        .unwrap();
 
     assert_eq!(display_data.native_price, 101.0);
     assert_eq!(display_data.fx_rate, 0.89);

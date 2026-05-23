@@ -12,13 +12,12 @@ use crate::db::repos::{
     asset_repo, portfolio_asset_history_repo, portfolio_history_repo, transaction_repo,
 };
 use crate::models::{
-    cents_to_f64, AssetPosition, MarketDataLimitation, PortfolioResult, PortfolioSnapshot,
-    Transaction,
+    cents_to_f64, AssetPosition, IndividualPriceFallback, MarketDataLimitation, PortfolioResult,
+    PortfolioSnapshot, Transaction,
 };
 use crate::services::market_data::MarketData;
 use crate::services::nav;
-use crate::services::price::PriceFetcher;
-use crate::services::{analytics, historical_market_data, individual_price, metrics};
+use crate::services::{analytics, historical_market_data, metrics};
 
 pub async fn get_portfolio(
     db: &DatabaseConnection,
@@ -330,7 +329,7 @@ async fn calc_return(
 async fn compute_asset_positions(
     db: &DatabaseConnection,
     snapshot_date: &str,
-    price_fetcher: &dyn PriceFetcher,
+    market_data: &MarketData,
 ) -> anyhow::Result<Vec<AssetPosition>> {
     let asset_snapshots = portfolio_asset_history_repo::find_by_date(db, snapshot_date).await?;
     if asset_snapshots.is_empty() {
@@ -352,16 +351,18 @@ async fn compute_asset_positions(
             continue;
         }
 
-        let display_market_data = individual_price::get_asset_display_market_data(
-            db,
-            asset_model,
-            snap.closing_price,
-            &snap.date,
-            snap.exchange_rate,
-            price_fetcher,
-        )
-        .await?;
-        let exchange_rate = display_market_data.fx_rate;
+        let individual_price = market_data
+            .individual_price(
+                db,
+                asset_model,
+                IndividualPriceFallback {
+                    native_price: snap.closing_price,
+                    price_date: snap.date.clone(),
+                    fx_rate: snap.exchange_rate,
+                },
+            )
+            .await?;
+        let exchange_rate = individual_price.fx_rate;
 
         let transactions = transaction_repo::find_by_asset_id(db, snap.asset_id).await?;
 
@@ -406,8 +407,8 @@ async fn compute_asset_positions(
             }
         }
 
-        let current_price = display_market_data.native_price;
-        let price_date = display_market_data.price_date;
+        let current_price = individual_price.native_price;
+        let price_date = individual_price.price_date;
 
         let current_value = snap.quantity * current_price * exchange_rate;
         let total_invested_for_asset = net_qty * avg_cost;
@@ -436,7 +437,7 @@ async fn compute_asset_positions(
             dividends_received,
             gain_loss,
             gain_loss_pct,
-            market_data_limitations: display_market_data.limitations,
+            market_data_limitations: individual_price.limitations,
         });
     }
 

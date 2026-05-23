@@ -3,7 +3,7 @@ mod common;
 use chrono::Duration;
 use rstock::constants::format_date;
 use rstock::db::repos::asset_repo;
-use rstock::services::individual_price;
+use rstock::models::IndividualPriceFallback;
 
 fn today_string() -> String {
     format_date(chrono::Local::now().date_naive())
@@ -30,16 +30,18 @@ async fn test_stock_display_uses_live_quote_without_persisting_it() {
         .historical_prices
         .insert("XFAKES1".to_owned(), vec![(today_string(), 125.0)]);
 
-    let result = individual_price::get_asset_display_market_data(
-        &db,
-        &asset,
-        90.0,
-        &cached_date,
-        1.0,
-        &fetcher,
-    )
-    .await
-    .unwrap();
+    let result = common::market_data(&fetcher)
+        .individual_price(
+            &db,
+            &asset,
+            IndividualPriceFallback {
+                native_price: 90.0,
+                price_date: cached_date.clone(),
+                fx_rate: 1.0,
+            },
+        )
+        .await
+        .unwrap();
 
     assert!((result.native_price - 125.0).abs() < 0.01);
     assert_eq!(result.price_date, today_string());
@@ -63,16 +65,18 @@ async fn test_display_uses_live_fx_quote_for_non_base_currency_asset() {
         .exchange_rates
         .insert("USDEUR".to_owned(), vec![(today_string(), 0.90)]);
 
-    let result = individual_price::get_asset_display_market_data(
-        &db,
-        &asset,
-        90.0,
-        &cached_date,
-        0.70,
-        &fetcher,
-    )
-    .await
-    .unwrap();
+    let result = common::market_data(&fetcher)
+        .individual_price(
+            &db,
+            &asset,
+            IndividualPriceFallback {
+                native_price: 90.0,
+                price_date: cached_date.clone(),
+                fx_rate: 0.70,
+            },
+        )
+        .await
+        .unwrap();
 
     assert!((result.native_price - 100.0).abs() < 0.01);
     assert!((result.fx_rate - 0.90).abs() < 0.01);
@@ -96,16 +100,18 @@ async fn test_fund_display_does_not_use_live_quote() {
         .historical_prices
         .insert("F000FAKE".to_owned(), vec![(today_string(), 125.0)]);
 
-    let result = individual_price::get_asset_display_market_data(
-        &db,
-        &asset,
-        90.0,
-        &cached_date,
-        1.0,
-        &fetcher,
-    )
-    .await
-    .unwrap();
+    let result = common::market_data(&fetcher)
+        .individual_price(
+            &db,
+            &asset,
+            IndividualPriceFallback {
+                native_price: 90.0,
+                price_date: cached_date.clone(),
+                fx_rate: 1.0,
+            },
+        )
+        .await
+        .unwrap();
 
     assert!((result.native_price - 100.0).abs() < 0.01);
     assert_eq!(result.price_date, cached_date);
@@ -122,16 +128,18 @@ async fn test_snapshot_fallback_preserves_display_when_current_data_is_missing()
         .unwrap()
         .unwrap();
 
-    let result = individual_price::get_asset_display_market_data(
-        &db,
-        &asset,
-        88.0,
-        fallback_date,
-        0.77,
-        &common::MockPriceFetcher::new(),
-    )
-    .await
-    .unwrap();
+    let result = common::market_data(&common::MockPriceFetcher::new())
+        .individual_price(
+            &db,
+            &asset,
+            IndividualPriceFallback {
+                native_price: 88.0,
+                price_date: fallback_date.to_owned(),
+                fx_rate: 0.77,
+            },
+        )
+        .await
+        .unwrap();
 
     assert!((result.native_price - 88.0).abs() < 0.01);
     assert_eq!(result.price_date, fallback_date);
@@ -155,16 +163,18 @@ async fn test_live_stock_with_stale_cached_fx_returns_actionable_limitation() {
         .historical_prices
         .insert("XFAKES4".to_owned(), vec![(today_string(), 120.0)]);
 
-    let result = individual_price::get_asset_display_market_data(
-        &db,
-        &asset,
-        90.0,
-        &stale_fx_date,
-        0.70,
-        &fetcher,
-    )
-    .await
-    .unwrap();
+    let result = common::market_data(&fetcher)
+        .individual_price(
+            &db,
+            &asset,
+            IndividualPriceFallback {
+                native_price: 90.0,
+                price_date: stale_fx_date.clone(),
+                fx_rate: 0.70,
+            },
+        )
+        .await
+        .unwrap();
 
     assert!((result.native_price - 120.0).abs() < 0.01);
     assert_eq!(result.limitations.len(), 1);
