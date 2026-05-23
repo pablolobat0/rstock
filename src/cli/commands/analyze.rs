@@ -5,7 +5,6 @@ use crate::constants::{
 };
 use crate::services;
 use crate::services::market_data::MarketData;
-use crate::services::price::PriceFetcher;
 
 use super::super::display;
 use super::super::CorrelationPeriod;
@@ -45,7 +44,7 @@ pub async fn correlation_matrix(
 
 pub async fn rolling_correlation(
     db: &DatabaseConnection,
-    fetcher: &dyn PriceFetcher,
+    market_data: &MarketData,
     identifier_a: String,
     identifier_b: String,
     period: CorrelationPeriod,
@@ -59,7 +58,7 @@ pub async fn rolling_correlation(
         &identifier_a,
         &identifier_b,
         period_label,
-        fetcher,
+        market_data,
     )
     .await?;
 

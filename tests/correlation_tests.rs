@@ -2,12 +2,14 @@ mod common;
 
 use common::{
     insert_asset, insert_daily_price, insert_etf_asset, insert_exchange_rate, insert_fund_asset,
-    insert_transaction, setup_test_db, MockPriceFetcher,
+    insert_portfolio_snapshot, insert_transaction, setup_test_db, MockPriceFetcher,
 };
 use rstock::constants::BENCHMARK_TICKER;
 use rstock::db::repos::asset_repo;
-use rstock::models::StockInfo;
-use rstock::services::analytics::{compute_correlation_data, compute_rolling_correlation_data};
+use rstock::models::{MarketDataSubject, StockInfo};
+use rstock::services::analytics::{
+    compute_all_period_metrics, compute_correlation_data, compute_rolling_correlation_data,
+};
 use rstock::services::metrics::{
     align_return_series_with_dates, align_return_series_with_dates_unfiltered,
     compute_rolling_correlation, summarize_rolling_correlation,
@@ -330,6 +332,39 @@ async fn test_insufficient_data_produces_warning() {
     );
 }
 
+#[tokio::test]
+async fn test_correlation_matrix_carries_market_data_limitations() {
+    let db = setup_test_db().await;
+    let mut fetcher = MockPriceFetcher::new();
+    seed_benchmark_market_data(&mut fetcher, 25);
+
+    let id_a = insert_asset(&db, "XFAKE1", "Fake A", "stock", "EUR").await;
+    seed_source_prices(&mut fetcher, "XFAKE1", 100.0, 25);
+    insert_transaction(&db, id_a, "2025-01-01", 1.0, 100.0, 0.0).await;
+
+    let start = chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
+    let end = chrono::NaiveDate::from_ymd_opt(2025, 1, 25).unwrap();
+    rebuild_portfolio_history(&db, start, end, None, &common::market_data(&fetcher))
+        .await
+        .unwrap();
+
+    let matrix = compute_correlation_data(
+        &db,
+        "2025-01-01",
+        "2025-02-10",
+        &common::market_data(&fetcher),
+    )
+    .await
+    .unwrap();
+
+    assert!(matrix.market_data_limitations.iter().any(|limitation| {
+        matches!(
+            &limitation.subject,
+            MarketDataSubject::Asset { ticker, .. } if ticker == "XFAKE1"
+        )
+    }));
+}
+
 #[test]
 fn test_align_return_series_with_dates_sorts_chronologically() {
     let a = std::collections::HashMap::from([
@@ -493,6 +528,70 @@ async fn test_rolling_correlation_for_pair() {
     assert_eq!(result.requested_end_date, "2025-04-30");
     assert!(!result.points.is_empty());
     assert!(result.latest.is_some());
+}
+
+#[tokio::test]
+async fn test_rolling_correlation_carries_market_data_limitations() {
+    let db = setup_test_db().await;
+    let mut fetcher = MockPriceFetcher::new();
+    insert_asset(&db, "XFAKE1", "Fake A", "stock", "EUR").await;
+    insert_asset(&db, "XFAKE2", "Fake B", "stock", "EUR").await;
+    seed_source_prices(&mut fetcher, "XFAKE1", 100.0, 120);
+    seed_source_prices(&mut fetcher, "XFAKE2", 50.0, 120);
+
+    let result = compute_rolling_correlation_data(
+        &db,
+        "2025-01-01",
+        "2025-05-30",
+        "XFAKE1",
+        "XFAKE2",
+        "1Y",
+        &common::market_data(&fetcher),
+    )
+    .await
+    .unwrap();
+
+    assert!(!result.points.is_empty());
+    assert!(result.market_data_limitations.iter().any(|limitation| {
+        matches!(
+            &limitation.subject,
+            MarketDataSubject::Asset { ticker, .. } if ticker == "XFAKE1"
+        )
+    }));
+}
+
+#[tokio::test]
+async fn test_period_metrics_carry_benchmark_market_data_limitations() {
+    let db = setup_test_db().await;
+    let mut fetcher = MockPriceFetcher::new();
+    seed_benchmark_market_data(&mut fetcher, 25);
+
+    for i in 0..25 {
+        let date = (chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap()
+            + chrono::Duration::days(i))
+        .format("%Y-%m-%d")
+        .to_string();
+        insert_portfolio_snapshot(&db, &date, 100.0 + i as f64, 1.0).await;
+    }
+
+    let result = compute_all_period_metrics(
+        &db,
+        "2025-02-10",
+        "2025-01-01",
+        "2025-01-01",
+        "2025-01-01",
+        "2025-01-01",
+        &common::market_data(&fetcher),
+    )
+    .await
+    .unwrap();
+
+    assert!(result.market_data_limitations.iter().any(|limitation| {
+        matches!(
+            &limitation.subject,
+            MarketDataSubject::Asset { ticker, .. } if ticker == BENCHMARK_TICKER
+        )
+    }));
 }
 
 #[tokio::test]

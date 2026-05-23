@@ -144,6 +144,28 @@ impl MarketData {
             limitations: prepared.limitations,
         })
     }
+
+    pub async fn tracked_correlation_market_data(
+        &self,
+        db: &DatabaseConnection,
+        tracked_assets: Vec<Asset>,
+        start_date: &str,
+        end_date: &str,
+    ) -> anyhow::Result<(
+        Vec<CorrelationMarketDataSeries>,
+        Vec<crate::models::MarketDataLimitation>,
+    )> {
+        let prepared = self
+            .prepare_valuation_market_data(db, &tracked_assets, start_date, end_date)
+            .await?;
+
+        let mut tracked_asset_series = Vec::with_capacity(tracked_assets.len());
+        for asset in tracked_assets {
+            tracked_asset_series.push(correlation_series(db, &asset, start_date, end_date).await?);
+        }
+
+        Ok((tracked_asset_series, prepared.limitations))
+    }
 }
 
 async fn get_or_create_benchmark_asset(db: &DatabaseConnection) -> anyhow::Result<Asset> {

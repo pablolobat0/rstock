@@ -75,17 +75,16 @@ pub async fn get_portfolio(
     )
     .await?;
 
-    let (ytd_metrics, one_year_metrics, three_year_metrics, five_year_metrics) =
-        analytics::compute_all_period_metrics(
-            db,
-            &snapshot_date,
-            &ytd_date,
-            &one_year_date,
-            &three_year_date,
-            &five_year_date,
-            market_data,
-        )
-        .await?;
+    let period_metrics = analytics::compute_all_period_metrics(
+        db,
+        &snapshot_date,
+        &ytd_date,
+        &one_year_date,
+        &three_year_date,
+        &five_year_date,
+        market_data,
+    )
+    .await?;
 
     let rows = compute_asset_positions(db, &snapshot_date, market_data).await?;
 
@@ -96,7 +95,11 @@ pub async fn get_portfolio(
         total_gain_loss,
         total_gain_loss_pct,
     ) = compute_non_monetary_totals(&rows);
-    let market_data_limitations = collect_market_data_limitations(&rows);
+    let mut market_data_limitations = collect_market_data_limitations(&rows);
+    extend_unique_limitations(
+        &mut market_data_limitations,
+        period_metrics.market_data_limitations.clone(),
+    );
 
     Ok(PortfolioResult {
         rows,
@@ -114,10 +117,10 @@ pub async fn get_portfolio(
         one_year_return,
         three_year_return,
         five_year_return,
-        ytd_metrics,
-        one_year_metrics,
-        three_year_metrics,
-        five_year_metrics,
+        ytd_metrics: period_metrics.ytd,
+        one_year_metrics: period_metrics.one_year,
+        three_year_metrics: period_metrics.three_year,
+        five_year_metrics: period_metrics.five_year,
         market_data_limitations,
     })
 }
@@ -249,6 +252,17 @@ fn collect_market_data_limitations(rows: &[AssetPosition]) -> Vec<MarketDataLimi
     }
 
     limitations
+}
+
+fn extend_unique_limitations(
+    limitations: &mut Vec<MarketDataLimitation>,
+    additional: Vec<MarketDataLimitation>,
+) {
+    for limitation in additional {
+        if !limitations.contains(&limitation) {
+            limitations.push(limitation);
+        }
+    }
 }
 
 fn compute_non_monetary_totals(rows: &[AssetPosition]) -> (f64, f64, f64, f64, f64) {

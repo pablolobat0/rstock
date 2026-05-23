@@ -1,14 +1,13 @@
 mod common;
 
 use chrono::{Duration, Local, NaiveDate};
-use rstock::constants::{format_date, BENCHMARK_CURRENCY, BENCHMARK_NAME, BENCHMARK_TICKER};
+use rstock::constants::{format_date, BENCHMARK_NAME, BENCHMARK_TICKER};
 use rstock::db::entities::asset;
 use rstock::db::repos::{daily_price_repo, exchange_rate_repo};
 use rstock::models::{
     Asset, IndividualPriceFallback, MarketDataLimitationClassification, MarketDataSubject,
 };
 use rstock::services::historical_market_data;
-use rstock::services::metrics;
 use sea_orm::EntityTrait;
 
 async fn make_asset(
@@ -47,18 +46,6 @@ fn date(year: i32, month: u32, day: u32) -> NaiveDate {
     NaiveDate::from_ymd_opt(year, month, day).unwrap()
 }
 
-async fn make_benchmark_asset(db: &sea_orm::DatabaseConnection) -> Asset {
-    let id = common::insert_asset(
-        db,
-        BENCHMARK_TICKER,
-        BENCHMARK_NAME,
-        "stock",
-        BENCHMARK_CURRENCY,
-    )
-    .await;
-    metrics::benchmark_asset(id)
-}
-
 #[tokio::test]
 async fn test_benchmark_market_data_prepares_prices_through_market_data() {
     let db = common::setup_test_db().await;
@@ -70,24 +57,21 @@ async fn test_benchmark_market_data_prepares_prices_through_market_data() {
     );
     mock.exchange_rates
         .insert("USDEUR".to_owned(), vec![("2025-01-02".to_owned(), 0.90)]);
-    let benchmark = make_benchmark_asset(&db).await;
 
-    let benchmark_market_data = historical_market_data::prepare_benchmark_market_data(
-        &db,
-        &benchmark,
-        "2025-01-02",
-        "2025-01-02",
-        &mock,
-    )
-    .await
-    .unwrap();
+    let benchmark_market_data = common::market_data(&mock)
+        .correlation_market_data(&db, Vec::new(), "2025-01-02", "2025-01-02")
+        .await
+        .unwrap();
 
-    assert_eq!(benchmark_market_data.effective_end, date(2025, 1, 2));
     assert_eq!(benchmark_market_data.limitations, vec![]);
     assert_eq!(
-        daily_price_repo::find_price(&db, benchmark_market_data.asset_id, "2025-01-02")
-            .await
-            .unwrap(),
+        daily_price_repo::find_price(
+            &db,
+            benchmark_market_data.benchmark_series.asset_id,
+            "2025-01-02"
+        )
+        .await
+        .unwrap(),
         Some(100.0)
     );
 }
@@ -103,17 +87,11 @@ async fn test_benchmark_market_data_prepares_required_fx() {
     );
     mock.exchange_rates
         .insert("USDEUR".to_owned(), vec![("2025-01-02".to_owned(), 0.90)]);
-    let benchmark = make_benchmark_asset(&db).await;
 
-    historical_market_data::prepare_benchmark_market_data(
-        &db,
-        &benchmark,
-        "2025-01-02",
-        "2025-01-02",
-        &mock,
-    )
-    .await
-    .unwrap();
+    common::market_data(&mock)
+        .correlation_market_data(&db, Vec::new(), "2025-01-02", "2025-01-02")
+        .await
+        .unwrap();
 
     assert_eq!(
         exchange_rate_repo::find_rate(&db, "USD", "EUR", "2025-01-02")
@@ -136,18 +114,12 @@ async fn test_benchmark_market_data_stays_distinct_from_holdings() {
     );
     mock.exchange_rates
         .insert("USDEUR".to_owned(), vec![("2025-01-02".to_owned(), 0.90)]);
-    let benchmark = make_benchmark_asset(&db).await;
 
-    let benchmark_market_data = historical_market_data::prepare_benchmark_market_data(
-        &db,
-        &benchmark,
-        "2025-01-02",
-        "2025-01-02",
-        &mock,
-    )
-    .await
-    .unwrap();
-    let benchmark = asset::Entity::find_by_id(benchmark_market_data.asset_id)
+    let benchmark_market_data = common::market_data(&mock)
+        .correlation_market_data(&db, Vec::new(), "2025-01-02", "2025-01-02")
+        .await
+        .unwrap();
+    let benchmark = asset::Entity::find_by_id(benchmark_market_data.benchmark_series.asset_id)
         .one(&db)
         .await
         .unwrap()
@@ -155,7 +127,10 @@ async fn test_benchmark_market_data_stays_distinct_from_holdings() {
 
     assert_eq!(benchmark.ticker, BENCHMARK_TICKER);
     assert_eq!(benchmark.name, BENCHMARK_NAME);
-    assert_ne!(benchmark_market_data.asset_id, held_asset.id);
+    assert_ne!(
+        benchmark_market_data.benchmark_series.asset_id,
+        held_asset.id
+    );
     assert!(common::get_asset_snapshots(&db, "2025-01-02")
         .await
         .is_empty());

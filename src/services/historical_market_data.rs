@@ -6,9 +6,7 @@ use sea_orm::DatabaseConnection;
 
 use crate::constants::{format_date, BASE_CURRENCY, DATE_FORMAT, FUND_API_PADDING_DAYS};
 use crate::db::repos::{daily_price_repo, exchange_rate_repo};
-use crate::models::{
-    Asset, AssetType, BenchmarkMarketData, MarketDataValuation, ValuationMarketData,
-};
+use crate::models::{Asset, AssetType, MarketDataValuation, ValuationMarketData};
 use crate::services::market_data_policy;
 use crate::services::price::PriceFetcher;
 
@@ -24,29 +22,6 @@ pub(crate) async fn prepare_valuation_market_data(
     price_fetcher: &dyn PriceFetcher,
 ) -> anyhow::Result<ValuationMarketData> {
     prepare_historical_market_data(db, assets, start_date, end_date, price_fetcher).await
-}
-
-pub async fn prepare_benchmark_market_data(
-    db: &DatabaseConnection,
-    benchmark: &Asset,
-    start_date: &str,
-    end_date: &str,
-    price_fetcher: &dyn PriceFetcher,
-) -> anyhow::Result<BenchmarkMarketData> {
-    let market_data = prepare_historical_market_data(
-        db,
-        std::slice::from_ref(benchmark),
-        start_date,
-        end_date,
-        price_fetcher,
-    )
-    .await?;
-
-    Ok(BenchmarkMarketData {
-        asset_id: benchmark.id,
-        effective_end: market_data.effective_end,
-        limitations: market_data.limitations,
-    })
 }
 
 pub(crate) async fn get_required_asset_valuation_data(
@@ -140,65 +115,6 @@ pub async fn get_base_currency_price_series(
                 .map(|rate| (date.clone(), price * rate))
         })
         .collect())
-}
-
-pub async fn fetch_direct_base_currency_price_series(
-    asset: &Asset,
-    start_date: &str,
-    end_date: &str,
-    price_fetcher: &dyn PriceFetcher,
-) -> anyhow::Result<Vec<(String, f64)>> {
-    let lookup_identifier = lookup_identifier(asset)?;
-    let prices = filter_fetched_series(
-        price_fetcher
-            .get_historical_prices(lookup_identifier, start_date, end_date, &asset.asset_type)
-            .await?,
-        start_date,
-        end_date,
-    );
-
-    if prices.is_empty() {
-        bail!("no price history returned for '{}'", asset.ticker);
-    }
-
-    if asset.currency == BASE_CURRENCY {
-        return Ok(prices);
-    }
-
-    let pair = market_data_policy::currency_pair(&asset.currency);
-    let rates = filter_fetched_series(
-        price_fetcher
-            .get_historical_exchange_rates(&pair, start_date, end_date)
-            .await?,
-        start_date,
-        end_date,
-    );
-
-    if rates.is_empty() {
-        bail!("no FX history returned for currency '{}'", asset.currency);
-    }
-
-    let rate_map: HashMap<&str, f64> = rates
-        .iter()
-        .map(|(date, rate)| (date.as_str(), *rate))
-        .collect();
-    let eur_prices: Vec<(String, f64)> = prices
-        .iter()
-        .filter_map(|(date, price)| {
-            rate_map
-                .get(date.as_str())
-                .map(|rate| (date.clone(), price * rate))
-        })
-        .collect();
-
-    if eur_prices.is_empty() {
-        bail!(
-            "could not align price and FX history for '{}'",
-            asset.ticker
-        );
-    }
-
-    Ok(eur_prices)
 }
 
 async fn get_exchange_rate(
@@ -475,17 +391,6 @@ fn historical_source_start_date(asset: &Asset, start_date: &str) -> anyhow::Resu
         ));
     }
     Ok(start_date.to_owned())
-}
-
-fn filter_fetched_series(
-    mut series: Vec<(String, f64)>,
-    start_date: &str,
-    end_date: &str,
-) -> Vec<(String, f64)> {
-    series.retain(|(date, _)| date.as_str() >= start_date && date.as_str() <= end_date);
-    series.sort_by(|left, right| left.0.cmp(&right.0));
-    series.dedup_by(|left, right| left.0 == right.0);
-    series
 }
 
 async fn fill_nav_exchange_rates(
