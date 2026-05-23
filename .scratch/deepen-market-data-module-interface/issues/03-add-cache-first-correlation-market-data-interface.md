@@ -1,6 +1,6 @@
 # Add cache-first correlation market data Interface
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

@@ -5,6 +5,7 @@ use common::{
     insert_transaction, setup_test_db, MockPriceFetcher,
 };
 use rstock::constants::BENCHMARK_TICKER;
+use rstock::db::repos::asset_repo;
 use rstock::models::StockInfo;
 use rstock::services::analytics::{compute_correlation_data, compute_rolling_correlation_data};
 use rstock::services::metrics::{
@@ -39,6 +40,20 @@ fn seed_benchmark_market_data(fetcher: &mut MockPriceFetcher, days: usize) {
     fetcher
         .exchange_rates
         .insert("USDEUR".to_owned(), benchmark_fx);
+}
+
+fn seed_source_prices(fetcher: &mut MockPriceFetcher, ticker: &str, base_price: f64, days: usize) {
+    let prices: Vec<(String, f64)> = (0..days)
+        .map(|i| {
+            let date = (chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap()
+                + chrono::Duration::days(i as i64))
+            .format("%Y-%m-%d")
+            .to_string();
+            (date, base_price + i as f64)
+        })
+        .collect();
+
+    fetcher.historical_prices.insert(ticker.to_owned(), prices);
 }
 
 /// Two perfectly correlated EUR assets (prices move in lockstep)
@@ -237,6 +252,45 @@ async fn test_usd_asset_uses_eur_conversion() {
         (corr - 1.0).abs() < 0.01,
         "expected ~1.0 with constant FX, got {corr}"
     );
+}
+
+#[tokio::test]
+async fn test_correlation_market_data_returns_tracked_and_benchmark_series_separately() {
+    let db = setup_test_db().await;
+    let mut fetcher = MockPriceFetcher::new();
+    seed_source_prices(&mut fetcher, "XFAKE1", 100.0, 25);
+    seed_source_prices(&mut fetcher, "XFAKE2", 50.0, 25);
+    seed_benchmark_market_data(&mut fetcher, 25);
+
+    let id_eur = insert_asset(&db, "XFAKE1", "Fake EUR", "stock", "EUR").await;
+    let id_usd = insert_asset(&db, "XFAKE2", "Fake USD", "stock", "USD").await;
+
+    let market_data = common::market_data(&fetcher);
+    let tracked_assets = asset_repo::find_by_ids(&db, [id_eur, id_usd].into_iter())
+        .await
+        .unwrap();
+
+    let result = market_data
+        .correlation_market_data(&db, tracked_assets, "2025-01-01", "2025-01-25")
+        .await
+        .unwrap();
+
+    assert_eq!(result.requested_start_date, "2025-01-01");
+    assert_eq!(result.requested_end_date, "2025-01-25");
+    assert_eq!(result.tracked_asset_series.len(), 2);
+    assert_eq!(result.benchmark_series.name, "MSCI ACWI Benchmark");
+    assert!(!result
+        .tracked_asset_series
+        .iter()
+        .any(|series| series.name == result.benchmark_series.name));
+
+    let usd_series = result
+        .tracked_asset_series
+        .iter()
+        .find(|series| series.name == "Fake USD")
+        .unwrap();
+    assert_eq!(usd_series.prices.len(), 25);
+    assert!((usd_series.prices[0].1 - 46.0).abs() < 1e-9);
 }
 
 /// Assets with insufficient data should appear in warnings and have None correlation

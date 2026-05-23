@@ -22,4 +22,4 @@ Route rolling correlation and portfolio risk benchmark data through the cache-fi
 
 ## Blocked by
 
-- .scratch/deepen-market-data-module-interface/issues/03-add-cache-first-correlation-market-data-interface.md
+None - can start immediately

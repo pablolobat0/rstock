@@ -2,6 +2,8 @@ use chrono::NaiveDate;
 
 use crate::models::AssetType;
 
+pub type BaseCurrencyPriceSeries = Vec<(String, f64)>;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValuationMarketData {
     pub effective_end: NaiveDate,
@@ -28,6 +30,22 @@ pub struct AssetDisplayMarketData {
     pub price_date: String,
     pub fx_rate: f64,
     pub base_currency_price: f64,
+    pub limitations: Vec<MarketDataLimitation>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CorrelationMarketDataSeries {
+    pub asset_id: i32,
+    pub name: String,
+    pub prices: BaseCurrencyPriceSeries,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CorrelationMarketData {
+    pub requested_start_date: String,
+    pub requested_end_date: String,
+    pub tracked_asset_series: Vec<CorrelationMarketDataSeries>,
+    pub benchmark_series: CorrelationMarketDataSeries,
     pub limitations: Vec<MarketDataLimitation>,
 }
 
