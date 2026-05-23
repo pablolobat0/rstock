@@ -10,6 +10,7 @@ use crate::models::{
     Asset, AssetClassification, CorrelationMatrix, PeriodMetrics, PortfolioSnapshot,
     RollingCorrelationResult,
 };
+use crate::services::market_data::MarketData;
 use crate::services::price::PriceFetcher;
 use crate::services::{historical_market_data, metrics};
 
@@ -17,7 +18,7 @@ pub async fn compute_correlation_data(
     db: &DatabaseConnection,
     start_date: &str,
     end_date: &str,
-    price_fetcher: &dyn PriceFetcher,
+    market_data: &MarketData,
 ) -> anyhow::Result<CorrelationMatrix> {
     let latest = portfolio_history_repo::find_latest(db).await?;
     let held_assets = match &latest {
@@ -28,32 +29,23 @@ pub async fn compute_correlation_data(
     let asset_ids: Vec<i32> = held_assets.iter().map(|s| s.asset_id).collect();
     let assets = asset_repo::find_by_ids(db, asset_ids.into_iter()).await?;
 
-    let benchmark = get_or_create_benchmark_asset(db).await?;
-    historical_market_data::prepare_benchmark_market_data(
-        db,
-        &benchmark,
-        start_date,
-        end_date,
-        price_fetcher,
-    )
-    .await?;
-
-    let mut all_assets: Vec<Asset> = assets;
-    all_assets.push(benchmark);
+    let correlation_market_data = market_data
+        .correlation_market_data(db, assets, start_date, end_date)
+        .await?;
 
     let mut return_series: Vec<(String, HashMap<String, f64>)> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
 
-    for asset in &all_assets {
-        let eur_prices =
-            historical_market_data::get_base_currency_price_series(db, asset, start_date, end_date)
-                .await?;
-
-        let returns = metrics::compute_log_returns(&eur_prices);
+    for series in correlation_market_data
+        .tracked_asset_series
+        .iter()
+        .chain(std::iter::once(&correlation_market_data.benchmark_series))
+    {
+        let returns = metrics::compute_log_returns(&series.prices);
         if returns.len() < MIN_DATA_POINTS {
-            warnings.push(asset.name.clone());
+            warnings.push(series.name.clone());
         }
-        return_series.push((asset.name.clone(), returns));
+        return_series.push((series.name.clone(), returns));
     }
 
     let n = return_series.len();

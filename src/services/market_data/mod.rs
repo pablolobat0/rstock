@@ -5,10 +5,13 @@ use chrono::NaiveDate;
 use sea_orm::DatabaseConnection;
 
 use crate::constants::DATE_FORMAT;
+use crate::db::repos::asset_repo;
 use crate::models::{
-    Asset, AssetType, FundData, IndividualPrice, IndividualPriceFallback, MarketDataValuation,
-    StockInfo, ValuationMarketData,
+    Asset, AssetClassification, AssetType, CorrelationMarketData, CorrelationMarketDataSeries,
+    FundData, IndividualPrice, IndividualPriceFallback, MarketDataValuation, StockInfo,
+    ValuationMarketData,
 };
+use crate::services::metrics;
 use crate::services::price::PriceFetcher;
 use crate::services::{historical_market_data, individual_price};
 
@@ -110,6 +113,64 @@ impl MarketData {
     ) -> anyhow::Result<IndividualPrice> {
         individual_price::get_individual_price(db, asset, fallback, self).await
     }
+
+    pub async fn correlation_market_data(
+        &self,
+        db: &DatabaseConnection,
+        tracked_assets: Vec<Asset>,
+        start_date: &str,
+        end_date: &str,
+    ) -> anyhow::Result<CorrelationMarketData> {
+        let benchmark = get_or_create_benchmark_asset(db).await?;
+        let mut all_assets = tracked_assets.clone();
+        all_assets.push(benchmark.clone());
+
+        let prepared = self
+            .prepare_valuation_market_data(db, &all_assets, start_date, end_date)
+            .await?;
+
+        let mut tracked_asset_series = Vec::with_capacity(tracked_assets.len());
+        for asset in tracked_assets {
+            tracked_asset_series.push(correlation_series(db, &asset, start_date, end_date).await?);
+        }
+
+        let benchmark_series = correlation_series(db, &benchmark, start_date, end_date).await?;
+
+        Ok(CorrelationMarketData {
+            requested_start_date: start_date.to_owned(),
+            requested_end_date: end_date.to_owned(),
+            tracked_asset_series,
+            benchmark_series,
+            limitations: prepared.limitations,
+        })
+    }
+}
+
+async fn get_or_create_benchmark_asset(db: &DatabaseConnection) -> anyhow::Result<Asset> {
+    let info = metrics::benchmark_asset_info();
+    if let Some(asset) = asset_repo::find_by_ticker(db, &info.ticker).await? {
+        return Ok(asset);
+    }
+
+    let id = asset_repo::create(db, &info, &AssetClassification::default(), None).await?;
+    Ok(metrics::benchmark_asset(id))
+}
+
+async fn correlation_series(
+    db: &DatabaseConnection,
+    asset: &Asset,
+    start_date: &str,
+    end_date: &str,
+) -> anyhow::Result<CorrelationMarketDataSeries> {
+    let prices: crate::models::BaseCurrencyPriceSeries =
+        historical_market_data::get_base_currency_price_series(db, asset, start_date, end_date)
+            .await?;
+
+    Ok(CorrelationMarketDataSeries {
+        asset_id: asset.id,
+        name: asset.name.clone(),
+        prices,
+    })
 }
 
 #[async_trait::async_trait]

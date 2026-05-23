@@ -14,7 +14,8 @@ pub use fund_analysis::{
     FundAnalysisResult, FundData, FundPeriodMetrics, HoldingChange, HoldingChangeType,
 };
 pub use market_data::{
-    BenchmarkMarketData, IndividualPrice, IndividualPriceFallback, MarketDataLimitation,
+    BaseCurrencyPriceSeries, BenchmarkMarketData, CorrelationMarketData,
+    CorrelationMarketDataSeries, IndividualPrice, IndividualPriceFallback, MarketDataLimitation,
     MarketDataLimitationClassification, MarketDataSubject, MarketDataValuation,
     ValuationMarketData,
 };
