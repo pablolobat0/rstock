@@ -30,15 +30,15 @@
          ┌─────────┴─────────┐
          │                   │
   ┌──────┴──────┐    ┌──────┴──────┐
-  │  DB Layer   │    │PriceFetcher │
-  │  repos/     │    │   trait     │
+  │  DB Layer   │    │ MarketData  │
+  │  repos/     │    │   module    │
   │  entities/  │    └──────┬──────┘
   └──────┬──────┘           │
          │           ┌──────┴──────┐
   ┌──────┴──────┐    │  External   │
   │   SQLite    │    │ Yahoo Fin.  │
-  │ ~/.rstock/  │    │ scripts     │
-  │ rstock.db   │    │ (Python)    │
+  │ ~/.rstock/  │    │ Yahoo Fin.  │
+  │ rstock.db   │    │ Morningstar │
   └─────────────┘    └─────────────┘
 ```
 
@@ -71,11 +71,11 @@ All business logic lives here. Key modules:
 
 **`nav.rs`** — Core NAV unitization engine. `rebuild_portfolio_history()` iterates calendar days from a start date to the effective end date, computing daily portfolio snapshots. `process_day_transactions()` handles share issuance (buys) and redemption (sells). `compute_day_asset_values()` calculates end-of-day portfolio value through strict Historical market data valuation reads.
 
-**`historical_market_data.rs`** — Prepares reproducible Historical market data for NAV and benchmark analytics. It fetches and caches required asset prices, infers required FX from supplied assets, hides provider-specific FX pair construction from external callers, calculates the Effective valuation date, returns actionable Market data limitation values, and exposes strict valuation reads for required asset and FX data.
+**`market_data/historical.rs`** — Private implementation for reproducible Historical market data used by NAV and benchmark analytics. It fetches and caches required asset prices, infers required FX from supplied assets, hides provider-specific FX pair construction from external callers, calculates the Effective valuation date, returns actionable Market data limitation values, and exposes strict valuation reads through the `market_data` Module root.
 
-**`individual_price.rs`** — Computes display-time Individual price values for portfolio rows. Stocks and FX may use non-persisted Live quote values, funds and ETFs use cached Historical market data semantics, and snapshot fallback preserves row rendering when current display data is unavailable.
+**`market_data/individual_price.rs`** — Private implementation for display-time Individual price values for portfolio rows. Stocks and FX may use non-persisted Live quote values, funds and ETFs use cached Historical market data semantics, and snapshot fallback preserves row rendering when current display data is unavailable.
 
-**`portfolio.rs`** — `get_portfolio()` builds the current position table (per-asset quantity, avg cost, gain/loss) and computes return metrics for the portfolio view. Portfolio rows use `individual_price.rs` for display values and carry Market data limitation values to display formatting.
+**`portfolio.rs`** — `get_portfolio()` builds the current position table (per-asset quantity, avg cost, gain/loss) and computes return metrics for the portfolio view. Portfolio rows use the `market_data` Module root for Individual price values and carry Market data limitation values to display formatting.
 
 **`analytics.rs`** — Computes correlation and risk-metric inputs from portfolio history and benchmark prices.
 
@@ -83,7 +83,7 @@ All business logic lives here. Key modules:
 
 **`transactions.rs`** — `buy()` records a purchase and invalidates snapshots from the buy date forward. `sell()` validates holdings (cannot sell more than owned), records the sale, and invalidates snapshots. `dividend()` records a dividend payment. `split()` records a stock split, adjusting quantity via the split ratio.
 
-**`price.rs`** — Defines the `PriceFetcher` async trait with two methods: `get_historical_prices()` and `get_historical_exchange_rates()`. `RealPriceFetcher` implements it using `yfinance-rs` for stocks and `uv run scripts/get_fund_price_history.py` for funds/ETFs.
+**`market_data/`** — Stateful market data Module. It exposes use-case-shaped Interfaces for valuation market data, correlation market data, Individual price, stock info, and fund data. Yahoo Finance and Morningstar source Adapters are private implementation details behind `MarketDataSources`.
 
 **`metrics.rs`** — Shared math helpers for volatility, max drawdown, Sharpe, Sortino, beta, Pearson correlation, log returns, return alignment, and CAGR. Uses daily log returns, 252 trading days/year, 3% annual risk-free rate, and actual elapsed dates for CAGR.
 
@@ -156,7 +156,7 @@ Centralized constants: `BASE_CURRENCY`, `INITIAL_NAV`, period durations, benchma
 
 ### Utilities (`utils.rs`)
 
-`resolve_scripts_dir()` locates the Python scripts directory (checks `RSTOCK_SCRIPTS_DIR` env var, then walks up from executable).
+`confirm_action()` provides a shared interactive confirmation prompt for destructive user-facing operations.
 
 ## Database Schema
 
@@ -289,24 +289,18 @@ Example: a first deposit at NAV 100 and a second deposit at NAV 129 will show a 
 ### Stock Prices
 
 ```
-Yahoo Finance API ──(yfinance-rs)──> Vec<(date, f64)> ──> daily_asset_prices table
+Yahoo Finance Adapter ──> SourceObservation ──> MarketData ──> daily_asset_prices table
 ```
 
-`RealPriceFetcher` uses `yfinance_rs::YahooFinance` with `HistoryBuilder` to fetch daily OHLCV data. Only the close price is extracted.
-
-`analyze correlation rolling` uses that fetched stock history directly in memory and does not write it to `daily_asset_prices`.
+The private Yahoo adapter uses `yfinance_rs::YahooFinance` with `HistoryBuilder` to fetch daily OHLCV data. Only the close price is extracted.
 
 ### Fund/ETF Prices
 
 ```
-Morningstar-backed script ──(uv run)──> JSON ──> daily_asset_prices table
+Morningstar Adapter ──> SourceObservation ──> MarketData ──> daily_asset_prices table
 ```
 
-The fetcher runs `uv run scripts/get_fund_price_history.py <identifier> <start> <end>` as a subprocess. For funds/ETFs, the identifier is the stored Morningstar code. The script outputs `[{"date": "YYYY-MM-DD", "price": f64}, ...]`.
-
-Script resolution order:
-1. `RSTOCK_SCRIPTS_DIR` environment variable
-2. Walk up from the executable's directory looking for a `scripts/` folder
+The private Morningstar adapter fetches fund/ETF price history using the stored Morningstar code and returns source-neutral observations to `MarketData`.
 
 ### Exchange Rates
 
@@ -316,7 +310,7 @@ Yahoo Finance ──(yfinance-rs)──> source-neutral currency columns ──>
 
 Same mechanism as stock prices. Provider-specific Yahoo pair symbols are constructed at fetch time and are not stored in the database.
 
-`analyze correlation rolling` also fetches FX series on demand and uses them in memory only.
+Correlation analytics use cache-first Base currency series prepared by `MarketData`.
 
 ### Forward-Fill
 
@@ -331,7 +325,7 @@ main.rs
   └─> portfolio::get_portfolio()
         ├─> Check if NAV snapshots are stale (last snapshot < yesterday)
         ├─> If stale: nav::rebuild_portfolio_history()
-        │     ├─> historical_market_data::prepare_nav_market_data()
+        │     ├─> market_data.prepare_valuation_market_data()
         │     └─> Day-by-day NAV computation loop using strict valuation reads
         ├─> Compute return metrics (YTD, 1Y, 3Y, 5Y)
         └─> metrics::compute_risk_metrics() (beta, Sharpe, Sortino)
@@ -431,9 +425,8 @@ main.rs
 main.rs
   └─> analytics::compute_rolling_correlation_data()
         ├─> Fetch stock metadata for the two requested tickers
-        ├─> Fetch stock price history directly through PriceFetcher
-        ├─> Fetch FX history directly when a ticker is not in EUR
-        ├─> Convert both price series to EUR
+        ├─> Request cache-first tracked correlation market data from MarketData
+        ├─> Use Base currency series returned by MarketData
         ├─> metrics::align_return_series_with_dates_unfiltered()
         ├─> metrics::compute_rolling_correlation() over trailing 60-day windows
         └─> Return dated rolling series + summary stats
@@ -446,8 +439,8 @@ main.rs
 main.rs
   └─> fund_analysis::compute_fund_analysis()
         ├─> asset_repo::find_by_morningstar_code()
-        ├─> Run scripts/get_fund_data.py
-        ├─> fetcher.get_historical_prices() for fund + benchmark
+        ├─> market_data.fund_data() for Morningstar fund data
+        ├─> MarketData source adapters for fund + benchmark history
         ├─> metrics::compute_cagr(), beta, Sharpe, Sortino, volatility, max drawdown
         ├─> Build trailing 1Y/3Y/5Y windows from trading-day history
         ├─> Filter allocation rows to holdings with ticker
@@ -461,7 +454,7 @@ main.rs
 main.rs
   └─> watchlist_repo::find_by_ticker() (must be in watchlist)
   └─> monitor::generate_monitor_report()
-        ├─> fetcher.get_historical_prices() (stock + sector ETF)
+        ├─> MarketData source adapters for stock + sector ETF history
         ├─> Compute momentum indicators (RSI, SMA, MACD)
         ├─> Fetch fundamentals via yfinance-rs
         └─> Compute relative strength and correlation

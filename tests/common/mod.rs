@@ -9,9 +9,8 @@ use rstock::db::entities::{
     asset, daily_asset_price, daily_exchange_rate, portfolio_asset_history, portfolio_history,
     transaction,
 };
-use rstock::models::{f64_to_cents, AssetType, FundData, StockInfo};
+use rstock::models::{f64_to_cents, FundData, StockInfo};
 use rstock::services::market_data::{MarketData, MarketDataSources, SourceObservation};
-use rstock::services::price::PriceFetcher;
 
 pub async fn setup_test_db() -> DatabaseConnection {
     let db = Database::connect("sqlite::memory:")
@@ -285,14 +284,14 @@ pub async fn insert_exchange_rate(
 }
 
 #[derive(Clone)]
-pub struct MockPriceFetcher {
+pub struct MockMarketDataSources {
     pub historical_prices: HashMap<String, Vec<(String, f64)>>,
     pub exchange_rates: HashMap<String, Vec<(String, f64)>>,
     pub stock_info: HashMap<String, StockInfo>,
     pub fund_data: HashMap<String, FundData>,
 }
 
-impl MockPriceFetcher {
+impl MockMarketDataSources {
     pub fn new() -> Self {
         Self {
             historical_prices: HashMap::new(),
@@ -303,45 +302,12 @@ impl MockPriceFetcher {
     }
 }
 
-pub fn market_data(sources: &MockPriceFetcher) -> MarketData {
+pub fn market_data(sources: &MockMarketDataSources) -> MarketData {
     MarketData::new(Box::new(sources.clone()))
 }
 
 #[async_trait::async_trait]
-impl PriceFetcher for MockPriceFetcher {
-    async fn get_historical_prices(
-        &self,
-        ticker: &str,
-        _start: &str,
-        _end: &str,
-        _asset_type: &AssetType,
-    ) -> anyhow::Result<Vec<(String, f64)>> {
-        Ok(self
-            .historical_prices
-            .get(ticker)
-            .cloned()
-            .unwrap_or_default())
-    }
-
-    async fn get_historical_exchange_rates(
-        &self,
-        pair: &str,
-        _start: &str,
-        _end: &str,
-    ) -> anyhow::Result<Vec<(String, f64)>> {
-        Ok(self.exchange_rates.get(pair).cloned().unwrap_or_default())
-    }
-
-    async fn get_stock_info(&self, ticker: &str) -> anyhow::Result<StockInfo> {
-        self.stock_info
-            .get(ticker)
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("no mock stock info for {ticker}"))
-    }
-}
-
-#[async_trait::async_trait]
-impl MarketDataSources for MockPriceFetcher {
+impl MarketDataSources for MockMarketDataSources {
     async fn stock_price_history(
         &self,
         ticker: &str,

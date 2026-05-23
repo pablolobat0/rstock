@@ -7,7 +7,6 @@ use rstock::db::repos::{daily_price_repo, exchange_rate_repo};
 use rstock::models::{
     Asset, IndividualPriceFallback, MarketDataLimitationClassification, MarketDataSubject,
 };
-use rstock::services::historical_market_data;
 use sea_orm::EntityTrait;
 
 async fn make_asset(
@@ -49,7 +48,7 @@ fn date(year: i32, month: u32, day: u32) -> NaiveDate {
 #[tokio::test]
 async fn test_benchmark_market_data_prepares_prices_through_market_data() {
     let db = common::setup_test_db().await;
-    let mut mock = common::MockPriceFetcher::new();
+    let mut mock = common::MockMarketDataSources::new();
 
     mock.historical_prices.insert(
         BENCHMARK_TICKER.to_owned(),
@@ -79,7 +78,7 @@ async fn test_benchmark_market_data_prepares_prices_through_market_data() {
 #[tokio::test]
 async fn test_benchmark_market_data_prepares_required_fx() {
     let db = common::setup_test_db().await;
-    let mut mock = common::MockPriceFetcher::new();
+    let mut mock = common::MockMarketDataSources::new();
 
     mock.historical_prices.insert(
         BENCHMARK_TICKER.to_owned(),
@@ -104,7 +103,7 @@ async fn test_benchmark_market_data_prepares_required_fx() {
 #[tokio::test]
 async fn test_benchmark_market_data_stays_distinct_from_holdings() {
     let db = common::setup_test_db().await;
-    let mut mock = common::MockPriceFetcher::new();
+    let mut mock = common::MockMarketDataSources::new();
 
     let held_asset = make_asset(&db, "XFAKE1", "Held Stock", "stock", "EUR").await;
     common::insert_transaction(&db, held_asset.id, "2025-01-02", 1.0, 10.0, 0.0).await;
@@ -139,7 +138,7 @@ async fn test_benchmark_market_data_stays_distinct_from_holdings() {
 #[tokio::test]
 async fn test_nav_market_data_does_not_persist_same_day_asset_or_fx_data() {
     let db = common::setup_test_db().await;
-    let mut mock = common::MockPriceFetcher::new();
+    let mut mock = common::MockMarketDataSources::new();
 
     let asset = make_asset(&db, "XFAKEUSD", "US Stock", "stock", "USD").await;
     let today = Local::now().date_naive();
@@ -184,7 +183,7 @@ async fn test_nav_market_data_does_not_persist_same_day_asset_or_fx_data() {
 #[tokio::test]
 async fn test_nav_market_data_persists_asset_forward_fill_between_source_observations_only() {
     let db = common::setup_test_db().await;
-    let mut mock = common::MockPriceFetcher::new();
+    let mut mock = common::MockMarketDataSources::new();
 
     let asset = make_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
     mock.historical_prices.insert(
@@ -232,7 +231,7 @@ async fn test_nav_market_data_persists_asset_forward_fill_between_source_observa
 #[tokio::test]
 async fn test_nav_market_data_uses_implicit_base_currency_fx() {
     let db = common::setup_test_db().await;
-    let mut mock = common::MockPriceFetcher::new();
+    let mut mock = common::MockMarketDataSources::new();
 
     let asset = make_asset(&db, "XFAKEEUR", "EUR Stock", "stock", "EUR").await;
     mock.historical_prices
@@ -260,7 +259,7 @@ async fn test_nav_market_data_uses_implicit_base_currency_fx() {
 #[tokio::test]
 async fn test_nav_market_data_persists_fx_forward_fill_between_source_observations_only() {
     let db = common::setup_test_db().await;
-    let mut mock = common::MockPriceFetcher::new();
+    let mut mock = common::MockMarketDataSources::new();
 
     let asset = make_asset(&db, "XFAKEUSD", "US Stock", "stock", "USD").await;
     mock.historical_prices.insert(
@@ -312,7 +311,7 @@ async fn test_nav_market_data_persists_fx_forward_fill_between_source_observatio
 #[tokio::test]
 async fn test_nav_market_data_returns_stale_cached_asset_limitation() {
     let db = common::setup_test_db().await;
-    let mock = common::MockPriceFetcher::new();
+    let mock = common::MockMarketDataSources::new();
 
     let asset = make_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
     common::insert_daily_price(&db, asset.id, "2025-01-01", 10.0, false).await;
@@ -341,7 +340,7 @@ async fn test_nav_market_data_returns_stale_cached_asset_limitation() {
 #[tokio::test]
 async fn test_nav_market_data_returns_only_actionable_reporting_lag() {
     let db = common::setup_test_db().await;
-    let mut mock = common::MockPriceFetcher::new();
+    let mut mock = common::MockMarketDataSources::new();
 
     let acceptable = make_fund_asset(&db, "XFAKEF1", "Test Fund 1", "EUR", "FUND1").await;
     let excessive = make_fund_asset(&db, "XFAKEF2", "Test Fund 2", "EUR", "FUND2").await;
@@ -373,7 +372,7 @@ async fn test_nav_market_data_returns_only_actionable_reporting_lag() {
 #[tokio::test]
 async fn test_nav_market_data_stock_stale_limitations_ignore_weekends() {
     let db = common::setup_test_db().await;
-    let mut mock = common::MockPriceFetcher::new();
+    let mut mock = common::MockMarketDataSources::new();
 
     let asset = make_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
     mock.historical_prices
@@ -395,7 +394,7 @@ async fn test_nav_market_data_stock_stale_limitations_ignore_weekends() {
 #[tokio::test]
 async fn test_nav_market_data_returns_fx_completed_weekday_stale_limitation() {
     let db = common::setup_test_db().await;
-    let mut mock = common::MockPriceFetcher::new();
+    let mut mock = common::MockMarketDataSources::new();
 
     let asset = make_asset(&db, "XFAKEUSD", "US Stock", "stock", "USD").await;
     mock.historical_prices.insert(
@@ -435,9 +434,9 @@ async fn test_asset_valuation_data_uses_implicit_base_currency_fx_rate() {
     let asset = make_asset(&db, "XFAKEEUR", "EUR Stock", "stock", "EUR").await;
     common::insert_daily_price(&db, asset.id, "2025-01-02", 25.0, false).await;
 
-    let valuation = historical_market_data::get_asset_valuation_data(&db, &asset, "2025-01-02")
+    let valuation = common::market_data(&common::MockMarketDataSources::new())
+        .get_required_asset_valuation_data(&db, &asset, "2025-01-02")
         .await
-        .unwrap()
         .unwrap();
 
     assert_eq!(valuation.native_price, 25.0);
@@ -452,9 +451,9 @@ async fn test_asset_valuation_data_uses_required_non_base_currency_fx_rate() {
     common::insert_daily_price(&db, asset.id, "2025-01-02", 100.0, false).await;
     common::insert_exchange_rate(&db, "USD", "EUR", "2025-01-02", 0.90).await;
 
-    let valuation = historical_market_data::get_asset_valuation_data(&db, &asset, "2025-01-02")
+    let valuation = common::market_data(&common::MockMarketDataSources::new())
+        .get_required_asset_valuation_data(&db, &asset, "2025-01-02")
         .await
-        .unwrap()
         .unwrap();
 
     assert_eq!(valuation.native_price, 100.0);
@@ -468,7 +467,8 @@ async fn test_asset_valuation_data_requires_non_base_currency_fx_rate() {
     let asset = make_asset(&db, "XFAKEUSD", "US Stock", "stock", "USD").await;
     common::insert_daily_price(&db, asset.id, "2025-01-02", 100.0, false).await;
 
-    let error = historical_market_data::get_asset_valuation_data(&db, &asset, "2025-01-02")
+    let error = common::market_data(&common::MockMarketDataSources::new())
+        .get_required_asset_valuation_data(&db, &asset, "2025-01-02")
         .await
         .unwrap_err();
 
@@ -482,7 +482,7 @@ async fn test_required_asset_valuation_data_fails_when_price_is_missing() {
     let db = common::setup_test_db().await;
     let asset = make_asset(&db, "XFAKEEUR", "EUR Stock", "stock", "EUR").await;
 
-    let error = common::market_data(&common::MockPriceFetcher::new())
+    let error = common::market_data(&common::MockMarketDataSources::new())
         .get_required_asset_valuation_data(&db, &asset, "2025-01-02")
         .await
         .unwrap_err();
@@ -497,7 +497,7 @@ async fn test_required_asset_exchange_rate_fails_when_rate_is_missing() {
     let db = common::setup_test_db().await;
     let asset = make_asset(&db, "XFAKEUSD", "US Stock", "stock", "USD").await;
 
-    let error = common::market_data(&common::MockPriceFetcher::new())
+    let error = common::market_data(&common::MockMarketDataSources::new())
         .get_required_asset_exchange_rates(&db, &[asset], "2025-01-02")
         .await
         .unwrap_err();
@@ -510,7 +510,7 @@ async fn test_required_asset_exchange_rate_fails_when_rate_is_missing() {
 #[tokio::test]
 async fn test_individual_price_uses_non_persisted_live_stock_and_fx_quotes() {
     let db = common::setup_test_db().await;
-    let mut mock = common::MockPriceFetcher::new();
+    let mut mock = common::MockMarketDataSources::new();
 
     let asset = make_asset(&db, "XFAKEUSD", "US Stock", "stock", "USD").await;
     let today = Local::now().date_naive();
@@ -554,7 +554,7 @@ async fn test_individual_price_uses_non_persisted_live_stock_and_fx_quotes() {
 #[tokio::test]
 async fn test_individual_price_does_not_use_live_quotes_for_funds() {
     let db = common::setup_test_db().await;
-    let mut mock = common::MockPriceFetcher::new();
+    let mut mock = common::MockMarketDataSources::new();
 
     let asset = make_fund_asset(&db, "XFAKEF1", "Test Fund", "EUR", "FUND1").await;
     let today = Local::now().date_naive();
@@ -584,7 +584,7 @@ async fn test_individual_price_does_not_use_live_quotes_for_funds() {
 #[tokio::test]
 async fn test_individual_price_combines_live_stock_with_stale_cached_fx_limitation() {
     let db = common::setup_test_db().await;
-    let mut mock = common::MockPriceFetcher::new();
+    let mut mock = common::MockMarketDataSources::new();
 
     let asset = make_asset(&db, "XFAKEUSD", "US Stock", "stock", "USD").await;
     let today = Local::now().date_naive();

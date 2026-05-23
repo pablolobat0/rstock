@@ -76,7 +76,7 @@ Three categories of model structs:
 All test utilities are in `tests/common/mod.rs`:
 
 - `setup_test_db()` — Creates in-memory SQLite with all migrations applied
-- `MockPriceFetcher` — Implements `PriceFetcher` trait with configurable price/rate maps
+- `MockMarketDataSources` — Implements `MarketDataSources` with configurable price/rate maps
 - Helper functions: `insert_asset()`, `insert_transaction()`, `insert_sell_transaction()`, `insert_daily_price()`, `insert_exchange_rate()`, `get_portfolio_snapshot()`, `get_all_snapshots()`, `get_asset_snapshots()`
 
 ### Test Guidelines

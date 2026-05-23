@@ -8,7 +8,6 @@ use crate::models::{
 };
 use crate::services::market_data::MarketData;
 use crate::services::portfolio::get_asset_positions;
-use crate::services::price::PriceFetcher;
 
 const LARGE_CAP_THRESHOLD: f64 = 10_000_000_000.0;
 const MID_CAP_THRESHOLD: f64 = 2_000_000_000.0;
@@ -240,7 +239,7 @@ fn map_to_sorted_entries(map: HashMap<String, f64>) -> Vec<AllocationEntry> {
 
 async fn enrich_direct_stocks(
     direct_stocks: &[(String, String, f64)],
-    market_data: &dyn PriceFetcher,
+    market_data: &MarketData,
     sector_map: &mut HashMap<String, f64>,
     country_map: &mut HashMap<String, f64>,
     market_cap_map: &mut HashMap<String, f64>,
@@ -251,7 +250,7 @@ async fn enrich_direct_stocks(
         let weight = *weight;
         let name = name.clone();
         async move {
-            let info_result = market_data.get_stock_info(ticker).await;
+            let info_result = market_data.stock_info(ticker).await;
             (ticker.clone(), name, weight, info_result)
         }
     });

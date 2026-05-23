@@ -5,7 +5,7 @@ use rstock::services::market_data::MarketData;
 
 #[tokio::test]
 async fn market_data_normalizes_fx_currencies_before_source_call() {
-    let mut sources = common::MockPriceFetcher::new();
+    let mut sources = common::MockMarketDataSources::new();
     sources
         .exchange_rates
         .insert("USDEUR".to_owned(), vec![("2025-01-02".to_owned(), 0.92)]);
@@ -27,7 +27,7 @@ async fn market_data_normalizes_fx_currencies_before_source_call() {
 
 #[tokio::test]
 async fn market_data_rejects_invalid_fx_currency_before_source_call() {
-    let market_data = MarketData::new(Box::new(common::MockPriceFetcher::new()));
+    let market_data = MarketData::new(Box::new(common::MockMarketDataSources::new()));
 
     let result = market_data
         .exchange_rate_history(
@@ -43,7 +43,7 @@ async fn market_data_rejects_invalid_fx_currency_before_source_call() {
 
 #[tokio::test]
 async fn market_data_same_currency_fx_uses_implicit_rate() {
-    let market_data = MarketData::new(Box::new(common::MockPriceFetcher::new()));
+    let market_data = MarketData::new(Box::new(common::MockMarketDataSources::new()));
     let start = NaiveDate::from_ymd_opt(2025, 1, 1).expect("valid date");
 
     let result = market_data

@@ -2,7 +2,7 @@ mod common;
 
 use common::{
     insert_asset, insert_daily_price, insert_etf_asset, insert_exchange_rate, insert_fund_asset,
-    insert_portfolio_snapshot, insert_transaction, setup_test_db, MockPriceFetcher,
+    insert_portfolio_snapshot, insert_transaction, setup_test_db, MockMarketDataSources,
 };
 use rstock::constants::BENCHMARK_TICKER;
 use rstock::db::repos::asset_repo;
@@ -16,7 +16,7 @@ use rstock::services::metrics::{
 };
 use rstock::services::nav::rebuild_portfolio_history;
 
-fn seed_benchmark_market_data(fetcher: &mut MockPriceFetcher, days: usize) {
+fn seed_benchmark_market_data(fetcher: &mut MockMarketDataSources, days: usize) {
     let benchmark_prices: Vec<(String, f64)> = (0..days)
         .map(|i| {
             let date = (chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap()
@@ -44,7 +44,12 @@ fn seed_benchmark_market_data(fetcher: &mut MockPriceFetcher, days: usize) {
         .insert("USDEUR".to_owned(), benchmark_fx);
 }
 
-fn seed_source_prices(fetcher: &mut MockPriceFetcher, ticker: &str, base_price: f64, days: usize) {
+fn seed_source_prices(
+    fetcher: &mut MockMarketDataSources,
+    ticker: &str,
+    base_price: f64,
+    days: usize,
+) {
     let prices: Vec<(String, f64)> = (0..days)
         .map(|i| {
             let date = (chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap()
@@ -63,7 +68,7 @@ fn seed_source_prices(fetcher: &mut MockPriceFetcher, ticker: &str, base_price: 
 #[tokio::test]
 async fn test_perfectly_correlated_assets() {
     let db = setup_test_db().await;
-    let mut fetcher = MockPriceFetcher::new();
+    let mut fetcher = MockMarketDataSources::new();
     seed_benchmark_market_data(&mut fetcher, 25);
 
     let id_a = insert_asset(&db, "XFAKE1", "Fake A", "stock", "EUR").await;
@@ -117,7 +122,7 @@ async fn test_perfectly_correlated_assets() {
 #[tokio::test]
 async fn test_negatively_correlated_assets() {
     let db = setup_test_db().await;
-    let mut fetcher = MockPriceFetcher::new();
+    let mut fetcher = MockMarketDataSources::new();
     seed_benchmark_market_data(&mut fetcher, 25);
 
     let id_a = insert_asset(&db, "XFAKE1", "Fake A", "stock", "EUR").await;
@@ -174,7 +179,7 @@ async fn test_negatively_correlated_assets() {
 #[tokio::test]
 async fn test_diagonal_is_one() {
     let db = setup_test_db().await;
-    let mut fetcher = MockPriceFetcher::new();
+    let mut fetcher = MockMarketDataSources::new();
     seed_benchmark_market_data(&mut fetcher, 25);
 
     let id_a = insert_asset(&db, "XFAKE1", "Fake A", "stock", "EUR").await;
@@ -211,7 +216,7 @@ async fn test_diagonal_is_one() {
 #[tokio::test]
 async fn test_usd_asset_uses_eur_conversion() {
     let db = setup_test_db().await;
-    let mut fetcher = MockPriceFetcher::new();
+    let mut fetcher = MockMarketDataSources::new();
     seed_benchmark_market_data(&mut fetcher, 25);
 
     // One EUR asset, one USD asset with same percentage moves
@@ -259,7 +264,7 @@ async fn test_usd_asset_uses_eur_conversion() {
 #[tokio::test]
 async fn test_correlation_market_data_returns_tracked_and_benchmark_series_separately() {
     let db = setup_test_db().await;
-    let mut fetcher = MockPriceFetcher::new();
+    let mut fetcher = MockMarketDataSources::new();
     seed_source_prices(&mut fetcher, "XFAKE1", 100.0, 25);
     seed_source_prices(&mut fetcher, "XFAKE2", 50.0, 25);
     seed_benchmark_market_data(&mut fetcher, 25);
@@ -299,7 +304,7 @@ async fn test_correlation_market_data_returns_tracked_and_benchmark_series_separ
 #[tokio::test]
 async fn test_insufficient_data_produces_warning() {
     let db = setup_test_db().await;
-    let mut fetcher = MockPriceFetcher::new();
+    let mut fetcher = MockMarketDataSources::new();
     seed_benchmark_market_data(&mut fetcher, 5);
 
     let id_a = insert_asset(&db, "XFAKE1", "Fake A", "stock", "EUR").await;
@@ -335,7 +340,7 @@ async fn test_insufficient_data_produces_warning() {
 #[tokio::test]
 async fn test_correlation_matrix_carries_market_data_limitations() {
     let db = setup_test_db().await;
-    let mut fetcher = MockPriceFetcher::new();
+    let mut fetcher = MockMarketDataSources::new();
     seed_benchmark_market_data(&mut fetcher, 25);
 
     let id_a = insert_asset(&db, "XFAKE1", "Fake A", "stock", "EUR").await;
@@ -434,7 +439,7 @@ fn test_summarize_rolling_correlation_values() {
 #[tokio::test]
 async fn test_rolling_correlation_for_pair() {
     let db = setup_test_db().await;
-    let mut fetcher = MockPriceFetcher::new();
+    let mut fetcher = MockMarketDataSources::new();
     insert_asset(&db, "XFAKE1", "Fake A", "stock", "EUR").await;
     insert_asset(&db, "XFAKE2", "Fake B", "stock", "EUR").await;
 
@@ -533,7 +538,7 @@ async fn test_rolling_correlation_for_pair() {
 #[tokio::test]
 async fn test_rolling_correlation_carries_market_data_limitations() {
     let db = setup_test_db().await;
-    let mut fetcher = MockPriceFetcher::new();
+    let mut fetcher = MockMarketDataSources::new();
     insert_asset(&db, "XFAKE1", "Fake A", "stock", "EUR").await;
     insert_asset(&db, "XFAKE2", "Fake B", "stock", "EUR").await;
     seed_source_prices(&mut fetcher, "XFAKE1", 100.0, 120);
@@ -563,7 +568,7 @@ async fn test_rolling_correlation_carries_market_data_limitations() {
 #[tokio::test]
 async fn test_period_metrics_carry_benchmark_market_data_limitations() {
     let db = setup_test_db().await;
-    let mut fetcher = MockPriceFetcher::new();
+    let mut fetcher = MockMarketDataSources::new();
     seed_benchmark_market_data(&mut fetcher, 25);
 
     for i in 0..25 {
@@ -597,7 +602,7 @@ async fn test_period_metrics_carry_benchmark_market_data_limitations() {
 #[tokio::test]
 async fn test_rolling_correlation_rejects_unknown_identifier() {
     let db = setup_test_db().await;
-    let mut fetcher = MockPriceFetcher::new();
+    let mut fetcher = MockMarketDataSources::new();
     insert_asset(&db, "XFAKE1", "Fake A", "stock", "EUR").await;
 
     let prices: Vec<(String, f64)> = (0..120)
@@ -635,7 +640,7 @@ async fn test_rolling_correlation_rejects_unknown_identifier() {
 #[tokio::test]
 async fn test_rolling_correlation_uses_morningstar_code_for_funds_and_etfs() {
     let db = setup_test_db().await;
-    let mut fetcher = MockPriceFetcher::new();
+    let mut fetcher = MockMarketDataSources::new();
     insert_fund_asset(&db, "IE00XFAKE1", "Fake Fund", "EUR", "F00000FUND").await;
     insert_etf_asset(&db, "IE00XFAKE2", "Fake ETF", "EUR", "F00000ETF").await;
 

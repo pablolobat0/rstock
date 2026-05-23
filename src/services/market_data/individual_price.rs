@@ -1,12 +1,11 @@
 use sea_orm::DatabaseConnection;
 
+use super::{policy, MarketData};
 use crate::constants::{format_date, BASE_CURRENCY};
 use crate::db::repos::{daily_price_repo, exchange_rate_repo};
 use crate::models::{
     Asset, AssetType, IndividualPrice, IndividualPriceFallback, MarketDataLimitation,
 };
-use crate::services::market_data::MarketData;
-use crate::services::market_data_policy;
 
 pub(crate) async fn get_individual_price(
     db: &DatabaseConnection,
@@ -71,11 +70,9 @@ async fn get_display_price(
             Some((price, date)) => (price, date),
             None => (fallback.native_price, fallback.price_date.clone()),
         };
-    let available_on = market_data_policy::parse_market_data_date(&date, "asset price date")?;
-    let requested_end =
-        market_data_policy::parse_market_data_date(yesterday, "display asset price end date")?;
-    let limitation =
-        market_data_policy::classify_asset_limitation(asset, available_on, requested_end);
+    let available_on = policy::parse_market_data_date(&date, "asset price date")?;
+    let requested_end = policy::parse_market_data_date(yesterday, "display asset price end date")?;
+    let limitation = policy::classify_asset_limitation(asset, available_on, requested_end);
 
     Ok((price, date, limitation))
 }
@@ -109,13 +106,11 @@ async fn get_display_exchange_rate(
     else {
         return Ok((fallback.fx_rate, Vec::new()));
     };
-    let available_on = market_data_policy::parse_market_data_date(&date_string, "FX rate date")?;
-    let requested_end =
-        market_data_policy::parse_market_data_date(yesterday, "display FX end date")?;
-    let limitations =
-        market_data_policy::classify_fx_limitation(&asset.currency, available_on, requested_end)
-            .into_iter()
-            .collect();
+    let available_on = policy::parse_market_data_date(&date_string, "FX rate date")?;
+    let requested_end = policy::parse_market_data_date(yesterday, "display FX end date")?;
+    let limitations = policy::classify_fx_limitation(&asset.currency, available_on, requested_end)
+        .into_iter()
+        .collect();
 
     Ok((rate, limitations))
 }
@@ -125,7 +120,7 @@ async fn fetch_live_asset_price(
     date: &str,
     market_data: &MarketData,
 ) -> anyhow::Result<Option<f64>> {
-    let date = market_data_policy::parse_market_data_date(date, "live asset price date")?;
+    let date = policy::parse_market_data_date(date, "live asset price date")?;
     let prices = market_data
         .stock_price_history(&asset.ticker, date, date)
         .await?;
@@ -137,7 +132,7 @@ async fn fetch_live_exchange_rate(
     date: &str,
     market_data: &MarketData,
 ) -> anyhow::Result<Option<f64>> {
-    let date = market_data_policy::parse_market_data_date(date, "live FX date")?;
+    let date = policy::parse_market_data_date(date, "live FX date")?;
     let rates = market_data
         .exchange_rate_history(currency, BASE_CURRENCY, date, date)
         .await?;

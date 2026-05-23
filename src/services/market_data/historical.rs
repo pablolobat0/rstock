@@ -4,11 +4,10 @@ use anyhow::{bail, Context};
 use chrono::NaiveDate;
 use sea_orm::DatabaseConnection;
 
-use crate::constants::{format_date, BASE_CURRENCY, DATE_FORMAT, FUND_API_PADDING_DAYS};
+use super::{policy, MarketData, SourceObservation};
+use crate::constants::{format_date, BASE_CURRENCY, FUND_API_PADDING_DAYS};
 use crate::db::repos::{daily_price_repo, exchange_rate_repo};
 use crate::models::{Asset, AssetType, MarketDataValuation, ValuationMarketData};
-use crate::services::market_data_policy;
-use crate::services::price::PriceFetcher;
 
 struct LatestMarketDataDate {
     date: String,
@@ -19,9 +18,9 @@ pub(crate) async fn prepare_valuation_market_data(
     assets: &[Asset],
     start_date: &str,
     end_date: &str,
-    price_fetcher: &dyn PriceFetcher,
+    market_data: &MarketData,
 ) -> anyhow::Result<ValuationMarketData> {
-    prepare_historical_market_data(db, assets, start_date, end_date, price_fetcher).await
+    prepare_historical_market_data(db, assets, start_date, end_date, market_data).await
 }
 
 pub(crate) async fn get_required_asset_valuation_data(
@@ -39,7 +38,7 @@ pub(crate) async fn get_required_asset_valuation_data(
         })
 }
 
-pub async fn get_asset_valuation_data(
+async fn get_asset_valuation_data(
     db: &DatabaseConnection,
     asset: &Asset,
     date: &str,
@@ -56,7 +55,7 @@ pub async fn get_asset_valuation_data(
     }))
 }
 
-pub async fn get_exchange_rate_for_asset(
+pub(crate) async fn get_exchange_rate_for_asset(
     db: &DatabaseConnection,
     asset: &Asset,
     date: &str,
@@ -83,7 +82,7 @@ pub(crate) async fn get_required_asset_exchange_rates(
     Ok(rates)
 }
 
-pub async fn get_base_currency_price_series(
+pub(crate) async fn get_base_currency_price_series(
     db: &DatabaseConnection,
     asset: &Asset,
     start_date: &str,
@@ -131,7 +130,7 @@ async fn get_exchange_rate(
     exchange_rate_repo::find_rate_at_or_before(db, from_currency, BASE_CURRENCY, date).await
 }
 
-pub async fn get_closing_price(
+async fn get_closing_price(
     db: &DatabaseConnection,
     asset: &Asset,
     date: &str,
@@ -148,17 +147,17 @@ async fn prepare_historical_market_data(
     assets: &[Asset],
     start_date: &str,
     end_date: &str,
-    price_fetcher: &dyn PriceFetcher,
+    market_data: &MarketData,
 ) -> anyhow::Result<ValuationMarketData> {
     let requested_end =
-        market_data_policy::parse_market_data_date(end_date, "historical market data end date")?;
+        policy::parse_market_data_date(end_date, "historical market data end date")?;
     let currencies = infer_required_currencies(assets);
     let latest_asset_dates =
-        fill_nav_asset_prices(db, assets, start_date, end_date, price_fetcher).await?;
+        fill_nav_asset_prices(db, assets, start_date, end_date, market_data).await?;
     let latest_rate_dates = if currencies.is_empty() {
         HashMap::new()
     } else {
-        fill_nav_exchange_rates(db, &currencies, start_date, end_date, price_fetcher).await?
+        fill_nav_exchange_rates(db, &currencies, start_date, end_date, market_data).await?
     };
 
     let mut latest_required_dates = Vec::with_capacity(assets.len() + currencies.len() + 1);
@@ -174,13 +173,11 @@ async fn prepare_historical_market_data(
             );
         };
         let latest_available_date =
-            market_data_policy::parse_market_data_date(&latest_date.date, "asset price date")?;
+            policy::parse_market_data_date(&latest_date.date, "asset price date")?;
         latest_required_dates.push(latest_available_date);
-        if let Some(limitation) = market_data_policy::classify_asset_limitation(
-            asset,
-            latest_available_date,
-            requested_end,
-        ) {
+        if let Some(limitation) =
+            policy::classify_asset_limitation(asset, latest_available_date, requested_end)
+        {
             limitations.push(limitation);
         }
     }
@@ -190,13 +187,11 @@ async fn prepare_historical_market_data(
             bail!("missing required historical market data for FX rate {currency}{BASE_CURRENCY}");
         };
         let latest_available_date =
-            market_data_policy::parse_market_data_date(&latest_date.date, "FX rate date")?;
+            policy::parse_market_data_date(&latest_date.date, "FX rate date")?;
         latest_required_dates.push(latest_available_date);
-        if let Some(limitation) = market_data_policy::classify_fx_limitation(
-            &currency,
-            latest_available_date,
-            requested_end,
-        ) {
+        if let Some(limitation) =
+            policy::classify_fx_limitation(&currency, latest_available_date, requested_end)
+        {
             limitations.push(limitation);
         }
     }
@@ -244,7 +239,7 @@ async fn fill_nav_asset_prices(
     assets: &[Asset],
     start_date: &str,
     end_date: &str,
-    price_fetcher: &dyn PriceFetcher,
+    market_data: &MarketData,
 ) -> anyhow::Result<HashMap<i32, LatestMarketDataDate>> {
     tracing::debug!(asset_count = assets.len(), %start_date, %end_date, "filling NAV asset price cache");
 
@@ -262,7 +257,7 @@ async fn fill_nav_asset_prices(
                 lookup_identifier,
                 start_date,
                 end_date,
-                price_fetcher,
+                market_data,
             )
             .await;
             (*asset, result)
@@ -303,29 +298,32 @@ async fn fill_historical_asset_prices(
     lookup_identifier: &str,
     start_date: &str,
     end_date: &str,
-    price_fetcher: &dyn PriceFetcher,
+    market_data: &MarketData,
 ) -> anyhow::Result<Option<String>> {
     let source_start_date = historical_source_start_date(asset, start_date)?;
-    let prices = price_fetcher
-        .get_historical_prices(
-            lookup_identifier,
-            &source_start_date,
-            end_date,
-            &asset.asset_type,
-        )
-        .await;
+    let source_start =
+        policy::parse_market_data_date(&source_start_date, "historical asset source start date")?;
+    let source_end = policy::parse_market_data_date(end_date, "historical asset source end date")?;
+    let prices = fetch_asset_price_history(
+        market_data,
+        asset,
+        lookup_identifier,
+        source_start,
+        source_end,
+    )
+    .await;
 
     let requested_end =
-        market_data_policy::parse_market_data_date(end_date, "historical asset price end date")?;
+        policy::parse_market_data_date(end_date, "historical asset price end date")?;
     let latest_completed_date = chrono::Local::now().date_naive() - chrono::Duration::days(1);
 
     let price_map: HashMap<String, f64> = match prices {
         Ok(prices) => prices
             .into_iter()
-            .filter(|(date, _)| {
-                NaiveDate::parse_from_str(date, DATE_FORMAT)
-                    .is_ok_and(|date| date <= requested_end && date <= latest_completed_date)
+            .filter(|observation| {
+                observation.date <= requested_end && observation.date <= latest_completed_date
             })
+            .map(|observation| (format_date(observation.date), observation.value))
             .collect(),
         Err(e) => {
             tracing::warn!(ticker = %asset.ticker, error = %e, "failed to fetch historical prices");
@@ -338,14 +336,9 @@ async fn fill_historical_asset_prices(
         None => return Ok(None),
     };
 
-    let start = market_data_policy::parse_market_data_date(
-        start_date,
-        "historical asset price start date",
-    )?;
-    let fill_end = market_data_policy::parse_market_data_date(
-        &last_api_date,
-        "last historical asset price API date",
-    )?;
+    let start = policy::parse_market_data_date(start_date, "historical asset price start date")?;
+    let fill_end =
+        policy::parse_market_data_date(&last_api_date, "last historical asset price API date")?;
     let mut last_known_price =
         daily_price_repo::find_price_before(db, asset.id, start_date).await?;
 
@@ -382,10 +375,8 @@ fn lookup_identifier(asset: &Asset) -> anyhow::Result<&str> {
 
 fn historical_source_start_date(asset: &Asset, start_date: &str) -> anyhow::Result<String> {
     if matches!(asset.asset_type, AssetType::Fund | AssetType::Etf) {
-        let start = market_data_policy::parse_market_data_date(
-            start_date,
-            "historical asset source start date",
-        )?;
+        let start =
+            policy::parse_market_data_date(start_date, "historical asset source start date")?;
         return Ok(format_date(
             start - chrono::Duration::days(FUND_API_PADDING_DAYS),
         ));
@@ -398,7 +389,7 @@ async fn fill_nav_exchange_rates(
     currencies: &[String],
     start_date: &str,
     end_date: &str,
-    price_fetcher: &dyn PriceFetcher,
+    market_data: &MarketData,
 ) -> anyhow::Result<HashMap<String, LatestMarketDataDate>> {
     tracing::debug!(currency_count = currencies.len(), %start_date, %end_date, "filling NAV exchange rate cache");
 
@@ -406,7 +397,7 @@ async fn fill_nav_exchange_rates(
         .iter()
         .map(|currency| async move {
             let result =
-                fill_historical_exchange_rates(db, currency, start_date, end_date, price_fetcher)
+                fill_historical_exchange_rates(db, currency, start_date, end_date, market_data)
                     .await;
             (currency, result)
         })
@@ -449,24 +440,25 @@ async fn fill_historical_exchange_rates(
     from_currency: &str,
     start_date: &str,
     end_date: &str,
-    price_fetcher: &dyn PriceFetcher,
+    market_data: &MarketData,
 ) -> anyhow::Result<Option<String>> {
-    let pair = market_data_policy::currency_pair(from_currency);
-    let rates = price_fetcher
-        .get_historical_exchange_rates(&pair, start_date, end_date)
+    let source_start =
+        policy::parse_market_data_date(start_date, "historical FX source start date")?;
+    let source_end = policy::parse_market_data_date(end_date, "historical FX source end date")?;
+    let rates = market_data
+        .exchange_rate_history(from_currency, BASE_CURRENCY, source_start, source_end)
         .await;
 
-    let requested_end =
-        market_data_policy::parse_market_data_date(end_date, "historical FX end date")?;
+    let requested_end = policy::parse_market_data_date(end_date, "historical FX end date")?;
     let latest_completed_date = chrono::Local::now().date_naive() - chrono::Duration::days(1);
 
     let rate_map: HashMap<String, f64> = match rates {
         Ok(rates) => rates
             .into_iter()
-            .filter(|(date, _)| {
-                NaiveDate::parse_from_str(date, DATE_FORMAT)
-                    .is_ok_and(|date| date <= requested_end && date <= latest_completed_date)
+            .filter(|observation| {
+                observation.date <= requested_end && observation.date <= latest_completed_date
             })
+            .map(|observation| (format_date(observation.date), observation.value))
             .collect(),
         Err(e) => {
             tracing::warn!(%from_currency, to_currency = BASE_CURRENCY, error = %e, "failed to fetch exchange rates");
@@ -479,9 +471,8 @@ async fn fill_historical_exchange_rates(
         None => return Ok(None),
     };
 
-    let start = market_data_policy::parse_market_data_date(start_date, "historical FX start date")?;
-    let fill_end =
-        market_data_policy::parse_market_data_date(&last_api_date, "last historical FX API date")?;
+    let start = policy::parse_market_data_date(start_date, "historical FX start date")?;
+    let fill_end = policy::parse_market_data_date(&last_api_date, "last historical FX API date")?;
     let mut last_known_rate =
         exchange_rate_repo::find_rate_before(db, from_currency, BASE_CURRENCY, start_date).await?;
 
@@ -504,4 +495,25 @@ async fn fill_historical_exchange_rates(
     }
 
     Ok(Some(last_api_date))
+}
+
+async fn fetch_asset_price_history(
+    market_data: &MarketData,
+    asset: &Asset,
+    lookup_identifier: &str,
+    start: NaiveDate,
+    end: NaiveDate,
+) -> anyhow::Result<Vec<SourceObservation>> {
+    match asset.asset_type {
+        AssetType::Stock => {
+            market_data
+                .stock_price_history(lookup_identifier, start, end)
+                .await
+        }
+        AssetType::Fund | AssetType::Etf => {
+            market_data
+                .fund_price_history(lookup_identifier, start, end)
+                .await
+        }
+    }
 }

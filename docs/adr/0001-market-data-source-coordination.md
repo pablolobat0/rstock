@@ -26,7 +26,7 @@ Production wiring constructs `DefaultMarketDataSources`, injects it into `Market
 
 Tests may inject fake implementations of `MarketDataSources` into `MarketData` so tests can use mock source observations without network calls.
 
-The Python Morningstar scripts will be replaced by Rust source **Adapter** implementation inside the market data Module. Current Morningstar endpoints are preserved for now. Morningstar token caching is private implementation detail using `~/.rstock/cache/morningstar_token.json`.
+Morningstar is implemented as a Rust source **Adapter** inside the market data Module. Current Morningstar endpoints are preserved for now. Morningstar token caching is private implementation detail using `~/.rstock/cache/morningstar_token.json`.
 
 ## Consequences
 
