@@ -326,7 +326,7 @@ async fn fill_historical_asset_prices(
             .map(|observation| (format_date(observation.date), observation.value))
             .collect(),
         Err(e) => {
-            tracing::warn!(ticker = %asset.ticker, error = %e, "failed to fetch historical prices");
+            tracing::warn!(ticker = %asset.ticker, error = %format!("{e:#}"), "failed to fetch historical prices");
             return Ok(None);
         }
     };

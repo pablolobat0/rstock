@@ -44,17 +44,18 @@ impl MorningstarAdapter {
         let body = self
             .get_with_token_refresh(code, |token| {
                 self.client
-                    .get(format!("{}/{token}", self.settings.chartservice_url))
+                    .get(&self.settings.chartservice_url)
+                    .bearer_auth(token)
+                    .header("accept", "application/json, text/plain, */*")
+                    .header("origin", "https://www.morningstar.com")
+                    .header("referer", "https://www.morningstar.com/")
                     .query(&[
-                        ("currencyId", "EUR".to_owned()),
-                        ("idtype", "Morningstar".to_owned()),
-                        ("frequency", "daily".to_owned()),
+                        ("query", format!("{code}:nav,totalReturn")),
+                        ("frequency", "d".to_owned()),
                         ("startDate", start.format(DATE_FORMAT).to_string()),
                         ("endDate", end.format(DATE_FORMAT).to_string()),
-                        ("performanceType", String::new()),
-                        ("outputType", "COMPACTJSON".to_owned()),
-                        ("id", format!("{code}]2]0]FOESP$$ALL")),
-                        ("applyTrackRecordExtension", "true".to_owned()),
+                        ("trackMarketData", "3.6.5".to_owned()),
+                        ("instid", "DOTCOM".to_owned()),
                     ])
             })
             .await
@@ -70,20 +71,27 @@ impl MorningstarAdapter {
     pub(super) async fn fund_data(&self, code: &str, limit: u32) -> anyhow::Result<FundData> {
         let count = limit.max(200).to_string();
         let body = self
-            .get_with_token_refresh(code, |token| {
-                self.client
-                    .get(format!("{}/{code}/data", self.settings.holdings_url))
-                    .bearer_auth(token)
-                    .query(&[
-                        ("premiumNum", count.clone()),
-                        ("freeNum", count.clone()),
-                        ("languageId", "es-ES".to_owned()),
-                        ("locale", "es-ES".to_owned()),
-                        ("clientId", "MDC_intl".to_owned()),
-                    ])
-            })
+            .client
+            .get(format!("{}/{code}/data", self.settings.holdings_url))
+            .header("apikey", &self.settings.sal_api_key)
+            .header("accept", "application/json")
+            .query(&[
+                ("premiumNum", count.clone()),
+                ("freeNum", count),
+                ("hideesg", "false".to_owned()),
+                ("locale", "en".to_owned()),
+                ("clientId", "MDC".to_owned()),
+                ("benchmarkId", "mstarorcat".to_owned()),
+                ("version", "4.71.0".to_owned()),
+            ])
+            .send()
             .await
-            .context("Morningstar sal-service holdings request failed")?;
+            .context("failed to send Morningstar sal-service holdings request")?
+            .error_for_status()
+            .context("Morningstar sal-service holdings request returned unsuccessful HTTP status")?
+            .text()
+            .await
+            .context("failed to read Morningstar sal-service holdings response")?;
 
         parse_fund_data(&body, limit)
     }
@@ -103,7 +111,8 @@ impl MorningstarAdapter {
         };
 
         response
-            .error_for_status()?
+            .error_for_status()
+            .context("Morningstar request returned unsuccessful HTTP status")?
             .text()
             .await
             .context("failed to read Morningstar response")
@@ -147,15 +156,23 @@ impl MorningstarAdapter {
 }
 
 fn parse_timeseries(body: &str) -> anyhow::Result<Vec<SourceObservation>> {
-    // COMPACTJSON returns rows like [date, value]; duplicate source dates keep the last value.
-    let rows: Vec<Vec<Value>> =
+    let payload: Value =
         serde_json::from_str(body).context("failed to parse Morningstar timeseries")?;
-    let observations = rows
+    let series = payload
+        .as_array()
+        .and_then(|values| values.first())
+        .and_then(|value| value.get("series"))
+        .and_then(Value::as_array)
+        .context("Morningstar timeseries response did not contain a series")?;
+    let observations = series
         .iter()
-        .filter_map(|row| {
+        .filter_map(|entry| {
             Some(SourceObservation {
-                date: parse_date_value(row.first()?)?,
-                value: row.iter().skip(1).find_map(Value::as_f64)?,
+                date: parse_date_value(entry.get("date")?)?,
+                value: entry
+                    .get("totalReturn")
+                    .or_else(|| entry.get("nav"))
+                    .and_then(Value::as_f64)?,
             })
         })
         .collect();
@@ -165,23 +182,33 @@ fn parse_timeseries(body: &str) -> anyhow::Result<Vec<SourceObservation>> {
 fn parse_fund_data(body: &str, limit: u32) -> anyhow::Result<FundData> {
     let payload: Value =
         serde_json::from_str(body).context("failed to parse Morningstar fund data")?;
-    let holdings = payload
-        .pointer("/holdingPage/holdingList")
-        .or_else(|| payload.get("holdings"))
-        .and_then(Value::as_array)
-        .map_or_else(Vec::new, |values| parse_holdings(values, limit));
+    let mut holdings = Vec::new();
+    for page_key in ["equityHoldingPage", "boldHoldingPage", "otherHoldingPage"] {
+        if let Some(values) = payload
+            .get(page_key)
+            .and_then(|page| page.get("holdingList"))
+            .and_then(Value::as_array)
+        {
+            holdings.extend(parse_holdings(values, limit));
+        }
+    }
+    holdings.sort_by(|a, b| b.weighting.total_cmp(&a.weighting));
+    holdings.truncate(limit as usize);
+
+    let portfolio_date = payload
+        .get("holdingSummary")
+        .and_then(|summary| summary.get("portfolioDate"))
+        .and_then(Value::as_str)
+        .and_then(|date| date.get(..10))
+        .map(str::to_owned);
 
     Ok(FundData {
-        fund_currency: string_field(&payload, &["fundCurrency", "fund_currency", "currency"]),
+        fund_currency: string_field(&payload, &["baseCurrencyId"]),
         total_holdings: payload
-            .get("totalHoldings")
-            .or_else(|| payload.get("total_holdings"))
+            .get("numberOfHolding")
             .and_then(Value::as_i64)
             .map(|value| value as i32),
-        portfolio_date: string_field(
-            &payload,
-            &["portfolioDate", "portfolio_date", "holdingDate", "asOfDate"],
-        ),
+        portfolio_date,
         holdings,
     })
 }
