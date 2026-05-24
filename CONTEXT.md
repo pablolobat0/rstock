@@ -60,6 +60,18 @@ _Avoid_: General market research, standalone stock screener
 A fund or ETF being analyzed for possible inclusion in the portfolio, even before it exists as a portfolio asset.
 _Avoid_: Stock watchlist item, existing holding
 
+**Fund candidate correlation**:
+The relationship between a Fund candidate's daily returns and the daily returns of the portfolio NAV or a currently held Tracked asset.
+_Avoid_: Holdings overlap, benchmark beta
+
+**Common fund holding**:
+A security that appears in the reported holdings of both funds being compared, shown with each fund's own holding weight.
+_Avoid_: Portfolio exposure, combined allocation
+
+**Fund quote metadata**:
+Current fund-level facts used in fund analysis, including fund name, assets under management, and inception date.
+_Avoid_: Holdings, price history
+
 **Asset classification**:
 The portfolio-analysis taxonomy assigned to an asset, including its top-level asset class and any relevant style, credit, duration, or management attributes.
 _Avoid_: Asset type, ticker metadata
@@ -100,6 +112,14 @@ _Avoid_: Data import, portfolio table
 - Stock and FX stale-data warnings are based on **Completed weekday** cadence, not exchange-specific holiday calendars.
 - CLI features should support portfolio ledger maintenance, **Portfolio-relevant analysis**, or market data needed for portfolio valuation.
 - A **Fund candidate** can be analyzed by Morningstar code without first becoming a portfolio asset.
+- **Fund candidate correlation** can compare a **Fund candidate** with the whole portfolio through **NAV**, and with each currently held **Tracked asset** individually.
+- A **Common fund holding** is based only on the two compared funds' reported holdings, not the user's current portfolio exposure.
+- **Fund quote metadata** is displayed at analysis time and is not part of the transaction ledger or NAV history.
+- Fund analysis can run for a **Fund candidate** that is not a **Tracked asset**; when no local asset name exists, the fund name from **Fund quote metadata** is used.
+- In fund comparison, standard performance metrics use YTD, 1Y, 3Y, 5Y, and all-time periods, while the selected period controls only the correlation and aligned return graph.
+- **Fund candidate correlation** is omitted for the portfolio NAV or any held **Tracked asset** that does not have return coverage for the requested correlation period.
+- Fund comparison correlation and aligned return graph require full coverage for the selected period; they do not fall back to shorter overlapping history.
+- Fund comparison updates holdings snapshot history for each compared fund but does not show holdings snapshot diffs.
 - Assets entering the portfolio ledger should have **Asset classification** available at creation time, including when created by import.
 - **Asset classification** attributes should be consistent with the top-level asset class; equity-specific attributes belong to equity assets, and fixed-income-specific attributes belong to fixed-income assets.
 - A **Tracked asset** may exist before, during, or after it is held in the portfolio.
@@ -122,3 +142,4 @@ _Avoid_: Data import, portfolio table
 - "analysis" can mean either **Portfolio-relevant analysis** or general market research; rstock uses the portfolio-relevant meaning unless a separate research feature is explicitly introduced.
 - **Asset classification** is not the same as asset type; asset type describes the vehicle, while **Asset classification** describes how the asset contributes to portfolio analysis.
 - "asset" can mean a **Tracked asset** or a current holding; use **Tracked asset** when the asset does not need an open position.
+- Fund beta currently uses the configured benchmark; future work may allow asset-specific or fund-specific benchmark selection.
