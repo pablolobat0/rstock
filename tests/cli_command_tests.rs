@@ -1,5 +1,5 @@
 use clap::Parser;
-use rstock::cli::{Cli, Commands, PortfolioCommands, TransactionCommands};
+use rstock::cli::{Cli, Commands, CompareCommands, PortfolioCommands, TransactionCommands};
 
 #[test]
 fn get_and_portfolio_get_parse() {
@@ -38,6 +38,25 @@ fn analysis_commands_parse() {
     ])
     .expect("rolling correlation should parse");
     assert!(matches!(cli.command, Commands::Analyze(_)));
+}
+
+#[test]
+fn compare_funds_command_parses() {
+    let cli = Cli::try_parse_from([
+        "rstock", "compare", "funds", "--code-a", "F00000A", "--code-b", "F00000B", "--period",
+        "6m",
+    ])
+    .expect("compare funds should parse");
+    assert!(matches!(
+        cli.command,
+        Commands::Compare(args) if matches!(args.command, CompareCommands::Funds { .. })
+    ));
+
+    let cli = Cli::try_parse_from([
+        "rstock", "compare", "funds", "--code-a", "F00000A", "--code-b", "F00000B",
+    ])
+    .expect("compare funds should parse with default period");
+    assert!(matches!(cli.command, Commands::Compare(_)));
 }
 
 #[test]

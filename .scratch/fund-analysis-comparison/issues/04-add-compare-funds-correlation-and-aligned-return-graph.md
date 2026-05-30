@@ -25,4 +25,4 @@ Extend `compare funds` with selected-period fund-to-fund correlation and an alig
 
 ## Blocked by
 
-- `.scratch/fund-analysis-comparison/issues/03-create-compare-funds-command-with-info-performance-allocations-and-common-holdings.md`
+None - can start immediately

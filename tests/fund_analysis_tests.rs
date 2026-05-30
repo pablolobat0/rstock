@@ -7,6 +7,7 @@ use rstock::services::fund_analysis::{
     compute_breakdown, compute_fingerprint, compute_fund_analysis, compute_holding_diff,
     compute_top_n_weight,
 };
+use rstock::services::fund_comparison::compute_common_holdings;
 use rstock::services::metrics::compute_cagr;
 
 #[test]
@@ -148,6 +149,67 @@ fn test_compute_top_10_weight_uses_largest_holdings() {
 #[test]
 fn test_compute_top_10_weight_none_for_no_holdings() {
     assert!(compute_top_n_weight(&[], 10).is_none());
+}
+
+#[test]
+fn test_common_holdings_match_by_ticker() {
+    let holdings_a = vec![holding_with_ticker("Apple Inc", 5.0, Some("AAPL"))];
+    let holdings_b = vec![holding_with_ticker("Apple", 3.0, Some("AAPL"))];
+
+    let matches = compute_common_holdings(&holdings_a, &holdings_b);
+
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0].ticker.as_deref(), Some("AAPL"));
+    assert_eq!(matches[0].name_a, "Apple Inc");
+    assert_eq!(matches[0].name_b, "Apple");
+}
+
+#[test]
+fn test_common_holdings_match_by_normalized_name_without_ticker() {
+    let holdings_a = vec![holding_with_ticker("  Vanguard   Cash Reserve ", 2.0, None)];
+    let holdings_b = vec![holding_with_ticker("vanguard cash reserve", 1.5, None)];
+
+    let matches = compute_common_holdings(&holdings_a, &holdings_b);
+
+    assert_eq!(matches.len(), 1);
+    assert!(matches[0].ticker.is_none());
+}
+
+#[test]
+fn test_common_holdings_do_not_fuzzy_match_similar_names() {
+    let holdings_a = vec![holding_with_ticker("Apple Inc", 5.0, None)];
+    let holdings_b = vec![holding_with_ticker("Apple Incorporated", 3.0, None)];
+
+    let matches = compute_common_holdings(&holdings_a, &holdings_b);
+
+    assert!(matches.is_empty());
+}
+
+#[test]
+fn test_common_holdings_do_not_match_same_name_with_different_tickers() {
+    let holdings_a = vec![holding_with_ticker("Apple", 5.0, Some("AAPL"))];
+    let holdings_b = vec![holding_with_ticker("Apple", 3.0, Some("APPL"))];
+
+    let matches = compute_common_holdings(&holdings_a, &holdings_b);
+
+    assert!(matches.is_empty());
+}
+
+#[test]
+fn test_common_holdings_sort_by_larger_fund_weight() {
+    let holdings_a = vec![
+        holding_with_ticker("Low", 1.0, Some("LOW")),
+        holding_with_ticker("High", 3.0, Some("HIGH")),
+    ];
+    let holdings_b = vec![
+        holding_with_ticker("High B", 2.0, Some("HIGH")),
+        holding_with_ticker("Low B", 9.0, Some("LOW")),
+    ];
+
+    let matches = compute_common_holdings(&holdings_a, &holdings_b);
+
+    assert_eq!(matches[0].ticker.as_deref(), Some("LOW"));
+    assert_eq!(matches[1].ticker.as_deref(), Some("HIGH"));
 }
 
 #[test]
@@ -430,6 +492,17 @@ fn fund_holding_without_ticker(
         sector: sector.map(str::to_owned),
         country: country.map(str::to_owned),
         currency: currency.map(str::to_owned),
+    }
+}
+
+fn holding_with_ticker(name: &str, weighting: f64, ticker: Option<&str>) -> FundHolding {
+    FundHolding {
+        name: name.to_owned(),
+        weighting,
+        ticker: ticker.map(str::to_owned),
+        sector: None,
+        country: None,
+        currency: None,
     }
 }
 

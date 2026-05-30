@@ -1,20 +1,17 @@
 use std::collections::HashMap;
 
 use anyhow::Context;
-use chrono::{Datelike, NaiveDate};
+use chrono::NaiveDate;
 use sea_orm::DatabaseConnection;
 
-use crate::constants::{
-    format_date, BENCHMARK_TICKER, DATE_FORMAT, FIVE_YEAR_TRADING_DAYS, ONE_YEAR_TRADING_DAYS,
-    THREE_YEAR_TRADING_DAYS,
-};
+use crate::constants::format_date;
 use crate::db::repos::{asset_repo, fund_holdings_snapshot_repo};
 use crate::models::{
-    AllocationEntry, FundAnalysisResult, FundData, FundHolding, FundPeriodMetrics,
-    FundQuoteMetadata, HoldingChange, HoldingChangeType,
+    AllocationEntry, FundAnalysisResult, FundData, FundHolding, FundQuoteMetadata, HoldingChange,
+    HoldingChangeType,
 };
-use crate::services::market_data::{MarketData, SourceObservation};
-use crate::services::metrics;
+use crate::services::fund_metrics::{compute_standard_fund_metrics, format_source_observations};
+use crate::services::market_data::MarketData;
 
 pub async fn compute_fund_analysis(
     db: &DatabaseConnection,
@@ -52,33 +49,7 @@ pub async fn compute_fund_analysis(
         .cloned()
         .collect();
 
-    let earliest_date = fund_prices
-        .first()
-        .map_or("2000-01-01", |(d, _)| d.as_str());
-    let benchmark_start =
-        NaiveDate::parse_from_str(earliest_date, DATE_FORMAT).context("invalid fund price date")?;
-    let benchmark_prices = market_data
-        .stock_price_history(BENCHMARK_TICKER, benchmark_start, today)
-        .await
-        .map(format_source_observations)
-        .unwrap_or_default();
-
-    let benchmark_returns = metrics::compute_log_returns(&benchmark_prices);
-
-    let ytd_start = NaiveDate::from_ymd_opt(today.year(), 1, 1).expect("Jan 1 always valid");
-    let ytd = compute_period_metrics(&fund_prices, &benchmark_returns, ytd_start, today);
-    let one_year =
-        compute_trailing_period_metrics(&fund_prices, &benchmark_returns, ONE_YEAR_TRADING_DAYS);
-    let three_year =
-        compute_trailing_period_metrics(&fund_prices, &benchmark_returns, THREE_YEAR_TRADING_DAYS);
-    let five_year =
-        compute_trailing_period_metrics(&fund_prices, &benchmark_returns, FIVE_YEAR_TRADING_DAYS);
-    let all_time = if fund_prices.len() >= 2 {
-        let start = NaiveDate::parse_from_str(&fund_prices[0].0, DATE_FORMAT).ok();
-        start.and_then(|s| compute_period_metrics(&fund_prices, &benchmark_returns, s, today))
-    } else {
-        None
-    };
+    let metrics = compute_standard_fund_metrics(market_data, &fund_prices, today).await;
 
     let sector_breakdown = compute_breakdown(&equity_holdings, |h| h.sector.clone());
     let country_breakdown = compute_breakdown(&equity_holdings, |h| h.country.clone());
@@ -115,11 +86,11 @@ pub async fn compute_fund_analysis(
         sector_breakdown,
         country_breakdown,
         currency_breakdown,
-        ytd,
-        one_year,
-        three_year,
-        five_year,
-        all_time,
+        ytd: metrics.ytd,
+        one_year: metrics.one_year,
+        three_year: metrics.three_year,
+        five_year: metrics.five_year,
+        all_time: metrics.all_time,
         holdings_changed,
         last_snapshot_date,
         holding_diff,
@@ -165,13 +136,6 @@ pub fn compute_fingerprint(holdings: &[FundHolding]) -> String {
         .map(|(name, weight)| serde_json::json!([name, weight]))
         .collect();
     serde_json::to_string(&compact).unwrap_or_default()
-}
-
-fn format_source_observations(observations: Vec<SourceObservation>) -> Vec<(String, f64)> {
-    observations
-        .into_iter()
-        .map(|observation| (format_date(observation.date), observation.value))
-        .collect()
 }
 
 pub fn compute_holding_diff(
@@ -251,83 +215,6 @@ fn is_equity_holding(holding: &FundHolding) -> bool {
         .ticker
         .as_deref()
         .is_some_and(|ticker| !ticker.trim().is_empty())
-}
-
-fn compute_period_metrics(
-    prices: &[(String, f64)],
-    benchmark_returns: &HashMap<String, f64>,
-    start: NaiveDate,
-    end: NaiveDate,
-) -> Option<FundPeriodMetrics> {
-    let start_str = format_date(start);
-    let end_str = format_date(end);
-
-    let window: Vec<&(String, f64)> = prices
-        .iter()
-        .filter(|(d, _)| d.as_str() >= start_str.as_str() && d.as_str() <= end_str.as_str())
-        .collect();
-
-    if window.len() < 2 {
-        return None;
-    }
-
-    let start_price = window.first().unwrap().1;
-    let end_price = window.last().unwrap().1;
-    if start_price <= 0.0 {
-        return None;
-    }
-    let total_return = (end_price / start_price - 1.0) * 100.0;
-    let cagr = metrics::compute_cagr(
-        window.first().unwrap().0.as_str(),
-        window.last().unwrap().0.as_str(),
-        start_price,
-        end_price,
-    );
-
-    let window_prices: Vec<(String, f64)> = window.iter().map(|(d, p)| (d.clone(), *p)).collect();
-    let fund_returns = metrics::compute_log_returns(&window_prices);
-    let nav_values: Vec<f64> = window.iter().map(|(_, p)| *p).collect();
-
-    let daily_returns: Vec<f64> = {
-        let mut sorted_dates: Vec<&String> = fund_returns.keys().collect();
-        sorted_dates.sort();
-        sorted_dates.iter().map(|d| fund_returns[*d]).collect()
-    };
-
-    let volatility = metrics::compute_volatility(&daily_returns);
-    let sharpe = metrics::compute_sharpe(&daily_returns);
-    let sortino = metrics::compute_sortino(&daily_returns);
-    let max_drawdown = metrics::compute_max_drawdown(&nav_values);
-
-    let (aligned_fund, aligned_bench) =
-        metrics::align_return_series(&fund_returns, benchmark_returns);
-    let beta = metrics::compute_beta(&aligned_fund, &aligned_bench);
-
-    Some(FundPeriodMetrics {
-        total_return,
-        cagr,
-        volatility,
-        sharpe,
-        sortino,
-        max_drawdown,
-        beta,
-    })
-}
-
-fn compute_trailing_period_metrics(
-    prices: &[(String, f64)],
-    benchmark_returns: &HashMap<String, f64>,
-    trading_days: usize,
-) -> Option<FundPeriodMetrics> {
-    if prices.len() < 2 {
-        return None;
-    }
-
-    let window_start = prices.len().saturating_sub(trading_days + 1);
-    let start = NaiveDate::parse_from_str(&prices[window_start].0, DATE_FORMAT).ok()?;
-    let end = NaiveDate::parse_from_str(&prices.last()?.0, DATE_FORMAT).ok()?;
-
-    compute_period_metrics(prices, benchmark_returns, start, end)
 }
 
 pub fn compute_breakdown(
