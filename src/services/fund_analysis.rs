@@ -1,25 +1,31 @@
 use std::collections::HashMap;
 
 use anyhow::Context;
-use chrono::{Datelike, NaiveDate};
+use chrono::{Datelike, Duration, NaiveDate};
 use sea_orm::DatabaseConnection;
 
 use crate::constants::{
     format_date, BENCHMARK_TICKER, DATE_FORMAT, FIVE_YEAR_TRADING_DAYS, ONE_YEAR_TRADING_DAYS,
     THREE_YEAR_TRADING_DAYS,
 };
-use crate::db::repos::{asset_repo, fund_holdings_snapshot_repo};
+use crate::db::repos::{
+    asset_repo, fund_holdings_snapshot_repo, portfolio_asset_history_repo, portfolio_history_repo,
+};
 use crate::models::{
-    AllocationEntry, FundAnalysisResult, FundData, FundHolding, FundPeriodMetrics,
+    AllocationEntry, Asset, CandidateCorrelationPeriod, CandidateCorrelationResult,
+    CandidateCorrelationRow, FundAnalysisResult, FundData, FundHolding, FundPeriodMetrics,
     FundQuoteMetadata, HoldingChange, HoldingChangeType,
 };
 use crate::services::market_data::{MarketData, SourceObservation};
-use crate::services::metrics;
+use crate::services::{analytics, metrics, portfolio};
+
+const COVERAGE_TOLERANCE_DAYS: i64 = 7;
 
 pub async fn compute_fund_analysis(
     db: &DatabaseConnection,
     market_data: &MarketData,
     ms_code: &str,
+    correlation_period: CandidateCorrelationPeriod,
 ) -> anyhow::Result<FundAnalysisResult> {
     let today = chrono::Local::now().date_naive();
     let today_str = format_date(today);
@@ -85,6 +91,9 @@ pub async fn compute_fund_analysis(
     let currency_breakdown = compute_breakdown(&equity_holdings, |h| h.currency.clone());
     let top_10_weight = compute_top_n_weight(&all_holdings, 10);
 
+    let candidate_correlation =
+        compute_candidate_correlation(db, market_data, &fund_prices, correlation_period).await;
+
     let (holdings_changed, last_snapshot_date, holding_diff) = compute_snapshot_diff(
         db,
         ms_code,
@@ -120,10 +129,296 @@ pub async fn compute_fund_analysis(
         three_year,
         five_year,
         all_time,
+        candidate_correlation,
         holdings_changed,
         last_snapshot_date,
         holding_diff,
     })
+}
+
+async fn compute_candidate_correlation(
+    db: &DatabaseConnection,
+    market_data: &MarketData,
+    fund_prices: &[(String, f64)],
+    period: CandidateCorrelationPeriod,
+) -> CandidateCorrelationResult {
+    let period_label = period.label.to_owned();
+    let rebuild_error = portfolio::trigger_rebuild_if_needed(db, market_data)
+        .await
+        .err()
+        .map(|error| {
+            tracing::warn!(error = %error, "failed to rebuild portfolio before fund candidate correlation");
+            "portfolio rebuild failed".to_owned()
+        });
+
+    let latest = match portfolio_history_repo::find_latest(db).await {
+        Ok(Some(snapshot)) => snapshot,
+        Ok(None) => {
+            return CandidateCorrelationResult {
+                period_label,
+                rows: vec![unavailable_portfolio_row("portfolio history unavailable")],
+            };
+        }
+        Err(error) => {
+            tracing::warn!(error = %error, "failed to load portfolio history for fund candidate correlation");
+            return CandidateCorrelationResult {
+                period_label,
+                rows: vec![unavailable_portfolio_row("portfolio history unavailable")],
+            };
+        }
+    };
+
+    let end = match NaiveDate::parse_from_str(&latest.date, DATE_FORMAT) {
+        Ok(date) => date,
+        Err(error) => {
+            tracing::warn!(date = latest.date, error = %error, "invalid latest portfolio NAV date");
+            return CandidateCorrelationResult {
+                period_label,
+                rows: vec![unavailable_portfolio_row(
+                    "portfolio history date unavailable",
+                )],
+            };
+        }
+    };
+    let start = end - Duration::days(period.days);
+    let start_str = format_date(start);
+    let end_str = format_date(end);
+
+    let candidate_window = window_prices(fund_prices, &start_str, &end_str);
+    let candidate_reason = coverage_reason(&candidate_window, start, end, "candidate");
+    let candidate_returns = metrics::compute_log_returns(&candidate_window);
+
+    let mut rows = Vec::new();
+    let portfolio_reason = rebuild_error.as_deref().or(candidate_reason.as_deref());
+    rows.push(if let Some(reason) = portfolio_reason {
+        unavailable_portfolio_row(reason)
+    } else {
+        compute_portfolio_correlation_row(db, &candidate_returns, start, end).await
+    });
+
+    rows.extend(
+        compute_asset_correlation_rows(
+            db,
+            market_data,
+            &candidate_returns,
+            candidate_reason.as_deref(),
+            &start_str,
+            &end_str,
+            start,
+            end,
+        )
+        .await,
+    );
+
+    sort_candidate_correlation_rows(&mut rows);
+    CandidateCorrelationResult { period_label, rows }
+}
+
+async fn compute_portfolio_correlation_row(
+    db: &DatabaseConnection,
+    candidate_returns: &HashMap<String, f64>,
+    start: NaiveDate,
+    end: NaiveDate,
+) -> CandidateCorrelationRow {
+    let start_str = format_date(start);
+    let end_str = format_date(end);
+    let snapshots = match portfolio_history_repo::find_between(db, &start_str, &end_str).await {
+        Ok(snapshots) => snapshots,
+        Err(error) => {
+            tracing::warn!(error = %error, "failed to load portfolio NAV series for fund candidate correlation");
+            return unavailable_portfolio_row("portfolio NAV unavailable");
+        }
+    };
+
+    let nav_prices: Vec<(String, f64)> = snapshots
+        .into_iter()
+        .map(|snapshot| (snapshot.date, snapshot.nav))
+        .collect();
+
+    if let Some(reason) = coverage_reason(&nav_prices, start, end, "portfolio NAV") {
+        return unavailable_portfolio_row(&reason);
+    }
+
+    let portfolio_returns = metrics::compute_log_returns(&nav_prices);
+    correlation_row("Portfolio NAV", true, candidate_returns, &portfolio_returns)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn compute_asset_correlation_rows(
+    db: &DatabaseConnection,
+    market_data: &MarketData,
+    candidate_returns: &HashMap<String, f64>,
+    candidate_reason: Option<&str>,
+    start_str: &str,
+    end_str: &str,
+    start: NaiveDate,
+    end: NaiveDate,
+) -> Vec<CandidateCorrelationRow> {
+    let latest_assets = match portfolio_asset_history_repo::find_by_date(db, end_str).await {
+        Ok(snapshots) => snapshots,
+        Err(error) => {
+            tracing::warn!(error = %error, "failed to load current holdings for fund candidate correlation");
+            return Vec::new();
+        }
+    };
+    let asset_ids: Vec<i32> = latest_assets
+        .iter()
+        .map(|snapshot| snapshot.asset_id)
+        .collect();
+    let assets = match asset_repo::find_by_ids(db, asset_ids.into_iter()).await {
+        Ok(assets) => assets,
+        Err(error) => {
+            tracing::warn!(error = %error, "failed to load held assets for fund candidate correlation");
+            return Vec::new();
+        }
+    };
+
+    if let Some(reason) = candidate_reason {
+        return assets
+            .into_iter()
+            .map(|asset| unavailable_asset_row(asset.name, reason))
+            .collect();
+    }
+
+    let mut rows = Vec::with_capacity(assets.len());
+    for asset in assets {
+        rows.push(
+            compute_one_asset_correlation_row(
+                db,
+                market_data,
+                asset,
+                candidate_returns,
+                start_str,
+                end_str,
+                start,
+                end,
+            )
+            .await,
+        );
+    }
+    rows
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn compute_one_asset_correlation_row(
+    db: &DatabaseConnection,
+    market_data: &MarketData,
+    asset: Asset,
+    candidate_returns: &HashMap<String, f64>,
+    start_str: &str,
+    end_str: &str,
+    start: NaiveDate,
+    end: NaiveDate,
+) -> CandidateCorrelationRow {
+    let asset_name = asset.name.clone();
+    let series = match market_data
+        .tracked_correlation_market_data(db, vec![asset], start_str, end_str)
+        .await
+    {
+        Ok((mut series, _limitations)) => series.pop(),
+        Err(error) => {
+            tracing::warn!(asset = asset_name, error = %error, "failed to load held-asset series for fund candidate correlation");
+            return unavailable_asset_row(asset_name, "asset price history unavailable");
+        }
+    };
+
+    let Some(series) = series else {
+        return unavailable_asset_row(asset_name, "asset price history unavailable");
+    };
+
+    if let Some(reason) = coverage_reason(&series.prices, start, end, &asset_name) {
+        return unavailable_asset_row(asset_name, &reason);
+    }
+
+    let asset_returns = metrics::compute_log_returns(&series.prices);
+    correlation_row(&asset_name, false, candidate_returns, &asset_returns)
+}
+
+fn correlation_row(
+    label: &str,
+    is_portfolio: bool,
+    candidate_returns: &HashMap<String, f64>,
+    comparison_returns: &HashMap<String, f64>,
+) -> CandidateCorrelationRow {
+    match analytics::compute_return_correlation(candidate_returns, comparison_returns) {
+        Some(correlation) => CandidateCorrelationRow {
+            label: label.to_owned(),
+            correlation: Some(correlation),
+            reason: None,
+            is_portfolio,
+        },
+        None => CandidateCorrelationRow {
+            label: label.to_owned(),
+            correlation: None,
+            reason: Some("insufficient aligned returns".to_owned()),
+            is_portfolio,
+        },
+    }
+}
+
+fn coverage_reason(
+    prices: &[(String, f64)],
+    requested_start: NaiveDate,
+    requested_end: NaiveDate,
+    label: &str,
+) -> Option<String> {
+    let first = prices
+        .first()
+        .and_then(|(date, _)| NaiveDate::parse_from_str(date, DATE_FORMAT).ok());
+    let last = prices
+        .last()
+        .and_then(|(date, _)| NaiveDate::parse_from_str(date, DATE_FORMAT).ok());
+
+    let (Some(first), Some(last)) = (first, last) else {
+        return Some(format!("{label} history unavailable"));
+    };
+
+    if first > requested_start + Duration::days(COVERAGE_TOLERANCE_DAYS) {
+        return Some(format!("{label} lacks start coverage"));
+    }
+    if last < requested_end - Duration::days(COVERAGE_TOLERANCE_DAYS) {
+        return Some(format!("{label} lacks recent coverage"));
+    }
+    None
+}
+
+fn window_prices(prices: &[(String, f64)], start_str: &str, end_str: &str) -> Vec<(String, f64)> {
+    prices
+        .iter()
+        .filter(|(date, _)| date.as_str() >= start_str && date.as_str() <= end_str)
+        .cloned()
+        .collect()
+}
+
+fn unavailable_portfolio_row(reason: &str) -> CandidateCorrelationRow {
+    CandidateCorrelationRow {
+        label: "Portfolio NAV".to_owned(),
+        correlation: None,
+        reason: Some(reason.to_owned()),
+        is_portfolio: true,
+    }
+}
+
+fn unavailable_asset_row(label: String, reason: &str) -> CandidateCorrelationRow {
+    CandidateCorrelationRow {
+        label,
+        correlation: None,
+        reason: Some(reason.to_owned()),
+        is_portfolio: false,
+    }
+}
+
+fn sort_candidate_correlation_rows(rows: &mut [CandidateCorrelationRow]) {
+    rows.sort_by(|left, right| {
+        right.is_portfolio.cmp(&left.is_portfolio).then_with(|| {
+            match (left.correlation, right.correlation) {
+                (Some(a), Some(b)) => b.partial_cmp(&a).unwrap_or(std::cmp::Ordering::Equal),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => left.label.cmp(&right.label),
+            }
+        })
+    });
 }
 
 fn quote_metadata_or_warn(

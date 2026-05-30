@@ -1,6 +1,6 @@
 # Add Fund Candidate Correlation To Analyze Fund
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

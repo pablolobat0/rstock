@@ -1,5 +1,7 @@
 use clap::Parser;
-use rstock::cli::{Cli, Commands, PortfolioCommands, TransactionCommands};
+use rstock::cli::{
+    AnalyzeCommands, Cli, Commands, CorrelationPeriod, PortfolioCommands, TransactionCommands,
+};
 
 #[test]
 fn get_and_portfolio_get_parse() {
@@ -26,7 +28,25 @@ fn removed_command_paths_do_not_parse() {
 fn analysis_commands_parse() {
     let cli = Cli::try_parse_from(["rstock", "analyze", "fund", "--code", "F00000TEST"])
         .expect("analyze fund should parse");
-    assert!(matches!(cli.command, Commands::Analyze(_)));
+    assert!(matches!(
+        cli.command,
+        Commands::Analyze(args) if matches!(args.command, AnalyzeCommands::Fund { period: CorrelationPeriod::OneYear, .. })
+    ));
+
+    let cli = Cli::try_parse_from([
+        "rstock",
+        "analyze",
+        "fund",
+        "--code",
+        "F00000TEST",
+        "--period",
+        "30d",
+    ])
+    .expect("analyze fund with period should parse");
+    assert!(matches!(
+        cli.command,
+        Commands::Analyze(args) if matches!(args.command, AnalyzeCommands::Fund { period: CorrelationPeriod::ThirtyDays, .. })
+    ));
 
     let cli = Cli::try_parse_from([
         "rstock",

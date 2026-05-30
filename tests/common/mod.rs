@@ -226,6 +226,30 @@ pub async fn insert_portfolio_snapshot(
         .expect("failed to insert portfolio snapshot");
 }
 
+pub async fn insert_portfolio_asset_snapshot(
+    db: &DatabaseConnection,
+    date: &str,
+    asset_id: i32,
+    quantity: f64,
+    closing_price: f64,
+    market_value: f64,
+    exchange_rate: f64,
+) {
+    let record = portfolio_asset_history::ActiveModel {
+        date: Set(date.to_owned()),
+        asset_id: Set(asset_id),
+        quantity: Set(quantity),
+        closing_price: Set(closing_price),
+        market_value: Set(market_value),
+        exchange_rate: Set(exchange_rate),
+        ..Default::default()
+    };
+    portfolio_asset_history::Entity::insert(record)
+        .exec(db)
+        .await
+        .expect("failed to insert portfolio asset snapshot");
+}
+
 pub async fn get_portfolio_snapshot(
     db: &DatabaseConnection,
     date: &str,
