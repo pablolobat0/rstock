@@ -10,8 +10,8 @@ use crate::constants::{
 };
 use crate::db::repos::{asset_repo, fund_holdings_snapshot_repo};
 use crate::models::{
-    AllocationEntry, FundAnalysisResult, FundHolding, FundPeriodMetrics, HoldingChange,
-    HoldingChangeType,
+    AllocationEntry, FundAnalysisResult, FundData, FundHolding, FundPeriodMetrics,
+    FundQuoteMetadata, HoldingChange, HoldingChangeType,
 };
 use crate::services::market_data::{MarketData, SourceObservation};
 use crate::services::metrics;
@@ -25,10 +25,11 @@ pub async fn compute_fund_analysis(
     let today_str = format_date(today);
 
     let asset = asset_repo::find_by_morningstar_code(db, ms_code).await?;
-    let name = asset.as_ref().map(|a| a.name.clone());
+    let local_name = asset.as_ref().map(|a| a.name.clone());
 
-    let (fund_data_result, prices_result) = tokio::join!(
+    let (fund_data_result, quote_metadata_result, prices_result) = tokio::join!(
         market_data.fund_data(ms_code, 200),
+        market_data.fund_quote_metadata(ms_code),
         market_data.fund_price_history(
             ms_code,
             NaiveDate::from_ymd_opt(2000, 1, 1).expect("literal date should be valid"),
@@ -37,9 +38,11 @@ pub async fn compute_fund_analysis(
     );
 
     let fund_data = fund_data_result?;
+    let quote_metadata = quote_metadata_or_warn(ms_code, quote_metadata_result);
     let fund_prices = format_source_observations(prices_result?);
 
-    let fund_currency = fund_data.fund_currency.clone();
+    let fund_currency = fund_currency(&fund_data, quote_metadata.as_ref());
+    let name = fund_name(local_name, quote_metadata.as_ref());
     let total_holdings = fund_data.total_holdings;
     let portfolio_date = fund_data.portfolio_date.clone();
     let all_holdings = fund_data.holdings;
@@ -98,6 +101,13 @@ pub async fn compute_fund_analysis(
         ms_code: ms_code.to_owned(),
         name,
         fund_currency,
+        aum: quote_metadata.as_ref().and_then(|metadata| metadata.aum),
+        aum_currency: quote_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.aum_currency.clone()),
+        inception_date: quote_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.inception_date.clone()),
         total_holdings,
         portfolio_date,
         top_10_weight,
@@ -114,6 +124,34 @@ pub async fn compute_fund_analysis(
         last_snapshot_date,
         holding_diff,
     })
+}
+
+fn quote_metadata_or_warn(
+    ms_code: &str,
+    result: anyhow::Result<FundQuoteMetadata>,
+) -> Option<FundQuoteMetadata> {
+    result
+        .map_err(|error| {
+            tracing::warn!(ms_code, error = %error, "failed to fetch fund quote metadata");
+            error
+        })
+        .ok()
+}
+
+fn fund_currency(
+    fund_data: &FundData,
+    quote_metadata: Option<&FundQuoteMetadata>,
+) -> Option<String> {
+    quote_metadata
+        .and_then(|metadata| metadata.quote_currency.clone())
+        .or_else(|| fund_data.fund_currency.clone())
+}
+
+fn fund_name(
+    local_name: Option<String>,
+    quote_metadata: Option<&FundQuoteMetadata>,
+) -> Option<String> {
+    local_name.or_else(|| quote_metadata.and_then(|metadata| metadata.name.clone()))
 }
 
 pub fn compute_fingerprint(holdings: &[FundHolding]) -> String {

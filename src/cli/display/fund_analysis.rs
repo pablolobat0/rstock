@@ -26,26 +26,50 @@ fn print_header(result: &FundAnalysisResult) {
     let name = result.name.as_deref().unwrap_or("Unknown Fund");
     println!("{}  [{}]", name.bold().underline(), result.ms_code,);
 
-    let mut info_parts = Vec::new();
-    if let Some(ref currency) = result.fund_currency {
-        info_parts.push(format!("Currency: {currency}"));
-    }
-    if let Some(total) = result.total_holdings {
-        info_parts.push(format!("Total Holdings: {total}"));
-    }
-    if let Some(weight) = result.top_10_weight {
-        info_parts.push(format!(
+    let info_parts = [
+        format!(
+            "Currency: {}",
+            result.fund_currency.as_deref().unwrap_or("N/A")
+        ),
+        format!("AUM: {}", display_aum(result)),
+        format!(
+            "Inception: {}",
+            result
+                .inception_date
+                .as_deref()
+                .map_or_else(|| "N/A".to_owned(), display_date)
+        ),
+        format!(
+            "Total Holdings: {}",
+            result
+                .total_holdings
+                .map_or_else(|| "N/A".to_owned(), |total| total.to_string())
+        ),
+        format!(
             "Top 10 Weight: {}",
-            format_eu(&format!("{weight:.2}%"))
-        ));
-    }
-    if let Some(ref date) = result.portfolio_date {
-        info_parts.push(format!("Portfolio Date: {}", display_date(date)));
-    }
-    if !info_parts.is_empty() {
-        println!("{}", info_parts.join("  |  "));
-    }
+            result.top_10_weight.map_or_else(
+                || "N/A".to_owned(),
+                |weight| format_eu(&format!("{weight:.2}%"))
+            )
+        ),
+        format!(
+            "Portfolio Date: {}",
+            result
+                .portfolio_date
+                .as_deref()
+                .map_or_else(|| "N/A".to_owned(), display_date)
+        ),
+    ];
+    println!("{}", info_parts.join("  |  "));
     println!();
+}
+
+fn display_aum(result: &FundAnalysisResult) -> String {
+    match (result.aum, result.aum_currency.as_deref()) {
+        (Some(aum), Some(currency)) => format!("{} {currency}", format_eu(&format!("{aum:.2}"))),
+        (Some(aum), None) => format!("{} N/A", format_eu(&format!("{aum:.2}"))),
+        (None, _) => "N/A".to_owned(),
+    }
 }
 
 fn print_performance(result: &FundAnalysisResult) {

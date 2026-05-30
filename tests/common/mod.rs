@@ -9,7 +9,7 @@ use rstock::db::entities::{
     asset, daily_asset_price, daily_exchange_rate, portfolio_asset_history, portfolio_history,
     transaction,
 };
-use rstock::models::{f64_to_cents, FundData, StockInfo};
+use rstock::models::{f64_to_cents, FundData, FundQuoteMetadata, StockInfo};
 use rstock::services::market_data::{MarketData, MarketDataSources, SourceObservation};
 
 pub async fn setup_test_db() -> DatabaseConnection {
@@ -289,6 +289,7 @@ pub struct MockMarketDataSources {
     pub exchange_rates: HashMap<String, Vec<(String, f64)>>,
     pub stock_info: HashMap<String, StockInfo>,
     pub fund_data: HashMap<String, FundData>,
+    pub fund_quote_metadata: HashMap<String, FundQuoteMetadata>,
 }
 
 impl MockMarketDataSources {
@@ -298,6 +299,7 @@ impl MockMarketDataSources {
             exchange_rates: HashMap::new(),
             stock_info: HashMap::new(),
             fund_data: HashMap::new(),
+            fund_quote_metadata: HashMap::new(),
         }
     }
 }
@@ -361,6 +363,13 @@ impl MarketDataSources for MockMarketDataSources {
             .get(code)
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("no mock fund data for {code}"))
+    }
+
+    async fn fund_quote_metadata(&self, code: &str) -> anyhow::Result<FundQuoteMetadata> {
+        self.fund_quote_metadata
+            .get(code)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("no mock fund quote metadata for {code}"))
     }
 }
 

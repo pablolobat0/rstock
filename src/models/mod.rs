@@ -11,7 +11,8 @@ pub use classification::{
     enum_to_db, AssetClass, AssetClassification, BondCredit, BondDuration, EquityStyle, Management,
 };
 pub use fund_analysis::{
-    FundAnalysisResult, FundData, FundPeriodMetrics, HoldingChange, HoldingChangeType,
+    FundAnalysisResult, FundData, FundPeriodMetrics, FundQuoteMetadata, HoldingChange,
+    HoldingChangeType,
 };
 pub use market_data::{
     BaseCurrencyPriceSeries, CorrelationMarketData, CorrelationMarketDataSeries, IndividualPrice,

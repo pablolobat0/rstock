@@ -1,10 +1,11 @@
 mod common;
 
-use common::setup_test_db;
+use common::{insert_fund_asset, market_data, setup_test_db, MockMarketDataSources};
 use rstock::db::repos::fund_holdings_snapshot_repo;
-use rstock::models::{FundHolding, HoldingChangeType};
+use rstock::models::{FundData, FundHolding, FundQuoteMetadata, HoldingChangeType};
 use rstock::services::fund_analysis::{
-    compute_breakdown, compute_fingerprint, compute_holding_diff, compute_top_n_weight,
+    compute_breakdown, compute_fingerprint, compute_fund_analysis, compute_holding_diff,
+    compute_top_n_weight,
 };
 use rstock::services::metrics::compute_cagr;
 
@@ -258,6 +259,83 @@ fn test_fingerprint_changes_with_different_weights() {
 }
 
 #[tokio::test]
+async fn test_fund_analysis_uses_quote_metadata_for_untracked_fund() {
+    let db = setup_test_db().await;
+    let mut sources = MockMarketDataSources::new();
+    sources.fund_data.insert("XQUOTE1".to_owned(), fund_data());
+    sources.fund_quote_metadata.insert(
+        "XQUOTE1".to_owned(),
+        FundQuoteMetadata {
+            name: Some("Morningstar Fund Name".to_owned()),
+            aum: Some(1234567.89),
+            aum_currency: Some("USD".to_owned()),
+            inception_date: Some("2010-02-03".to_owned()),
+            quote_currency: Some("USD".to_owned()),
+        },
+    );
+    sources
+        .historical_prices
+        .insert("XQUOTE1".to_owned(), fund_prices());
+
+    let result = compute_fund_analysis(&db, &market_data(&sources), "XQUOTE1")
+        .await
+        .unwrap();
+
+    assert_eq!(result.name.as_deref(), Some("Morningstar Fund Name"));
+    assert_eq!(result.fund_currency.as_deref(), Some("USD"));
+    assert_eq!(result.aum, Some(1234567.89));
+    assert_eq!(result.aum_currency.as_deref(), Some("USD"));
+    assert_eq!(result.inception_date.as_deref(), Some("2010-02-03"));
+}
+
+#[tokio::test]
+async fn test_fund_analysis_local_name_wins_and_quote_currency_overrides_holdings_currency() {
+    let db = setup_test_db().await;
+    insert_fund_asset(&db, "XLOCAL1", "Local Fund Name", "EUR", "XQUOTE2").await;
+    let mut sources = MockMarketDataSources::new();
+    sources.fund_data.insert("XQUOTE2".to_owned(), fund_data());
+    sources.fund_quote_metadata.insert(
+        "XQUOTE2".to_owned(),
+        FundQuoteMetadata {
+            name: Some("Morningstar Fund Name".to_owned()),
+            aum: None,
+            aum_currency: None,
+            inception_date: None,
+            quote_currency: Some("GBP".to_owned()),
+        },
+    );
+    sources
+        .historical_prices
+        .insert("XQUOTE2".to_owned(), fund_prices());
+
+    let result = compute_fund_analysis(&db, &market_data(&sources), "XQUOTE2")
+        .await
+        .unwrap();
+
+    assert_eq!(result.name.as_deref(), Some("Local Fund Name"));
+    assert_eq!(result.fund_currency.as_deref(), Some("GBP"));
+}
+
+#[tokio::test]
+async fn test_fund_analysis_quote_metadata_failure_is_non_fatal() {
+    let db = setup_test_db().await;
+    let mut sources = MockMarketDataSources::new();
+    sources.fund_data.insert("XQUOTE3".to_owned(), fund_data());
+    sources
+        .historical_prices
+        .insert("XQUOTE3".to_owned(), fund_prices());
+
+    let result = compute_fund_analysis(&db, &market_data(&sources), "XQUOTE3")
+        .await
+        .unwrap();
+
+    assert!(result.name.is_none());
+    assert_eq!(result.fund_currency.as_deref(), Some("EUR"));
+    assert!(result.aum.is_none());
+    assert!(result.inception_date.is_none());
+}
+
+#[tokio::test]
 async fn test_snapshot_insert_and_find_latest() {
     let db = setup_test_db().await;
 
@@ -353,4 +431,30 @@ fn fund_holding_without_ticker(
         country: country.map(str::to_owned),
         currency: currency.map(str::to_owned),
     }
+}
+
+fn fund_data() -> FundData {
+    FundData {
+        fund_currency: Some("EUR".to_owned()),
+        total_holdings: Some(2),
+        portfolio_date: Some("2025-01-31".to_owned()),
+        holdings: vec![
+            fund_holding("Apple", 6.0, Some("Technology"), Some("US"), Some("USD")),
+            fund_holding(
+                "Microsoft",
+                4.0,
+                Some("Technology"),
+                Some("US"),
+                Some("USD"),
+            ),
+        ],
+    }
+}
+
+fn fund_prices() -> Vec<(String, f64)> {
+    vec![
+        ("2025-01-01".to_owned(), 100.0),
+        ("2025-01-02".to_owned(), 101.0),
+        ("2025-01-03".to_owned(), 102.0),
+    ]
 }

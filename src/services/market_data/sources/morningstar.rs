@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::constants::DATE_FORMAT;
-use crate::models::{FundData, FundHolding};
+use crate::models::{FundData, FundHolding, FundQuoteMetadata};
 use crate::settings::Settings;
 
 use super::market_data_sources::sort_and_dedup_observations;
@@ -94,6 +94,33 @@ impl MorningstarAdapter {
             .context("failed to read Morningstar sal-service holdings response")?;
 
         parse_fund_data(&body, limit)
+    }
+
+    pub(super) async fn fund_quote_metadata(
+        &self,
+        code: &str,
+    ) -> anyhow::Result<FundQuoteMetadata> {
+        let body = self
+            .client
+            .get(format!("{}/{code}/data", self.settings.quote_url))
+            .header("apikey", &self.settings.sal_api_key)
+            .header("accept", "application/json")
+            .query(&[
+                ("locale", "en"),
+                ("clientId", "MDC"),
+                ("benchmarkId", "mstarorcat"),
+                ("version", "4.71.0"),
+            ])
+            .send()
+            .await
+            .context("failed to send Morningstar sal-service quote request")?
+            .error_for_status()
+            .context("Morningstar sal-service quote request returned unsuccessful HTTP status")?
+            .text()
+            .await
+            .context("failed to read Morningstar sal-service quote response")?;
+
+        parse_fund_quote_metadata(&body)
     }
 
     async fn get_with_token_refresh(
@@ -213,6 +240,21 @@ fn parse_fund_data(body: &str, limit: u32) -> anyhow::Result<FundData> {
     })
 }
 
+fn parse_fund_quote_metadata(body: &str) -> anyhow::Result<FundQuoteMetadata> {
+    let payload: Value =
+        serde_json::from_str(body).context("failed to parse Morningstar fund quote metadata")?;
+    Ok(FundQuoteMetadata {
+        name: string_field(&payload, &["investmentName"]),
+        aum: numeric_field(&payload, &["tNAInShareClassCurrency"]),
+        aum_currency: string_field(&payload, &["tNACurrency", "baseCurrencyId"]),
+        inception_date: payload
+            .get("inceptionDate")
+            .and_then(parse_date_value)
+            .map(|date| date.format(DATE_FORMAT).to_string()),
+        quote_currency: string_field(&payload, &["baseCurrencyId"]),
+    })
+}
+
 fn parse_holdings(values: &[Value], limit: u32) -> Vec<FundHolding> {
     values
         .iter()
@@ -251,6 +293,10 @@ fn parse_date_value(value: &Value) -> Option<NaiveDate> {
     match value {
         Value::String(text) => NaiveDate::parse_from_str(text, DATE_FORMAT)
             .ok()
+            .or_else(|| {
+                text.get(..10)
+                    .and_then(|date| NaiveDate::parse_from_str(date, DATE_FORMAT).ok())
+            })
             .or_else(|| parse_millis_date(text)),
         Value::Number(number) => number.as_i64().and_then(millis_to_date),
         Value::Null | Value::Bool(_) | Value::Array(_) | Value::Object(_) => None,

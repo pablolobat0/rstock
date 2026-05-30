@@ -4,6 +4,9 @@ pub struct FundAnalysisResult {
     pub ms_code: String,
     pub name: Option<String>,
     pub fund_currency: Option<String>,
+    pub aum: Option<f64>,
+    pub aum_currency: Option<String>,
+    pub inception_date: Option<String>,
     pub total_holdings: Option<i32>,
     pub portfolio_date: Option<String>,
     pub top_10_weight: Option<f64>,
@@ -50,4 +53,13 @@ pub struct FundData {
     pub total_holdings: Option<i32>,
     pub portfolio_date: Option<String>,
     pub holdings: Vec<FundHolding>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FundQuoteMetadata {
+    pub name: Option<String>,
+    pub aum: Option<f64>,
+    pub aum_currency: Option<String>,
+    pub inception_date: Option<String>,
+    pub quote_currency: Option<String>,
 }
