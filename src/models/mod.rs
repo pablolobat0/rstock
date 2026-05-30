@@ -1,6 +1,7 @@
 mod asset;
 mod classification;
 mod fund_analysis;
+mod fund_comparison;
 mod market_data;
 mod portfolio;
 mod stock_info;
@@ -13,6 +14,10 @@ pub use classification::{
 pub use fund_analysis::{
     FundAnalysisResult, FundData, FundPeriodMetrics, FundQuoteMetadata, HoldingChange,
     HoldingChangeType,
+};
+pub use fund_comparison::{
+    AllocationComparison, CommonFundHolding, FundComparisonResult, FundComparisonSide,
+    FundInfoComparison,
 };
 pub use market_data::{
     BaseCurrencyPriceSeries, CorrelationMarketData, CorrelationMarketDataSeries, IndividualPrice,
