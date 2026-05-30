@@ -154,6 +154,10 @@ pub enum AnalyzeCommands {
         /// Morningstar security code (e.g. F00000YN5R)
         #[arg(short, long)]
         code: String,
+
+        /// Time period for candidate correlation calculation
+        #[arg(short, long, value_enum, default_value = "1y")]
+        period: CorrelationPeriod,
     },
 
     /// Correlation analysis: static matrix and rolling pair correlation

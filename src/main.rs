@@ -81,8 +81,8 @@ async fn main() -> anyhow::Result<()> {
             AnalyzeCommands::Composition {} => {
                 cli::commands::analyze::composition(&db, &market_data).await
             }
-            AnalyzeCommands::Fund { code } => {
-                cli::commands::analyze::fund(&db, &market_data, code).await
+            AnalyzeCommands::Fund { code, period } => {
+                cli::commands::analyze::fund(&db, &market_data, code, period).await
             }
             AnalyzeCommands::Correlation(args) => match args.command {
                 CorrelationCommands::Matrix { period } => {

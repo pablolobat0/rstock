@@ -19,6 +19,7 @@ pub fn print_fund_analysis(result: &FundAnalysisResult) {
     print_breakdown("Country Allocation", &result.country_breakdown);
     print_breakdown("Currency Allocation", &result.currency_breakdown);
     print_snapshot_diff(result);
+    print_candidate_correlation(result);
     println!();
 }
 
@@ -245,6 +246,51 @@ fn print_snapshot_diff(result: &FundAnalysisResult) {
     }
 }
 
+fn print_candidate_correlation(result: &FundAnalysisResult) {
+    println!();
+    println!(
+        "{}",
+        format!(
+            "Fund Candidate Correlation ({})",
+            result.candidate_correlation.period_label
+        )
+        .bold()
+    );
+    println!();
+
+    if result.candidate_correlation.rows.is_empty() {
+        println!("  N/A");
+        return;
+    }
+
+    let rows: Vec<CandidateCorrelationDisplayRow> = result
+        .candidate_correlation
+        .rows
+        .iter()
+        .map(|row| CandidateCorrelationDisplayRow {
+            asset: row.label.clone(),
+            correlation: row.correlation.map_or_else(
+                || {
+                    row.reason
+                        .as_deref()
+                        .map_or_else(|| "N/A".to_owned(), |reason| format!("N/A ({reason})"))
+                },
+                |correlation| format_plain(Some(correlation)),
+            ),
+        })
+        .collect();
+
+    let mut table = Table::new(&rows);
+    table.with(
+        Style::modern()
+            .horizontals([(1, HorizontalLine::inherit(Style::modern()).horizontal('═'))])
+            .remove_horizontal()
+            .remove_vertical(),
+    );
+    table.modify(Columns::single(1), Alignment::right());
+    println!("{table}");
+}
+
 fn display_optional(value: Option<&str>) -> String {
     value
         .map(str::trim)
@@ -312,4 +358,12 @@ struct BreakdownRow {
     label: String,
     #[tabled(rename = "Weight")]
     weight: String,
+}
+
+#[derive(Tabled)]
+struct CandidateCorrelationDisplayRow {
+    #[tabled(rename = "Asset")]
+    asset: String,
+    #[tabled(rename = "Correlation")]
+    correlation: String,
 }

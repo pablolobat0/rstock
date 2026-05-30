@@ -1,8 +1,15 @@
 mod common;
 
-use common::{insert_fund_asset, market_data, setup_test_db, MockMarketDataSources};
+use chrono::Duration;
+use common::{
+    insert_asset, insert_fund_asset, insert_portfolio_asset_snapshot, insert_portfolio_snapshot,
+    market_data, setup_test_db, MockMarketDataSources,
+};
+use rstock::constants::format_date;
 use rstock::db::repos::fund_holdings_snapshot_repo;
-use rstock::models::{FundData, FundHolding, FundQuoteMetadata, HoldingChangeType};
+use rstock::models::{
+    CandidateCorrelationPeriod, FundData, FundHolding, FundQuoteMetadata, HoldingChangeType,
+};
 use rstock::services::fund_analysis::{
     compute_breakdown, compute_fingerprint, compute_fund_analysis, compute_holding_diff,
     compute_top_n_weight,
@@ -339,9 +346,14 @@ async fn test_fund_analysis_uses_quote_metadata_for_untracked_fund() {
         .historical_prices
         .insert("XQUOTE1".to_owned(), fund_prices());
 
-    let result = compute_fund_analysis(&db, &market_data(&sources), "XQUOTE1")
-        .await
-        .unwrap();
+    let result = compute_fund_analysis(
+        &db,
+        &market_data(&sources),
+        "XQUOTE1",
+        one_year_candidate_period(),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(result.name.as_deref(), Some("Morningstar Fund Name"));
     assert_eq!(result.fund_currency.as_deref(), Some("USD"));
@@ -370,9 +382,14 @@ async fn test_fund_analysis_local_name_wins_and_quote_currency_overrides_holding
         .historical_prices
         .insert("XQUOTE2".to_owned(), fund_prices());
 
-    let result = compute_fund_analysis(&db, &market_data(&sources), "XQUOTE2")
-        .await
-        .unwrap();
+    let result = compute_fund_analysis(
+        &db,
+        &market_data(&sources),
+        "XQUOTE2",
+        one_year_candidate_period(),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(result.name.as_deref(), Some("Local Fund Name"));
     assert_eq!(result.fund_currency.as_deref(), Some("GBP"));
@@ -387,14 +404,73 @@ async fn test_fund_analysis_quote_metadata_failure_is_non_fatal() {
         .historical_prices
         .insert("XQUOTE3".to_owned(), fund_prices());
 
-    let result = compute_fund_analysis(&db, &market_data(&sources), "XQUOTE3")
-        .await
-        .unwrap();
+    let result = compute_fund_analysis(
+        &db,
+        &market_data(&sources),
+        "XQUOTE3",
+        one_year_candidate_period(),
+    )
+    .await
+    .unwrap();
 
     assert!(result.name.is_none());
     assert_eq!(result.fund_currency.as_deref(), Some("EUR"));
     assert!(result.aum.is_none());
     assert!(result.inception_date.is_none());
+}
+
+#[tokio::test]
+async fn test_fund_analysis_candidate_correlation_uses_nav_and_current_holdings() {
+    let db = setup_test_db().await;
+    let good_asset_id = insert_asset(&db, "XGOOD", "Good Asset", "stock", "EUR").await;
+    let missing_asset_id = insert_asset(&db, "XMISS", "Missing Asset", "stock", "EUR").await;
+
+    let end = chrono::Local::now().date_naive() - Duration::days(1);
+    let start = end - Duration::days(30);
+    let dates = date_range(start, end);
+    for (idx, date) in dates.iter().enumerate() {
+        insert_portfolio_snapshot(&db, date, 100.0 + idx as f64, 10.0).await;
+    }
+    let end_str = format_date(end);
+    insert_portfolio_asset_snapshot(&db, &end_str, good_asset_id, 1.0, 100.0, 100.0, 1.0).await;
+    insert_portfolio_asset_snapshot(&db, &end_str, missing_asset_id, 1.0, 100.0, 100.0, 1.0).await;
+
+    let mut sources = MockMarketDataSources::new();
+    sources.fund_data.insert("XCORR1".to_owned(), fund_data());
+    sources
+        .historical_prices
+        .insert("XCORR1".to_owned(), linear_prices(&dates, 100.0, 1.0));
+    sources
+        .historical_prices
+        .insert("XGOOD".to_owned(), linear_prices(&dates, 50.0, 0.5));
+
+    let result = compute_fund_analysis(
+        &db,
+        &market_data(&sources),
+        "XCORR1",
+        CandidateCorrelationPeriod {
+            label: "30D",
+            days: 30,
+        },
+    )
+    .await
+    .unwrap();
+
+    let rows = &result.candidate_correlation.rows;
+    assert_eq!(result.candidate_correlation.period_label, "30D");
+    assert_eq!(rows[0].label, "Portfolio NAV");
+    assert!(rows[0].correlation.is_some());
+    let good_row = rows.iter().find(|row| row.label == "Good Asset").unwrap();
+    assert!(good_row.correlation.is_some());
+    let missing_row = rows
+        .iter()
+        .find(|row| row.label == "Missing Asset")
+        .unwrap();
+    assert!(missing_row.correlation.is_none());
+    assert_eq!(
+        missing_row.reason.as_deref(),
+        Some("asset price history unavailable")
+    );
 }
 
 #[tokio::test]
@@ -530,4 +606,29 @@ fn fund_prices() -> Vec<(String, f64)> {
         ("2025-01-02".to_owned(), 101.0),
         ("2025-01-03".to_owned(), 102.0),
     ]
+}
+
+fn one_year_candidate_period() -> CandidateCorrelationPeriod {
+    CandidateCorrelationPeriod {
+        label: "1Y",
+        days: 365,
+    }
+}
+
+fn date_range(start: chrono::NaiveDate, end: chrono::NaiveDate) -> Vec<String> {
+    let mut dates = Vec::new();
+    let mut date = start;
+    while date <= end {
+        dates.push(format_date(date));
+        date += Duration::days(1);
+    }
+    dates
+}
+
+fn linear_prices(dates: &[String], start_price: f64, step: f64) -> Vec<(String, f64)> {
+    dates
+        .iter()
+        .enumerate()
+        .map(|(idx, date)| (date.clone(), start_price + idx as f64 * step))
+        .collect()
 }

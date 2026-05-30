@@ -19,9 +19,27 @@ pub struct FundAnalysisResult {
     pub three_year: Option<FundPeriodMetrics>,
     pub five_year: Option<FundPeriodMetrics>,
     pub all_time: Option<FundPeriodMetrics>,
+    pub candidate_correlation: CandidateCorrelationResult,
     pub holdings_changed: bool,
     pub last_snapshot_date: Option<String>,
     pub holding_diff: Vec<HoldingChange>,
+}
+
+pub struct CandidateCorrelationResult {
+    pub period_label: String,
+    pub rows: Vec<CandidateCorrelationRow>,
+}
+
+pub struct CandidateCorrelationPeriod {
+    pub label: &'static str,
+    pub days: i64,
+}
+
+pub struct CandidateCorrelationRow {
+    pub label: String,
+    pub correlation: Option<f64>,
+    pub reason: Option<String>,
+    pub is_portfolio: bool,
 }
 
 pub struct FundPeriodMetrics {
