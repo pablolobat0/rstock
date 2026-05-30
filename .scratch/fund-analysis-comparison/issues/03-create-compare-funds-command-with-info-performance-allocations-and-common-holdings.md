@@ -38,4 +38,4 @@ Add the first complete `compare funds` vertical slice: a top-level `compare` com
 
 ## Blocked by
 
-- `.scratch/fund-analysis-comparison/issues/01-add-fund-quote-metadata-to-single-fund-analysis.md`
+None - can start immediately
