@@ -1,6 +1,6 @@
 # Create Compare Funds Command With Info, Performance, Allocations, And Common Holdings
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
