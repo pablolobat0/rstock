@@ -1,6 +1,6 @@
 # Update Holdings Snapshots During Compare Funds
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
