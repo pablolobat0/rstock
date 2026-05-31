@@ -47,7 +47,6 @@ pub struct CommonFundHolding {
     pub ticker: Option<String>,
     pub name_a: String,
     pub weight_a: f64,
-    pub name_b: String,
     pub weight_b: f64,
 }
 

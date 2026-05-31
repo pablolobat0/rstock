@@ -177,7 +177,7 @@ pub fn compute_log_returns(prices: &[(String, f64)]) -> HashMap<String, f64> {
 }
 
 /// Computes CAGR from start/end values using the actual elapsed days between two dates.
-/// Returns `None` when values are invalid or the elapsed window is shorter than 1 year.
+/// Returns `None` when values or dates are invalid.
 pub fn compute_cagr(
     start_date: &str,
     end_date: &str,
@@ -191,7 +191,7 @@ pub fn compute_cagr(
     let start = NaiveDate::parse_from_str(start_date, DATE_FORMAT).ok()?;
     let end = NaiveDate::parse_from_str(end_date, DATE_FORMAT).ok()?;
     let elapsed_days = (end - start).num_days();
-    if elapsed_days < 365 {
+    if elapsed_days <= 0 {
         return None;
     }
 

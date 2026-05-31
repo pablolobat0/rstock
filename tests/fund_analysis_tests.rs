@@ -171,18 +171,36 @@ fn test_common_holdings_match_by_ticker() {
     assert_eq!(matches.len(), 1);
     assert_eq!(matches[0].ticker.as_deref(), Some("AAPL"));
     assert_eq!(matches[0].name_a, "Apple Inc");
-    assert_eq!(matches[0].name_b, "Apple");
 }
 
 #[test]
 fn test_common_holdings_match_by_normalized_name_without_ticker() {
-    let holdings_a = vec![holding_with_ticker("  Vanguard   Cash Reserve ", 2.0, None)];
-    let holdings_b = vec![holding_with_ticker("vanguard cash reserve", 1.5, None)];
+    let holdings_a = vec![holding_with_ticker("  Private   Holding ", 2.0, None)];
+    let holdings_b = vec![holding_with_ticker("private holding", 1.5, None)];
 
     let matches = compute_common_holdings(&holdings_a, &holdings_b);
 
     assert_eq!(matches.len(), 1);
     assert!(matches[0].ticker.is_none());
+}
+
+#[test]
+fn test_common_holdings_exclude_cash_holdings() {
+    let holdings_a = vec![
+        holding_with_ticker("Cash", 3.0, None),
+        holding_with_ticker("Cash", 2.0, Some("CASH")),
+        holding_with_ticker("Apple Inc", 5.0, Some("AAPL")),
+    ];
+    let holdings_b = vec![
+        holding_with_ticker("Cash", 4.0, None),
+        holding_with_ticker("Cash", 1.0, Some("CASH")),
+        holding_with_ticker("Apple", 3.0, Some("AAPL")),
+    ];
+
+    let matches = compute_common_holdings(&holdings_a, &holdings_b);
+
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0].ticker.as_deref(), Some("AAPL"));
 }
 
 #[test]
@@ -322,8 +340,10 @@ fn test_compute_cagr_negative() {
 }
 
 #[test]
-fn test_compute_cagr_none_for_short_window() {
-    assert!(compute_cagr("2026-01-01", "2026-04-01", 100.0, 110.0).is_none());
+fn test_compute_cagr_annualizes_short_window() {
+    let cagr = compute_cagr("2026-01-01", "2026-04-01", 100.0, 110.0).unwrap();
+
+    assert!(cagr > 0.0);
 }
 
 #[test]

@@ -3,6 +3,7 @@ use tabled::builder::Builder;
 use tabled::settings::object::Columns;
 use tabled::settings::style::HorizontalLine;
 use tabled::settings::{Alignment, Style};
+use tabled::Table;
 use textplots::{Chart, Plot, Shape};
 
 use crate::constants::{display_date, MIN_DATA_POINTS};
@@ -100,34 +101,35 @@ fn print_performance(result: &FundComparisonResult) {
     println!("{}", "Performance".bold());
     println!();
 
-    let rows = [
+    let return_rows = [
         build_performance_rows("Total Return", result, |m| {
             format_return_plain(Some(m.total_return))
         }),
         build_performance_rows("CAGR", result, |m| format_return_plain(m.cagr)),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+    print_performance_table("Returns", return_rows, &[3]);
+
+    let risk_rows = [
         build_performance_rows("Volatility", result, |m| format_pct(m.volatility)),
-        build_performance_rows("Sharpe", result, |m| format_plain(m.sharpe)),
-        build_performance_rows("Sortino", result, |m| format_plain(m.sortino)),
         build_performance_rows("Max DD", result, |m| format_pct(m.max_drawdown)),
         build_performance_rows("Beta", result, |m| format_plain(m.beta)),
     ]
     .into_iter()
     .flatten()
     .collect::<Vec<_>>();
+    print_performance_table("Risk", risk_rows, &[3, 5]);
 
-    print_table(
-        vec![
-            "Metric".to_owned(),
-            "Fund".to_owned(),
-            "YTD".to_owned(),
-            "1Y".to_owned(),
-            "3Y".to_owned(),
-            "5Y".to_owned(),
-            "All Time".to_owned(),
-        ],
-        rows,
-        6,
-    );
+    let risk_adjusted_rows = [
+        build_performance_rows("Sharpe", result, |m| format_plain(m.sharpe)),
+        build_performance_rows("Sortino", result, |m| format_plain(m.sortino)),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+    print_performance_table("Risk-Adjusted", risk_adjusted_rows, &[3]);
 }
 
 fn print_allocations(title: &str, entries: &[AllocationComparison], result: &FundComparisonResult) {
@@ -145,6 +147,7 @@ fn print_allocations(title: &str, entries: &[AllocationComparison], result: &Fun
                 entry.label.clone(),
                 format_eu(&format!("{:.2}%", entry.weight_a)),
                 format_eu(&format!("{:.2}%", entry.weight_b)),
+                format_allocation_difference(entry),
             ]
         })
         .collect();
@@ -153,9 +156,10 @@ fn print_allocations(title: &str, entries: &[AllocationComparison], result: &Fun
             "Category".to_owned(),
             result.fund_a.name.clone(),
             result.fund_b.name.clone(),
+            "Diff A-B".to_owned(),
         ],
         rows,
-        2,
+        3,
     );
 }
 
@@ -172,24 +176,22 @@ fn print_common_holdings(result: &FundComparisonResult) {
         .iter()
         .map(|holding| {
             vec![
-                display_dash(holding.ticker.as_deref()),
                 holding.name_a.clone(),
+                display_dash(holding.ticker.as_deref()),
                 format_eu(&format!("{:.2}%", holding.weight_a)),
-                holding.name_b.clone(),
                 format_eu(&format!("{:.2}%", holding.weight_b)),
             ]
         })
         .collect();
     print_table(
         vec![
+            "Holding".to_owned(),
             "Ticker".to_owned(),
-            format!("{} Holding", result.fund_a.name),
-            format!("{} Weight", result.fund_a.name),
-            format!("{} Holding", result.fund_b.name),
-            format!("{} Weight", result.fund_b.name),
+            result.fund_a.name.clone(),
+            result.fund_b.name.clone(),
         ],
         rows,
-        4,
+        3,
     );
 }
 
@@ -278,8 +280,28 @@ fn build_performance_rows(
 ) -> Vec<Vec<String>> {
     vec![
         performance_row(metric, &result.fund_a, &format_fn),
-        performance_row(metric, &result.fund_b, &format_fn),
+        performance_row("", &result.fund_b, &format_fn),
     ]
+}
+
+fn print_performance_table(title: &str, rows: Vec<Vec<String>>, separator_lines: &[usize]) {
+    println!("{}", title.bold());
+    println!();
+
+    print_table_with_separators(
+        vec![
+            "Metric".to_owned(),
+            "Fund".to_owned(),
+            "YTD".to_owned(),
+            "1Y".to_owned(),
+            "3Y".to_owned(),
+            "5Y".to_owned(),
+            "All Time".to_owned(),
+        ],
+        rows,
+        6,
+        separator_lines,
+    );
 }
 
 fn performance_row(
@@ -303,6 +325,15 @@ fn performance_row(
 }
 
 fn print_table(headers: Vec<String>, rows: Vec<Vec<String>>, rightmost_column: usize) {
+    print_table_with_separators(headers, rows, rightmost_column, &[]);
+}
+
+fn print_table_with_separators(
+    headers: Vec<String>,
+    rows: Vec<Vec<String>>,
+    rightmost_column: usize,
+    separator_lines: &[usize],
+) {
     let mut builder = Builder::default();
     builder.push_record(headers);
     for row in rows {
@@ -310,17 +341,44 @@ fn print_table(headers: Vec<String>, rows: Vec<Vec<String>>, rightmost_column: u
     }
 
     let mut table = builder.build();
-    table.with(
-        Style::modern()
-            .horizontals([(1, HorizontalLine::inherit(Style::modern()).horizontal('═'))])
-            .remove_horizontal()
-            .remove_vertical(),
-    );
+    apply_table_style(&mut table, separator_lines);
     for col in 1..=rightmost_column {
         table.modify(Columns::single(col), Alignment::right());
     }
     println!("{table}");
     println!();
+}
+
+fn apply_table_style(table: &mut Table, separator_lines: &[usize]) {
+    let header = HorizontalLine::inherit(Style::modern()).horizontal('═');
+    let separator = HorizontalLine::inherit(Style::modern()).horizontal('─');
+
+    match separator_lines {
+        [] | [_, _, _, ..] => {
+            table.with(
+                Style::modern()
+                    .horizontals([(1, header)])
+                    .remove_horizontal()
+                    .remove_vertical(),
+            );
+        }
+        [first] => {
+            table.with(
+                Style::modern()
+                    .horizontals([(1, header), (*first, separator)])
+                    .remove_horizontal()
+                    .remove_vertical(),
+            );
+        }
+        [first, second] => {
+            table.with(
+                Style::modern()
+                    .horizontals([(1, header), (*first, separator), (*second, separator)])
+                    .remove_horizontal()
+                    .remove_vertical(),
+            );
+        }
+    }
 }
 
 fn display_aum(fund: &FundComparisonSide) -> String {
@@ -329,6 +387,15 @@ fn display_aum(fund: &FundComparisonSide) -> String {
         (Some(aum), None) => format!("{} N/A", format_eu(&format!("{aum:.2}"))),
         (None, _) => "N/A".to_owned(),
     }
+}
+
+fn format_allocation_difference(entry: &AllocationComparison) -> String {
+    let difference = entry.weight_a - entry.weight_b;
+    if difference.abs() < 0.005 {
+        return "0,00 pp".to_owned();
+    }
+
+    format!("{} pp", format_eu(&format!("{difference:+.2}")))
 }
 
 fn display_date_optional(value: Option<&str>) -> String {

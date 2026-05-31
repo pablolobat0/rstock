@@ -327,10 +327,17 @@ fn compare_allocations(
         .collect();
 
     comparisons.sort_by(|a, b| {
-        b.weight_a
-            .max(b.weight_b)
-            .partial_cmp(&a.weight_a.max(a.weight_b))
+        (b.weight_a - b.weight_b)
+            .abs()
+            .partial_cmp(&(a.weight_a - a.weight_b).abs())
             .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| {
+                b.weight_a
+                    .max(b.weight_b)
+                    .partial_cmp(&a.weight_a.max(a.weight_b))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .then_with(|| a.label.cmp(&b.label))
     });
     comparisons
 }
@@ -341,6 +348,7 @@ pub fn compute_common_holdings(
 ) -> Vec<CommonFundHolding> {
     let by_ticker_b: HashMap<String, &FundHolding> = holdings_b
         .iter()
+        .filter(|holding| !is_cash_holding(holding))
         .filter_map(|holding| {
             holding
                 .ticker
@@ -351,11 +359,16 @@ pub fn compute_common_holdings(
         .collect();
     let by_name_b: HashMap<String, &FundHolding> = holdings_b
         .iter()
+        .filter(|holding| !is_cash_holding(holding))
         .map(|holding| (normalize_name(&holding.name), holding))
         .collect();
 
     let mut common = Vec::new();
     for holding_a in holdings_a {
+        if is_cash_holding(holding_a) {
+            continue;
+        }
+
         let ticker = holding_a
             .ticker
             .as_deref()
@@ -379,7 +392,6 @@ pub fn compute_common_holdings(
                     .or_else(|| holding_b.ticker.clone()),
                 name_a: holding_a.name.clone(),
                 weight_a: holding_a.weighting,
-                name_b: holding_b.name.clone(),
                 weight_b: holding_b.weighting,
             });
         }
@@ -392,6 +404,13 @@ pub fn compute_common_holdings(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     common
+}
+
+fn is_cash_holding(holding: &FundHolding) -> bool {
+    let name = normalize_name(&holding.name);
+    let ticker = holding.ticker.as_deref().map(str::trim);
+
+    name == "cash" || ticker.is_some_and(|ticker| ticker.eq_ignore_ascii_case("cash"))
 }
 
 fn normalize_name(name: &str) -> String {
