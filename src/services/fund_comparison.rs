@@ -4,12 +4,15 @@ use anyhow::{bail, Context};
 use chrono::NaiveDate;
 use sea_orm::DatabaseConnection;
 
+use crate::constants::format_date;
 use crate::db::repos::asset_repo;
 use crate::models::{
     AllocationComparison, AllocationEntry, CommonFundHolding, FundComparisonResult,
     FundComparisonSide, FundHolding, FundInfoComparison, FundQuoteMetadata,
 };
-use crate::services::fund_analysis::{compute_breakdown, compute_top_n_weight};
+use crate::services::fund_analysis::{
+    compute_breakdown, compute_top_n_weight, record_holdings_snapshot,
+};
 use crate::services::fund_metrics::{compute_standard_fund_metrics, format_source_observations};
 use crate::services::market_data::MarketData;
 
@@ -61,6 +64,7 @@ async fn build_comparison_side(
     code: &str,
 ) -> anyhow::Result<FundComparisonData> {
     let today = chrono::Local::now().date_naive();
+    let today_str = format_date(today);
     let local_name = asset_repo::find_by_morningstar_code(db, code)
         .await?
         .map(|asset| asset.name);
@@ -83,6 +87,15 @@ async fn build_comparison_side(
     );
     let metrics = compute_standard_fund_metrics(market_data, &prices, today).await;
     let top_10_weight = compute_top_n_weight(&fund_data.holdings, 10);
+    record_holdings_snapshot(
+        db,
+        code,
+        fund_data.portfolio_date.as_deref(),
+        &fund_data.holdings,
+        fund_data.total_holdings,
+        &today_str,
+    )
+    .await?;
     let name = local_name
         .or_else(|| {
             quote_metadata

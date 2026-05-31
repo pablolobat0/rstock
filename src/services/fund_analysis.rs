@@ -506,6 +506,26 @@ pub fn compute_holding_diff(
     Ok(changes)
 }
 
+pub async fn record_holdings_snapshot(
+    db: &DatabaseConnection,
+    ms_code: &str,
+    snapshot_date: Option<&str>,
+    holdings: &[FundHolding],
+    total_holdings: Option<i32>,
+    today_str: &str,
+) -> anyhow::Result<()> {
+    compute_snapshot_diff(
+        db,
+        ms_code,
+        snapshot_date,
+        holdings,
+        total_holdings,
+        today_str,
+    )
+    .await
+    .map(|_| ())
+}
+
 fn is_equity_holding(holding: &FundHolding) -> bool {
     holding
         .ticker
