@@ -9,7 +9,8 @@ use rstock::constants::format_date;
 use rstock::db::entities::fund_holdings_snapshot;
 use rstock::db::repos::fund_holdings_snapshot_repo;
 use rstock::models::{
-    CandidateCorrelationPeriod, FundData, FundHolding, FundQuoteMetadata, HoldingChangeType,
+    CandidateCorrelationPeriod, FundComparisonPeriod, FundData, FundHolding, FundQuoteMetadata,
+    HoldingChangeType,
 };
 use rstock::services::fund_analysis::{
     compute_breakdown, compute_fingerprint, compute_fund_analysis, compute_holding_diff,
@@ -219,6 +220,87 @@ fn test_common_holdings_sort_by_larger_fund_weight() {
 
     assert_eq!(matches[0].ticker.as_deref(), Some("LOW"));
     assert_eq!(matches[1].ticker.as_deref(), Some("HIGH"));
+}
+
+#[tokio::test]
+async fn test_compare_funds_computes_selected_period_correlation_and_graph_points() {
+    let db = setup_test_db().await;
+    let today = chrono::Local::now().date_naive();
+    let dates = date_range(today - Duration::days(30), today);
+    let mut sources = MockMarketDataSources::new();
+    sources
+        .fund_data
+        .insert("XCOMPARE1".to_owned(), fund_data());
+    sources
+        .fund_data
+        .insert("XCOMPARE2".to_owned(), fund_data());
+    sources
+        .historical_prices
+        .insert("XCOMPARE1".to_owned(), linear_prices(&dates, 100.0, 1.0));
+    sources
+        .historical_prices
+        .insert("XCOMPARE2".to_owned(), linear_prices(&dates, 200.0, 2.0));
+    let market_data = market_data(&sources);
+
+    let result = compare_funds(
+        &db,
+        &market_data,
+        "XCOMPARE1",
+        "XCOMPARE2",
+        FundComparisonPeriod {
+            label: "30D",
+            days: 30,
+        },
+    )
+    .await
+    .expect("fund comparison should compute");
+
+    assert_eq!(result.correlation.period_label, "30D");
+    assert!(result.correlation.correlation.is_some());
+    assert!(result.correlation.reason.is_none());
+    assert_eq!(result.correlation.points.len(), dates.len());
+    assert_eq!(result.correlation.points[0].return_a, 0.0);
+    assert_eq!(result.correlation.points[0].return_b, 0.0);
+    let last = result.correlation.points.last().unwrap();
+    assert!((last.return_a - 30.0).abs() < 0.01);
+    assert!((last.return_b - 30.0).abs() < 0.01);
+}
+
+#[tokio::test]
+async fn test_compare_funds_requires_full_selected_period_coverage() {
+    let db = setup_test_db().await;
+    let today = chrono::Local::now().date_naive();
+    let dates = date_range(today - Duration::days(5), today);
+    let mut sources = MockMarketDataSources::new();
+    sources.fund_data.insert("XSHORT1".to_owned(), fund_data());
+    sources.fund_data.insert("XSHORT2".to_owned(), fund_data());
+    sources
+        .historical_prices
+        .insert("XSHORT1".to_owned(), linear_prices(&dates, 100.0, 1.0));
+    sources
+        .historical_prices
+        .insert("XSHORT2".to_owned(), linear_prices(&dates, 200.0, 2.0));
+    let market_data = market_data(&sources);
+
+    let result = compare_funds(
+        &db,
+        &market_data,
+        "XSHORT1",
+        "XSHORT2",
+        FundComparisonPeriod {
+            label: "30D",
+            days: 30,
+        },
+    )
+    .await
+    .expect("fund comparison should compute without fallback graph");
+
+    assert!(result.correlation.correlation.is_none());
+    assert!(result.correlation.points.is_empty());
+    assert_eq!(
+        result.correlation.reason.as_deref(),
+        Some("first fund lacks selected-period start coverage")
+    );
 }
 
 #[test]
@@ -554,9 +636,15 @@ async fn test_compare_funds_records_snapshots_for_both_funds() {
         .historical_prices
         .insert("XCOMP2".to_owned(), fund_prices());
 
-    compare_funds(&db, &market_data(&sources), "XCOMP1", "XCOMP2")
-        .await
-        .unwrap();
+    compare_funds(
+        &db,
+        &market_data(&sources),
+        "XCOMP1",
+        "XCOMP2",
+        thirty_day_fund_comparison_period(),
+    )
+    .await
+    .unwrap();
 
     let snapshot_a =
         fund_holdings_snapshot_repo::find_by_snapshot_date(&db, "XCOMP1", "2025-02-01")
@@ -599,12 +687,24 @@ async fn test_compare_funds_reuses_existing_reported_snapshot() {
         .insert("XREUSE2".to_owned(), fund_prices());
     let market_data = market_data(&sources);
 
-    compare_funds(&db, &market_data, "XREUSE1", "XREUSE2")
-        .await
-        .unwrap();
-    compare_funds(&db, &market_data, "XREUSE1", "XREUSE2")
-        .await
-        .unwrap();
+    compare_funds(
+        &db,
+        &market_data,
+        "XREUSE1",
+        "XREUSE2",
+        thirty_day_fund_comparison_period(),
+    )
+    .await
+    .unwrap();
+    compare_funds(
+        &db,
+        &market_data,
+        "XREUSE1",
+        "XREUSE2",
+        thirty_day_fund_comparison_period(),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(snapshot_count(&db, "XREUSE1", "2025-04-01").await, 1);
     assert_eq!(snapshot_count(&db, "XREUSE2", "2025-04-02").await, 1);
@@ -628,9 +728,15 @@ async fn test_compare_funds_snapshot_falls_back_to_today_without_portfolio_date(
         .historical_prices
         .insert("XTODAY2".to_owned(), fund_prices());
 
-    compare_funds(&db, &market_data(&sources), "XTODAY1", "XTODAY2")
-        .await
-        .unwrap();
+    compare_funds(
+        &db,
+        &market_data(&sources),
+        "XTODAY1",
+        "XTODAY2",
+        thirty_day_fund_comparison_period(),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(snapshot_count(&db, "XTODAY1", &today).await, 1);
 }
@@ -726,6 +832,13 @@ fn one_year_candidate_period() -> CandidateCorrelationPeriod {
     CandidateCorrelationPeriod {
         label: "1Y",
         days: 365,
+    }
+}
+
+fn thirty_day_fund_comparison_period() -> FundComparisonPeriod {
+    FundComparisonPeriod {
+        label: "30D",
+        days: 30,
     }
 }
 

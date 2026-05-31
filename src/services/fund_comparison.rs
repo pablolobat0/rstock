@@ -4,21 +4,26 @@ use anyhow::{bail, Context};
 use chrono::NaiveDate;
 use sea_orm::DatabaseConnection;
 
-use crate::constants::format_date;
+use crate::constants::{format_date, DATE_FORMAT, MIN_DATA_POINTS};
 use crate::db::repos::asset_repo;
 use crate::models::{
-    AllocationComparison, AllocationEntry, CommonFundHolding, FundComparisonResult,
-    FundComparisonSide, FundHolding, FundInfoComparison, FundQuoteMetadata,
+    AlignedFundReturnPoint, AllocationComparison, AllocationEntry, CommonFundHolding,
+    FundComparisonCorrelation, FundComparisonPeriod, FundComparisonResult, FundComparisonSide,
+    FundHolding, FundInfoComparison, FundQuoteMetadata,
 };
 use crate::services::fund_analysis::{
     compute_breakdown, compute_top_n_weight, record_holdings_snapshot,
 };
 use crate::services::fund_metrics::{compute_standard_fund_metrics, format_source_observations};
 use crate::services::market_data::MarketData;
+use crate::services::metrics;
+
+const COVERAGE_TOLERANCE_DAYS: i64 = 7;
 
 struct FundComparisonData {
     side: FundComparisonSide,
     holdings: Vec<FundHolding>,
+    prices: Vec<(String, f64)>,
 }
 
 pub async fn compare_funds(
@@ -26,6 +31,7 @@ pub async fn compare_funds(
     market_data: &MarketData,
     code_a: &str,
     code_b: &str,
+    period: FundComparisonPeriod,
 ) -> anyhow::Result<FundComparisonResult> {
     if code_a.trim().eq_ignore_ascii_case(code_b.trim()) {
         bail!("cannot compare a fund with itself; provide two different fund codes");
@@ -53,6 +59,7 @@ pub async fn compare_funds(
             &compute_breakdown(&equity_b, |h| h.currency.clone()),
         ),
         common_holdings: compute_common_holdings(&fund_a.holdings, &fund_b.holdings),
+        correlation: compute_correlation(&fund_a.prices, &fund_b.prices, period),
         fund_a: fund_a.side,
         fund_b: fund_b.side,
     })
@@ -134,6 +141,7 @@ async fn build_comparison_side(
     Ok(FundComparisonData {
         side,
         holdings: fund_data.holdings,
+        prices,
     })
 }
 
@@ -147,6 +155,133 @@ fn quote_metadata_or_warn(
             error
         })
         .ok()
+}
+
+fn compute_correlation(
+    prices_a: &[(String, f64)],
+    prices_b: &[(String, f64)],
+    period: FundComparisonPeriod,
+) -> FundComparisonCorrelation {
+    let requested_end = chrono::Local::now().date_naive();
+    let requested_start = requested_end - chrono::Duration::days(period.days);
+    let period_label = period.label.to_owned();
+
+    if let Some(reason) = coverage_reason(prices_a, requested_start, requested_end, "first fund") {
+        return unavailable_correlation(period_label, reason);
+    }
+    if let Some(reason) = coverage_reason(prices_b, requested_start, requested_end, "second fund") {
+        return unavailable_correlation(period_label, reason);
+    }
+
+    let start_str = format_date(requested_start);
+    let end_str = format_date(requested_end);
+    let window_a = window_prices(prices_a, &start_str, &end_str);
+    let window_b = window_prices(prices_b, &start_str, &end_str);
+    let returns_a = metrics::compute_log_returns(&window_a);
+    let returns_b = metrics::compute_log_returns(&window_b);
+    let aligned_returns = metrics::align_return_series_with_dates(&returns_a, &returns_b);
+    if aligned_returns.len() < MIN_DATA_POINTS {
+        return unavailable_correlation(period_label, "not enough aligned return data".to_owned());
+    }
+
+    let values_a: Vec<f64> = aligned_returns
+        .iter()
+        .map(|(_, return_a, _)| *return_a)
+        .collect();
+    let values_b: Vec<f64> = aligned_returns
+        .iter()
+        .map(|(_, _, return_b)| *return_b)
+        .collect();
+    let points = aligned_return_points(&window_a, &window_b);
+    if points.len() < MIN_DATA_POINTS {
+        return unavailable_correlation(period_label, "not enough aligned graph data".to_owned());
+    }
+
+    FundComparisonCorrelation {
+        period_label,
+        correlation: Some(metrics::pearson_correlation(&values_a, &values_b)),
+        reason: None,
+        points,
+    }
+}
+
+fn unavailable_correlation(period_label: String, reason: String) -> FundComparisonCorrelation {
+    FundComparisonCorrelation {
+        period_label,
+        correlation: None,
+        reason: Some(reason),
+        points: Vec::new(),
+    }
+}
+
+fn coverage_reason(
+    prices: &[(String, f64)],
+    requested_start: NaiveDate,
+    requested_end: NaiveDate,
+    label: &str,
+) -> Option<String> {
+    let Some((first, last)) = price_date_bounds(prices) else {
+        return Some(format!("{label} has no price history"));
+    };
+
+    if first > requested_start + chrono::Duration::days(COVERAGE_TOLERANCE_DAYS) {
+        return Some(format!("{label} lacks selected-period start coverage"));
+    }
+    if last < requested_end - chrono::Duration::days(COVERAGE_TOLERANCE_DAYS) {
+        return Some(format!("{label} lacks current price coverage"));
+    }
+    None
+}
+
+fn price_date_bounds(prices: &[(String, f64)]) -> Option<(NaiveDate, NaiveDate)> {
+    let dates: Vec<NaiveDate> = prices
+        .iter()
+        .filter_map(|(date, _)| NaiveDate::parse_from_str(date, DATE_FORMAT).ok())
+        .collect();
+    Some((*dates.iter().min()?, *dates.iter().max()?))
+}
+
+fn window_prices(prices: &[(String, f64)], start: &str, end: &str) -> Vec<(String, f64)> {
+    prices
+        .iter()
+        .filter(|(date, _)| date.as_str() >= start && date.as_str() <= end)
+        .cloned()
+        .collect()
+}
+
+fn aligned_return_points(
+    prices_a: &[(String, f64)],
+    prices_b: &[(String, f64)],
+) -> Vec<AlignedFundReturnPoint> {
+    let map_b: HashMap<&str, f64> = prices_b
+        .iter()
+        .map(|(date, price)| (date.as_str(), *price))
+        .collect();
+    let mut aligned_prices: Vec<(String, f64, f64)> = prices_a
+        .iter()
+        .filter_map(|(date, price_a)| {
+            map_b
+                .get(date.as_str())
+                .map(|price_b| (date.clone(), *price_a, *price_b))
+        })
+        .collect();
+    aligned_prices.sort_by(|left, right| left.0.cmp(&right.0));
+
+    let Some((_, base_a, base_b)) = aligned_prices.first().cloned() else {
+        return Vec::new();
+    };
+    if base_a <= 0.0 || base_b <= 0.0 {
+        return Vec::new();
+    }
+
+    aligned_prices
+        .into_iter()
+        .map(|(date, price_a, price_b)| AlignedFundReturnPoint {
+            date,
+            return_a: (price_a / base_a - 1.0) * 100.0,
+            return_b: (price_b / base_b - 1.0) * 100.0,
+        })
+        .collect()
 }
 
 fn equity_holdings(holdings: &[FundHolding]) -> Vec<FundHolding> {

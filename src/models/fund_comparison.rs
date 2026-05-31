@@ -7,6 +7,13 @@ pub struct FundComparisonResult {
     pub country_allocations: Vec<AllocationComparison>,
     pub currency_allocations: Vec<AllocationComparison>,
     pub common_holdings: Vec<CommonFundHolding>,
+    pub correlation: FundComparisonCorrelation,
+}
+
+#[derive(Clone, Copy)]
+pub struct FundComparisonPeriod {
+    pub label: &'static str,
+    pub days: i64,
 }
 
 pub struct FundComparisonSide {
@@ -42,4 +49,17 @@ pub struct CommonFundHolding {
     pub weight_a: f64,
     pub name_b: String,
     pub weight_b: f64,
+}
+
+pub struct FundComparisonCorrelation {
+    pub period_label: String,
+    pub correlation: Option<f64>,
+    pub reason: Option<String>,
+    pub points: Vec<AlignedFundReturnPoint>,
+}
+
+pub struct AlignedFundReturnPoint {
+    pub date: String,
+    pub return_a: f64,
+    pub return_b: f64,
 }
