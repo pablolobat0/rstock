@@ -3,6 +3,7 @@ use sea_orm::DatabaseConnection;
 use crate::constants::{
     format_date, FIVE_YEAR_DAYS, ONE_YEAR_DAYS, SIX_MONTH_DAYS, THIRTY_DAYS, THREE_YEAR_DAYS,
 };
+use crate::models::CandidateCorrelationPeriod;
 use crate::services;
 use crate::services::market_data::MarketData;
 
@@ -13,8 +14,12 @@ pub async fn fund(
     db: &DatabaseConnection,
     market_data: &MarketData,
     code: String,
+    period: CorrelationPeriod,
 ) -> anyhow::Result<()> {
-    let result = services::fund_analysis::compute_fund_analysis(db, market_data, &code).await?;
+    let candidate_period = candidate_correlation_period(&period);
+    let result =
+        services::fund_analysis::compute_fund_analysis(db, market_data, &code, candidate_period)
+            .await?;
     display::print_fund_analysis(&result);
     Ok(())
 }
@@ -66,7 +71,7 @@ pub async fn rolling_correlation(
     Ok(())
 }
 
-fn correlation_date_range(period: &CorrelationPeriod) -> (String, String, &'static str) {
+pub(crate) fn correlation_date_range(period: &CorrelationPeriod) -> (String, String, &'static str) {
     let today = chrono::Local::now().date_naive();
     let today_str = format_date(today);
 
@@ -80,4 +85,16 @@ fn correlation_date_range(period: &CorrelationPeriod) -> (String, String, &'stat
 
     let start_str = format_date(start_date);
     (start_str, today_str, period_label)
+}
+
+fn candidate_correlation_period(period: &CorrelationPeriod) -> CandidateCorrelationPeriod {
+    let days = match period {
+        CorrelationPeriod::ThirtyDays => THIRTY_DAYS,
+        CorrelationPeriod::SixMonths => SIX_MONTH_DAYS,
+        CorrelationPeriod::OneYear => ONE_YEAR_DAYS,
+        CorrelationPeriod::ThreeYears => THREE_YEAR_DAYS,
+        CorrelationPeriod::FiveYears => FIVE_YEAR_DAYS,
+    };
+    let (_, _, label) = correlation_date_range(period);
+    CandidateCorrelationPeriod { label, days }
 }

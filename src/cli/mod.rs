@@ -109,6 +109,33 @@ pub enum Commands {
 
     /// Analyze portfolio-relevant data: composition, fund candidates, correlations
     Analyze(AnalyzeArgs),
+
+    /// Compare portfolio-relevant candidates side by side
+    Compare(CompareArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct CompareArgs {
+    #[command(subcommand)]
+    pub command: CompareCommands,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum CompareCommands {
+    /// Compare two Morningstar fund codes
+    Funds {
+        /// First Morningstar security code
+        #[arg(long = "code-a")]
+        code_a: String,
+
+        /// Second Morningstar security code
+        #[arg(long = "code-b")]
+        code_b: String,
+
+        /// Period reserved for comparison correlation and graph sections
+        #[arg(short, long, value_enum, default_value = "1y")]
+        period: CorrelationPeriod,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -127,6 +154,10 @@ pub enum AnalyzeCommands {
         /// Morningstar security code (e.g. F00000YN5R)
         #[arg(short, long)]
         code: String,
+
+        /// Time period for candidate correlation calculation
+        #[arg(short, long, value_enum, default_value = "1y")]
+        period: CorrelationPeriod,
     },
 
     /// Correlation analysis: static matrix and rolling pair correlation

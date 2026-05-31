@@ -3,6 +3,8 @@ pub mod assets;
 pub mod composition;
 pub mod export;
 pub mod fund_analysis;
+pub mod fund_comparison;
+pub mod fund_metrics;
 pub mod import;
 pub mod market_data;
 pub mod metrics;

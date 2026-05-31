@@ -1,6 +1,6 @@
 # Add Fund Candidate Correlation To Analyze Fund
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
@@ -27,4 +27,4 @@ Extend `analyze fund` with a `--period` flag and a final **Fund candidate correl
 
 ## Blocked by
 
-- `.scratch/fund-analysis-comparison/issues/01-add-fund-quote-metadata-to-single-fund-analysis.md`
+None - can start immediately

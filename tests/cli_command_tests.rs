@@ -1,5 +1,8 @@
 use clap::Parser;
-use rstock::cli::{Cli, Commands, PortfolioCommands, TransactionCommands};
+use rstock::cli::{
+    AnalyzeCommands, Cli, Commands, CompareCommands, CorrelationPeriod, PortfolioCommands,
+    TransactionCommands,
+};
 
 #[test]
 fn get_and_portfolio_get_parse() {
@@ -26,7 +29,25 @@ fn removed_command_paths_do_not_parse() {
 fn analysis_commands_parse() {
     let cli = Cli::try_parse_from(["rstock", "analyze", "fund", "--code", "F00000TEST"])
         .expect("analyze fund should parse");
-    assert!(matches!(cli.command, Commands::Analyze(_)));
+    assert!(matches!(
+        cli.command,
+        Commands::Analyze(args) if matches!(args.command, AnalyzeCommands::Fund { period: CorrelationPeriod::OneYear, .. })
+    ));
+
+    let cli = Cli::try_parse_from([
+        "rstock",
+        "analyze",
+        "fund",
+        "--code",
+        "F00000TEST",
+        "--period",
+        "30d",
+    ])
+    .expect("analyze fund with period should parse");
+    assert!(matches!(
+        cli.command,
+        Commands::Analyze(args) if matches!(args.command, AnalyzeCommands::Fund { period: CorrelationPeriod::ThirtyDays, .. })
+    ));
 
     let cli = Cli::try_parse_from([
         "rstock",
@@ -38,6 +59,25 @@ fn analysis_commands_parse() {
     ])
     .expect("rolling correlation should parse");
     assert!(matches!(cli.command, Commands::Analyze(_)));
+}
+
+#[test]
+fn compare_funds_command_parses() {
+    let cli = Cli::try_parse_from([
+        "rstock", "compare", "funds", "--code-a", "F00000A", "--code-b", "F00000B", "--period",
+        "6m",
+    ])
+    .expect("compare funds should parse");
+    assert!(matches!(
+        cli.command,
+        Commands::Compare(args) if matches!(args.command, CompareCommands::Funds { .. })
+    ));
+
+    let cli = Cli::try_parse_from([
+        "rstock", "compare", "funds", "--code-a", "F00000A", "--code-b", "F00000B",
+    ])
+    .expect("compare funds should parse with default period");
+    assert!(matches!(cli.command, Commands::Compare(_)));
 }
 
 #[test]

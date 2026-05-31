@@ -1,12 +1,24 @@
 mod common;
 
-use common::setup_test_db;
-use rstock::db::repos::fund_holdings_snapshot_repo;
-use rstock::models::{FundHolding, HoldingChangeType};
-use rstock::services::fund_analysis::{
-    compute_breakdown, compute_fingerprint, compute_holding_diff, compute_top_n_weight,
+use chrono::Duration;
+use common::{
+    insert_asset, insert_fund_asset, insert_portfolio_asset_snapshot, insert_portfolio_snapshot,
+    market_data, setup_test_db, MockMarketDataSources,
 };
+use rstock::constants::format_date;
+use rstock::db::entities::fund_holdings_snapshot;
+use rstock::db::repos::fund_holdings_snapshot_repo;
+use rstock::models::{
+    CandidateCorrelationPeriod, FundComparisonPeriod, FundData, FundHolding, FundQuoteMetadata,
+    HoldingChangeType,
+};
+use rstock::services::fund_analysis::{
+    compute_breakdown, compute_fingerprint, compute_fund_analysis, compute_holding_diff,
+    compute_top_n_weight,
+};
+use rstock::services::fund_comparison::{compare_funds, compute_common_holdings};
 use rstock::services::metrics::compute_cagr;
+use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter};
 
 #[test]
 fn test_sector_breakdown_aggregation_uses_unclassified() {
@@ -150,6 +162,148 @@ fn test_compute_top_10_weight_none_for_no_holdings() {
 }
 
 #[test]
+fn test_common_holdings_match_by_ticker() {
+    let holdings_a = vec![holding_with_ticker("Apple Inc", 5.0, Some("AAPL"))];
+    let holdings_b = vec![holding_with_ticker("Apple", 3.0, Some("AAPL"))];
+
+    let matches = compute_common_holdings(&holdings_a, &holdings_b);
+
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0].ticker.as_deref(), Some("AAPL"));
+    assert_eq!(matches[0].name_a, "Apple Inc");
+    assert_eq!(matches[0].name_b, "Apple");
+}
+
+#[test]
+fn test_common_holdings_match_by_normalized_name_without_ticker() {
+    let holdings_a = vec![holding_with_ticker("  Vanguard   Cash Reserve ", 2.0, None)];
+    let holdings_b = vec![holding_with_ticker("vanguard cash reserve", 1.5, None)];
+
+    let matches = compute_common_holdings(&holdings_a, &holdings_b);
+
+    assert_eq!(matches.len(), 1);
+    assert!(matches[0].ticker.is_none());
+}
+
+#[test]
+fn test_common_holdings_do_not_fuzzy_match_similar_names() {
+    let holdings_a = vec![holding_with_ticker("Apple Inc", 5.0, None)];
+    let holdings_b = vec![holding_with_ticker("Apple Incorporated", 3.0, None)];
+
+    let matches = compute_common_holdings(&holdings_a, &holdings_b);
+
+    assert!(matches.is_empty());
+}
+
+#[test]
+fn test_common_holdings_do_not_match_same_name_with_different_tickers() {
+    let holdings_a = vec![holding_with_ticker("Apple", 5.0, Some("AAPL"))];
+    let holdings_b = vec![holding_with_ticker("Apple", 3.0, Some("APPL"))];
+
+    let matches = compute_common_holdings(&holdings_a, &holdings_b);
+
+    assert!(matches.is_empty());
+}
+
+#[test]
+fn test_common_holdings_sort_by_larger_fund_weight() {
+    let holdings_a = vec![
+        holding_with_ticker("Low", 1.0, Some("LOW")),
+        holding_with_ticker("High", 3.0, Some("HIGH")),
+    ];
+    let holdings_b = vec![
+        holding_with_ticker("High B", 2.0, Some("HIGH")),
+        holding_with_ticker("Low B", 9.0, Some("LOW")),
+    ];
+
+    let matches = compute_common_holdings(&holdings_a, &holdings_b);
+
+    assert_eq!(matches[0].ticker.as_deref(), Some("LOW"));
+    assert_eq!(matches[1].ticker.as_deref(), Some("HIGH"));
+}
+
+#[tokio::test]
+async fn test_compare_funds_computes_selected_period_correlation_and_graph_points() {
+    let db = setup_test_db().await;
+    let today = chrono::Local::now().date_naive();
+    let dates = date_range(today - Duration::days(30), today);
+    let mut sources = MockMarketDataSources::new();
+    sources
+        .fund_data
+        .insert("XCOMPARE1".to_owned(), fund_data());
+    sources
+        .fund_data
+        .insert("XCOMPARE2".to_owned(), fund_data());
+    sources
+        .historical_prices
+        .insert("XCOMPARE1".to_owned(), linear_prices(&dates, 100.0, 1.0));
+    sources
+        .historical_prices
+        .insert("XCOMPARE2".to_owned(), linear_prices(&dates, 200.0, 2.0));
+    let market_data = market_data(&sources);
+
+    let result = compare_funds(
+        &db,
+        &market_data,
+        "XCOMPARE1",
+        "XCOMPARE2",
+        FundComparisonPeriod {
+            label: "30D",
+            days: 30,
+        },
+    )
+    .await
+    .expect("fund comparison should compute");
+
+    assert_eq!(result.correlation.period_label, "30D");
+    assert!(result.correlation.correlation.is_some());
+    assert!(result.correlation.reason.is_none());
+    assert_eq!(result.correlation.points.len(), dates.len());
+    assert_eq!(result.correlation.points[0].return_a, 0.0);
+    assert_eq!(result.correlation.points[0].return_b, 0.0);
+    let last = result.correlation.points.last().unwrap();
+    assert!((last.return_a - 30.0).abs() < 0.01);
+    assert!((last.return_b - 30.0).abs() < 0.01);
+}
+
+#[tokio::test]
+async fn test_compare_funds_requires_full_selected_period_coverage() {
+    let db = setup_test_db().await;
+    let today = chrono::Local::now().date_naive();
+    let dates = date_range(today - Duration::days(5), today);
+    let mut sources = MockMarketDataSources::new();
+    sources.fund_data.insert("XSHORT1".to_owned(), fund_data());
+    sources.fund_data.insert("XSHORT2".to_owned(), fund_data());
+    sources
+        .historical_prices
+        .insert("XSHORT1".to_owned(), linear_prices(&dates, 100.0, 1.0));
+    sources
+        .historical_prices
+        .insert("XSHORT2".to_owned(), linear_prices(&dates, 200.0, 2.0));
+    let market_data = market_data(&sources);
+
+    let result = compare_funds(
+        &db,
+        &market_data,
+        "XSHORT1",
+        "XSHORT2",
+        FundComparisonPeriod {
+            label: "30D",
+            days: 30,
+        },
+    )
+    .await
+    .expect("fund comparison should compute without fallback graph");
+
+    assert!(result.correlation.correlation.is_none());
+    assert!(result.correlation.points.is_empty());
+    assert_eq!(
+        result.correlation.reason.as_deref(),
+        Some("first fund lacks selected-period start coverage")
+    );
+}
+
+#[test]
 fn test_compute_cagr_positive() {
     let cagr = compute_cagr("2023-01-01", "2026-01-01", 100.0, 200.0).unwrap();
     assert!((cagr - 25.99).abs() < 0.2);
@@ -258,6 +412,152 @@ fn test_fingerprint_changes_with_different_weights() {
 }
 
 #[tokio::test]
+async fn test_fund_analysis_uses_quote_metadata_for_untracked_fund() {
+    let db = setup_test_db().await;
+    let mut sources = MockMarketDataSources::new();
+    sources.fund_data.insert("XQUOTE1".to_owned(), fund_data());
+    sources.fund_quote_metadata.insert(
+        "XQUOTE1".to_owned(),
+        FundQuoteMetadata {
+            name: Some("Morningstar Fund Name".to_owned()),
+            aum: Some(1234567.89),
+            aum_currency: Some("USD".to_owned()),
+            inception_date: Some("2010-02-03".to_owned()),
+            quote_currency: Some("USD".to_owned()),
+        },
+    );
+    sources
+        .historical_prices
+        .insert("XQUOTE1".to_owned(), fund_prices());
+
+    let result = compute_fund_analysis(
+        &db,
+        &market_data(&sources),
+        "XQUOTE1",
+        one_year_candidate_period(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result.name.as_deref(), Some("Morningstar Fund Name"));
+    assert_eq!(result.fund_currency.as_deref(), Some("USD"));
+    assert_eq!(result.aum, Some(1234567.89));
+    assert_eq!(result.aum_currency.as_deref(), Some("USD"));
+    assert_eq!(result.inception_date.as_deref(), Some("2010-02-03"));
+}
+
+#[tokio::test]
+async fn test_fund_analysis_local_name_wins_and_quote_currency_overrides_holdings_currency() {
+    let db = setup_test_db().await;
+    insert_fund_asset(&db, "XLOCAL1", "Local Fund Name", "EUR", "XQUOTE2").await;
+    let mut sources = MockMarketDataSources::new();
+    sources.fund_data.insert("XQUOTE2".to_owned(), fund_data());
+    sources.fund_quote_metadata.insert(
+        "XQUOTE2".to_owned(),
+        FundQuoteMetadata {
+            name: Some("Morningstar Fund Name".to_owned()),
+            aum: None,
+            aum_currency: None,
+            inception_date: None,
+            quote_currency: Some("GBP".to_owned()),
+        },
+    );
+    sources
+        .historical_prices
+        .insert("XQUOTE2".to_owned(), fund_prices());
+
+    let result = compute_fund_analysis(
+        &db,
+        &market_data(&sources),
+        "XQUOTE2",
+        one_year_candidate_period(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result.name.as_deref(), Some("Local Fund Name"));
+    assert_eq!(result.fund_currency.as_deref(), Some("GBP"));
+}
+
+#[tokio::test]
+async fn test_fund_analysis_quote_metadata_failure_is_non_fatal() {
+    let db = setup_test_db().await;
+    let mut sources = MockMarketDataSources::new();
+    sources.fund_data.insert("XQUOTE3".to_owned(), fund_data());
+    sources
+        .historical_prices
+        .insert("XQUOTE3".to_owned(), fund_prices());
+
+    let result = compute_fund_analysis(
+        &db,
+        &market_data(&sources),
+        "XQUOTE3",
+        one_year_candidate_period(),
+    )
+    .await
+    .unwrap();
+
+    assert!(result.name.is_none());
+    assert_eq!(result.fund_currency.as_deref(), Some("EUR"));
+    assert!(result.aum.is_none());
+    assert!(result.inception_date.is_none());
+}
+
+#[tokio::test]
+async fn test_fund_analysis_candidate_correlation_uses_nav_and_current_holdings() {
+    let db = setup_test_db().await;
+    let good_asset_id = insert_asset(&db, "XGOOD", "Good Asset", "stock", "EUR").await;
+    let missing_asset_id = insert_asset(&db, "XMISS", "Missing Asset", "stock", "EUR").await;
+
+    let end = chrono::Local::now().date_naive() - Duration::days(1);
+    let start = end - Duration::days(30);
+    let dates = date_range(start, end);
+    for (idx, date) in dates.iter().enumerate() {
+        insert_portfolio_snapshot(&db, date, 100.0 + idx as f64, 10.0).await;
+    }
+    let end_str = format_date(end);
+    insert_portfolio_asset_snapshot(&db, &end_str, good_asset_id, 1.0, 100.0, 100.0, 1.0).await;
+    insert_portfolio_asset_snapshot(&db, &end_str, missing_asset_id, 1.0, 100.0, 100.0, 1.0).await;
+
+    let mut sources = MockMarketDataSources::new();
+    sources.fund_data.insert("XCORR1".to_owned(), fund_data());
+    sources
+        .historical_prices
+        .insert("XCORR1".to_owned(), linear_prices(&dates, 100.0, 1.0));
+    sources
+        .historical_prices
+        .insert("XGOOD".to_owned(), linear_prices(&dates, 50.0, 0.5));
+
+    let result = compute_fund_analysis(
+        &db,
+        &market_data(&sources),
+        "XCORR1",
+        CandidateCorrelationPeriod {
+            label: "30D",
+            days: 30,
+        },
+    )
+    .await
+    .unwrap();
+
+    let rows = &result.candidate_correlation.rows;
+    assert_eq!(result.candidate_correlation.period_label, "30D");
+    assert_eq!(rows[0].label, "Portfolio NAV");
+    assert!(rows[0].correlation.is_some());
+    let good_row = rows.iter().find(|row| row.label == "Good Asset").unwrap();
+    assert!(good_row.correlation.is_some());
+    let missing_row = rows
+        .iter()
+        .find(|row| row.label == "Missing Asset")
+        .unwrap();
+    assert!(missing_row.correlation.is_none());
+    assert_eq!(
+        missing_row.reason.as_deref(),
+        Some("asset price history unavailable")
+    );
+}
+
+#[tokio::test]
 async fn test_snapshot_insert_and_find_latest() {
     let db = setup_test_db().await;
 
@@ -319,6 +619,128 @@ async fn test_snapshot_find_by_snapshot_date() {
     assert!(missing.is_none());
 }
 
+#[tokio::test]
+async fn test_compare_funds_records_snapshots_for_both_funds() {
+    let db = setup_test_db().await;
+    let mut sources = MockMarketDataSources::new();
+    sources
+        .fund_data
+        .insert("XCOMP1".to_owned(), fund_data_with_date("2025-02-01"));
+    sources
+        .fund_data
+        .insert("XCOMP2".to_owned(), fund_data_with_date("2025-03-01"));
+    sources
+        .historical_prices
+        .insert("XCOMP1".to_owned(), fund_prices());
+    sources
+        .historical_prices
+        .insert("XCOMP2".to_owned(), fund_prices());
+
+    compare_funds(
+        &db,
+        &market_data(&sources),
+        "XCOMP1",
+        "XCOMP2",
+        thirty_day_fund_comparison_period(),
+    )
+    .await
+    .unwrap();
+
+    let snapshot_a =
+        fund_holdings_snapshot_repo::find_by_snapshot_date(&db, "XCOMP1", "2025-02-01")
+            .await
+            .unwrap()
+            .expect("fund A snapshot should be recorded");
+    let snapshot_b =
+        fund_holdings_snapshot_repo::find_by_snapshot_date(&db, "XCOMP2", "2025-03-01")
+            .await
+            .unwrap()
+            .expect("fund B snapshot should be recorded");
+
+    assert_eq!(snapshot_a.total_holdings, Some(2));
+    assert_eq!(snapshot_b.total_holdings, Some(2));
+    assert_eq!(
+        snapshot_a.fingerprint,
+        compute_fingerprint(&fund_data().holdings)
+    );
+    assert_eq!(
+        snapshot_b.fingerprint,
+        compute_fingerprint(&fund_data().holdings)
+    );
+}
+
+#[tokio::test]
+async fn test_compare_funds_reuses_existing_reported_snapshot() {
+    let db = setup_test_db().await;
+    let mut sources = MockMarketDataSources::new();
+    sources
+        .fund_data
+        .insert("XREUSE1".to_owned(), fund_data_with_date("2025-04-01"));
+    sources
+        .fund_data
+        .insert("XREUSE2".to_owned(), fund_data_with_date("2025-04-02"));
+    sources
+        .historical_prices
+        .insert("XREUSE1".to_owned(), fund_prices());
+    sources
+        .historical_prices
+        .insert("XREUSE2".to_owned(), fund_prices());
+    let market_data = market_data(&sources);
+
+    compare_funds(
+        &db,
+        &market_data,
+        "XREUSE1",
+        "XREUSE2",
+        thirty_day_fund_comparison_period(),
+    )
+    .await
+    .unwrap();
+    compare_funds(
+        &db,
+        &market_data,
+        "XREUSE1",
+        "XREUSE2",
+        thirty_day_fund_comparison_period(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(snapshot_count(&db, "XREUSE1", "2025-04-01").await, 1);
+    assert_eq!(snapshot_count(&db, "XREUSE2", "2025-04-02").await, 1);
+}
+
+#[tokio::test]
+async fn test_compare_funds_snapshot_falls_back_to_today_without_portfolio_date() {
+    let db = setup_test_db().await;
+    let today = format_date(chrono::Local::now().date_naive());
+    let mut sources = MockMarketDataSources::new();
+    sources
+        .fund_data
+        .insert("XTODAY1".to_owned(), fund_data_without_portfolio_date());
+    sources
+        .fund_data
+        .insert("XTODAY2".to_owned(), fund_data_with_date("2025-05-01"));
+    sources
+        .historical_prices
+        .insert("XTODAY1".to_owned(), fund_prices());
+    sources
+        .historical_prices
+        .insert("XTODAY2".to_owned(), fund_prices());
+
+    compare_funds(
+        &db,
+        &market_data(&sources),
+        "XTODAY1",
+        "XTODAY2",
+        thirty_day_fund_comparison_period(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(snapshot_count(&db, "XTODAY1", &today).await, 1);
+}
+
 // --- Test helpers ---
 
 fn fund_holding(
@@ -353,4 +775,100 @@ fn fund_holding_without_ticker(
         country: country.map(str::to_owned),
         currency: currency.map(str::to_owned),
     }
+}
+
+fn holding_with_ticker(name: &str, weighting: f64, ticker: Option<&str>) -> FundHolding {
+    FundHolding {
+        name: name.to_owned(),
+        weighting,
+        ticker: ticker.map(str::to_owned),
+        sector: None,
+        country: None,
+        currency: None,
+    }
+}
+
+fn fund_data() -> FundData {
+    FundData {
+        fund_currency: Some("EUR".to_owned()),
+        total_holdings: Some(2),
+        portfolio_date: Some("2025-01-31".to_owned()),
+        holdings: vec![
+            fund_holding("Apple", 6.0, Some("Technology"), Some("US"), Some("USD")),
+            fund_holding(
+                "Microsoft",
+                4.0,
+                Some("Technology"),
+                Some("US"),
+                Some("USD"),
+            ),
+        ],
+    }
+}
+
+fn fund_data_with_date(portfolio_date: &str) -> FundData {
+    FundData {
+        portfolio_date: Some(portfolio_date.to_owned()),
+        ..fund_data()
+    }
+}
+
+fn fund_data_without_portfolio_date() -> FundData {
+    FundData {
+        portfolio_date: None,
+        ..fund_data()
+    }
+}
+
+fn fund_prices() -> Vec<(String, f64)> {
+    vec![
+        ("2025-01-01".to_owned(), 100.0),
+        ("2025-01-02".to_owned(), 101.0),
+        ("2025-01-03".to_owned(), 102.0),
+    ]
+}
+
+fn one_year_candidate_period() -> CandidateCorrelationPeriod {
+    CandidateCorrelationPeriod {
+        label: "1Y",
+        days: 365,
+    }
+}
+
+fn thirty_day_fund_comparison_period() -> FundComparisonPeriod {
+    FundComparisonPeriod {
+        label: "30D",
+        days: 30,
+    }
+}
+
+fn date_range(start: chrono::NaiveDate, end: chrono::NaiveDate) -> Vec<String> {
+    let mut dates = Vec::new();
+    let mut date = start;
+    while date <= end {
+        dates.push(format_date(date));
+        date += Duration::days(1);
+    }
+    dates
+}
+
+fn linear_prices(dates: &[String], start_price: f64, step: f64) -> Vec<(String, f64)> {
+    dates
+        .iter()
+        .enumerate()
+        .map(|(idx, date)| (date.clone(), start_price + idx as f64 * step))
+        .collect()
+}
+
+async fn snapshot_count(
+    db: &sea_orm::DatabaseConnection,
+    ms_code: &str,
+    snapshot_date: &str,
+) -> u64 {
+    fund_holdings_snapshot::Entity::find()
+        .filter(fund_holdings_snapshot::Column::MsCode.eq(ms_code))
+        .filter(fund_holdings_snapshot::Column::SnapshotDate.eq(snapshot_date))
+        .count(db)
+        .await
+        .unwrap()
 }

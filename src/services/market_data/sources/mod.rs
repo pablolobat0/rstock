@@ -4,7 +4,7 @@ mod yahoo;
 
 use chrono::NaiveDate;
 
-use crate::models::{FundData, StockInfo};
+use crate::models::{FundData, FundQuoteMetadata, StockInfo};
 use crate::settings::Settings;
 
 pub use market_data_sources::{MarketDataSources, SourceObservation};
@@ -63,5 +63,9 @@ impl MarketDataSources for DefaultMarketDataSources {
 
     async fn fund_data(&self, code: &str, limit: u32) -> anyhow::Result<FundData> {
         self.morningstar.fund_data(code, limit).await
+    }
+
+    async fn fund_quote_metadata(&self, code: &str) -> anyhow::Result<FundQuoteMetadata> {
+        self.morningstar.fund_quote_metadata(code).await
     }
 }

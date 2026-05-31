@@ -1,6 +1,7 @@
 mod asset;
 mod classification;
 mod fund_analysis;
+mod fund_comparison;
 mod market_data;
 mod portfolio;
 mod stock_info;
@@ -11,7 +12,13 @@ pub use classification::{
     enum_to_db, AssetClass, AssetClassification, BondCredit, BondDuration, EquityStyle, Management,
 };
 pub use fund_analysis::{
-    FundAnalysisResult, FundData, FundPeriodMetrics, HoldingChange, HoldingChangeType,
+    CandidateCorrelationPeriod, CandidateCorrelationResult, CandidateCorrelationRow,
+    FundAnalysisResult, FundData, FundPeriodMetrics, FundQuoteMetadata, HoldingChange,
+    HoldingChangeType,
+};
+pub use fund_comparison::{
+    AlignedFundReturnPoint, AllocationComparison, CommonFundHolding, FundComparisonCorrelation,
+    FundComparisonPeriod, FundComparisonResult, FundComparisonSide, FundInfoComparison,
 };
 pub use market_data::{
     BaseCurrencyPriceSeries, CorrelationMarketData, CorrelationMarketDataSeries, IndividualPrice,

@@ -10,8 +10,8 @@ mod utils;
 use clap::Parser;
 
 use cli::{
-    AnalyzeCommands, AssetCommands, Cli, Commands, CorrelationCommands, PortfolioCommands,
-    TransactionCommands,
+    AnalyzeCommands, AssetCommands, Cli, Commands, CompareCommands, CorrelationCommands,
+    PortfolioCommands, TransactionCommands,
 };
 use sea_orm::DatabaseConnection;
 use services::market_data::{DefaultMarketDataSources, MarketData};
@@ -81,8 +81,8 @@ async fn main() -> anyhow::Result<()> {
             AnalyzeCommands::Composition {} => {
                 cli::commands::analyze::composition(&db, &market_data).await
             }
-            AnalyzeCommands::Fund { code } => {
-                cli::commands::analyze::fund(&db, &market_data, code).await
+            AnalyzeCommands::Fund { code, period } => {
+                cli::commands::analyze::fund(&db, &market_data, code, period).await
             }
             AnalyzeCommands::Correlation(args) => match args.command {
                 CorrelationCommands::Matrix { period } => {
@@ -103,6 +103,13 @@ async fn main() -> anyhow::Result<()> {
                     .await
                 }
             },
+        },
+        Commands::Compare(args) => match args.command {
+            CompareCommands::Funds {
+                code_a,
+                code_b,
+                period,
+            } => cli::commands::compare::funds(&db, &market_data, code_a, code_b, period).await,
         },
     }
 }

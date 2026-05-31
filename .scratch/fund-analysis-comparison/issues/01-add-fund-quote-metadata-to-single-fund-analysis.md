@@ -1,6 +1,6 @@
 # Add Fund Quote Metadata To Single-Fund Analysis
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

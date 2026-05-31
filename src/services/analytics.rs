@@ -60,10 +60,8 @@ pub async fn compute_correlation_data(
     for i in 0..n {
         matrix[i][i] = Some(1.0);
         for j in (i + 1)..n {
-            let (aligned_a, aligned_b) =
-                metrics::align_return_series(&return_series[i].1, &return_series[j].1);
-            if aligned_a.len() >= MIN_DATA_POINTS {
-                let corr = metrics::pearson_correlation(&aligned_a, &aligned_b);
+            if let Some(corr) = compute_return_correlation(&return_series[i].1, &return_series[j].1)
+            {
                 matrix[i][j] = Some(corr);
                 matrix[j][i] = Some(corr);
             }
@@ -76,6 +74,18 @@ pub async fn compute_correlation_data(
         warnings,
         market_data_limitations: correlation_market_data.limitations,
     })
+}
+
+#[allow(clippy::implicit_hasher)]
+pub fn compute_return_correlation(
+    left_returns: &HashMap<String, f64>,
+    right_returns: &HashMap<String, f64>,
+) -> Option<f64> {
+    let (aligned_left, aligned_right) = metrics::align_return_series(left_returns, right_returns);
+    if aligned_left.len() < MIN_DATA_POINTS {
+        return None;
+    }
+    Some(metrics::pearson_correlation(&aligned_left, &aligned_right))
 }
 
 pub async fn compute_rolling_correlation_data(

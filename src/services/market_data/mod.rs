@@ -10,7 +10,8 @@ use sea_orm::DatabaseConnection;
 use crate::db::repos::asset_repo;
 use crate::models::{
     Asset, AssetClassification, CorrelationMarketData, CorrelationMarketDataSeries, FundData,
-    IndividualPrice, IndividualPriceFallback, MarketDataValuation, StockInfo, ValuationMarketData,
+    FundQuoteMetadata, IndividualPrice, IndividualPriceFallback, MarketDataValuation, StockInfo,
+    ValuationMarketData,
 };
 use crate::services::metrics;
 
@@ -71,6 +72,10 @@ impl MarketData {
 
     pub async fn fund_data(&self, code: &str, limit: u32) -> anyhow::Result<FundData> {
         self.sources.fund_data(code, limit).await
+    }
+
+    pub async fn fund_quote_metadata(&self, code: &str) -> anyhow::Result<FundQuoteMetadata> {
+        self.sources.fund_quote_metadata(code).await
     }
 
     pub async fn prepare_valuation_market_data(

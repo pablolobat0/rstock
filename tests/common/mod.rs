@@ -9,7 +9,7 @@ use rstock::db::entities::{
     asset, daily_asset_price, daily_exchange_rate, portfolio_asset_history, portfolio_history,
     transaction,
 };
-use rstock::models::{f64_to_cents, FundData, StockInfo};
+use rstock::models::{f64_to_cents, FundData, FundQuoteMetadata, StockInfo};
 use rstock::services::market_data::{MarketData, MarketDataSources, SourceObservation};
 
 pub async fn setup_test_db() -> DatabaseConnection {
@@ -226,6 +226,30 @@ pub async fn insert_portfolio_snapshot(
         .expect("failed to insert portfolio snapshot");
 }
 
+pub async fn insert_portfolio_asset_snapshot(
+    db: &DatabaseConnection,
+    date: &str,
+    asset_id: i32,
+    quantity: f64,
+    closing_price: f64,
+    market_value: f64,
+    exchange_rate: f64,
+) {
+    let record = portfolio_asset_history::ActiveModel {
+        date: Set(date.to_owned()),
+        asset_id: Set(asset_id),
+        quantity: Set(quantity),
+        closing_price: Set(closing_price),
+        market_value: Set(market_value),
+        exchange_rate: Set(exchange_rate),
+        ..Default::default()
+    };
+    portfolio_asset_history::Entity::insert(record)
+        .exec(db)
+        .await
+        .expect("failed to insert portfolio asset snapshot");
+}
+
 pub async fn get_portfolio_snapshot(
     db: &DatabaseConnection,
     date: &str,
@@ -289,6 +313,7 @@ pub struct MockMarketDataSources {
     pub exchange_rates: HashMap<String, Vec<(String, f64)>>,
     pub stock_info: HashMap<String, StockInfo>,
     pub fund_data: HashMap<String, FundData>,
+    pub fund_quote_metadata: HashMap<String, FundQuoteMetadata>,
 }
 
 impl MockMarketDataSources {
@@ -298,6 +323,7 @@ impl MockMarketDataSources {
             exchange_rates: HashMap::new(),
             stock_info: HashMap::new(),
             fund_data: HashMap::new(),
+            fund_quote_metadata: HashMap::new(),
         }
     }
 }
@@ -361,6 +387,13 @@ impl MarketDataSources for MockMarketDataSources {
             .get(code)
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("no mock fund data for {code}"))
+    }
+
+    async fn fund_quote_metadata(&self, code: &str) -> anyhow::Result<FundQuoteMetadata> {
+        self.fund_quote_metadata
+            .get(code)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("no mock fund quote metadata for {code}"))
     }
 }
 

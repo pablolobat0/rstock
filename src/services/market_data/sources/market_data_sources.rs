@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use chrono::NaiveDate;
 
-use crate::models::{FundData, StockInfo};
+use crate::models::{FundData, FundQuoteMetadata, StockInfo};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct SourceObservation {
@@ -37,6 +37,8 @@ pub trait MarketDataSources: Send + Sync {
     async fn stock_info(&self, ticker: &str) -> anyhow::Result<StockInfo>;
 
     async fn fund_data(&self, code: &str, limit: u32) -> anyhow::Result<FundData>;
+
+    async fn fund_quote_metadata(&self, code: &str) -> anyhow::Result<FundQuoteMetadata>;
 }
 
 pub(super) fn sort_and_dedup_observations(
