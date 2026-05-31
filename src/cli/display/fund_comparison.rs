@@ -3,8 +3,9 @@ use tabled::builder::Builder;
 use tabled::settings::object::Columns;
 use tabled::settings::style::HorizontalLine;
 use tabled::settings::{Alignment, Style};
+use textplots::{Chart, Plot, Shape};
 
-use crate::constants::display_date;
+use crate::constants::{display_date, MIN_DATA_POINTS};
 use crate::models::{
     AllocationComparison, FundComparisonResult, FundComparisonSide, FundPeriodMetrics,
 };
@@ -20,6 +21,7 @@ pub fn print_fund_comparison(result: &FundComparisonResult) {
     print_allocations("Country Allocation", &result.country_allocations, result);
     print_allocations("Currency Allocation", &result.currency_allocations, result);
     print_common_holdings(result);
+    print_correlation(result);
     println!();
 }
 
@@ -189,6 +191,84 @@ fn print_common_holdings(result: &FundComparisonResult) {
         rows,
         4,
     );
+}
+
+fn print_correlation(result: &FundComparisonResult) {
+    println!(
+        "{}",
+        format!(
+            "Fund-To-Fund Correlation — {}",
+            result.correlation.period_label
+        )
+        .bold()
+    );
+    println!();
+
+    let Some(correlation) = result.correlation.correlation else {
+        println!(
+            "Correlation: N/A ({})",
+            result
+                .correlation
+                .reason
+                .as_deref()
+                .unwrap_or("selected-period coverage unavailable")
+        );
+        println!();
+        return;
+    };
+
+    println!("Correlation: {}", format_plain(Some(correlation)));
+    if result.correlation.points.len() < MIN_DATA_POINTS {
+        println!("Aligned return graph: N/A (not enough aligned graph data)");
+        println!();
+        return;
+    }
+
+    let points_a: Vec<(f32, f32)> = result
+        .correlation
+        .points
+        .iter()
+        .enumerate()
+        .map(|(idx, point)| (idx as f32, point.return_a as f32))
+        .collect();
+    let points_b: Vec<(f32, f32)> = result
+        .correlation
+        .points
+        .iter()
+        .enumerate()
+        .map(|(idx, point)| (idx as f32, point.return_b as f32))
+        .collect();
+    let xmax = (result.correlation.points.len() - 1) as f32;
+
+    println!(
+        "Legend: {} = line, {} = points",
+        result.fund_a.name, result.fund_b.name
+    );
+    Chart::new(180, 40, 0.0, xmax)
+        .lineplot(&Shape::Lines(&points_a))
+        .lineplot(&Shape::Points(&points_b))
+        .display();
+
+    let first = &result.correlation.points[0];
+    let last = &result.correlation.points[result.correlation.points.len() - 1];
+    println!(
+        "  Aligned period: {}  →  {}",
+        display_date(&first.date),
+        display_date(&last.date)
+    );
+    println!(
+        "  {}: {}  →  {}",
+        result.fund_a.name,
+        format_return_plain(Some(first.return_a)),
+        format_return_plain(Some(last.return_a))
+    );
+    println!(
+        "  {}: {}  →  {}",
+        result.fund_b.name,
+        format_return_plain(Some(first.return_b)),
+        format_return_plain(Some(last.return_b))
+    );
+    println!();
 }
 
 fn build_performance_rows(

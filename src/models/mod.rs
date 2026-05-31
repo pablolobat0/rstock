@@ -17,8 +17,8 @@ pub use fund_analysis::{
     HoldingChangeType,
 };
 pub use fund_comparison::{
-    AllocationComparison, CommonFundHolding, FundComparisonResult, FundComparisonSide,
-    FundInfoComparison,
+    AlignedFundReturnPoint, AllocationComparison, CommonFundHolding, FundComparisonCorrelation,
+    FundComparisonPeriod, FundComparisonResult, FundComparisonSide, FundInfoComparison,
 };
 pub use market_data::{
     BaseCurrencyPriceSeries, CorrelationMarketData, CorrelationMarketDataSeries, IndividualPrice,
