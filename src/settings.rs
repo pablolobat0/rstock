@@ -1,3 +1,4 @@
+use crate::constants::app_data_dir;
 use anyhow::Context;
 use std::path::PathBuf;
 
@@ -14,7 +15,7 @@ pub struct Settings {
 
 impl Settings {
     pub fn from_env() -> anyhow::Result<Self> {
-        dotenvy::dotenv().ok();
+        load_dotenv_files();
 
         Ok(Self {
             token_page_url: required_env("RSTOCK_SOURCE_TOKEN_PAGE_URL")?,
@@ -26,6 +27,11 @@ impl Settings {
             token_cache_path: PathBuf::from(required_env("RSTOCK_SOURCE_TOKEN_CACHE_PATH")?),
         })
     }
+}
+
+fn load_dotenv_files() {
+    dotenvy::dotenv().ok();
+    dotenvy::from_path(app_data_dir().join(".env")).ok();
 }
 
 fn required_env(name: &str) -> anyhow::Result<String> {
