@@ -1,8 +1,11 @@
 mod common;
 
+use std::process::Command;
+
 use rstock::models::StockInfo;
 use rstock::services::composition::compute_composition;
 use sea_orm::{EntityTrait, Set};
+use serde_json::{json, Value};
 
 use common::{
     insert_daily_price, insert_portfolio_snapshot, insert_transaction, setup_test_db,
@@ -88,6 +91,15 @@ fn mock_stock_info(
     }
 }
 
+fn composition_envelope(result: &rstock::models::CompositionResult) -> Value {
+    let mut output = Vec::new();
+    rstock::cli::output::write_json(&mut output, "analyze.composition", result)
+        .expect("composition JSON should serialize");
+    let text = String::from_utf8(output).expect("composition JSON should be UTF-8");
+    assert_eq!(text.lines().count(), 1);
+    serde_json::from_str(&text).expect("composition output should be valid JSON")
+}
+
 #[tokio::test]
 async fn test_composition_direct_stocks_only() {
     let db = setup_test_db().await;
@@ -99,8 +111,8 @@ async fn test_composition_direct_stocks_only() {
         "stock",
         "EUR",
         Some("equity"),
-        None,
-        None,
+        Some("growth"),
+        Some("passive"),
     )
     .await;
     let id2 = insert_classified_asset(
@@ -110,8 +122,8 @@ async fn test_composition_direct_stocks_only() {
         "stock",
         "EUR",
         Some("equity"),
-        None,
-        None,
+        Some("value"),
+        Some("active"),
     )
     .await;
 
@@ -172,6 +184,30 @@ async fn test_composition_direct_stocks_only() {
 
     // Market cap: one large (50B), one mid (5B)
     assert_eq!(result.market_cap_breakdown.len(), 2);
+
+    let envelope = composition_envelope(&result);
+    assert_eq!(envelope["command"], "analyze.composition");
+    let data = &envelope["data"];
+    for field in [
+        "asset_class_breakdown",
+        "equity_style_breakdown",
+        "management_breakdown",
+        "sector_breakdown",
+        "country_breakdown",
+        "market_cap_breakdown",
+        "top_holdings",
+        "warnings",
+    ] {
+        assert!(data[field].is_array(), "{field} should be an array");
+    }
+    assert_eq!(data["equity_style_breakdown"].as_array().unwrap().len(), 2);
+    assert_eq!(data["management_breakdown"].as_array().unwrap().len(), 2);
+    assert_eq!(data["top_holdings"].as_array().unwrap().len(), 2);
+    assert!(data["top_holdings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|holding| holding["ticker"] == "XFAKE1"));
 }
 
 #[tokio::test]
@@ -215,6 +251,21 @@ async fn test_composition_empty_portfolio() {
 
     assert!(result.asset_class_breakdown.is_empty());
     assert!(!result.warnings.is_empty());
+
+    let envelope = composition_envelope(&result);
+    let data = &envelope["data"];
+    for field in [
+        "asset_class_breakdown",
+        "equity_style_breakdown",
+        "management_breakdown",
+        "sector_breakdown",
+        "country_breakdown",
+        "market_cap_breakdown",
+        "top_holdings",
+    ] {
+        assert_eq!(data[field], json!([]), "{field} should remain empty");
+    }
+    assert_eq!(data["warnings"], json!(["Portfolio has no value."]));
 }
 
 #[tokio::test]
@@ -250,4 +301,38 @@ async fn test_composition_failed_stock_info() {
 
     // Should have a warning about failed lookup
     assert!(result.warnings.iter().any(|w| w.contains("XFAKE1")));
+
+    let envelope = composition_envelope(&result);
+    let data = &envelope["data"];
+    assert!(data["warnings"][0]
+        .as_str()
+        .is_some_and(|warning| warning.contains("XFAKE1")));
+    assert!(data["top_holdings"][0]["country"].is_null());
+    assert!(data["top_holdings"][0]["sector"].is_null());
+}
+
+#[test]
+fn composition_command_emits_one_json_envelope() {
+    let home = tempfile::tempdir().expect("temporary HOME should be created");
+    let output = Command::new(env!("CARGO_BIN_EXE_rstock"))
+        .args(["analyze", "composition", "--json"])
+        .env("HOME", home.path())
+        .output()
+        .expect("rstock should run");
+
+    assert!(
+        output.status.success(),
+        "rstock failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be UTF-8");
+    assert_eq!(stdout.lines().count(), 1);
+    assert!(!stdout.contains("\u{1b}["));
+    let envelope: Value = serde_json::from_str(&stdout).expect("stdout should be valid JSON");
+    assert_eq!(envelope["command"], "analyze.composition");
+    assert_eq!(envelope["data"]["top_holdings"], json!([]));
+    assert_eq!(
+        envelope["data"]["warnings"],
+        json!(["Portfolio has no value."])
+    );
 }

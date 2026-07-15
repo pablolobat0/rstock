@@ -137,12 +137,14 @@ impl std::fmt::Display for MarketCapCategory {
     }
 }
 
+#[derive(serde::Serialize)]
 pub struct AllocationEntry {
     pub label: String,
     /// Weight as a percentage (0–100)
     pub weight: f64,
 }
 
+#[derive(serde::Serialize)]
 pub struct TopHolding {
     pub name: String,
     pub ticker: Option<String>,
@@ -152,6 +154,7 @@ pub struct TopHolding {
     pub sector: Option<String>,
 }
 
+#[derive(serde::Serialize)]
 pub struct CompositionResult {
     pub asset_class_breakdown: Vec<AllocationEntry>,
     pub equity_style_breakdown: Vec<AllocationEntry>,
