@@ -1,6 +1,7 @@
 use anyhow::Context;
 use chrono::{Datelike, NaiveDate};
 use sea_orm::DatabaseConnection;
+use serde::Serialize;
 
 use crate::constants::{
     format_date, DATE_FORMAT, FIVE_YEAR_DAYS, ONE_MONTH_DAYS, ONE_YEAR_DAYS, SIX_MONTH_DAYS,
@@ -85,6 +86,7 @@ pub async fn asset_add(
     bond_duration: Option<BondDuration>,
     management: Option<Management>,
     morningstar_code: Option<String>,
+    output_format: OutputFormat,
 ) -> anyhow::Result<()> {
     let info = AssetInfo {
         ticker: ticker.clone(),
@@ -99,9 +101,24 @@ pub async fn asset_add(
         bond_duration,
         management,
     };
-    services::assets::create_tracked_asset(db, &info, &classification, morningstar_code.as_deref())
-        .await?;
-    println!("Added asset {ticker}");
+    let asset_id = services::assets::create_tracked_asset(
+        db,
+        &info,
+        &classification,
+        morningstar_code.as_deref(),
+    )
+    .await?;
+    if output_format.is_json() {
+        output::emit_json(
+            "portfolio.asset.add",
+            &CreatedAssetOutput {
+                asset_id,
+                ticker: &ticker,
+            },
+        )?;
+    } else {
+        println!("Added asset {ticker}");
+    }
     Ok(())
 }
 
@@ -116,6 +133,7 @@ pub async fn asset_edit(
     bond_duration: Option<BondDuration>,
     management: Option<Management>,
     morningstar_code: Option<String>,
+    output_format: OutputFormat,
 ) -> anyhow::Result<()> {
     let classification = AssetClassification {
         asset_class,
@@ -135,8 +153,23 @@ pub async fn asset_edit(
         morningstar_code.as_deref(),
     )
     .await?;
-    println!("Updated asset {ticker}");
+    if output_format.is_json() {
+        output::emit_json("portfolio.asset.edit", &AssetOutput { ticker: &ticker })?;
+    } else {
+        println!("Updated asset {ticker}");
+    }
     Ok(())
+}
+
+#[derive(Serialize)]
+struct CreatedAssetOutput<'a> {
+    asset_id: i32,
+    ticker: &'a str,
+}
+
+#[derive(Serialize)]
+struct AssetOutput<'a> {
+    ticker: &'a str,
 }
 
 #[cfg(test)]
