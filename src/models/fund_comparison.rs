@@ -1,5 +1,7 @@
 use super::FundPeriodMetrics;
+use serde::Serialize;
 
+#[derive(Serialize)]
 pub struct FundComparisonResult {
     pub fund_a: FundComparisonSide,
     pub fund_b: FundComparisonSide,
@@ -16,6 +18,7 @@ pub struct FundComparisonPeriod {
     pub days: i64,
 }
 
+#[derive(Serialize)]
 pub struct FundComparisonSide {
     pub code: String,
     pub name: String,
@@ -27,6 +30,7 @@ pub struct FundComparisonSide {
     pub all_time: Option<FundPeriodMetrics>,
 }
 
+#[derive(Serialize)]
 pub struct FundInfoComparison {
     pub currency: Option<String>,
     pub aum: Option<f64>,
@@ -37,12 +41,14 @@ pub struct FundInfoComparison {
     pub portfolio_date: Option<String>,
 }
 
+#[derive(Serialize)]
 pub struct AllocationComparison {
     pub label: String,
     pub weight_a: f64,
     pub weight_b: f64,
 }
 
+#[derive(Serialize)]
 pub struct CommonFundHolding {
     pub ticker: Option<String>,
     pub name_a: String,
@@ -50,6 +56,7 @@ pub struct CommonFundHolding {
     pub weight_b: f64,
 }
 
+#[derive(Serialize)]
 pub struct FundComparisonCorrelation {
     pub period_label: String,
     pub correlation: Option<f64>,
@@ -57,6 +64,7 @@ pub struct FundComparisonCorrelation {
     pub points: Vec<AlignedFundReturnPoint>,
 }
 
+#[derive(Serialize)]
 pub struct AlignedFundReturnPoint {
     pub date: String,
     pub return_a: f64,

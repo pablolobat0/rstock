@@ -83,7 +83,17 @@ async fn main() -> anyhow::Result<()> {
                 code_a,
                 code_b,
                 period,
-            } => cli::commands::compare::funds(&db, &market_data, code_a, code_b, period).await,
+            } => {
+                cli::commands::compare::funds(
+                    &db,
+                    &market_data,
+                    code_a,
+                    code_b,
+                    period,
+                    output_format,
+                )
+                .await
+            }
         },
     }
 }
