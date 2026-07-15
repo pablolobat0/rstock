@@ -1,5 +1,6 @@
 pub mod commands;
 pub mod display;
+pub mod output;
 
 use chrono::NaiveDate;
 use clap::{Args, Parser, Subcommand, ValueEnum};
@@ -55,6 +56,10 @@ pub struct Cli {
     /// Increase logging verbosity (-v info, -vv debug, -vvv trace)
     #[arg(short, long, action = clap::ArgAction::Count, global = true)]
     pub verbose: u8,
+
+    /// Emit successful command output as JSON
+    #[arg(long, global = true)]
+    pub json: bool,
 
     #[command(subcommand)]
     pub command: Commands,

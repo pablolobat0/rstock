@@ -1,4 +1,5 @@
 use crate::db::entities::{portfolio_asset_history, portfolio_history};
+use serde::Serialize;
 
 use super::{AssetPosition, MarketDataLimitation};
 
@@ -44,6 +45,7 @@ impl From<portfolio_asset_history::Model> for AssetSnapshot {
     }
 }
 
+#[derive(Serialize)]
 pub struct PeriodMetrics {
     pub volatility: Option<f64>,
     pub max_drawdown: Option<f64>,
@@ -52,7 +54,10 @@ pub struct PeriodMetrics {
     pub sortino: Option<f64>,
 }
 
+#[derive(Serialize)]
 pub struct PortfolioResult {
+    pub base_currency: String,
+    #[serde(rename = "positions")]
     pub rows: Vec<AssetPosition>,
     pub total_invested: f64,
     pub total_current_value: f64,

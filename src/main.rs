@@ -9,6 +9,7 @@ mod utils;
 
 use clap::Parser;
 
+use cli::output::OutputFormat;
 use cli::{
     AnalyzeCommands, AssetCommands, Cli, Commands, CompareCommands, CorrelationCommands,
     PortfolioCommands, TransactionCommands,
@@ -23,14 +24,18 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::debug!(command = ?cli.command, "starting rstock");
 
+    let output_format = OutputFormat::from_json(cli.json);
+
     let db = db::connect().await?;
     let market_data = MarketData::new(Box::new(DefaultMarketDataSources::new()?));
 
     match cli.command {
-        Commands::Get { period } => cli::commands::portfolio::get(&db, &market_data, period).await,
+        Commands::Get { period } => {
+            cli::commands::portfolio::get(&db, &market_data, period, output_format).await
+        }
         Commands::Portfolio(args) => match args.command {
             PortfolioCommands::Get { period } => {
-                cli::commands::portfolio::get(&db, &market_data, period).await
+                cli::commands::portfolio::get(&db, &market_data, period, output_format).await
             }
             PortfolioCommands::Asset(asset_args) => {
                 run_asset_command(&db, asset_args.command).await

@@ -14,14 +14,21 @@ use crate::services;
 use crate::services::market_data::MarketData;
 
 use super::super::display;
+use super::super::output::{self, OutputFormat};
 use super::super::ChartPeriod;
 
 pub async fn get(
     db: &DatabaseConnection,
     market_data: &MarketData,
     period: ChartPeriod,
+    output_format: OutputFormat,
 ) -> anyhow::Result<()> {
-    let result = services::portfolio::get_portfolio(db, market_data).await?;
+    let mut result = services::portfolio::get_portfolio(db, market_data).await?;
+
+    if output_format.is_json() {
+        prepare_json_result(&mut result);
+        return output::emit_json("portfolio.get", &result);
+    }
 
     display::print_portfolio(&result);
 
@@ -57,6 +64,12 @@ pub async fn get(
     display::print_nav_chart(&snapshots, period_label);
 
     Ok(())
+}
+
+fn prepare_json_result(result: &mut crate::models::PortfolioResult) {
+    result
+        .rows
+        .sort_by(|left, right| right.current_value.total_cmp(&left.current_value));
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -124,4 +137,113 @@ pub async fn asset_edit(
     .await?;
     println!("Updated asset {ticker}");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::NaiveDate;
+    use serde_json::{json, Value};
+
+    use crate::cli::output;
+    use crate::models::{
+        AssetPosition, AssetType, MarketDataLimitation, MarketDataLimitationClassification,
+        MarketDataSubject, PortfolioResult,
+    };
+
+    use super::prepare_json_result;
+
+    #[test]
+    fn portfolio_json_preserves_domain_values_and_orders_positions() {
+        let limitation = MarketDataLimitation {
+            subject: MarketDataSubject::Asset {
+                ticker: "XFAKE2".to_string(),
+                name: "Fake Fund".to_string(),
+                asset_type: AssetType::Fund,
+            },
+            latest_available_date: NaiveDate::from_ymd_opt(2025, 1, 9).unwrap(),
+            requested_end_date: NaiveDate::from_ymd_opt(2025, 1, 10).unwrap(),
+            classification: MarketDataLimitationClassification::ActionableReportingLag,
+        };
+        let mut result = PortfolioResult {
+            base_currency: "EUR".to_string(),
+            rows: vec![
+                position("XFAKE1", "USD", 100.0, Vec::new()),
+                position("XFAKE2", "GBP", 300.0, vec![limitation.clone()]),
+            ],
+            total_invested: 350.0,
+            total_current_value: 400.0,
+            total_dividends: 0.0,
+            total_gain_loss: 50.0,
+            total_gain_loss_pct: 14.29,
+            snapshot_date: Some("2025-01-09".to_string()),
+            nav: Some(110.0),
+            daily_change: None,
+            daily_change_pct: None,
+            inception_date: Some("2024-01-01".to_string()),
+            ytd_return: None,
+            one_year_return: Some(10.0),
+            three_year_return: None,
+            five_year_return: None,
+            ytd_metrics: None,
+            one_year_metrics: None,
+            three_year_metrics: None,
+            five_year_metrics: None,
+            market_data_limitations: vec![limitation],
+        };
+        prepare_json_result(&mut result);
+
+        let mut output = Vec::new();
+        output::write_json(&mut output, "portfolio.get", &result).unwrap();
+        let value: Value = serde_json::from_slice(&output).unwrap();
+
+        assert_eq!(value["command"], "portfolio.get");
+        assert_eq!(value["data"]["base_currency"], "EUR");
+        assert_eq!(value["data"]["positions"][0]["ticker"], "XFAKE2");
+        assert_eq!(value["data"]["positions"][1]["ticker"], "XFAKE1");
+        assert_eq!(value["data"]["positions"][0]["currency"], "GBP");
+        assert!(value["data"]["daily_change"].is_null());
+        assert_eq!(
+            value["data"]["market_data_limitations"][0]["subject"],
+            json!({
+                "type": "asset",
+                "ticker": "XFAKE2",
+                "name": "Fake Fund",
+                "asset_type": "fund"
+            })
+        );
+        assert_eq!(
+            value["data"]["market_data_limitations"][0]["classification"],
+            "actionable_reporting_lag"
+        );
+        assert!(value["data"].get("nav_history").is_none());
+        assert!(!String::from_utf8(output).unwrap().contains("\u{1b}["));
+    }
+
+    fn position(
+        ticker: &str,
+        currency: &str,
+        current_value: f64,
+        market_data_limitations: Vec<MarketDataLimitation>,
+    ) -> AssetPosition {
+        AssetPosition {
+            ticker: ticker.to_string(),
+            name: format!("{ticker} name"),
+            asset_type: AssetType::Fund,
+            currency: currency.to_string(),
+            morningstar_code: Some("F00000TEST".to_string()),
+            asset_class: Some("equity".to_string()),
+            equity_style: None,
+            management: None,
+            total_qty: 1.0,
+            avg_cost: 100.0,
+            current_price: current_value,
+            price_date: "2025-01-09".to_string(),
+            total_invested: 100.0,
+            current_value,
+            dividends_received: 0.0,
+            gain_loss: current_value - 100.0,
+            gain_loss_pct: current_value - 100.0,
+            market_data_limitations,
+        }
+    }
 }

@@ -2,12 +2,14 @@ use std::fmt;
 use std::str::FromStr;
 
 use clap::ValueEnum;
+use serde::Serialize;
 
 use crate::db::entities::asset;
 
 use super::MarketDataLimitation;
 
-#[derive(ValueEnum, Clone, Debug, PartialEq, Eq)]
+#[derive(ValueEnum, Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AssetType {
     Stock,
     Fund,
@@ -86,6 +88,7 @@ impl Asset {
     }
 }
 
+#[derive(Serialize)]
 pub struct AssetPosition {
     pub ticker: String,
     pub name: String,
