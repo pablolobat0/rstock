@@ -20,10 +20,10 @@ rstock tracks your investment portfolio from the terminal. It records buy/sell t
 - **Colored portfolio table** — Per-asset breakdown with gain/loss highlighting and dividend tracking
 - **Portfolio composition** — Asset class, style, management, sector, country, and market-cap breakdowns with top holdings
 - **Correlation analysis** — Portfolio asset correlation matrix over configurable periods
-- **Stock monitoring** — Watchlist with momentum indicators (RSI, SMA, MACD), fundamentals, and sector comparison
 - **Fund deep-dive analysis** — `analyze fund` with performance, top holdings, equity-only allocation tables, and snapshot diffs
-- **Export** — Dump transactions to CSV
-- **Asset listing** — View all tracked assets at a glance
+- **Fund comparison** — Compare performance, allocations, common holdings, and correlation for two fund candidates
+- **Import/export** — Load or dump Transaction ledger entries as CSV
+- **JSON output** — Emit compact structured results for automation and LLM consumers
 
 ## Prerequisites
 
@@ -51,16 +51,16 @@ rstock portfolio asset add \
   --type stock \
   --asset-class equity
 
-rstock buy \
+rstock transaction buy \
   --ticker MSFT \
   --date 26-02-2026 \
   --quantity 1 \
   --price 390
 ```
 
-Create the asset once, then record transactions against it. The root `buy` command is a shortcut for `rstock transaction buy ...`.
+Create the asset once, then record transactions against it.
 
-Root `buy` flags:
+`transaction buy` flags:
 
 | Flag         | Required | Default | Description                          |
 |--------------|----------|---------|--------------------------------------|
@@ -101,14 +101,15 @@ rstock get --period 5y    # 5-year chart
 
 `get` is also available as `rstock portfolio get ...`. Chart periods: `1m`, `3m`, `6m`, `ytd`, `1y` (default), `3y`, `5y`, `all`.
 
-### List assets and CSV import/export
+### Manage assets and CSV import/export
 
 ```bash
-rstock portfolio list                       # Show all portfolio assets
 rstock portfolio asset add --ticker SAN --name "Banco Santander" --type stock --asset-class equity
 rstock portfolio asset add --ticker FUND1 --name "Sample Fund" --type fund --asset-class equity --management active --morningstar-code F00000YN5R
-rstock data export --output txns.csv        # Export transactions to CSV
-rstock data import --input txns.csv         # Import transactions from CSV
+rstock portfolio asset edit --ticker SAN --name "Banco Santander, S.A."
+rstock transaction list                     # List ledger entries and their IDs
+rstock transaction export --output txns.csv # Export transactions to CSV
+rstock transaction import --input txns.csv  # Import transactions from CSV
 ```
 
 ### Analyze portfolio and funds
@@ -119,6 +120,7 @@ rstock analyze correlation matrix           # 1Y asset correlation matrix (defau
 rstock analyze correlation matrix --period 30d
 rstock analyze correlation rolling AAPL MSFT --period 1y   # 60-day rolling stock-pair correlation
 rstock analyze fund --code F00000YN5R      # Deep-dive fund analysis by Morningstar code
+rstock compare funds --code-a F00000YN5R --code-b F00000XABC --period 1y
 ```
 
 Periods: `30d`, `6m`, `1y` (default), `3y`, `5y`.
@@ -129,21 +131,25 @@ Rolling correlation notes:
 - Preserves the distinction between tracked assets and benchmark data
 - Computes over aligned available trading-day series
 
-### Monitor stocks
+### JSON output
 
 ```bash
-rstock monitor add --ticker AAPL --sector-etf XLK
-rstock monitor list
-rstock monitor view AAPL                  # 1Y analysis (default)
-rstock monitor view AAPL --period 6m      # 6-month analysis
-rstock monitor remove --ticker AAPL
+rstock --json transaction list
+# {"command":"transaction.list","data":{"transactions":[],"count":0}}
+
+rstock portfolio asset add --ticker XFAKE1 --name "Example" --type stock --asset-class equity --json
+# {"command":"portfolio.asset.add","data":{"asset_id":1,"ticker":"XFAKE1"}}
 ```
+
+`--json` is a global option and may appear before or after a command or nested subcommand. For every successful application command it replaces terminal tables, charts, colors, prompts, previews, and prose with exactly one compact `{"command":"...","data":...}` document on standard output. Transaction edit and delete additionally require `--yes` in JSON mode.
+
+JSON mode applies only to successful application results. Runtime errors and Clap-generated help and version output remain unchanged text. The JSON schema is unversioned, best-effort output with no backward-compatibility guarantee.
 
 ## Architecture
 
 ```
 src/
-├── cli/                # Clap CLI: root shortcuts + grouped commands
+├── cli/                # Clap CLI, command adapters, human display, and JSON output
 ├── main.rs             # Entry point, command dispatch
 ├── constants.rs        # Centralized constants (dates, currency, metrics, thresholds)
 ├── utils.rs            # Shared interactive helpers
@@ -180,7 +186,7 @@ tests/                         # Integration tests + common test utilities
 2. `main.rs` dispatches to service functions
 3. Services request valuation, Individual price, and correlation inputs through `MarketData`
 4. NAV engine computes daily snapshots using unitization
-5. `src/cli/display` renders tables, charts, and reports to the terminal
+5. The CLI boundary selects human rendering or one compact JSON envelope
 
 ### Key design decisions
 

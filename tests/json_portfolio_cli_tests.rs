@@ -34,3 +34,23 @@ fn both_dashboard_paths_emit_the_same_empty_json_contract() {
         assert!(value["data"].get("nav_history").is_none());
     }
 }
+
+#[test]
+fn empty_dashboard_keeps_human_table_and_chart_messages() {
+    let home = tempfile::tempdir().expect("temporary HOME should be created");
+    let output = Command::new(env!("CARGO_BIN_EXE_rstock"))
+        .arg("get")
+        .env("HOME", home.path())
+        .output()
+        .expect("rstock should run");
+
+    assert!(
+        output.status.success(),
+        "rstock failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be UTF-8");
+    assert!(stdout.contains("No positions found."));
+    assert!(stdout.contains("Not enough data to display NAV chart."));
+    assert!(!stdout.trim_start().starts_with('{'));
+}

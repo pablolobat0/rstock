@@ -16,15 +16,15 @@
                    ┌─────────────┼─────────────┐
                    │             │             │
             ┌──────┴──────┐ ┌───┴────┐ ┌──────┴──────┐
-            │  Services   │ │ Models │ │   Display   │
+            │  Services   │ │ Models │ │ CLI Output  │
             │  nav.rs     │ │        │ │ src/cli/    │
             │  portfolio  │ │ asset  │ │  (tables,   │
             │  prices     │ │ tx     │ │   charts,   │
-            │  metrics    │ │ port.  │ │   reports)  │
+            │  metrics    │ │ port.  │ │   reports,  │
             │ composition │ │ monitor│ │             │
             │ fund_analysis││        │ │             │
             │  monitor    │ │        │ │             │
-            │  export     │ │        │ │             │
+            │  export     │ │        │ │   or JSON)  │
             └──────┬──────┘ └────────┘ └─────────────┘
                    │
          ┌─────────┴─────────┐
@@ -48,14 +48,12 @@
 
 `src/cli/mod.rs` defines the root commands and grouped subcommands using clap derive macros:
 - **`get`** — Display portfolio with optional `--period` (1m, 3m, 6m, ytd, 1y, 3y, 5y, all)
-- **`buy`** — Record a purchase for an existing asset (ticker, date, quantity, price, optional: fees)
-- **`portfolio`** — Portfolio views and asset metadata management
-- **`transaction`** — Record, edit, or delete transactions
-- **`data`** — Import or export transactions as CSV
+- **`portfolio`** — Grouped dashboard and Tracked asset add/edit commands
+- **`transaction`** — List, record, edit, delete, import, or export Transaction ledger entries
 - **`analyze`** — Composition, fund analysis, static correlation matrix, and rolling pair correlation
-- **`monitor`** — Subcommand group: add/remove/list/view stocks in a watchlist with momentum indicators
+- **`compare`** — Side-by-side fund candidate comparison
 
-`main.rs` dispatches commands to service functions. It also handles chart period date-range calculation and date validation (rejects future dates).
+`main.rs` creates an `OutputFormat` from the global `--json` flag and passes it through every dispatch path. Command adapters in `src/cli/commands/` call presentation-neutral services, then choose either the existing human renderer or `output::emit_json()`. `src/cli/output.rs` owns compact serialization and emits one `command`/`data` envelope to stdout; services do not emit successful command output. Errors and Clap help/version remain outside this successful-output boundary.
 
 ### Logging (`logging.rs`)
 
@@ -95,17 +93,19 @@ All business logic lives here. Key modules:
 
 **`export.rs`** — `export_transactions_csv()` dumps all transactions to a CSV file.
 
-### Display Layer (`display/`)
+### Output Layer (`src/cli/display/`, `src/cli/output.rs`)
 
-Pure output formatting with no business logic, split into submodules:
+Pure output formatting with no business logic. `OutputFormat` selects human or JSON output at the CLI boundary. Human formatting remains split into command-oriented display submodules, while `output.rs` provides the shared JSON envelope writer:
 
 - **`helpers.rs`** — Shared formatting utilities (price, quantity, percentage, color helpers)
 - **`portfolio.rs`** — `print_portfolio()` renders per-asset table, summary (NAV, returns, risk metrics), and user-facing Market data limitation warning text using `tabled` with green/red coloring via `colored`
-- **`simple.rs`** — `print_asset_list()` lists all tracked assets, `print_nav_chart()` renders ASCII NAV chart via `textplots`, `print_watchlist()` lists monitored stocks
+- **`simple.rs`** — `print_nav_chart()` renders the ASCII NAV chart via `textplots`
 - **`correlation.rs`** — `print_correlation_matrix()` renders N×N correlation matrix with color-coded values
 - **`composition.rs`** — `print_composition()` renders composition breakdowns and top holdings
 - **`fund_analysis.rs`** — `print_fund_analysis()` renders deep-dive fund analysis tables and snapshot diffs
+- **`fund_comparison.rs`** — `print_fund_comparison()` renders side-by-side fund candidate analysis
 - **`monitor.rs`** — `print_monitor_report()` renders stock analysis with fundamentals, momentum indicators, and sector comparison charts
+- **`output.rs`** — `OutputFormat`, compact `command`/`data` envelope serialization, and stdout emission
 
 ### Model Layer (`models/`)
 
@@ -338,17 +338,17 @@ main.rs
   └─> display::print_nav_chart()
 ```
 
-### `buy`
+### `transaction buy`
 
 ```
 main.rs
   └─> transactions::buy()
-        ├─> asset_repo::get_or_create() (upsert asset metadata)
+        ├─> asset_repo::find_by_ticker() (asset must already exist)
         ├─> transaction_repo::insert_buy() (store with cents conversion)
         └─> portfolio_history_repo::delete_from_date() (invalidate snapshots)
 ```
 
-### `sell`
+### `transaction sell`
 
 ```
 main.rs
@@ -360,7 +360,7 @@ main.rs
         └─> portfolio_history_repo::delete_from_date() (invalidate snapshots)
 ```
 
-### `dividend`
+### `transaction dividend`
 
 ```
 main.rs
@@ -370,7 +370,7 @@ main.rs
         └─> portfolio_history_repo::delete_from_date() (invalidate snapshots)
 ```
 
-### `split`
+### `transaction split`
 
 ```
 main.rs
@@ -380,15 +380,7 @@ main.rs
         └─> portfolio_history_repo::delete_from_date() (invalidate snapshots)
 ```
 
-### `list`
-
-```
-main.rs
-  └─> asset_repo::find_all()
-  └─> display::print_asset_list()
-```
-
-### `export`
+### `transaction export`
 
 ```
 main.rs
@@ -446,17 +438,4 @@ main.rs
         ├─> Filter allocation rows to holdings with ticker
         └─> fund_holdings_snapshot_repo compare/store by Morningstar portfolio date
   └─> display::print_fund_analysis()
-```
-
-### `monitor view`
-
-```
-main.rs
-  └─> watchlist_repo::find_by_ticker() (must be in watchlist)
-  └─> monitor::generate_monitor_report()
-        ├─> MarketData source adapters for stock + sector ETF history
-        ├─> Compute momentum indicators (RSI, SMA, MACD)
-        ├─> Fetch fundamentals via yfinance-rs
-        └─> Compute relative strength and correlation
-  └─> display::print_monitor_report()
 ```

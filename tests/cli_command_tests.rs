@@ -1,4 +1,4 @@
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use rstock::cli::{
     AnalyzeCommands, Cli, Commands, CompareCommands, CorrelationPeriod, PortfolioCommands,
     TransactionCommands,
@@ -36,6 +36,184 @@ fn json_is_global_and_has_no_short_alias() {
     assert!(cli.json);
 
     assert!(Cli::try_parse_from(["rstock", "-j", "get"]).is_err());
+}
+
+#[test]
+fn every_application_command_leaf_accepts_json() {
+    let cases: &[&[&str]] = &[
+        &["rstock", "get", "--json"],
+        &["rstock", "portfolio", "get", "--json"],
+        &[
+            "rstock",
+            "portfolio",
+            "asset",
+            "add",
+            "-t",
+            "XFAKE1",
+            "-n",
+            "Fake",
+            "-T",
+            "stock",
+            "--asset-class",
+            "equity",
+            "--json",
+        ],
+        &[
+            "rstock",
+            "portfolio",
+            "asset",
+            "edit",
+            "-t",
+            "XFAKE1",
+            "-n",
+            "Fake",
+            "--json",
+        ],
+        &["rstock", "transaction", "list", "--json"],
+        &[
+            "rstock",
+            "transaction",
+            "buy",
+            "-t",
+            "XFAKE1",
+            "-d",
+            "01-01-2025",
+            "-q",
+            "1",
+            "-p",
+            "10",
+            "--json",
+        ],
+        &[
+            "rstock",
+            "transaction",
+            "sell",
+            "-t",
+            "XFAKE1",
+            "-d",
+            "01-01-2025",
+            "-q",
+            "1",
+            "-p",
+            "10",
+            "--json",
+        ],
+        &[
+            "rstock",
+            "transaction",
+            "dividend",
+            "-t",
+            "XFAKE1",
+            "-d",
+            "01-01-2025",
+            "-a",
+            "1",
+            "--json",
+        ],
+        &[
+            "rstock",
+            "transaction",
+            "split",
+            "-t",
+            "XFAKE1",
+            "-d",
+            "01-01-2025",
+            "-r",
+            "2",
+            "--json",
+        ],
+        &[
+            "rstock",
+            "transaction",
+            "edit",
+            "1",
+            "--quantity",
+            "2",
+            "--yes",
+            "--json",
+        ],
+        &["rstock", "transaction", "delete", "1", "--yes", "--json"],
+        &["rstock", "transaction", "export", "-o", "tx.csv", "--json"],
+        &["rstock", "transaction", "import", "-i", "tx.csv", "--json"],
+        &["rstock", "analyze", "composition", "--json"],
+        &[
+            "rstock",
+            "analyze",
+            "fund",
+            "--code",
+            "F00000TEST",
+            "--json",
+        ],
+        &["rstock", "analyze", "correlation", "matrix", "--json"],
+        &[
+            "rstock",
+            "analyze",
+            "correlation",
+            "rolling",
+            "XFAKE1",
+            "XFAKE2",
+            "--json",
+        ],
+        &[
+            "rstock", "compare", "funds", "--code-a", "F00000A", "--code-b", "F00000B", "--json",
+        ],
+    ];
+
+    for args in cases {
+        let cli = Cli::try_parse_from(*args).unwrap_or_else(|error| {
+            panic!("JSON should parse for {args:?}: {error}");
+        });
+        assert!(cli.json, "JSON was not enabled for {args:?}");
+    }
+}
+
+#[test]
+fn application_command_surface_matches_the_dispatch_audit() {
+    fn collect_leaves(command: &clap::Command, prefix: &str, leaves: &mut Vec<String>) {
+        for child in command
+            .get_subcommands()
+            .filter(|child| child.get_name() != "help")
+        {
+            let path = if prefix.is_empty() {
+                child.get_name().to_string()
+            } else {
+                format!("{prefix} {}", child.get_name())
+            };
+            if child.get_subcommands().next().is_some() {
+                collect_leaves(child, &path, leaves);
+            } else {
+                leaves.push(path);
+            }
+        }
+    }
+
+    let mut actual = Vec::new();
+    collect_leaves(&Cli::command(), "", &mut actual);
+    actual.sort();
+
+    let mut expected = vec![
+        "analyze composition",
+        "analyze correlation matrix",
+        "analyze correlation rolling",
+        "analyze fund",
+        "compare funds",
+        "get",
+        "portfolio asset add",
+        "portfolio asset edit",
+        "portfolio get",
+        "transaction buy",
+        "transaction delete",
+        "transaction dividend",
+        "transaction edit",
+        "transaction export",
+        "transaction import",
+        "transaction list",
+        "transaction sell",
+        "transaction split",
+    ];
+    expected.sort();
+
+    assert_eq!(actual, expected);
 }
 
 #[test]
