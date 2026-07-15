@@ -32,6 +32,16 @@ fn fund_analysis_envelope(result: &rstock::models::FundAnalysisResult) -> Value 
     serde_json::from_str(&text).expect("fund analysis output should be valid JSON")
 }
 
+fn fund_comparison_envelope(result: &rstock::models::FundComparisonResult) -> Value {
+    let mut output = Vec::new();
+    rstock::cli::output::write_json(&mut output, "compare.funds", result)
+        .expect("fund comparison JSON should serialize");
+    let text = String::from_utf8(output).expect("fund comparison JSON should be UTF-8");
+    assert_eq!(text.lines().count(), 1);
+    assert!(!text.contains("\u{1b}["));
+    serde_json::from_str(&text).expect("fund comparison output should be valid JSON")
+}
+
 #[test]
 fn test_sector_breakdown_aggregation_uses_unclassified() {
     let holdings = vec![
@@ -331,6 +341,212 @@ async fn test_compare_funds_requires_full_selected_period_coverage() {
         result.correlation.reason.as_deref(),
         Some("first fund lacks selected-period start coverage")
     );
+}
+
+#[tokio::test]
+async fn test_fund_comparison_json_complete_structure_and_aligned_points() {
+    let db = setup_test_db().await;
+    let today = chrono::Local::now().date_naive();
+    let dates = date_range(today - Duration::days(2_000), today);
+    let mut sources = MockMarketDataSources::new();
+    sources
+        .fund_data
+        .insert("XJSONCMP1".to_owned(), fund_data());
+    sources.fund_data.insert(
+        "XJSONCMP2".to_owned(),
+        FundData {
+            fund_currency: Some("USD".to_owned()),
+            total_holdings: Some(2),
+            portfolio_date: Some("2025-02-28".to_owned()),
+            holdings: vec![
+                fund_holding("Apple", 3.5, Some("Technology"), Some("US"), Some("USD")),
+                fund_holding("Toyota", 2.5, Some("Consumer"), Some("Japan"), Some("JPY")),
+            ],
+        },
+    );
+    sources.fund_quote_metadata.insert(
+        "XJSONCMP1".to_owned(),
+        FundQuoteMetadata {
+            name: Some("First Candidate".to_owned()),
+            aum: Some(1_000_000.0),
+            aum_currency: Some("EUR".to_owned()),
+            inception_date: Some("2010-01-02".to_owned()),
+            quote_currency: Some("EUR".to_owned()),
+        },
+    );
+    sources.fund_quote_metadata.insert(
+        "XJSONCMP2".to_owned(),
+        FundQuoteMetadata {
+            name: Some("Second Candidate".to_owned()),
+            aum: Some(2_000_000.0),
+            aum_currency: Some("USD".to_owned()),
+            inception_date: Some("2012-03-04".to_owned()),
+            quote_currency: Some("USD".to_owned()),
+        },
+    );
+    sources
+        .historical_prices
+        .insert("XJSONCMP1".to_owned(), linear_prices(&dates, 100.0, 0.05));
+    sources
+        .historical_prices
+        .insert("XJSONCMP2".to_owned(), linear_prices(&dates, 200.0, 0.04));
+    sources.historical_prices.insert(
+        BENCHMARK_TICKER.to_owned(),
+        linear_prices(&dates, 300.0, 0.03),
+    );
+
+    let result = compare_funds(
+        &db,
+        &market_data(&sources),
+        "XJSONCMP1",
+        "XJSONCMP2",
+        thirty_day_fund_comparison_period(),
+    )
+    .await
+    .unwrap();
+    let envelope = fund_comparison_envelope(&result);
+
+    assert_eq!(envelope["command"], "compare.funds");
+    let data = &envelope["data"];
+    assert_eq!(data["fund_a"]["code"], "XJSONCMP1");
+    assert_eq!(data["fund_a"]["name"], "First Candidate");
+    assert_eq!(data["fund_a"]["info"]["aum"], json!(1_000_000.0));
+    assert_eq!(data["fund_a"]["info"]["aum_currency"], "EUR");
+    assert_eq!(data["fund_a"]["info"]["inception_date"], "2010-01-02");
+    assert_eq!(data["fund_a"]["info"]["total_holdings"], 2);
+    assert_eq!(data["fund_a"]["info"]["top_10_weight"], json!(10.0));
+    assert_eq!(data["fund_a"]["info"]["portfolio_date"], "2025-01-31");
+    assert_eq!(data["fund_b"]["code"], "XJSONCMP2");
+    assert_eq!(data["fund_b"]["name"], "Second Candidate");
+    assert_eq!(data["fund_b"]["info"]["currency"], "USD");
+    for fund in ["fund_a", "fund_b"] {
+        for period in ["ytd", "one_year", "three_year", "five_year", "all_time"] {
+            assert!(
+                data[fund][period].is_object(),
+                "{fund}.{period} should contain metrics"
+            );
+            for metric in [
+                "total_return",
+                "cagr",
+                "volatility",
+                "sharpe",
+                "sortino",
+                "max_drawdown",
+                "beta",
+            ] {
+                assert!(
+                    data[fund][period].get(metric).is_some(),
+                    "{fund}.{period}.{metric} should be present"
+                );
+            }
+        }
+    }
+    for section in [
+        "sector_allocations",
+        "country_allocations",
+        "currency_allocations",
+    ] {
+        assert!(!data[section].as_array().unwrap().is_empty());
+        let allocation = &data[section][0];
+        assert!(allocation["label"].is_string());
+        assert!(allocation["weight_a"].is_number());
+        assert!(allocation["weight_b"].is_number());
+    }
+    let apple = data["common_holdings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|holding| holding["ticker"] == "Appl")
+        .expect("Apple should be a Common fund holding");
+    assert_eq!(apple["weight_a"], json!(6.0));
+    assert_eq!(apple["weight_b"], json!(3.5));
+    assert_eq!(data["correlation"]["period_label"], "30D");
+    assert!(data["correlation"]["correlation"].is_number());
+    assert!(data["correlation"]["reason"].is_null());
+    let point = &data["correlation"]["points"][0];
+    assert!(point["date"].is_string());
+    assert!(point["return_a"].is_number());
+    assert!(point["return_b"].is_number());
+}
+
+#[tokio::test]
+async fn test_fund_comparison_json_missing_coverage_uses_nulls_and_empty_points() {
+    let db = setup_test_db().await;
+    let today = chrono::Local::now().date_naive();
+    let dates = date_range(today - Duration::days(5), today);
+    let mut sources = MockMarketDataSources::new();
+    sources
+        .fund_data
+        .insert("XJSONSHORT1".to_owned(), fund_data());
+    sources
+        .fund_data
+        .insert("XJSONSHORT2".to_owned(), fund_data());
+    sources
+        .historical_prices
+        .insert("XJSONSHORT1".to_owned(), linear_prices(&dates, 100.0, 1.0));
+    sources
+        .historical_prices
+        .insert("XJSONSHORT2".to_owned(), linear_prices(&dates, 200.0, 2.0));
+
+    let result = compare_funds(
+        &db,
+        &market_data(&sources),
+        "XJSONSHORT1",
+        "XJSONSHORT2",
+        thirty_day_fund_comparison_period(),
+    )
+    .await
+    .unwrap();
+    let data = fund_comparison_envelope(&result)["data"].clone();
+
+    assert!(data["fund_a"]["info"]["aum"].is_null());
+    assert!(data["fund_b"]["info"]["inception_date"].is_null());
+    assert!(data["correlation"]["correlation"].is_null());
+    assert_eq!(
+        data["correlation"]["reason"],
+        "first fund lacks selected-period start coverage"
+    );
+    assert_eq!(data["correlation"]["points"], json!([]));
+}
+
+#[tokio::test]
+async fn test_fund_comparison_json_empty_common_holdings_remains_array() {
+    let db = setup_test_db().await;
+    let mut sources = MockMarketDataSources::new();
+    sources.fund_data.insert(
+        "XJSONUNIQUE1".to_owned(),
+        FundData {
+            holdings: vec![holding_with_ticker("Unique A", 4.0, Some("XA"))],
+            ..fund_data()
+        },
+    );
+    sources.fund_data.insert(
+        "XJSONUNIQUE2".to_owned(),
+        FundData {
+            holdings: vec![holding_with_ticker("Unique B", 5.0, Some("XB"))],
+            ..fund_data()
+        },
+    );
+    sources
+        .historical_prices
+        .insert("XJSONUNIQUE1".to_owned(), Vec::new());
+    sources
+        .historical_prices
+        .insert("XJSONUNIQUE2".to_owned(), Vec::new());
+
+    let result = compare_funds(
+        &db,
+        &market_data(&sources),
+        "XJSONUNIQUE1",
+        "XJSONUNIQUE2",
+        thirty_day_fund_comparison_period(),
+    )
+    .await
+    .unwrap();
+    let data = fund_comparison_envelope(&result)["data"].clone();
+
+    assert_eq!(data["common_holdings"], json!([]));
+    assert!(data["common_holdings"].is_array());
 }
 
 #[test]

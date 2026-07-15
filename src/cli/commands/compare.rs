@@ -8,6 +8,7 @@ use crate::services;
 use crate::services::market_data::MarketData;
 
 use super::super::display;
+use super::super::output::{self, OutputFormat};
 use super::super::CorrelationPeriod;
 
 pub async fn funds(
@@ -16,6 +17,7 @@ pub async fn funds(
     code_a: String,
     code_b: String,
     period: CorrelationPeriod,
+    output_format: OutputFormat,
 ) -> anyhow::Result<()> {
     let result = services::fund_comparison::compare_funds(
         db,
@@ -25,6 +27,11 @@ pub async fn funds(
         fund_comparison_period(&period),
     )
     .await?;
+
+    if output_format.is_json() {
+        return output::emit_json("compare.funds", &result);
+    }
+
     display::print_fund_comparison(&result);
     Ok(())
 }
