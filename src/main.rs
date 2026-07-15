@@ -46,7 +46,7 @@ async fn main() -> anyhow::Result<()> {
         }
         Commands::Analyze(args) => match args.command {
             AnalyzeCommands::Composition {} => {
-                cli::commands::analyze::composition(&db, &market_data).await
+                cli::commands::analyze::composition(&db, &market_data, output_format).await
             }
             AnalyzeCommands::Fund { code, period } => {
                 cli::commands::analyze::fund(&db, &market_data, code, period).await
