@@ -49,7 +49,7 @@ async fn main() -> anyhow::Result<()> {
                 cli::commands::analyze::composition(&db, &market_data, output_format).await
             }
             AnalyzeCommands::Fund { code, period } => {
-                cli::commands::analyze::fund(&db, &market_data, code, period).await
+                cli::commands::analyze::fund(&db, &market_data, code, period, output_format).await
             }
             AnalyzeCommands::Correlation(args) => match args.command {
                 CorrelationCommands::Matrix { period } => {

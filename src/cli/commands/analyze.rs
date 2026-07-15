@@ -16,11 +16,17 @@ pub async fn fund(
     market_data: &MarketData,
     code: String,
     period: CorrelationPeriod,
+    output_format: OutputFormat,
 ) -> anyhow::Result<()> {
     let candidate_period = candidate_correlation_period(&period);
     let result =
         services::fund_analysis::compute_fund_analysis(db, market_data, &code, candidate_period)
             .await?;
+
+    if output_format.is_json() {
+        return output::emit_json("analyze.fund", &result);
+    }
+
     display::print_fund_analysis(&result);
     Ok(())
 }
