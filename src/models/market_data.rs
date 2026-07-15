@@ -1,4 +1,5 @@
 use chrono::NaiveDate;
+use serde::Serialize;
 
 use crate::models::AssetType;
 
@@ -49,7 +50,7 @@ pub struct CorrelationMarketData {
     pub limitations: Vec<MarketDataLimitation>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MarketDataLimitation {
     pub subject: MarketDataSubject,
     pub latest_available_date: NaiveDate,
@@ -57,7 +58,8 @@ pub struct MarketDataLimitation {
     pub classification: MarketDataLimitationClassification,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum MarketDataSubject {
     Asset {
         ticker: String,
@@ -69,7 +71,8 @@ pub enum MarketDataSubject {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum MarketDataLimitationClassification {
     ActionableReportingLag,
     ActionableStaleData,

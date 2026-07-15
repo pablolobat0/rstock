@@ -18,6 +18,27 @@ fn get_and_portfolio_get_parse() {
 }
 
 #[test]
+fn json_is_global_and_has_no_short_alias() {
+    let cli = Cli::try_parse_from(["rstock", "--json", "get"])
+        .expect("JSON should parse before the command");
+    assert!(cli.json);
+
+    let cli = Cli::try_parse_from(["rstock", "get", "--json"])
+        .expect("JSON should parse after the top-level command");
+    assert!(cli.json);
+
+    let cli = Cli::try_parse_from(["rstock", "portfolio", "--json", "get"])
+        .expect("JSON should parse within a nested command path");
+    assert!(cli.json);
+
+    let cli = Cli::try_parse_from(["rstock", "portfolio", "get", "--json"])
+        .expect("JSON should parse after a nested command path");
+    assert!(cli.json);
+
+    assert!(Cli::try_parse_from(["rstock", "-j", "get"]).is_err());
+}
+
+#[test]
 fn removed_command_paths_do_not_parse() {
     assert!(Cli::try_parse_from(["rstock", "buy", "-t", "XFAKE1"]).is_err());
     assert!(Cli::try_parse_from(["rstock", "portfolio", "list"]).is_err());

@@ -102,6 +102,7 @@ pub async fn get_portfolio(
     );
 
     Ok(PortfolioResult {
+        base_currency: BASE_CURRENCY.to_string(),
         rows,
         total_invested,
         total_current_value,
@@ -149,6 +150,7 @@ pub async fn get_asset_positions(
     let market_data_limitations = collect_market_data_limitations(&rows);
 
     Ok(PortfolioResult {
+        base_currency: BASE_CURRENCY.to_string(),
         rows,
         total_invested,
         total_current_value,
@@ -217,6 +219,7 @@ pub async fn get_inception_date(db: &DatabaseConnection) -> anyhow::Result<Optio
 
 fn empty_result() -> PortfolioResult {
     PortfolioResult {
+        base_currency: BASE_CURRENCY.to_string(),
         rows: Vec::new(),
         total_invested: 0.0,
         total_current_value: 0.0,
