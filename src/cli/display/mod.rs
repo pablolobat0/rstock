@@ -14,4 +14,4 @@ pub use fund_analysis::print_fund_analysis;
 pub use fund_comparison::print_fund_comparison;
 pub use portfolio::print_portfolio;
 pub use simple::print_nav_chart;
-pub use transaction::{format_transaction_detail, print_transaction_list};
+pub use transaction::{format_transaction_detail, print_transaction_list, transaction_list_output};

@@ -36,10 +36,11 @@ async fn test_import_buy_sell_dividend_split() {
          25-01-2025,XFAKE1,,,EUR,,,,,,,split,2,0.00,0.00\n"
     ));
 
-    let count = import_transactions_csv(&db, csv.path().to_str().unwrap())
+    let result = import_transactions_csv(&db, csv.path().to_str().unwrap())
         .await
         .expect("import should succeed");
-    assert_eq!(count, 4);
+    assert_eq!(result.count, 4);
+    assert_eq!(result.transaction_receipts.len(), 4);
 
     let txns = transaction_repo::find_all_ordered_by_date(&db, None, None)
         .await

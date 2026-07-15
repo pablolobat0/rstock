@@ -1,0 +1,281 @@
+use std::path::Path;
+use std::process::{Command, Output};
+
+use serde_json::{json, Value};
+
+fn run(home: &Path, args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_rstock"))
+        .args(args)
+        .env("HOME", home)
+        .output()
+        .expect("rstock should run")
+}
+
+fn run_success(home: &Path, args: &[&str]) -> Output {
+    let output = run(home, args);
+    assert!(
+        output.status.success(),
+        "rstock failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output
+}
+
+fn run_json(home: &Path, args: &[&str], command: &str) -> Value {
+    let output = run_success(home, args);
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be UTF-8");
+    assert_eq!(stdout.lines().count(), 1, "unexpected stdout: {stdout}");
+    assert!(!stdout.contains("\u{1b}["));
+    let value: Value = serde_json::from_str(&stdout).expect("stdout should be one JSON value");
+    assert_eq!(value["command"], command);
+    value
+}
+
+fn add_asset(home: &Path) {
+    run_success(
+        home,
+        &[
+            "portfolio",
+            "asset",
+            "add",
+            "--ticker",
+            "XFAKE1",
+            "--name",
+            "Fake Stock",
+            "--type",
+            "stock",
+            "--asset-class",
+            "equity",
+            "--equity-style",
+            "blend",
+            "--management",
+            "passive",
+        ],
+    );
+}
+
+fn buy(home: &Path, json: bool) -> Output {
+    let mut args = vec![
+        "transaction",
+        "buy",
+        "--ticker",
+        "XFAKE1",
+        "--date",
+        "01-01-2025",
+        "--quantity",
+        "10",
+        "--price",
+        "12.3456",
+        "--fees",
+        "0.1234",
+    ];
+    if json {
+        args.push("--json");
+    }
+    run_success(home, &args)
+}
+
+#[test]
+fn empty_transaction_list_uses_the_normal_json_schema() {
+    let home = tempfile::tempdir().expect("temporary HOME should be created");
+    let value = run_json(
+        home.path(),
+        &["--json", "transaction", "list"],
+        "transaction.list",
+    );
+
+    assert_eq!(value["data"]["transactions"], json!([]));
+    assert_eq!(value["data"]["count"], 0);
+}
+
+#[test]
+fn transaction_workflow_emits_decimal_rows_and_id_receipts() {
+    let home = tempfile::tempdir().expect("temporary HOME should be created");
+    add_asset(home.path());
+
+    let buy_output = buy(home.path(), true);
+    let stdout = String::from_utf8(buy_output.stdout).expect("stdout should be UTF-8");
+    let buy_value: Value = serde_json::from_str(&stdout).expect("buy output should be JSON");
+    assert_eq!(buy_value["command"], "transaction.buy");
+    assert_eq!(buy_value["data"]["transaction_id"], 1);
+
+    let list = run_json(
+        home.path(),
+        &["transaction", "list", "--json"],
+        "transaction.list",
+    );
+    assert_eq!(list["data"]["count"], 1);
+    let row = &list["data"]["transactions"][0];
+    assert_eq!(row["id"], 1);
+    assert_eq!(row["date"], "01-01-2025");
+    assert_eq!(row["tx_type"], "buy");
+    assert_eq!(row["ticker"], "XFAKE1");
+    assert_eq!(row["asset_name"], "Fake Stock");
+    assert_eq!(row["quantity"], 10.0);
+    assert_eq!(row["price"], 12.3456);
+    assert_eq!(row["fees"], 0.1234);
+    assert!(row.get("asset_id").is_none());
+    assert!(row.get("price_cents").is_none());
+
+    let cases: &[(&[&str], &str, i64)] = &[
+        (
+            &[
+                "transaction",
+                "sell",
+                "-t",
+                "XFAKE1",
+                "-d",
+                "02-01-2025",
+                "-q",
+                "1",
+                "-p",
+                "13",
+                "--json",
+            ],
+            "transaction.sell",
+            2,
+        ),
+        (
+            &[
+                "transaction",
+                "dividend",
+                "-t",
+                "XFAKE1",
+                "-d",
+                "03-01-2025",
+                "-a",
+                "2",
+                "--json",
+            ],
+            "transaction.dividend",
+            3,
+        ),
+        (
+            &[
+                "transaction",
+                "split",
+                "-t",
+                "XFAKE1",
+                "-d",
+                "04-01-2025",
+                "-r",
+                "2",
+                "--json",
+            ],
+            "transaction.split",
+            4,
+        ),
+        (
+            &[
+                "transaction",
+                "edit",
+                "1",
+                "--quantity",
+                "11",
+                "--yes",
+                "--json",
+            ],
+            "transaction.edit",
+            1,
+        ),
+        (
+            &["transaction", "delete", "2", "--yes", "--json"],
+            "transaction.delete",
+            2,
+        ),
+    ];
+
+    for (args, command, id) in cases {
+        let value = run_json(home.path(), args, command);
+        assert_eq!(value["data"]["transaction_id"], *id);
+    }
+}
+
+#[test]
+fn json_edit_and_delete_require_explicit_consent_without_mutating() {
+    let home = tempfile::tempdir().expect("temporary HOME should be created");
+    add_asset(home.path());
+    buy(home.path(), true);
+
+    for args in [
+        vec!["transaction", "edit", "1", "--quantity", "99", "--json"],
+        vec!["transaction", "delete", "1", "--json"],
+    ] {
+        let output = run(home.path(), &args);
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("--yes is required"));
+    }
+
+    let list = run_json(
+        home.path(),
+        &["transaction", "list", "--json"],
+        "transaction.list",
+    );
+    assert_eq!(list["data"]["count"], 1);
+    assert_eq!(list["data"]["transactions"][0]["quantity"], 10.0);
+}
+
+#[test]
+fn import_and_export_emit_count_and_path_without_service_output() {
+    let source_home = tempfile::tempdir().expect("temporary HOME should be created");
+    add_asset(source_home.path());
+    buy(source_home.path(), true);
+
+    let files = tempfile::tempdir().expect("temporary file directory should be created");
+    let export_path = files.path().join("transactions.csv");
+    let export_path_text = export_path.to_string_lossy().into_owned();
+    let export = run_json(
+        source_home.path(),
+        &[
+            "transaction",
+            "export",
+            "--output",
+            &export_path_text,
+            "--json",
+        ],
+        "transaction.export",
+    );
+    assert_eq!(export["data"]["count"], 1);
+    assert_eq!(export["data"]["path"], export_path_text);
+
+    let target_home = tempfile::tempdir().expect("temporary HOME should be created");
+    let import = run_json(
+        target_home.path(),
+        &[
+            "transaction",
+            "import",
+            "--input",
+            &export_path_text,
+            "--json",
+        ],
+        "transaction.import",
+    );
+    assert_eq!(import["data"]["count"], 1);
+    assert_eq!(import["data"]["path"], export_path_text);
+
+    let human_home = tempfile::tempdir().expect("temporary HOME should be created");
+    let human = run_success(
+        human_home.path(),
+        &["transaction", "import", "--input", &export_path_text],
+    );
+    let stdout = String::from_utf8(human.stdout).expect("stdout should be UTF-8");
+    assert!(stdout.starts_with(
+        "Bought 10 units of Fake Stock (XFAKE1) at 12.35 EUR on 01-01-2025. Total: 123.58 EUR\nTransaction ID: 1\n"
+    ));
+    assert!(stdout.ends_with(&format!(
+        "Imported 1 transactions from {export_path_text}\n"
+    )));
+}
+
+#[test]
+fn human_buy_summary_is_unchanged() {
+    let home = tempfile::tempdir().expect("temporary HOME should be created");
+    add_asset(home.path());
+
+    let output = buy(home.path(), false);
+    assert_eq!(
+        String::from_utf8(output.stdout).expect("stdout should be UTF-8"),
+        "Bought 10 units of Fake Stock (XFAKE1) at 12.35 EUR on 01-01-2025. Total: 123.58 EUR\nTransaction ID: 1\n"
+    );
+}
