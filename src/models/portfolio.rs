@@ -109,7 +109,7 @@ pub struct RollingCorrelationResult {
 
 // --- Holdings report models ---
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub struct FundHolding {
     pub name: String,
     /// Weight within the fund (0–100 percentage)

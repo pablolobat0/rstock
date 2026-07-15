@@ -1,5 +1,7 @@
 use super::portfolio::{AllocationEntry, FundHolding};
+use serde::Serialize;
 
+#[derive(Serialize)]
 pub struct FundAnalysisResult {
     pub ms_code: String,
     pub name: Option<String>,
@@ -25,6 +27,7 @@ pub struct FundAnalysisResult {
     pub holding_diff: Vec<HoldingChange>,
 }
 
+#[derive(Serialize)]
 pub struct CandidateCorrelationResult {
     pub period_label: String,
     pub rows: Vec<CandidateCorrelationRow>,
@@ -35,6 +38,7 @@ pub struct CandidateCorrelationPeriod {
     pub days: i64,
 }
 
+#[derive(Serialize)]
 pub struct CandidateCorrelationRow {
     pub label: String,
     pub correlation: Option<f64>,
@@ -42,6 +46,7 @@ pub struct CandidateCorrelationRow {
     pub is_portfolio: bool,
 }
 
+#[derive(Serialize)]
 pub struct FundPeriodMetrics {
     pub total_return: f64,
     pub cagr: Option<f64>,
@@ -52,6 +57,7 @@ pub struct FundPeriodMetrics {
     pub beta: Option<f64>,
 }
 
+#[derive(Serialize)]
 pub struct HoldingChange {
     pub name: String,
     pub change_type: HoldingChangeType,
@@ -59,6 +65,8 @@ pub struct HoldingChange {
     pub new_weight: Option<f64>,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum HoldingChangeType {
     Added,
     Removed,

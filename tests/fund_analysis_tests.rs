@@ -6,6 +6,7 @@ use common::{
     market_data, setup_test_db, MockMarketDataSources,
 };
 use rstock::constants::format_date;
+use rstock::constants::BENCHMARK_TICKER;
 use rstock::db::entities::fund_holdings_snapshot;
 use rstock::db::repos::fund_holdings_snapshot_repo;
 use rstock::models::{
@@ -19,6 +20,17 @@ use rstock::services::fund_analysis::{
 use rstock::services::fund_comparison::{compare_funds, compute_common_holdings};
 use rstock::services::metrics::compute_cagr;
 use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter};
+use serde_json::{json, Value};
+
+fn fund_analysis_envelope(result: &rstock::models::FundAnalysisResult) -> Value {
+    let mut output = Vec::new();
+    rstock::cli::output::write_json(&mut output, "analyze.fund", result)
+        .expect("fund analysis JSON should serialize");
+    let text = String::from_utf8(output).expect("fund analysis JSON should be UTF-8");
+    assert_eq!(text.lines().count(), 1);
+    assert!(!text.contains("\u{1b}["));
+    serde_json::from_str(&text).expect("fund analysis output should be valid JSON")
+}
 
 #[test]
 fn test_sector_breakdown_aggregation_uses_unclassified() {
@@ -575,6 +587,266 @@ async fn test_fund_analysis_candidate_correlation_uses_nav_and_current_holdings(
         missing_row.reason.as_deref(),
         Some("asset price history unavailable")
     );
+}
+
+#[tokio::test]
+async fn test_fund_analysis_json_complete_data() {
+    let db = setup_test_db().await;
+    let today = chrono::Local::now().date_naive();
+    let dates = date_range(today - Duration::days(1_400), today);
+    let mut sources = MockMarketDataSources::new();
+    sources
+        .fund_data
+        .insert("XJSONFULL".to_owned(), fund_data());
+    sources.fund_quote_metadata.insert(
+        "XJSONFULL".to_owned(),
+        FundQuoteMetadata {
+            name: Some("Complete Candidate Fund".to_owned()),
+            aum: Some(1_234_567.89),
+            aum_currency: Some("USD".to_owned()),
+            inception_date: Some("2010-02-03".to_owned()),
+            quote_currency: Some("EUR".to_owned()),
+        },
+    );
+    sources
+        .historical_prices
+        .insert("XJSONFULL".to_owned(), linear_prices(&dates, 100.0, 0.05));
+    sources.historical_prices.insert(
+        BENCHMARK_TICKER.to_owned(),
+        linear_prices(&dates, 200.0, 0.03),
+    );
+
+    let result = compute_fund_analysis(
+        &db,
+        &market_data(&sources),
+        "XJSONFULL",
+        one_year_candidate_period(),
+    )
+    .await
+    .unwrap();
+    let envelope = fund_analysis_envelope(&result);
+
+    assert_eq!(envelope["command"], "analyze.fund");
+    let data = &envelope["data"];
+    assert_eq!(data["ms_code"], "XJSONFULL");
+    assert_eq!(data["name"], "Complete Candidate Fund");
+    assert_eq!(data["fund_currency"], "EUR");
+    assert_eq!(data["aum"], json!(1_234_567.89));
+    assert_eq!(data["aum_currency"], "USD");
+    assert_eq!(data["inception_date"], "2010-02-03");
+    assert_eq!(data["top_holdings"].as_array().unwrap().len(), 2);
+    for section in [
+        "sector_breakdown",
+        "country_breakdown",
+        "currency_breakdown",
+        "holding_diff",
+    ] {
+        assert!(data[section].is_array(), "{section} should be an array");
+    }
+    for period in ["ytd", "one_year", "three_year", "five_year", "all_time"] {
+        assert!(data[period].is_object(), "{period} should contain metrics");
+        assert!(data[period]["total_return"].is_number());
+    }
+    assert_eq!(data["candidate_correlation"]["period_label"], "1Y");
+    assert!(data["candidate_correlation"]["rows"].is_array());
+    assert_eq!(data["holdings_changed"], true);
+    assert!(data["last_snapshot_date"].is_null());
+}
+
+#[tokio::test]
+async fn test_fund_analysis_json_partial_metadata_uses_nulls() {
+    let db = setup_test_db().await;
+    let mut sources = MockMarketDataSources::new();
+    sources.fund_data.insert(
+        "XJSONPART".to_owned(),
+        FundData {
+            fund_currency: None,
+            total_holdings: None,
+            portfolio_date: None,
+            holdings: vec![fund_holding_without_ticker(
+                "Private Holding",
+                2.5,
+                None,
+                None,
+                None,
+            )],
+        },
+    );
+    sources.historical_prices.insert(
+        "XJSONPART".to_owned(),
+        vec![
+            ("2025-01-01".to_owned(), 100.0),
+            ("2025-01-02".to_owned(), 101.0),
+        ],
+    );
+
+    let result = compute_fund_analysis(
+        &db,
+        &market_data(&sources),
+        "XJSONPART",
+        one_year_candidate_period(),
+    )
+    .await
+    .unwrap();
+    let data = fund_analysis_envelope(&result)["data"].clone();
+
+    for field in [
+        "name",
+        "fund_currency",
+        "aum",
+        "aum_currency",
+        "inception_date",
+        "total_holdings",
+        "portfolio_date",
+    ] {
+        assert!(data[field].is_null(), "{field} should be null");
+    }
+    let holding = &data["top_holdings"][0];
+    for field in ["ticker", "sector", "country", "currency"] {
+        assert!(holding[field].is_null(), "holding {field} should be null");
+    }
+    assert_eq!(data["sector_breakdown"], json!([]));
+    assert_eq!(data["country_breakdown"], json!([]));
+    assert_eq!(data["currency_breakdown"], json!([]));
+}
+
+#[tokio::test]
+async fn test_fund_analysis_json_unavailable_metrics_are_null() {
+    let db = setup_test_db().await;
+    let mut sources = MockMarketDataSources::new();
+    sources.fund_data.insert(
+        "XJSONNONE".to_owned(),
+        FundData {
+            fund_currency: Some("EUR".to_owned()),
+            total_holdings: Some(0),
+            portfolio_date: Some("2025-01-31".to_owned()),
+            holdings: Vec::new(),
+        },
+    );
+    sources
+        .historical_prices
+        .insert("XJSONNONE".to_owned(), Vec::new());
+
+    let result = compute_fund_analysis(
+        &db,
+        &market_data(&sources),
+        "XJSONNONE",
+        one_year_candidate_period(),
+    )
+    .await
+    .unwrap();
+    let data = fund_analysis_envelope(&result)["data"].clone();
+
+    for period in ["ytd", "one_year", "three_year", "five_year", "all_time"] {
+        assert!(data[period].is_null(), "{period} should be null");
+    }
+    assert!(data["top_10_weight"].is_null());
+    for section in [
+        "top_holdings",
+        "sector_breakdown",
+        "country_breakdown",
+        "currency_breakdown",
+        "holding_diff",
+    ] {
+        assert_eq!(data[section], json!([]), "{section} should be empty");
+    }
+}
+
+#[tokio::test]
+async fn test_fund_analysis_json_correlation_omissions_include_reasons() {
+    let db = setup_test_db().await;
+    let mut sources = MockMarketDataSources::new();
+    sources
+        .fund_data
+        .insert("XJSONCORR".to_owned(), fund_data());
+    sources
+        .historical_prices
+        .insert("XJSONCORR".to_owned(), fund_prices());
+
+    let result = compute_fund_analysis(
+        &db,
+        &market_data(&sources),
+        "XJSONCORR",
+        one_year_candidate_period(),
+    )
+    .await
+    .unwrap();
+    let rows = fund_analysis_envelope(&result)["data"]["candidate_correlation"]["rows"].clone();
+
+    assert_eq!(rows.as_array().unwrap().len(), 1);
+    assert_eq!(rows[0]["label"], "Portfolio NAV");
+    assert!(rows[0]["correlation"].is_null());
+    assert_eq!(rows[0]["reason"], "portfolio history unavailable");
+    assert_eq!(rows[0]["is_portfolio"], true);
+}
+
+#[tokio::test]
+async fn test_fund_analysis_json_holdings_changes_include_typed_diffs() {
+    let db = setup_test_db().await;
+    let mut initial_sources = MockMarketDataSources::new();
+    initial_sources
+        .fund_data
+        .insert("XJSONDIFF".to_owned(), fund_data_with_date("2025-01-31"));
+    initial_sources
+        .historical_prices
+        .insert("XJSONDIFF".to_owned(), fund_prices());
+    compute_fund_analysis(
+        &db,
+        &market_data(&initial_sources),
+        "XJSONDIFF",
+        one_year_candidate_period(),
+    )
+    .await
+    .unwrap();
+
+    let mut changed_sources = MockMarketDataSources::new();
+    changed_sources.fund_data.insert(
+        "XJSONDIFF".to_owned(),
+        FundData {
+            portfolio_date: Some("2025-02-28".to_owned()),
+            holdings: vec![
+                fund_holding("Apple", 7.0, Some("Technology"), Some("US"), Some("USD")),
+                fund_holding("NVIDIA", 3.0, Some("Technology"), Some("US"), Some("USD")),
+            ],
+            ..fund_data()
+        },
+    );
+    changed_sources
+        .historical_prices
+        .insert("XJSONDIFF".to_owned(), fund_prices());
+
+    let result = compute_fund_analysis(
+        &db,
+        &market_data(&changed_sources),
+        "XJSONDIFF",
+        one_year_candidate_period(),
+    )
+    .await
+    .unwrap();
+    let data = fund_analysis_envelope(&result)["data"].clone();
+
+    assert_eq!(data["holdings_changed"], true);
+    assert_eq!(data["last_snapshot_date"], "2025-01-31");
+    let diffs = data["holding_diff"].as_array().unwrap();
+    assert_eq!(diffs.len(), 3);
+    assert!(diffs.iter().any(|diff| {
+        diff["name"] == "NVIDIA"
+            && diff["change_type"] == "added"
+            && diff["old_weight"].is_null()
+            && diff["new_weight"] == 3.0
+    }));
+    assert!(diffs.iter().any(|diff| {
+        diff["name"] == "Microsoft"
+            && diff["change_type"] == "removed"
+            && diff["old_weight"] == 4.0
+            && diff["new_weight"].is_null()
+    }));
+    assert!(diffs.iter().any(|diff| {
+        diff["name"] == "Apple"
+            && diff["change_type"] == "weight_changed"
+            && diff["old_weight"] == 6.0
+            && diff["new_weight"] == 7.0
+    }));
 }
 
 #[tokio::test]
