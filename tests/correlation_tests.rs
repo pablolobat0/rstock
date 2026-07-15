@@ -15,6 +15,17 @@ use rstock::services::metrics::{
     compute_rolling_correlation, summarize_rolling_correlation,
 };
 use rstock::services::nav::rebuild_portfolio_history;
+use serde_json::{json, Value};
+
+fn correlation_envelope<T: serde::Serialize>(command: &str, result: &T) -> (String, Value) {
+    let mut output = Vec::new();
+    rstock::cli::output::write_json(&mut output, command, result)
+        .expect("correlation JSON should serialize");
+    let text = String::from_utf8(output).expect("correlation JSON should be UTF-8");
+    assert_eq!(text.lines().count(), 1);
+    let value = serde_json::from_str(&text).expect("correlation output should be valid JSON");
+    (text, value)
+}
 
 fn seed_benchmark_market_data(fetcher: &mut MockMarketDataSources, days: usize) {
     let benchmark_prices: Vec<(String, f64)> = (0..days)
@@ -370,6 +381,63 @@ async fn test_correlation_matrix_carries_market_data_limitations() {
     }));
 }
 
+#[tokio::test]
+async fn test_correlation_matrix_json_preserves_nulls_warnings_and_limitations() {
+    let db = setup_test_db().await;
+    let mut fetcher = MockMarketDataSources::new();
+    seed_benchmark_market_data(&mut fetcher, 5);
+    let id_a = insert_asset(&db, "XFAKE1", "Fake A", "stock", "EUR").await;
+    seed_source_prices(&mut fetcher, "XFAKE1", 100.0, 5);
+    insert_transaction(&db, id_a, "2025-01-01", 1.0, 100.0, 0.0).await;
+
+    rebuild_portfolio_history(
+        &db,
+        chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
+        chrono::NaiveDate::from_ymd_opt(2025, 1, 5).unwrap(),
+        None,
+        &common::market_data(&fetcher),
+    )
+    .await
+    .unwrap();
+
+    let matrix = compute_correlation_data(
+        &db,
+        "2025-01-01",
+        "2025-02-10",
+        &common::market_data(&fetcher),
+    )
+    .await
+    .unwrap();
+    let (text, envelope) = correlation_envelope("analyze.correlation.matrix", &matrix);
+
+    assert_eq!(envelope["command"], "analyze.correlation.matrix");
+    assert!(envelope["data"]["names"]
+        .as_array()
+        .unwrap()
+        .contains(&json!("Fake A")));
+    assert!(envelope["data"]["matrix"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|row| row.as_array().unwrap().iter())
+        .any(Value::is_null));
+    assert!(envelope["data"]["warnings"]
+        .as_array()
+        .unwrap()
+        .contains(&json!("Fake A")));
+    let limitations = envelope["data"]["market_data_limitations"]
+        .as_array()
+        .unwrap();
+    assert!(!limitations.is_empty());
+    assert!(limitations.iter().any(|limitation| {
+        limitation["subject"]["type"] == "asset"
+            && limitation["subject"]["ticker"] == "XFAKE1"
+            && limitation["latest_available_date"] == "2025-01-05"
+            && limitation["requested_end_date"] == "2025-02-10"
+    }));
+    assert!(!text.contains("\u{1b}["));
+}
+
 #[test]
 fn test_align_return_series_with_dates_sorts_chronologically() {
     let a = std::collections::HashMap::from([
@@ -563,6 +631,86 @@ async fn test_rolling_correlation_carries_market_data_limitations() {
             MarketDataSubject::Asset { ticker, .. } if ticker == "XFAKE1"
         )
     }));
+}
+
+#[tokio::test]
+async fn test_rolling_correlation_json_preserves_context_summary_points_and_limitations() {
+    let db = setup_test_db().await;
+    let mut fetcher = MockMarketDataSources::new();
+    insert_asset(&db, "XFAKE1", "Fake A", "stock", "EUR").await;
+    insert_asset(&db, "XFAKE2", "Fake B", "stock", "EUR").await;
+    seed_source_prices(&mut fetcher, "XFAKE1", 100.0, 120);
+    seed_source_prices(&mut fetcher, "XFAKE2", 50.0, 120);
+
+    let result = compute_rolling_correlation_data(
+        &db,
+        "2025-01-01",
+        "2025-05-30",
+        "XFAKE1",
+        "XFAKE2",
+        "1Y",
+        &common::market_data(&fetcher),
+    )
+    .await
+    .unwrap();
+    let (text, envelope) = correlation_envelope("analyze.correlation.rolling", &result);
+    let data = &envelope["data"];
+
+    assert_eq!(envelope["command"], "analyze.correlation.rolling");
+    assert_eq!(data["left_name"], "Fake A");
+    assert_eq!(data["right_name"], "Fake B");
+    assert_eq!(data["period_label"], "1Y");
+    assert_eq!(data["window_label"], "60D rolling");
+    assert_eq!(data["requested_start_date"], "2025-01-01");
+    assert_eq!(data["requested_end_date"], "2025-05-30");
+    for metric in ["latest", "min", "max", "average"] {
+        assert!(data[metric].is_number());
+    }
+    let points = data["points"].as_array().unwrap();
+    assert!(!points.is_empty());
+    assert!(points.iter().all(|point| {
+        point
+            .as_array()
+            .is_some_and(|pair| pair.len() == 2 && pair[0].is_string() && pair[1].is_number())
+    }));
+    assert!(!data["market_data_limitations"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert!(!text.contains("\u{1b}["));
+}
+
+#[tokio::test]
+async fn test_insufficient_rolling_correlation_json_uses_normal_schema() {
+    let db = setup_test_db().await;
+    let mut fetcher = MockMarketDataSources::new();
+    insert_asset(&db, "XFAKE1", "Fake A", "stock", "EUR").await;
+    insert_asset(&db, "XFAKE2", "Fake B", "stock", "EUR").await;
+    seed_source_prices(&mut fetcher, "XFAKE1", 100.0, 20);
+    seed_source_prices(&mut fetcher, "XFAKE2", 50.0, 20);
+
+    let result = compute_rolling_correlation_data(
+        &db,
+        "2025-01-01",
+        "2025-01-20",
+        "XFAKE1",
+        "XFAKE2",
+        "30D",
+        &common::market_data(&fetcher),
+    )
+    .await
+    .unwrap();
+    let (text, envelope) = correlation_envelope("analyze.correlation.rolling", &result);
+    let data = &envelope["data"];
+
+    assert_eq!(data["points"], json!([]));
+    for metric in ["latest", "min", "max", "average"] {
+        assert!(data[metric].is_null());
+    }
+    assert_eq!(data["left_name"], "Fake A");
+    assert_eq!(data["right_name"], "Fake B");
+    assert!(!text.contains("Not enough aligned data"));
+    assert!(!text.contains("\u{1b}["));
 }
 
 #[tokio::test]

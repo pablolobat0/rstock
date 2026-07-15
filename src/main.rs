@@ -53,7 +53,13 @@ async fn main() -> anyhow::Result<()> {
             }
             AnalyzeCommands::Correlation(args) => match args.command {
                 CorrelationCommands::Matrix { period } => {
-                    cli::commands::analyze::correlation_matrix(&db, &market_data, period).await
+                    cli::commands::analyze::correlation_matrix(
+                        &db,
+                        &market_data,
+                        period,
+                        output_format,
+                    )
+                    .await
                 }
                 CorrelationCommands::Rolling {
                     identifier_a,
@@ -66,6 +72,7 @@ async fn main() -> anyhow::Result<()> {
                         identifier_a,
                         identifier_b,
                         period,
+                        output_format,
                     )
                     .await
                 }
