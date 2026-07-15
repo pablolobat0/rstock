@@ -38,7 +38,7 @@ async fn main() -> anyhow::Result<()> {
                 cli::commands::portfolio::get(&db, &market_data, period, output_format).await
             }
             PortfolioCommands::Asset(asset_args) => {
-                run_asset_command(&db, asset_args.command).await
+                run_asset_command(&db, asset_args.command, output_format).await
             }
         },
         Commands::Transaction(args) => {
@@ -159,7 +159,11 @@ async fn run_transaction_command(
     }
 }
 
-async fn run_asset_command(db: &DatabaseConnection, cmd: AssetCommands) -> anyhow::Result<()> {
+async fn run_asset_command(
+    db: &DatabaseConnection,
+    cmd: AssetCommands,
+    output_format: OutputFormat,
+) -> anyhow::Result<()> {
     match cmd {
         AssetCommands::Add {
             ticker,
@@ -185,6 +189,7 @@ async fn run_asset_command(db: &DatabaseConnection, cmd: AssetCommands) -> anyho
                 bond_duration,
                 management,
                 morningstar_code,
+                output_format,
             )
             .await
         }
@@ -208,6 +213,7 @@ async fn run_asset_command(db: &DatabaseConnection, cmd: AssetCommands) -> anyho
                 bond_duration,
                 management,
                 morningstar_code,
+                output_format,
             )
             .await
         }
