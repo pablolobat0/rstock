@@ -1,5 +1,6 @@
 use crate::constants::display_date;
 use crate::models::{cents_to_f64, Transaction, TransactionListItem};
+use serde::Serialize;
 
 use super::types::TransactionRow;
 
@@ -9,7 +10,27 @@ pub fn print_transaction_list(items: &[TransactionListItem]) {
         return;
     }
 
-    let rows: Vec<TransactionRow> = items
+    let rows = transaction_rows(items);
+
+    println!("{}", tabled::Table::new(&rows));
+    println!("\nTotal: {} transactions", items.len());
+}
+
+#[derive(Serialize)]
+pub struct TransactionListOutput {
+    pub transactions: Vec<TransactionRow>,
+    pub count: usize,
+}
+
+pub fn transaction_list_output(items: &[TransactionListItem]) -> TransactionListOutput {
+    TransactionListOutput {
+        transactions: transaction_rows(items),
+        count: items.len(),
+    }
+}
+
+fn transaction_rows(items: &[TransactionListItem]) -> Vec<TransactionRow> {
+    items
         .iter()
         .map(|item| TransactionRow {
             id: item.transaction.id,
@@ -17,14 +38,11 @@ pub fn print_transaction_list(items: &[TransactionListItem]) {
             tx_type: item.transaction.tx_type.to_string(),
             ticker: item.ticker.clone(),
             asset_name: item.asset_name.clone(),
-            quantity: format!("{:.4}", item.transaction.quantity),
-            price: format!("{:.4}", cents_to_f64(item.transaction.price_cents)),
-            fees: format!("{:.4}", cents_to_f64(item.transaction.fees_cents)),
+            quantity: item.transaction.quantity,
+            price: cents_to_f64(item.transaction.price_cents),
+            fees: cents_to_f64(item.transaction.fees_cents),
         })
-        .collect();
-
-    println!("{}", tabled::Table::new(&rows));
-    println!("\nTotal: {} transactions", items.len());
+        .collect()
 }
 
 pub fn format_transaction_detail(tx: &Transaction, ticker: &str) -> String {

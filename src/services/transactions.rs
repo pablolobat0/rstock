@@ -9,6 +9,12 @@ use crate::models::{
     f64_to_cents, BuyOrder, DividendOrder, SellOrder, SplitOrder, Transaction, TransactionListItem,
 };
 
+#[derive(Debug)]
+pub struct TransactionReceipt {
+    pub transaction_id: i32,
+    pub summary: String,
+}
+
 pub async fn list(db: &DatabaseConnection) -> anyhow::Result<Vec<TransactionListItem>> {
     let transactions = transaction_repo::find_all_ordered_by_date(db, None, None).await?;
     let asset_ids = transactions.iter().map(|tx| tx.asset_id);
@@ -29,7 +35,11 @@ pub async fn list(db: &DatabaseConnection) -> anyhow::Result<Vec<TransactionList
     Ok(items)
 }
 
-pub async fn buy(db: &DatabaseConnection, ticker: String, order: BuyOrder) -> anyhow::Result<()> {
+pub async fn buy(
+    db: &DatabaseConnection,
+    ticker: String,
+    order: BuyOrder,
+) -> anyhow::Result<TransactionReceipt> {
     let asset = asset_repo::find_by_ticker(db, &ticker).await?.ok_or_else(|| {
         anyhow::anyhow!(
             "asset with ticker '{ticker}' not found; create it first with `rstock portfolio asset add -t {ticker} ...`"
@@ -63,13 +73,17 @@ pub async fn buy(db: &DatabaseConnection, ticker: String, order: BuyOrder) -> an
         date = %order.date,
         "buy transaction recorded"
     );
-    println!("{summary}");
-    println!("Transaction ID: {tx_id}");
-
-    Ok(())
+    Ok(TransactionReceipt {
+        transaction_id: tx_id,
+        summary,
+    })
 }
 
-pub async fn sell(db: &DatabaseConnection, ticker: String, order: SellOrder) -> anyhow::Result<()> {
+pub async fn sell(
+    db: &DatabaseConnection,
+    ticker: String,
+    order: SellOrder,
+) -> anyhow::Result<TransactionReceipt> {
     let asset = asset_repo::find_by_ticker(db, &ticker)
         .await?
         .ok_or_else(|| anyhow::anyhow!("Asset with ticker '{ticker}' not found"))?;
@@ -116,17 +130,17 @@ pub async fn sell(db: &DatabaseConnection, ticker: String, order: SellOrder) -> 
         date = %order.date,
         "sell transaction recorded"
     );
-    println!("{summary}");
-    println!("Transaction ID: {tx_id}");
-
-    Ok(())
+    Ok(TransactionReceipt {
+        transaction_id: tx_id,
+        summary,
+    })
 }
 
 pub async fn dividend(
     db: &DatabaseConnection,
     ticker: String,
     order: DividendOrder,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<TransactionReceipt> {
     let asset = asset_repo::find_by_ticker(db, &ticker)
         .await?
         .ok_or_else(|| anyhow::anyhow!("Asset with ticker '{ticker}' not found"))?;
@@ -171,17 +185,17 @@ pub async fn dividend(
         date = %order.date,
         "dividend recorded"
     );
-    println!("{summary}");
-    println!("Transaction ID: {tx_id}");
-
-    Ok(())
+    Ok(TransactionReceipt {
+        transaction_id: tx_id,
+        summary,
+    })
 }
 
 pub async fn split(
     db: &DatabaseConnection,
     ticker: String,
     order: SplitOrder,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<TransactionReceipt> {
     let asset = asset_repo::find_by_ticker(db, &ticker)
         .await?
         .ok_or_else(|| anyhow::anyhow!("Asset with ticker '{ticker}' not found"))?;
@@ -233,13 +247,13 @@ pub async fn split(
         date = %order.date,
         "split recorded"
     );
-    println!("{summary}");
-    println!("Transaction ID: {tx_id}");
-
-    Ok(())
+    Ok(TransactionReceipt {
+        transaction_id: tx_id,
+        summary,
+    })
 }
 
-pub async fn delete(db: &DatabaseConnection, id: i32) -> anyhow::Result<()> {
+pub async fn delete(db: &DatabaseConnection, id: i32) -> anyhow::Result<TransactionReceipt> {
     let tx = transaction_repo::find_by_id(db, id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("Transaction {id} not found"))?;
@@ -254,8 +268,10 @@ pub async fn delete(db: &DatabaseConnection, id: i32) -> anyhow::Result<()> {
     }
 
     tracing::info!(id, "transaction deleted");
-    println!("Transaction {id} deleted.");
-    Ok(())
+    Ok(TransactionReceipt {
+        transaction_id: id,
+        summary: format!("Transaction {id} deleted."),
+    })
 }
 
 pub async fn edit(
@@ -265,7 +281,7 @@ pub async fn edit(
     new_quantity: Option<f64>,
     new_price: Option<f64>,
     new_fees: Option<f64>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<TransactionReceipt> {
     let tx = transaction_repo::find_by_id(db, id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("Transaction {id} not found"))?;
@@ -297,6 +313,8 @@ pub async fn edit(
     }
 
     tracing::info!(id, "transaction edited");
-    println!("Transaction {id} updated.");
-    Ok(())
+    Ok(TransactionReceipt {
+        transaction_id: id,
+        summary: format!("Transaction {id} updated."),
+    })
 }

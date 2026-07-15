@@ -41,47 +41,9 @@ async fn main() -> anyhow::Result<()> {
                 run_asset_command(&db, asset_args.command).await
             }
         },
-        Commands::Transaction(args) => match args.command {
-            TransactionCommands::List {} => cli::commands::transactions::list(&db).await,
-            TransactionCommands::Buy {
-                ticker,
-                date,
-                quantity,
-                price,
-                fees,
-            } => cli::commands::transactions::buy(&db, ticker, date, quantity, price, fees).await,
-            TransactionCommands::Sell {
-                ticker,
-                date,
-                quantity,
-                price,
-                fees,
-            } => cli::commands::transactions::sell(&db, ticker, date, quantity, price, fees).await,
-            TransactionCommands::Dividend {
-                ticker,
-                date,
-                amount,
-                fees,
-            } => cli::commands::transactions::dividend(&db, ticker, date, amount, fees).await,
-            TransactionCommands::Split {
-                ticker,
-                date,
-                ratio,
-            } => cli::commands::transactions::split(&db, ticker, date, ratio).await,
-            TransactionCommands::Edit {
-                id,
-                date,
-                quantity,
-                price,
-                fees,
-                yes,
-            } => cli::commands::transactions::edit(&db, id, date, quantity, price, fees, yes).await,
-            TransactionCommands::Delete { id, yes } => {
-                cli::commands::transactions::delete(&db, id, yes).await
-            }
-            TransactionCommands::Export { output } => cli::commands::export::run(&db, output).await,
-            TransactionCommands::Import { input } => cli::commands::import::run(&db, input).await,
-        },
+        Commands::Transaction(args) => {
+            run_transaction_command(&db, args.command, output_format).await
+        }
         Commands::Analyze(args) => match args.command {
             AnalyzeCommands::Composition {} => {
                 cli::commands::analyze::composition(&db, &market_data).await
@@ -116,6 +78,84 @@ async fn main() -> anyhow::Result<()> {
                 period,
             } => cli::commands::compare::funds(&db, &market_data, code_a, code_b, period).await,
         },
+    }
+}
+
+async fn run_transaction_command(
+    db: &DatabaseConnection,
+    cmd: TransactionCommands,
+    output_format: OutputFormat,
+) -> anyhow::Result<()> {
+    match cmd {
+        TransactionCommands::List {} => cli::commands::transactions::list(db, output_format).await,
+        TransactionCommands::Buy {
+            ticker,
+            date,
+            quantity,
+            price,
+            fees,
+        } => {
+            cli::commands::transactions::buy(db, ticker, date, quantity, price, fees, output_format)
+                .await
+        }
+        TransactionCommands::Sell {
+            ticker,
+            date,
+            quantity,
+            price,
+            fees,
+        } => {
+            cli::commands::transactions::sell(
+                db,
+                ticker,
+                date,
+                quantity,
+                price,
+                fees,
+                output_format,
+            )
+            .await
+        }
+        TransactionCommands::Dividend {
+            ticker,
+            date,
+            amount,
+            fees,
+        } => {
+            cli::commands::transactions::dividend(db, ticker, date, amount, fees, output_format)
+                .await
+        }
+        TransactionCommands::Split {
+            ticker,
+            date,
+            ratio,
+        } => cli::commands::transactions::split(db, ticker, date, ratio, output_format).await,
+        TransactionCommands::Edit {
+            id,
+            date,
+            quantity,
+            price,
+            fees,
+            yes,
+        } => {
+            let options = cli::commands::transactions::EditOptions {
+                date,
+                quantity,
+                price,
+                fees,
+                yes,
+            };
+            cli::commands::transactions::edit(db, id, options, output_format).await
+        }
+        TransactionCommands::Delete { id, yes } => {
+            cli::commands::transactions::delete(db, id, yes, output_format).await
+        }
+        TransactionCommands::Export { output } => {
+            cli::commands::export::run(db, output, output_format).await
+        }
+        TransactionCommands::Import { input } => {
+            cli::commands::import::run(db, input, output_format).await
+        }
     }
 }
 

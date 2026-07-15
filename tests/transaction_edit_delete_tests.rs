@@ -127,7 +127,10 @@ async fn test_service_delete_invalidates_snapshots() {
     // Insert a portfolio snapshot after the transaction date
     insert_portfolio_snapshot(&db, "2025-01-03", 100.0, 10.0).await;
 
-    services::transactions::delete(&db, 1).await.unwrap();
+    let receipt = services::transactions::delete(&db, 1).await.unwrap();
+
+    assert_eq!(receipt.transaction_id, 1);
+    assert_eq!(receipt.summary, "Transaction 1 deleted.");
 
     // Snapshot should be invalidated
     let snapshots = get_all_snapshots(&db).await;
@@ -143,9 +146,12 @@ async fn test_service_edit_invalidates_snapshots() {
     // Insert a portfolio snapshot after the transaction date
     insert_portfolio_snapshot(&db, "2025-01-03", 100.0, 10.0).await;
 
-    services::transactions::edit(&db, 1, None, Some(20.0), None, None)
+    let receipt = services::transactions::edit(&db, 1, None, Some(20.0), None, None)
         .await
         .unwrap();
+
+    assert_eq!(receipt.transaction_id, 1);
+    assert_eq!(receipt.summary, "Transaction 1 updated.");
 
     // Snapshot should be invalidated
     let snapshots = get_all_snapshots(&db).await;

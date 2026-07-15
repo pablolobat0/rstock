@@ -1,6 +1,7 @@
+use serde::Serialize;
 use tabled::Tabled;
 
-#[derive(Tabled)]
+#[derive(Serialize, Tabled)]
 pub struct TransactionRow {
     #[tabled(rename = "ID")]
     pub id: i32,
@@ -13,11 +14,19 @@ pub struct TransactionRow {
     #[tabled(rename = "Name")]
     pub asset_name: String,
     #[tabled(rename = "Quantity")]
-    pub quantity: String,
+    #[tabled(display_with = "format_decimal")]
+    pub quantity: f64,
     #[tabled(rename = "Price/Amount")]
-    pub price: String,
+    #[tabled(display_with = "format_decimal")]
+    pub price: f64,
     #[tabled(rename = "Fees")]
-    pub fees: String,
+    #[tabled(display_with = "format_decimal")]
+    pub fees: f64,
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn format_decimal(value: &f64) -> String {
+    format!("{value:.4}")
 }
 
 #[derive(Tabled)]

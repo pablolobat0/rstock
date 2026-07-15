@@ -29,21 +29,21 @@ const EXPECTED_HEADERS: [&str; 15] = [
     "Fees",
 ];
 
-pub async fn import_transactions_csv(db: &DatabaseConnection, path: &str) -> anyhow::Result<usize> {
-    let mut rdr =
-        csv::Reader::from_path(path).with_context(|| format!("failed to open CSV file: {path}"))?;
-    validate_headers(rdr.headers()?)?;
+#[derive(Debug)]
+pub struct ImportResult {
+    pub count: usize,
+    pub transaction_receipts: Vec<transactions::TransactionReceipt>,
+}
 
-    let mut rows = Vec::new();
-    for (i, result) in rdr.records().enumerate() {
-        let record = result.with_context(|| format!("row {}: failed to read CSV record", i + 2))?;
-        let row = parse_row(&record, i + 2)?;
-        rows.push(row);
-    }
-
+pub async fn import_transactions_csv(
+    db: &DatabaseConnection,
+    path: &str,
+) -> anyhow::Result<ImportResult> {
+    let mut rows = read_rows(path)?;
     rows.sort_by_key(|r| r.date);
 
     let count = rows.len();
+    let mut transaction_receipts = Vec::with_capacity(count);
     for row in &rows {
         let row_num = row.source_row;
         let date_str = format_date(row.date);
@@ -93,9 +93,10 @@ pub async fn import_transactions_csv(db: &DatabaseConnection, path: &str) -> any
                     price: row.price,
                     fees: row.fees,
                 };
-                transactions::buy(db, row.ticker.clone(), order)
+                let receipt = transactions::buy(db, row.ticker.clone(), order)
                     .await
                     .with_context(|| format!("row {row_num}"))?;
+                transaction_receipts.push(receipt);
             }
             TxType::Sell => {
                 let order = SellOrder {
@@ -104,9 +105,10 @@ pub async fn import_transactions_csv(db: &DatabaseConnection, path: &str) -> any
                     price: row.price,
                     fees: row.fees,
                 };
-                transactions::sell(db, row.ticker.clone(), order)
+                let receipt = transactions::sell(db, row.ticker.clone(), order)
                     .await
                     .with_context(|| format!("row {row_num}"))?;
+                transaction_receipts.push(receipt);
             }
             TxType::Dividend => {
                 let order = DividendOrder {
@@ -114,23 +116,45 @@ pub async fn import_transactions_csv(db: &DatabaseConnection, path: &str) -> any
                     amount: row.price,
                     fees: row.fees,
                 };
-                transactions::dividend(db, row.ticker.clone(), order)
+                let receipt = transactions::dividend(db, row.ticker.clone(), order)
                     .await
                     .with_context(|| format!("row {row_num}"))?;
+                transaction_receipts.push(receipt);
             }
             TxType::Split => {
                 let order = SplitOrder {
                     date: date_str,
                     ratio: row.quantity,
                 };
-                transactions::split(db, row.ticker.clone(), order)
+                let receipt = transactions::split(db, row.ticker.clone(), order)
                     .await
                     .with_context(|| format!("row {row_num}"))?;
+                transaction_receipts.push(receipt);
             }
         }
     }
 
-    Ok(count)
+    Ok(ImportResult {
+        count,
+        transaction_receipts,
+    })
+}
+
+fn read_rows(path: &str) -> anyhow::Result<Vec<CsvRow>> {
+    let mut reader =
+        csv::Reader::from_path(path).with_context(|| format!("failed to open CSV file: {path}"))?;
+    validate_headers(reader.headers()?)?;
+
+    reader
+        .records()
+        .enumerate()
+        .map(|(index, result)| {
+            let row_num = index + 2;
+            let record =
+                result.with_context(|| format!("row {row_num}: failed to read CSV record"))?;
+            parse_row(&record, row_num)
+        })
+        .collect()
 }
 
 fn parse_row(record: &csv::StringRecord, row_num: usize) -> anyhow::Result<CsvRow> {
