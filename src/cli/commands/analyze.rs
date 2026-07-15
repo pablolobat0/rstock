@@ -45,6 +45,7 @@ pub async fn correlation_matrix(
     db: &DatabaseConnection,
     market_data: &MarketData,
     period: CorrelationPeriod,
+    output_format: OutputFormat,
 ) -> anyhow::Result<()> {
     let (start_str, today_str, period_label) = correlation_date_range(&period);
 
@@ -52,6 +53,10 @@ pub async fn correlation_matrix(
     let matrix =
         services::analytics::compute_correlation_data(db, &start_str, &today_str, market_data)
             .await?;
+
+    if output_format.is_json() {
+        return output::emit_json("analyze.correlation.matrix", &matrix);
+    }
 
     display::print_correlation_matrix(&matrix, period_label);
     Ok(())
@@ -63,6 +68,7 @@ pub async fn rolling_correlation(
     identifier_a: String,
     identifier_b: String,
     period: CorrelationPeriod,
+    output_format: OutputFormat,
 ) -> anyhow::Result<()> {
     let (start_str, today_str, period_label) = correlation_date_range(&period);
 
@@ -76,6 +82,10 @@ pub async fn rolling_correlation(
         market_data,
     )
     .await?;
+
+    if output_format.is_json() {
+        return output::emit_json("analyze.correlation.rolling", &result);
+    }
 
     display::print_rolling_correlation(&result);
     Ok(())

@@ -80,6 +80,7 @@ pub struct PortfolioResult {
     pub market_data_limitations: Vec<MarketDataLimitation>,
 }
 
+#[derive(Serialize)]
 pub struct CorrelationMatrix {
     /// Display names in order (assets + reference index)
     pub names: Vec<String>,
@@ -90,6 +91,7 @@ pub struct CorrelationMatrix {
     pub market_data_limitations: Vec<MarketDataLimitation>,
 }
 
+#[derive(Serialize)]
 pub struct RollingCorrelationResult {
     pub left_name: String,
     pub right_name: String,
