@@ -8,10 +8,11 @@ use tabled::Table;
 
 use crate::constants::{display_date, format_date};
 use crate::models::{
-    AssetType, MarketDataLimitation, MarketDataSubject, PeriodMetrics, PortfolioResult,
+    AssetType, MarketDataLimitation, MarketDataSubject, MonetaryPosition, PeriodMetrics,
+    PortfolioResult,
 };
 
-use super::types::PortfolioRow;
+use super::types::{MonetaryPortfolioRow, PortfolioRow};
 
 use super::helpers::{
     color_for_value, color_value, format_eu, format_pct, format_plain, format_return_plain,
@@ -114,9 +115,13 @@ fn print_metrics_table(periods: &[(&str, Option<f64>, &Option<PeriodMetrics>)]) 
 
 #[allow(clippy::too_many_lines)]
 pub fn print_portfolio(result: &PortfolioResult) {
-    if result.rows.is_empty() {
+    if result.rows.is_empty() && result.monetary_positions.is_empty() {
         println!("No positions found.");
-    } else {
+    } else if !result.rows.is_empty() && !result.monetary_positions.is_empty() {
+        println!("Portfolio:");
+    }
+
+    if !result.rows.is_empty() {
         let total_current_value = result.total_current_value;
         let display_rows: Vec<PortfolioRow> = result
             .rows
@@ -243,6 +248,10 @@ pub fn print_portfolio(result: &PortfolioResult) {
         println!("{totals}");
     }
 
+    if !result.monetary_positions.is_empty() {
+        print_monetary_positions(result);
+    }
+
     if let Some(ref snapshot_date) = result.snapshot_date {
         println!();
         println!("As of:          {}", display_date(snapshot_date));
@@ -294,11 +303,139 @@ pub fn print_portfolio(result: &PortfolioResult) {
             println!("- {warning}");
         }
     }
+
+    if !result.monetary_market_data_limitations.is_empty() {
+        println!();
+        println!("Monetary market data limitations:");
+        for limitation in &result.monetary_market_data_limitations {
+            let warning = format_market_data_limitation_warning(limitation);
+            println!("- {warning}");
+        }
+    }
+}
+
+fn print_monetary_positions(result: &PortfolioResult) {
+    println!();
+    println!("Monetary holdings:");
+
+    let mut positions: Vec<&MonetaryPosition> = result.monetary_positions.iter().collect();
+    positions.sort_by(|left, right| {
+        right
+            .current_value
+            .unwrap_or(f64::NEG_INFINITY)
+            .total_cmp(&left.current_value.unwrap_or(f64::NEG_INFINITY))
+    });
+    let display_rows: Vec<MonetaryPortfolioRow> = positions
+        .iter()
+        .map(|position| monetary_display_row(position))
+        .collect();
+    let mut table = Table::new(&display_rows);
+    table.with(
+        Style::modern()
+            .horizontals([(1, HorizontalLine::inherit(Style::modern()).horizontal('═'))])
+            .verticals([(1, VerticalLine::inherit(Style::modern()))])
+            .remove_horizontal()
+            .remove_vertical(),
+    );
+    for col in 4..=12 {
+        table.modify(Columns::single(col), Alignment::right());
+    }
+    for (index, position) in positions.iter().enumerate() {
+        if let Some(gain_loss) = position.gain_loss {
+            let color = if gain_loss >= 0.0 {
+                Color::FG_GREEN
+            } else {
+                Color::FG_RED
+            };
+            table.modify(Cell::new(index + 1, 11), color.clone());
+            table.modify(Cell::new(index + 1, 12), color);
+        }
+    }
+    println!("{table}");
+    if let Some(value) = result.total_monetary_value {
+        println!("Monetary value: {}", format_eu(&format!("{value:.2}")));
+        println!(
+            "Total value: {}",
+            format_eu(&format!("{:.2}", result.total_current_value + value))
+        );
+    } else {
+        println!("Monetary value: unavailable");
+        println!("Total value: unavailable");
+    }
+}
+
+fn monetary_display_row(position: &MonetaryPosition) -> MonetaryPortfolioRow {
+    let gain_loss = position.gain_loss.map(|value| {
+        let sign = if value >= 0.0 { "+" } else { "" };
+        format_eu(&format!("{sign}{value:.2}"))
+    });
+    let gain_loss_pct = position.gain_loss_pct.map(|value| {
+        let sign = if value >= 0.0 { "+" } else { "" };
+        format_eu(&format!("{sign}{value:.2}%"))
+    });
+
+    MonetaryPortfolioRow {
+        ticker: if position.asset_type == AssetType::Stock {
+            position.ticker.clone()
+        } else {
+            String::new()
+        },
+        name: position.name.clone(),
+        asset_type: position.asset_type.to_string(),
+        currency: position.currency.clone(),
+        quantity: if position.total_qty.fract() == 0.0 {
+            format_eu(&format!("{}", position.total_qty as i64))
+        } else {
+            format_eu(&format!("{:.2}", position.total_qty))
+        },
+        avg_cost: format_optional_amount(position.avg_cost),
+        current_price: format_optional_amount(position.current_price),
+        price_date: position
+            .price_date
+            .as_deref()
+            .map(display_date)
+            .unwrap_or_default(),
+        total_invested: format_optional_amount(position.total_invested),
+        current_value: format_optional_amount(position.current_value),
+        dividends: position
+            .dividends_received
+            .filter(|value| *value > 0.0)
+            .map(|value| format_eu(&format!("{value:.2}")))
+            .unwrap_or_default(),
+        gain_loss: gain_loss.unwrap_or_default(),
+        gain_loss_pct: gain_loss_pct.unwrap_or_default(),
+    }
+}
+
+fn format_optional_amount(value: Option<f64>) -> String {
+    value
+        .map(|value| format_eu(&format!("{value:.2}")))
+        .unwrap_or_default()
 }
 
 pub(super) fn format_market_data_limitation_warning(limitation: &MarketDataLimitation) -> String {
-    let latest_available_date = display_date(&format_date(limitation.latest_available_date));
     let requested_end_date = display_date(&format_date(limitation.requested_end_date));
+
+    if limitation.latest_available_date.is_none() {
+        return match &limitation.subject {
+            MarketDataSubject::Asset {
+                ticker,
+                name,
+                asset_type,
+            } => format!(
+                "Market data limitation: {asset_type} {ticker} ({name}) has no available price through {requested_end_date}."
+            ),
+            MarketDataSubject::FxRate { currency } => format!(
+                "Market data limitation: FX rate {currency} has no available rate through {requested_end_date}."
+            ),
+        };
+    }
+
+    let latest_available_date = limitation
+        .latest_available_date
+        .map(format_date)
+        .map(|date| display_date(&date))
+        .unwrap_or_default();
 
     match &limitation.subject {
         MarketDataSubject::Asset {

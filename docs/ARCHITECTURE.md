@@ -73,7 +73,7 @@ All business logic lives here. Key modules:
 
 **`market_data/individual_price.rs`** — Private implementation for display-time Individual price values for portfolio rows. Stocks and FX may use non-persisted Live quote values, funds and ETFs use cached Historical market data semantics, and snapshot fallback preserves row rendering when current display data is unavailable.
 
-**`portfolio.rs`** — `get_portfolio()` builds the current position table (per-asset quantity, avg cost, gain/loss) and computes return metrics for the portfolio view. Portfolio rows use the `market_data` Module root for Individual price values and carry Market data limitation values to display formatting.
+**`portfolio.rs`** — `get_portfolio()` builds the current position table (per-asset quantity, avg cost, gain/loss) and computes return metrics for the portfolio view. Portfolio rows use the `market_data` Module root for Individual price values and carry Market data limitation values to display formatting. Monetary holdings are derived separately from the Transaction ledger and do not participate in NAV or aggregate performance values.
 
 **`analytics.rs`** — Computes correlation and risk-metric inputs from portfolio history and benchmark prices.
 
@@ -126,7 +126,7 @@ Domain structs organized by concept:
 **`portfolio.rs`**:
 - `PortfolioSnapshot` — Daily NAV snapshot (date, asset_value, total_value, outstanding_shares, nav)
 - `AssetSnapshot` — Per-asset daily position (quantity, closing_price, market_value, exchange_rate)
-- `PortfolioResult` — Query result with asset rows and aggregated totals (including total_dividends)
+- `PortfolioResult` — Query result with performance positions, separate Monetary holdings, and aggregated totals (including total_dividends and a nullable monetary value)
 - `PeriodMetrics` — Per-period volatility, max drawdown, beta, Sharpe ratio, and Sortino ratio
 - `CorrelationMatrix` — N×N asset correlation matrix with labels and warnings
 - `AllocationEntry`, `TopHolding`, `CompositionResult`, `FundHolding` — Composition and holdings models
@@ -333,6 +333,7 @@ main.rs
         ├─> Load latest portfolio_asset_history
         ├─> For each position: individual_price::get_asset_display_market_data()
         ├─> Compute avg cost, gain/loss
+        ├─> Derive open Monetary holdings separately from the Transaction ledger
         └─> Aggregate totals and Market data limitation values
   └─> display::print_portfolio()
   └─> display::print_nav_chart()

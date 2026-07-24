@@ -33,6 +33,10 @@ pub async fn get(
 
     display::print_portfolio(&result);
 
+    if result.rows.is_empty() && !result.monetary_positions.is_empty() {
+        return Ok(());
+    }
+
     let today = chrono::Local::now().date_naive();
     let today_str = format_date(today);
 
@@ -71,6 +75,12 @@ fn prepare_json_result(result: &mut crate::models::PortfolioResult) {
     result
         .rows
         .sort_by(|left, right| right.current_value.total_cmp(&left.current_value));
+    result.monetary_positions.sort_by(|left, right| {
+        right
+            .current_value
+            .unwrap_or(f64::NEG_INFINITY)
+            .total_cmp(&left.current_value.unwrap_or(f64::NEG_INFINITY))
+    });
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -180,7 +190,7 @@ mod tests {
     use crate::cli::output;
     use crate::models::{
         AssetPosition, AssetType, MarketDataLimitation, MarketDataLimitationClassification,
-        MarketDataSubject, PortfolioResult,
+        MarketDataSubject, MonetaryPosition, PortfolioResult,
     };
 
     use super::prepare_json_result;
@@ -193,7 +203,7 @@ mod tests {
                 name: "Fake Fund".to_string(),
                 asset_type: AssetType::Fund,
             },
-            latest_available_date: NaiveDate::from_ymd_opt(2025, 1, 9).unwrap(),
+            latest_available_date: Some(NaiveDate::from_ymd_opt(2025, 1, 9).unwrap()),
             requested_end_date: NaiveDate::from_ymd_opt(2025, 1, 10).unwrap(),
             classification: MarketDataLimitationClassification::ActionableReportingLag,
         };
@@ -203,6 +213,8 @@ mod tests {
                 position("XFAKE1", "USD", 100.0, Vec::new()),
                 position("XFAKE2", "GBP", 300.0, vec![limitation.clone()]),
             ],
+            monetary_positions: vec![monetary_position("XFAKEM1", Some(200.0))],
+            total_monetary_value: Some(200.0),
             total_invested: 350.0,
             total_current_value: 400.0,
             total_dividends: 0.0,
@@ -222,6 +234,7 @@ mod tests {
             three_year_metrics: None,
             five_year_metrics: None,
             market_data_limitations: vec![limitation],
+            monetary_market_data_limitations: Vec::new(),
         };
         prepare_json_result(&mut result);
 
@@ -233,6 +246,8 @@ mod tests {
         assert_eq!(value["data"]["base_currency"], "EUR");
         assert_eq!(value["data"]["positions"][0]["ticker"], "XFAKE2");
         assert_eq!(value["data"]["positions"][1]["ticker"], "XFAKE1");
+        assert_eq!(value["data"]["monetary_positions"][0]["ticker"], "XFAKEM1");
+        assert_eq!(value["data"]["total_monetary_value"], 200.0);
         assert_eq!(value["data"]["positions"][0]["currency"], "GBP");
         assert!(value["data"]["daily_change"].is_null());
         assert_eq!(
@@ -277,6 +292,29 @@ mod tests {
             gain_loss: current_value - 100.0,
             gain_loss_pct: current_value - 100.0,
             market_data_limitations,
+        }
+    }
+
+    fn monetary_position(ticker: &str, current_value: Option<f64>) -> MonetaryPosition {
+        MonetaryPosition {
+            ticker: ticker.to_string(),
+            name: format!("{ticker} name"),
+            asset_type: AssetType::Fund,
+            currency: "EUR".to_string(),
+            morningstar_code: Some("F00000MONEY".to_string()),
+            asset_class: Some("monetary".to_string()),
+            equity_style: None,
+            management: None,
+            total_qty: 2.0,
+            avg_cost: Some(100.0),
+            current_price: current_value.map(|value| value / 2.0),
+            price_date: Some("2025-01-09".to_string()),
+            total_invested: Some(200.0),
+            current_value,
+            dividends_received: Some(0.0),
+            gain_loss: current_value.map(|value| value - 200.0),
+            gain_loss_pct: current_value.map(|value| (value - 200.0) / 2.0),
+            market_data_limitations: Vec::new(),
         }
     }
 }

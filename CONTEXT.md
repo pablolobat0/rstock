@@ -84,6 +84,10 @@ _Avoid_: Holding, arbitrary ticker
 The chronological record of buys, sells, dividends, and splits used to derive holdings and NAV history.
 _Avoid_: Data import, portfolio table
 
+**Monetary holding**:
+A currently held Tracked asset with the Monetary Asset classification, shown as portfolio inventory but excluded from portfolio performance measurement.
+_Avoid_: Cash balance, performance asset
+
 ## Relationships
 
 - **NAV** is calculated at one **Effective valuation date**.
@@ -129,6 +133,13 @@ _Avoid_: Data import, portfolio table
 - **Transaction ledger** entries use positive quantities, prices, dividend amounts, and split ratios; fees are non-negative.
 - A dividend transaction records the total cash received for the asset, not the per-share dividend rate.
 - A split transaction records the new-units-per-old-unit ratio; the ratio multiplies existing quantity.
+- A **Monetary holding** is displayed by the portfolio view but is excluded from aggregate portfolio value, allocation weights, gain/loss, NAV, returns, and risk metrics.
+- A **Monetary holding** retains its own quantity, average cost, Individual price, current value, dividends, and gain/loss for display.
+- The portfolio view presents performance holdings as `positions` and **Monetary holding** values separately as `monetary_positions`.
+- If a **Monetary holding** has no available Individual price, it remains visible with ledger-derived quantity and cost facts; its current price, price date, value, and gain/loss are unavailable rather than inferred from a transaction price.
+- The **Base currency** value of all **Monetary holding** values is reported separately from aggregate portfolio value and is unavailable when any open Monetary holding cannot be valued.
+- The portfolio view's Total value is the sum of aggregate portfolio value and the separate Monetary holding value; it is informational and does not participate in portfolio performance measurement.
+- Market data limitations for **Monetary holding** values are reported separately and do not imply a limitation on NAV or portfolio performance.
 
 ## Example Dialogue
 

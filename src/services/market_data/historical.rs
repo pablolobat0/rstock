@@ -23,6 +23,21 @@ pub(crate) async fn prepare_valuation_market_data(
     prepare_historical_market_data(db, assets, start_date, end_date, market_data).await
 }
 
+pub(crate) async fn fill_historical_market_data_cache(
+    db: &DatabaseConnection,
+    assets: &[Asset],
+    start_date: &str,
+    end_date: &str,
+    market_data: &MarketData,
+) -> anyhow::Result<()> {
+    fill_nav_asset_prices(db, assets, start_date, end_date, market_data).await?;
+    let currencies = infer_required_currencies(assets);
+    if !currencies.is_empty() {
+        fill_nav_exchange_rates(db, &currencies, start_date, end_date, market_data).await?;
+    }
+    Ok(())
+}
+
 pub(crate) async fn get_required_asset_valuation_data(
     db: &DatabaseConnection,
     asset: &Asset,

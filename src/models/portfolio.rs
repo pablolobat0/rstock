@@ -1,7 +1,7 @@
 use crate::db::entities::{portfolio_asset_history, portfolio_history};
 use serde::Serialize;
 
-use super::{AssetPosition, MarketDataLimitation};
+use super::{AssetPosition, MarketDataLimitation, MonetaryPosition};
 
 pub struct PortfolioSnapshot {
     pub date: String,
@@ -59,6 +59,8 @@ pub struct PortfolioResult {
     pub base_currency: String,
     #[serde(rename = "positions")]
     pub rows: Vec<AssetPosition>,
+    pub monetary_positions: Vec<MonetaryPosition>,
+    pub total_monetary_value: Option<f64>,
     pub total_invested: f64,
     pub total_current_value: f64,
     pub total_dividends: f64,
@@ -78,6 +80,7 @@ pub struct PortfolioResult {
     pub three_year_metrics: Option<PeriodMetrics>,
     pub five_year_metrics: Option<PeriodMetrics>,
     pub market_data_limitations: Vec<MarketDataLimitation>,
+    pub monetary_market_data_limitations: Vec<MarketDataLimitation>,
 }
 
 #[derive(Serialize)]

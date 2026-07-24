@@ -241,3 +241,164 @@ async fn test_portfolio_surfaces_fx_stale_data_warning() {
         }
     );
 }
+
+#[tokio::test]
+async fn test_portfolio_returns_monetary_only_holdings_separately() {
+    let db = common::setup_test_db().await;
+    let price_date = date_string(1);
+    let asset_id =
+        common::insert_monetary_fund_asset(&db, "XFAKEM1", "Monetary Fund", "EUR", "F000MONEY")
+            .await;
+    common::insert_transaction(&db, asset_id, &price_date, 20.0, 100.0, 0.0).await;
+    common::insert_daily_price(&db, asset_id, &price_date, 101.0, false).await;
+
+    let market_data = common::market_data(&common::MockMarketDataSources::new());
+    let result = portfolio::get_portfolio(&db, &market_data).await.unwrap();
+
+    assert!(result.rows.is_empty());
+    assert_eq!(result.monetary_positions.len(), 1);
+    let position = &result.monetary_positions[0];
+    assert_eq!(position.ticker, "XFAKEM1");
+    assert!((position.total_qty - 20.0).abs() < 1e-9);
+    assert!((position.current_price.unwrap() - 101.0).abs() < 1e-9);
+    assert!((position.current_value.unwrap() - 2020.0).abs() < 1e-9);
+    assert!((position.gain_loss.unwrap() - 20.0).abs() < 1e-9);
+    assert!((result.total_monetary_value.unwrap() - 2020.0).abs() < 1e-9);
+    assert!(result.nav.is_none());
+    assert!(result.market_data_limitations.is_empty());
+    assert!(result.monetary_market_data_limitations.is_empty());
+}
+
+#[tokio::test]
+async fn test_portfolio_keeps_monetary_holding_when_price_is_missing() {
+    let db = common::setup_test_db().await;
+    let transaction_date = date_string(1);
+    let asset_id = common::insert_monetary_fund_asset(
+        &db,
+        "XFAKEM2",
+        "Unpriced Monetary Fund",
+        "EUR",
+        "F000NOPRICE",
+    )
+    .await;
+    common::insert_transaction(&db, asset_id, &transaction_date, 10.0, 50.0, 0.0).await;
+
+    let market_data = common::market_data(&common::MockMarketDataSources::new());
+    let result = portfolio::get_portfolio(&db, &market_data).await.unwrap();
+
+    assert_eq!(result.monetary_positions.len(), 1);
+    let position = &result.monetary_positions[0];
+    assert!((position.total_qty - 10.0).abs() < 1e-9);
+    assert!((position.avg_cost.unwrap() - 50.0).abs() < 1e-9);
+    assert!((position.total_invested.unwrap() - 500.0).abs() < 1e-9);
+    assert!(position.current_price.is_none());
+    assert!(position.price_date.is_none());
+    assert!(position.current_value.is_none());
+    assert!(position.gain_loss.is_none());
+    assert!(position.gain_loss_pct.is_none());
+    assert_eq!(position.market_data_limitations.len(), 1);
+    assert!(result.total_monetary_value.is_none());
+    assert!(result.market_data_limitations.is_empty());
+    assert_eq!(result.monetary_market_data_limitations.len(), 1);
+}
+
+#[tokio::test]
+async fn test_portfolio_excludes_future_monetary_transactions() {
+    let db = common::setup_test_db().await;
+    let future_date =
+        rstock::constants::format_date(chrono::Local::now().date_naive() + Duration::days(1));
+    let asset_id = common::insert_monetary_fund_asset(
+        &db,
+        "XFAKEM3",
+        "Future Monetary Fund",
+        "EUR",
+        "F000FUTURE",
+    )
+    .await;
+    common::insert_transaction(&db, asset_id, &future_date, 10.0, 50.0, 0.0).await;
+
+    let market_data = common::market_data(&common::MockMarketDataSources::new());
+    let result = portfolio::get_portfolio(&db, &market_data).await.unwrap();
+
+    assert!(result.monetary_positions.is_empty());
+    assert!(result.total_monetary_value.unwrap().abs() < 1e-9);
+}
+
+#[tokio::test]
+async fn test_monetary_cost_basis_accounts_for_splits() {
+    let db = common::setup_test_db().await;
+    let transaction_date = date_string(2);
+    let split_date = date_string(1);
+    let asset_id = common::insert_monetary_fund_asset(
+        &db,
+        "XFAKEM4",
+        "Split Monetary Fund",
+        "EUR",
+        "F000SPLIT",
+    )
+    .await;
+    common::insert_transaction(&db, asset_id, &transaction_date, 10.0, 100.0, 0.0).await;
+    common::insert_split_transaction(&db, asset_id, &split_date, 2.0).await;
+    common::insert_daily_price(&db, asset_id, &split_date, 60.0, false).await;
+
+    let market_data = common::market_data(&common::MockMarketDataSources::new());
+    let result = portfolio::get_portfolio(&db, &market_data).await.unwrap();
+    let position = &result.monetary_positions[0];
+
+    assert!((position.total_qty - 20.0).abs() < 1e-9);
+    assert!((position.avg_cost.unwrap() - 50.0).abs() < 1e-9);
+    assert!((position.total_invested.unwrap() - 1000.0).abs() < 1e-9);
+    assert!((position.gain_loss.unwrap() - 200.0).abs() < 1e-9);
+}
+
+#[tokio::test]
+async fn test_monetary_snapshot_is_not_returned_as_performance_position() {
+    let db = common::setup_test_db().await;
+    let snapshot_date = date_string(0);
+    let stock_id = common::insert_asset(&db, "XFAKES3", "Performance Stock", "stock", "EUR").await;
+    let monetary_id = common::insert_monetary_fund_asset(
+        &db,
+        "XFAKEM5",
+        "Legacy Monetary Fund",
+        "EUR",
+        "F000LEGACY",
+    )
+    .await;
+    common::insert_transaction(&db, stock_id, &snapshot_date, 10.0, 100.0, 0.0).await;
+    common::insert_transaction(&db, monetary_id, &snapshot_date, 5.0, 100.0, 0.0).await;
+    common::insert_daily_price(&db, stock_id, &snapshot_date, 110.0, false).await;
+    common::insert_daily_price(&db, monetary_id, &snapshot_date, 101.0, false).await;
+    common::insert_portfolio_snapshot(&db, &snapshot_date, 100.0, 10.0).await;
+    common::insert_portfolio_asset_snapshot(
+        &db,
+        &snapshot_date,
+        stock_id,
+        10.0,
+        110.0,
+        1100.0,
+        1.0,
+    )
+    .await;
+    common::insert_portfolio_asset_snapshot(
+        &db,
+        &snapshot_date,
+        monetary_id,
+        5.0,
+        101.0,
+        505.0,
+        1.0,
+    )
+    .await;
+
+    let market_data = common::market_data(&common::MockMarketDataSources::new());
+    let result = portfolio::get_portfolio(&db, &market_data).await.unwrap();
+
+    assert_eq!(result.rows.len(), 1);
+    assert_eq!(result.rows[0].ticker, "XFAKES3");
+    assert_eq!(result.monetary_positions.len(), 1);
+    assert_eq!(result.monetary_positions[0].ticker, "XFAKEM5");
+    assert!((result.total_invested - 1000.0).abs() < 1e-9);
+    assert!((result.total_current_value - 1100.0).abs() < 1e-9);
+    assert!((result.total_gain_loss - 100.0).abs() < 1e-9);
+    assert!((result.nav.unwrap() - 100.0).abs() < 1e-9);
+}

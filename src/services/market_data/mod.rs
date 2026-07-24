@@ -10,8 +10,8 @@ use sea_orm::DatabaseConnection;
 use crate::db::repos::asset_repo;
 use crate::models::{
     Asset, AssetClassification, CorrelationMarketData, CorrelationMarketDataSeries, FundData,
-    FundQuoteMetadata, IndividualPrice, IndividualPriceFallback, MarketDataValuation, StockInfo,
-    ValuationMarketData,
+    FundQuoteMetadata, IndividualPrice, IndividualPriceAvailability, IndividualPriceFallback,
+    MarketDataValuation, StockInfo, ValuationMarketData,
 };
 use crate::services::metrics;
 
@@ -122,6 +122,27 @@ impl MarketData {
         fallback: IndividualPriceFallback,
     ) -> anyhow::Result<IndividualPrice> {
         individual_price::get_individual_price(db, asset, fallback, self).await
+    }
+
+    pub async fn prepare_individual_price_market_data(
+        &self,
+        db: &DatabaseConnection,
+        assets: &[Asset],
+        start_date: &str,
+        end_date: &str,
+    ) -> anyhow::Result<()> {
+        individual_price::prepare_individual_price_market_data(
+            db, assets, start_date, end_date, self,
+        )
+        .await
+    }
+
+    pub async fn individual_price_if_available(
+        &self,
+        db: &DatabaseConnection,
+        asset: &Asset,
+    ) -> anyhow::Result<IndividualPriceAvailability> {
+        individual_price::get_individual_price_if_available(db, asset, self).await
     }
 
     pub async fn correlation_market_data(

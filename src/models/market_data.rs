@@ -35,6 +35,14 @@ pub struct IndividualPrice {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct IndividualPriceAvailability {
+    pub native_price: Option<f64>,
+    pub price_date: Option<String>,
+    pub fx_rate: Option<f64>,
+    pub limitations: Vec<MarketDataLimitation>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct CorrelationMarketDataSeries {
     pub asset_id: i32,
     pub name: String,
@@ -53,7 +61,7 @@ pub struct CorrelationMarketData {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MarketDataLimitation {
     pub subject: MarketDataSubject,
-    pub latest_available_date: NaiveDate,
+    pub latest_available_date: Option<NaiveDate>,
     pub requested_end_date: NaiveDate,
     pub classification: MarketDataLimitationClassification,
 }
@@ -73,7 +81,9 @@ pub enum MarketDataSubject {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[allow(clippy::enum_variant_names)]
 pub enum MarketDataLimitationClassification {
+    ActionableMissingData,
     ActionableReportingLag,
     ActionableStaleData,
 }

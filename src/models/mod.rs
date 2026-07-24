@@ -7,7 +7,7 @@ mod portfolio;
 mod stock_info;
 mod transaction;
 
-pub use asset::{Asset, AssetInfo, AssetPosition, AssetType};
+pub use asset::{Asset, AssetInfo, AssetPosition, AssetType, MonetaryPosition};
 pub use classification::{
     enum_to_db, AssetClass, AssetClassification, BondCredit, BondDuration, EquityStyle, Management,
 };
@@ -22,8 +22,9 @@ pub use fund_comparison::{
 };
 pub use market_data::{
     BaseCurrencyPriceSeries, CorrelationMarketData, CorrelationMarketDataSeries, IndividualPrice,
-    IndividualPriceFallback, MarketDataLimitation, MarketDataLimitationClassification,
-    MarketDataSubject, MarketDataValuation, ValuationMarketData,
+    IndividualPriceAvailability, IndividualPriceFallback, MarketDataLimitation,
+    MarketDataLimitationClassification, MarketDataSubject, MarketDataValuation,
+    ValuationMarketData,
 };
 pub use portfolio::{
     AllocationEntry, AssetSnapshot, CompositionResult, CorrelationMatrix, FundHolding,

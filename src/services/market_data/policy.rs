@@ -40,7 +40,7 @@ pub(crate) fn classify_asset_limitation(
             name: asset.name.clone(),
             asset_type: asset.asset_type.clone(),
         },
-        latest_available_date: latest_date,
+        latest_available_date: Some(latest_date),
         requested_end_date: requested_end,
         classification,
     })
@@ -62,10 +62,40 @@ pub(crate) fn classify_fx_limitation(
         subject: MarketDataSubject::FxRate {
             currency: currency.to_owned(),
         },
-        latest_available_date: latest_date,
+        latest_available_date: Some(latest_date),
         requested_end_date: requested_end,
         classification: MarketDataLimitationClassification::ActionableStaleData,
     })
+}
+
+pub(crate) fn missing_asset_limitation(
+    asset: &Asset,
+    requested_end_date: NaiveDate,
+) -> MarketDataLimitation {
+    MarketDataLimitation {
+        subject: MarketDataSubject::Asset {
+            ticker: asset.ticker.clone(),
+            name: asset.name.clone(),
+            asset_type: asset.asset_type.clone(),
+        },
+        latest_available_date: None,
+        requested_end_date,
+        classification: MarketDataLimitationClassification::ActionableMissingData,
+    }
+}
+
+pub(crate) fn missing_fx_limitation(
+    currency: &str,
+    requested_end_date: NaiveDate,
+) -> MarketDataLimitation {
+    MarketDataLimitation {
+        subject: MarketDataSubject::FxRate {
+            currency: currency.to_owned(),
+        },
+        latest_available_date: None,
+        requested_end_date,
+        classification: MarketDataLimitationClassification::ActionableMissingData,
+    }
 }
 
 pub(crate) fn parse_market_data_date(date: &str, label: &str) -> anyhow::Result<NaiveDate> {
