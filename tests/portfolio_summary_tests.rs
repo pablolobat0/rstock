@@ -243,6 +243,83 @@ async fn test_portfolio_surfaces_fx_stale_data_warning() {
 }
 
 #[tokio::test]
+async fn test_portfolio_includes_holding_bought_after_effective_valuation_date() {
+    let db = common::setup_test_db().await;
+    let stale_date = date_string(7);
+    let purchase_date = date_string(1);
+    let split_date = date_string(0);
+    let stale_fund_id =
+        common::insert_fund_asset(&db, "XFAKEF3", "Lagging Fund", "EUR", "F000LAG").await;
+    let new_stock_id = common::insert_asset(&db, "XFAKES4", "New Stock", "stock", "EUR").await;
+
+    common::insert_transaction(&db, stale_fund_id, &stale_date, 5.0, 100.0, 0.0).await;
+    common::insert_daily_price(&db, stale_fund_id, &stale_date, 101.0, false).await;
+    common::insert_portfolio_snapshot(&db, &stale_date, 100.0, 5.0).await;
+    common::insert_portfolio_asset_snapshot(
+        &db,
+        &stale_date,
+        stale_fund_id,
+        5.0,
+        101.0,
+        505.0,
+        1.0,
+    )
+    .await;
+
+    common::insert_transaction(&db, new_stock_id, &purchase_date, 3.0, 20.0, 1.0).await;
+    common::insert_split_transaction(&db, new_stock_id, &split_date, 2.0).await;
+    common::insert_daily_price(&db, new_stock_id, &split_date, 11.0, false).await;
+
+    let market_data = common::market_data(&common::MockMarketDataSources::new());
+    let result = portfolio::get_portfolio(&db, &market_data).await.unwrap();
+
+    assert_eq!(result.snapshot_date.as_deref(), Some(stale_date.as_str()));
+    assert_eq!(result.rows.len(), 2);
+    let position = result
+        .rows
+        .iter()
+        .find(|position| position.ticker == "XFAKES4")
+        .unwrap();
+    assert!((position.total_qty - 6.0).abs() < 1e-9);
+    assert!((position.avg_cost - (61.0 / 6.0)).abs() < 1e-9);
+    assert!((position.total_invested - 61.0).abs() < 1e-9);
+    assert!((position.current_price - 11.0).abs() < 1e-9);
+    assert!((position.current_value - 66.0).abs() < 1e-9);
+}
+
+#[tokio::test]
+async fn test_unpriced_post_snapshot_holding_does_not_hide_priced_positions() {
+    let db = common::setup_test_db().await;
+    let snapshot_date = date_string(0);
+    let today = rstock::constants::format_date(chrono::Local::now().date_naive());
+    let priced_stock_id =
+        common::insert_asset(&db, "XFAKES5", "Priced Stock", "stock", "EUR").await;
+    let unpriced_stock_id =
+        common::insert_asset(&db, "XFAKES6", "Unpriced Stock", "stock", "EUR").await;
+
+    common::insert_transaction(&db, priced_stock_id, &snapshot_date, 2.0, 10.0, 0.0).await;
+    common::insert_daily_price(&db, priced_stock_id, &snapshot_date, 11.0, false).await;
+    common::insert_portfolio_snapshot(&db, &snapshot_date, 100.0, 2.0).await;
+    common::insert_portfolio_asset_snapshot(
+        &db,
+        &snapshot_date,
+        priced_stock_id,
+        2.0,
+        11.0,
+        22.0,
+        1.0,
+    )
+    .await;
+    common::insert_transaction(&db, unpriced_stock_id, &today, 1.0, 5.0, 0.0).await;
+
+    let market_data = common::market_data(&common::MockMarketDataSources::new());
+    let result = portfolio::get_portfolio(&db, &market_data).await.unwrap();
+
+    assert_eq!(result.rows.len(), 1);
+    assert_eq!(result.rows[0].ticker, "XFAKES5");
+}
+
+#[tokio::test]
 async fn test_portfolio_returns_monetary_only_holdings_separately() {
     let db = common::setup_test_db().await;
     let price_date = date_string(1);

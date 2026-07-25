@@ -589,86 +589,117 @@ async fn compute_asset_positions(
     market_data: &MarketData,
 ) -> anyhow::Result<Vec<AssetPosition>> {
     let asset_snapshots = portfolio_asset_history_repo::find_by_date(db, snapshot_date).await?;
-    if asset_snapshots.is_empty() {
+    let snapshots_by_asset: HashMap<i32, _> = asset_snapshots
+        .into_iter()
+        .map(|snapshot| (snapshot.asset_id, snapshot))
+        .collect();
+
+    let today = format_date(chrono::Local::now().date_naive());
+    let mut transactions_by_asset: HashMap<i32, Vec<Transaction>> = HashMap::new();
+    for transaction in transaction_repo::find_all_ordered_by_date(db, None, Some(&today)).await? {
+        transactions_by_asset
+            .entry(transaction.asset_id)
+            .or_default()
+            .push(transaction);
+    }
+    if transactions_by_asset.is_empty() {
         return Ok(Vec::new());
     }
 
-    let asset_ids: Vec<i32> = asset_snapshots.iter().map(|s| s.asset_id).collect();
+    let asset_ids: Vec<i32> = transactions_by_asset.keys().copied().collect();
     let assets = asset_repo::find_by_ids(db, asset_ids).await?;
-    let asset_map: HashMap<i32, _> = assets.iter().map(|a| (a.id, a)).collect();
-
     let mut rows: Vec<AssetPosition> = Vec::new();
 
-    for snap in &asset_snapshots {
-        let Some(asset_model) = asset_map.get(&snap.asset_id) else {
-            continue;
-        };
-
+    for asset_model in &assets {
         if asset_model.is_monetary() || is_benchmark_ticker(&asset_model.ticker) {
             continue;
         }
 
-        let individual_price = market_data
-            .individual_price(
-                db,
-                asset_model,
-                IndividualPriceFallback {
-                    native_price: snap.closing_price,
-                    price_date: snap.date.clone(),
-                    fx_rate: snap.exchange_rate,
-                },
-            )
-            .await?;
-        let exchange_rate = individual_price.fx_rate;
-
-        let transactions = transaction_repo::find_by_asset_id(db, snap.asset_id).await?;
-
-        let mut total_buy_cost_eur = 0.0;
-        let total_buy_qty: f64 = transactions
-            .iter()
-            .filter(|t| t.is_buy())
-            .map(|t| t.quantity)
-            .sum();
-        let net_qty: f64 = transactions.iter().map(Transaction::signed_quantity).sum();
-
-        for t in transactions.iter().filter(|t| t.is_buy()) {
-            let tx_cost = t.quantity * cents_to_f64(t.price_cents) + cents_to_f64(t.fees_cents);
-            if asset_model.currency == BASE_CURRENCY {
-                total_buy_cost_eur += tx_cost;
-            } else {
-                let tx_rate = market_data
-                    .get_asset_exchange_rate(db, asset_model, &t.date)
-                    .await?
-                    .unwrap_or(exchange_rate);
-                total_buy_cost_eur += tx_cost * tx_rate;
-            }
-        }
-
-        let avg_cost = if total_buy_qty > 0.0 {
-            total_buy_cost_eur / total_buy_qty
-        } else {
-            0.0
+        let Some(transactions) = transactions_by_asset.get(&asset_model.id) else {
+            continue;
         };
+        let net_qty = Transaction::compute_holdings(transactions);
+        if net_qty <= FLOAT_EPSILON {
+            continue;
+        }
 
-        let mut dividends_received = 0.0;
-        for t in transactions.iter().filter(|t| t.is_dividend()) {
-            let div_amount = t.quantity * cents_to_f64(t.price_cents) - cents_to_f64(t.fees_cents);
-            if asset_model.currency == BASE_CURRENCY {
-                dividends_received += div_amount;
+        let (current_price, price_date, exchange_rate, market_data_limitations) =
+            if let Some(snapshot) = snapshots_by_asset.get(&asset_model.id) {
+                let individual_price = market_data
+                    .individual_price(
+                        db,
+                        asset_model,
+                        IndividualPriceFallback {
+                            native_price: snapshot.closing_price,
+                            price_date: snapshot.date.clone(),
+                            fx_rate: snapshot.exchange_rate,
+                        },
+                    )
+                    .await?;
+                (
+                    individual_price.native_price,
+                    individual_price.price_date,
+                    individual_price.fx_rate,
+                    individual_price.limitations,
+                )
             } else {
+                let individual_price = market_data
+                    .individual_price_if_available(db, asset_model)
+                    .await?;
+                let (Some(current_price), Some(price_date), Some(exchange_rate)) = (
+                    individual_price.native_price,
+                    individual_price.price_date,
+                    individual_price.fx_rate,
+                ) else {
+                    tracing::warn!(
+                        ticker = %asset_model.ticker,
+                        "omitting current holding because individual valuation data is unavailable"
+                    );
+                    continue;
+                };
+                (
+                    current_price,
+                    price_date,
+                    exchange_rate,
+                    individual_price.limitations,
+                )
+            };
+
+        let mut ledger_qty = 0.0;
+        let mut cost_basis = 0.0;
+        let mut dividends_received = 0.0;
+        for transaction in transactions {
+            if transaction.is_split() {
+                ledger_qty *= transaction.quantity;
+            } else if transaction.is_buy() {
+                let native_cost = transaction.quantity * cents_to_f64(transaction.price_cents)
+                    + cents_to_f64(transaction.fees_cents);
                 let tx_rate = market_data
-                    .get_asset_exchange_rate(db, asset_model, &t.date)
+                    .get_asset_exchange_rate(db, asset_model, &transaction.date)
                     .await?
                     .unwrap_or(exchange_rate);
-                dividends_received += div_amount * tx_rate;
+                cost_basis += native_cost * tx_rate;
+                ledger_qty += transaction.quantity;
+            } else if transaction.is_sell() {
+                if ledger_qty > FLOAT_EPSILON {
+                    let sold_fraction = (transaction.quantity / ledger_qty).min(1.0);
+                    cost_basis *= 1.0 - sold_fraction;
+                }
+                ledger_qty -= transaction.quantity;
+            } else if transaction.is_dividend() {
+                let native_dividend = transaction.quantity * cents_to_f64(transaction.price_cents)
+                    - cents_to_f64(transaction.fees_cents);
+                let tx_rate = market_data
+                    .get_asset_exchange_rate(db, asset_model, &transaction.date)
+                    .await?
+                    .unwrap_or(exchange_rate);
+                dividends_received += native_dividend * tx_rate;
             }
         }
 
-        let current_price = individual_price.native_price;
-        let price_date = individual_price.price_date;
-
-        let current_value = snap.quantity * current_price * exchange_rate;
-        let total_invested_for_asset = net_qty * avg_cost;
+        let avg_cost = cost_basis / net_qty;
+        let current_value = net_qty * current_price * exchange_rate;
+        let total_invested_for_asset = cost_basis;
         let gain_loss = current_value + dividends_received - total_invested_for_asset;
         let gain_loss_pct = if total_invested_for_asset == 0.0 {
             0.0
@@ -685,7 +716,7 @@ async fn compute_asset_positions(
             asset_class: asset_model.asset_class.clone(),
             equity_style: asset_model.equity_style.clone(),
             management: asset_model.management.clone(),
-            total_qty: snap.quantity,
+            total_qty: net_qty,
             avg_cost,
             current_price,
             price_date,
@@ -694,7 +725,7 @@ async fn compute_asset_positions(
             dividends_received,
             gain_loss,
             gain_loss_pct,
-            market_data_limitations: individual_price.limitations,
+            market_data_limitations,
         });
     }
 
