@@ -60,7 +60,7 @@ pub(crate) async fn get_individual_price_if_available(
     let yesterday_str = format_date(yesterday);
     let mut limitations = Vec::new();
 
-    let price = if asset.asset_type == AssetType::Stock {
+    let price = if supports_live_asset_price(asset) {
         match fetch_live_asset_price(asset, &today_str, market_data).await {
             Ok(price) => price.map(|price| (price, today_str.clone())),
             Err(error) => {
@@ -153,7 +153,7 @@ async fn get_display_price(
     fallback: &IndividualPriceFallback,
     market_data: &MarketData,
 ) -> anyhow::Result<(f64, String, Option<MarketDataLimitation>)> {
-    if asset.asset_type == AssetType::Stock {
+    if supports_live_asset_price(asset) {
         if let Some(live_price) = fetch_live_asset_price(asset, today, market_data)
             .await
             .unwrap_or(None)
@@ -210,6 +210,10 @@ async fn get_display_exchange_rate(
         .collect();
 
     Ok((rate, limitations))
+}
+
+fn supports_live_asset_price(asset: &Asset) -> bool {
+    matches!(asset.asset_type, AssetType::Stock | AssetType::Etf)
 }
 
 async fn fetch_live_asset_price(
