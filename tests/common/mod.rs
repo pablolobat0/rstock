@@ -10,6 +10,7 @@ use rstock::db::entities::{
     transaction,
 };
 use rstock::models::{f64_to_cents, FundData, FundQuoteMetadata, StockInfo};
+use rstock::services::clock::FixedClock;
 use rstock::services::market_data::{MarketData, MarketDataSources, SourceObservation};
 
 pub async fn setup_test_db() -> DatabaseConnection {
@@ -354,6 +355,10 @@ impl MockMarketDataSources {
 
 pub fn market_data(sources: &MockMarketDataSources) -> MarketData {
     MarketData::new(Box::new(sources.clone()))
+}
+
+pub fn market_data_at(sources: &MockMarketDataSources, today: chrono::NaiveDate) -> MarketData {
+    MarketData::new_with_clock(Box::new(sources.clone()), Box::new(FixedClock::new(today)))
 }
 
 #[async_trait::async_trait]

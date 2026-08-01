@@ -13,17 +13,27 @@ use crate::models::{
     FundQuoteMetadata, IndividualPrice, IndividualPriceAvailability, IndividualPriceFallback,
     MarketDataValuation, StockInfo, ValuationMarketData,
 };
+use crate::services::clock::{Clock, SystemClock};
 use crate::services::metrics;
 
 pub use sources::{DefaultMarketDataSources, MarketDataSources, SourceObservation};
 
 pub struct MarketData {
     sources: Box<dyn MarketDataSources>,
+    clock: Box<dyn Clock>,
 }
 
 impl MarketData {
     pub fn new(sources: Box<dyn MarketDataSources>) -> Self {
-        Self { sources }
+        Self::new_with_clock(sources, Box::new(SystemClock))
+    }
+
+    pub fn new_with_clock(sources: Box<dyn MarketDataSources>, clock: Box<dyn Clock>) -> Self {
+        Self { sources, clock }
+    }
+
+    pub fn today(&self) -> NaiveDate {
+        self.clock.today()
     }
 
     pub(crate) async fn stock_price_history(

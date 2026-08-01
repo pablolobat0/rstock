@@ -89,6 +89,29 @@ impl Asset {
 }
 
 #[derive(Serialize)]
+#[allow(dead_code)] // Used through the library portfolio interface while CLI callers migrate.
+pub struct CurrentPosition {
+    pub ticker: String,
+    pub name: String,
+    pub asset_type: AssetType,
+    pub currency: String,
+    pub morningstar_code: Option<String>,
+    pub asset_class: Option<String>,
+    pub equity_style: Option<String>,
+    pub management: Option<String>,
+    pub total_qty: f64,
+    pub avg_cost: Option<f64>,
+    pub current_price: Option<f64>,
+    pub price_date: Option<String>,
+    pub total_invested: Option<f64>,
+    pub current_value: Option<f64>,
+    pub dividends_received: Option<f64>,
+    pub gain_loss: Option<f64>,
+    pub gain_loss_pct: Option<f64>,
+    pub market_data_limitations: Vec<MarketDataLimitation>,
+}
+
+#[derive(Serialize)]
 pub struct AssetPosition {
     pub ticker: String,
     pub name: String,

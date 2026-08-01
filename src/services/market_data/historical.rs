@@ -330,7 +330,7 @@ async fn fill_historical_asset_prices(
 
     let requested_end =
         policy::parse_market_data_date(end_date, "historical asset price end date")?;
-    let latest_completed_date = chrono::Local::now().date_naive() - chrono::Duration::days(1);
+    let latest_completed_date = market_data.today() - chrono::Duration::days(1);
 
     let price_map: HashMap<String, f64> = match prices {
         Ok(prices) => prices
@@ -465,7 +465,7 @@ async fn fill_historical_exchange_rates(
         .await;
 
     let requested_end = policy::parse_market_data_date(end_date, "historical FX end date")?;
-    let latest_completed_date = chrono::Local::now().date_naive() - chrono::Duration::days(1);
+    let latest_completed_date = market_data.today() - chrono::Duration::days(1);
 
     let rate_map: HashMap<String, f64> = match rates {
         Ok(rates) => rates

@@ -14,7 +14,7 @@ pub(crate) async fn get_individual_price(
     fallback: IndividualPriceFallback,
     market_data: &MarketData,
 ) -> anyhow::Result<IndividualPrice> {
-    let today = chrono::Local::now().date_naive();
+    let today = market_data.today();
     let today_str = format_date(today);
     let yesterday_str = format_date(today - chrono::Duration::days(1));
 
@@ -54,7 +54,7 @@ pub(crate) async fn get_individual_price_if_available(
     asset: &Asset,
     market_data: &MarketData,
 ) -> anyhow::Result<IndividualPriceAvailability> {
-    let today = chrono::Local::now().date_naive();
+    let today = market_data.today();
     let today_str = format_date(today);
     let yesterday = today - chrono::Duration::days(1);
     let yesterday_str = format_date(yesterday);

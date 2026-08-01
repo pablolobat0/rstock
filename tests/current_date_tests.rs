@@ -1,0 +1,94 @@
+mod common;
+
+use chrono::NaiveDate;
+use rstock::constants::format_date;
+use rstock::db::repos::{asset_repo, daily_price_repo};
+use rstock::models::IndividualPriceFallback;
+use rstock::services::portfolio;
+
+fn fixed_today() -> NaiveDate {
+    NaiveDate::from_ymd_opt(2025, 6, 10).unwrap()
+}
+
+#[tokio::test]
+async fn fixed_clock_excludes_future_transactions_from_current_inventory() {
+    let db = common::setup_test_db().await;
+    let asset_id =
+        common::insert_monetary_fund_asset(&db, "XFAKECLOCK1", "Clock Fund", "EUR", "F000CLOCK")
+            .await;
+    common::insert_transaction(&db, asset_id, "2025-06-10", 2.0, 100.0, 0.0).await;
+    common::insert_transaction(&db, asset_id, "2025-06-11", 3.0, 100.0, 0.0).await;
+    common::insert_daily_price(&db, asset_id, "2025-06-09", 101.0, false).await;
+
+    let market_data = common::market_data_at(&common::MockMarketDataSources::new(), fixed_today());
+    let result = portfolio::get_portfolio(&db, &market_data).await.unwrap();
+
+    assert_eq!(result.monetary_positions.len(), 1);
+    assert!((result.monetary_positions[0].total_qty - 2.0).abs() < 1e-9);
+}
+
+#[tokio::test]
+async fn fixed_clock_limits_historical_market_data_to_latest_completed_date() {
+    let db = common::setup_test_db().await;
+    common::insert_asset(&db, "XFAKECLOCK2", "Clock Stock", "stock", "EUR").await;
+    let asset = asset_repo::find_by_ticker(&db, "XFAKECLOCK2")
+        .await
+        .unwrap()
+        .unwrap();
+    let mut sources = common::MockMarketDataSources::new();
+    sources.historical_prices.insert(
+        asset.ticker.clone(),
+        vec![
+            ("2025-06-09".to_owned(), 100.0),
+            ("2025-06-10".to_owned(), 101.0),
+        ],
+    );
+
+    let market_data = common::market_data_at(&sources, fixed_today());
+    let prepared = market_data
+        .prepare_valuation_market_data(&db, &[asset.clone()], "2025-06-09", "2025-06-10")
+        .await
+        .unwrap();
+
+    assert_eq!(
+        prepared.effective_end,
+        NaiveDate::from_ymd_opt(2025, 6, 9).unwrap()
+    );
+    assert_eq!(
+        daily_price_repo::find_price(&db, asset.id, "2025-06-10")
+            .await
+            .unwrap(),
+        None
+    );
+}
+
+#[tokio::test]
+async fn fixed_clock_sets_live_stock_price_date() {
+    let db = common::setup_test_db().await;
+    common::insert_asset(&db, "XFAKECLOCK3", "Live Clock Stock", "stock", "EUR").await;
+    let asset = asset_repo::find_by_ticker(&db, "XFAKECLOCK3")
+        .await
+        .unwrap()
+        .unwrap();
+    let mut sources = common::MockMarketDataSources::new();
+    sources.historical_prices.insert(
+        asset.ticker.clone(),
+        vec![(format_date(fixed_today()), 125.0)],
+    );
+
+    let result = common::market_data_at(&sources, fixed_today())
+        .individual_price(
+            &db,
+            &asset,
+            IndividualPriceFallback {
+                native_price: 100.0,
+                price_date: "2025-06-09".to_owned(),
+                fx_rate: 1.0,
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(result.price_date, "2025-06-10");
+    assert!((result.native_price - 125.0).abs() < 1e-9);
+}

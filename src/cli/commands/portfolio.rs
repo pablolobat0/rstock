@@ -37,7 +37,7 @@ pub async fn get(
         return Ok(());
     }
 
-    let today = chrono::Local::now().date_naive();
+    let today = market_data.today();
     let today_str = format_date(today);
 
     let (start_date, period_label) = match period {
