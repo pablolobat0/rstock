@@ -8,7 +8,7 @@ permission:
   glob: allow
   grep: allow
   list: allow
-  task: deny
+  task: allow
   todowrite: allow
   question: allow
   skill: allow
@@ -24,9 +24,10 @@ permission:
     "git reset --hard*": deny
     "git clean*": deny
     "git checkout --*": deny
-    "rm -rf*": deny
 ---
 
 Implement exactly one assigned issue in the current Orca worktree.
 
-Do not create or delegate to subagents, worktrees, Tasks, Dispatches, or review agents. Read the repository guidance and full specification, preserve unrelated files, implement and verify the issue, inspect the final Git state, and commit only intended changes. Report through the exact Orca lifecycle command in the injected task preamble only after all commands have ended, then stop and idle.
+Load and follow the `implement` skill before editing. You may create OpenCode subagents required by that skill for implementation review and fixes; ensure they finish before reporting. Do not create Orca Runs, Tasks, Dispatches, terminals, worktrees, or separate Orca review workers.
+
+Read the repository guidance and full specification, preserve unrelated files, implement and verify the issue, inspect the final Git state, and create focused commits. Push the issue branch, open or update a GitHub PR targeting the assigned PRD branch, and verify its URL and base. When implementation and all internal reviews are complete, send the exact Orca `merge_ready` report required by the injected Task, then open and wait on the required durable merge-decision ask. Do not send `worker_done` before the PR is verified merged. After a `merged` reply, verify the merge and send `worker_done`; after `changes-requested`, update and re-review the same PR.

@@ -1,173 +1,231 @@
 ---
 name: orchestrate-prd-issues
-description: Use when asked to orchestrate Orca agents to implement a PRD or issue directory, especially `.scratch/<feature>/`, with isolated worktrees, commits, reviews, merges or GitHub PRs, cleanup, OpenCode models, or the `agy` Antigravity CLI.
+description: Use in a dedicated orchestration session when asked to implement a PRD and its issues through Orca, OpenCode workers, dependency waves, issue branches, GitHub PRs, approval-gated merges, and cleanup.
 ---
 
 # Orchestrate PRD Issues
 
-Implement a PRD through Orca as a supervised task DAG. Every issue gets an isolated implementation worktree, a fresh worker session, a scoped commit, an independent review gate, an explicit integration outcome, and safe cleanup.
+Run the implementation phase of a two-session workflow.
 
-## Non-Negotiable Invariants
+The planning session is already complete: the user used skills such as `grill-with-docs`, `to-spec`, and `to-tickets` to produce a PRD and dependency-linked issues. This orchestration session receives that PRD and those issues, then drives implementation through reviewed GitHub PRs.
 
-- Load the live `orchestration` and `orca-cli` guides before running Orca commands. Never guess the installed command surface.
-- Use Orca Runs, Tasks, Dispatches, and `worker_done`; never substitute non-Orca subagents for coordinated work.
-- Create one fresh implementation agent and one dedicated worktree per issue. Never reuse an agent session across issues.
-- Workers must not create subagents, review workers, worktrees, Tasks, or Dispatches. Only the coordinator owns the DAG.
-- Launch implementation workers with non-interactive permissions. OpenCode uses `--auto --agent orca-prd-worker`; Antigravity uses `agy --dangerously-skip-permissions --mode accept-edits`.
-- Never run implementation workers in the user's current checkout. Create a PRD integration worktree first, then child issue worktrees.
-- Every implementation worker must commit its own scoped changes before `worker_done`.
-- A worker may send `worker_done` only after its own commands and verification have ended. It must not have nested work still running.
-- Never merge or open a PR before an independent reviewer reports an explicit approval.
-- Never mark an issue `done` before approval and successful integration or verified PR creation.
-- Never remove an implementation worktree until its commit is safely merged into the PRD branch or pushed and referenced by a verified PR URL.
-- Preserve unrelated user changes. Never stage, commit, revert, or clean files outside the issue scope.
+## Required Outcome
 
-## Phase 1: Preflight And Delivery Choice
+- One pushed PRD branch acts as the integration base.
+- One Orca worktree, issue branch, and fresh OpenCode worker exist per active issue.
+- Each worker loads the `implement` skill, implements exactly one issue, runs its internal OpenCode reviews, commits, pushes, and opens a GitHub PR targeting the PRD branch.
+- The coordinator starts every dependency-ready issue that can safely run concurrently.
+- Issue Tasks remain incomplete while their PRs await user approval.
+- The coordinator reports: `X pending PRs are ready for approval` with links and review/test summaries.
+- Only after the user approves and each PR is verified merged does the coordinator complete its Task, update issue state, remove its worktree, and unlock dependents.
 
-1. Read `AGENTS.md`, `CONTEXT.md`, `docs/ARCHITECTURE.md`, `docs/CONVENTIONS.md`, relevant ADRs, the PRD, every issue file, and the local tracker conventions.
-2. Inspect `git status`, current branch, recent log, Orca status, existing Runs, and existing worktrees.
-3. Build the issue DAG from every `Blocked by:` line and current `Status:` value.
-4. Treat a dependency as satisfied only when its issue is `done` and its commit is present in the selected base branch. Do not merely delete dependency metadata to make work appear ready.
-5. Ask one decision question if the user did not choose a delivery mode:
-   - `Merge to PRD branch`: review and merge each approved issue into one local PRD integration branch.
-   - `GitHub PR per issue`: push each approved issue branch and open a documented PR, normally targeting the PRD branch.
-6. Create a clean top-level Orca worktree for the PRD integration branch. Do not repurpose a dirty main checkout.
-7. Create one Orca Run for the whole PRD. Register all issue Tasks with real dependency IDs before dispatching workers.
+## Ownership Boundaries
 
-Use issue statuses as follows:
+The coordinator owns:
 
-- `ready-for-agent`: dependency-complete and undispatched.
-- `in-progress`: implementation or remediation is active.
-- `done`: reviewed and integrated, or reviewed with a verified PR URL.
+- The Orca Run and Task DAG.
+- PRD branch creation and synchronization.
+- Dependency scheduling and concurrency.
+- User-facing merge approval gates.
+- Merging approved PRs.
+- Task and issue completion after merge.
+- Orca terminal/worktree cleanup.
 
-Append concise implementation, review, commit, PR, and blocker notes under each issue's `## Comments` section.
+Each issue worker owns:
 
-## Phase 2: Choose Agent And Model Deliberately
+- One issue branch and worktree.
+- Loading and following the `implement` skill.
+- Code changes, tests, commits, and internal review/fix cycles.
+- Pushing its issue branch.
+- Opening or updating its GitHub PR against the PRD branch.
+- Reporting `merge_ready` with complete evidence.
 
-Do not rotate models arbitrarily. Match model strength and tool to the work.
+Workers may use OpenCode subagents required by the `implement` skill. They must not create Orca Runs, Tasks, Dispatches, terminals, or worktrees. Internal reviews are OpenCode subagents inside the worker session, not separate Orca workers.
 
-| Work | Preferred launcher | Model / effort |
-| --- | --- | --- |
-| Cross-module architecture, domain logic, risky refactor | OpenCode | `openai/gpt-5.6-terra` |
-| Complex independent review or spec audit | `agy` | `claude-opus-4-6-thinking`, `--effort high` |
-| Focused implementation with clear boundaries | OpenCode | `openai/gpt-5.6-sol` or `openai/gpt-5.6-luna` |
-| Fast second review, dependency audit, documentation check | `agy` | `gemini-3.6-flash-high`, `--effort high` |
-| Merge conflict resolution or integration repair | OpenCode | `openai/gpt-5.6-terra` |
+## Non-Negotiable Rules
 
-Before choosing, run `opencode models` or `agy models`; use only models actually installed. If `agy` is absent, use an independent OpenCode reviewer. Never claim Antigravity was used unless the `agy` process was launched and verified.
+- Load the live `orchestration` and `orca-cli` guides before using Orca.
+- Never reuse one OpenCode session for multiple issues.
+- Never implement in the user's current checkout.
+- Never start a blocked issue before every blocking PR is merged into the PRD branch.
+- Never treat an opened or approved PR as merged; verify its GitHub merge state.
+- Never complete an issue Task when the worker merely finishes implementation.
+- Never clean up an issue worktree before its PR is merged or otherwise safely preserved by explicit user direction.
+- Preserve unrelated user changes and never force-push.
+- Keep the coordinator in a mailbox-draining loop while workers run.
 
-## Phase 3: Dispatch Ready Issues In Parallel
+## Phase 1: Preflight
 
-At each scheduling wave:
+1. Read repository agent instructions, domain docs, architecture/conventions, ADRs, the PRD, and every provided issue.
+2. Support local `.scratch/<feature>/` issues now and GitHub issues when the planning workflow moves there. For GitHub, fetch full issue bodies, comments, labels, and dependency references with `gh`.
+3. Inspect Git status, branches, remotes, recent commits, Orca status, Runs, worktrees, and open PRs.
+4. Build the issue DAG from `Blocked by` relationships. Record the exact external issue identifier and Orca Task ID mapping.
+5. A dependency is satisfied only when its PR is merged into the PRD branch. A worker report, commit, pushed branch, open PR, review approval, or green CI is not sufficient.
+6. Register all issue Tasks under one Orca Run with real Task dependency IDs. Keep blocked Tasks pending.
 
-1. Recompute readiness from issue status and commits present in the PRD integration branch.
-2. Start every ready issue whose likely file ownership does not create an avoidable integration conflict. Separate worktrees permit parallelism, but do not parallelize two large rewrites of the same central module unless the expected merge cost is accepted.
-3. Create each issue worktree from the latest PRD integration commit. Use child Orca lineage under the integration worktree and `--setup run`.
-4. Launch exactly one fresh worker terminal in that worktree.
-5. Close the bare-create fallback shell only after `terminal list` proves which terminal is the unused shell and which is the agent.
-6. Wait for TUI readiness, verify the agent terminal is writable, then inject the Dispatch.
+## Phase 2: Create The PRD Branch
 
-OpenCode implementation command:
+If orchestration starts from `main` or the repository default branch:
+
+1. Create a clean top-level Orca worktree from the current remote default branch.
+2. Create a PRD branch named consistently, such as `agent/<prd-slug>`.
+3. Push it immediately with upstream tracking so issue PRs can target it on GitHub.
+4. Record the PRD branch name and remote SHA as Run context.
+
+If a PRD branch already exists:
+
+1. Verify its local and remote identity.
+2. Use or create a clean Orca integration worktree for it.
+3. Fetch and fast-forward it before scheduling each new dependency wave.
+
+Never repurpose a dirty `main` checkout as the PRD worktree.
+
+## Phase 3: Schedule Dependency Waves
+
+At the start of every wave:
+
+1. Fetch GitHub PR and issue state.
+2. Recompute the ready frontier from PRs verified merged into the PRD branch.
+3. Start all ready issues that can reasonably run concurrently.
+4. Prefer parallel work for independent modules and behavior slices.
+5. Serialize ready issues only when they are expected to rewrite the same central code and parallel merge conflict cost would dominate.
+
+For each ready issue:
+
+1. Update its tracker state to `in-progress` without erasing dependency history.
+2. Create a child Orca worktree from the latest PRD branch HEAD with `--setup run`.
+3. Create one fresh OpenCode terminal using the `orca-prd-worker` profile and an installed model appropriate to the issue.
+4. Wait for TUI readiness and verify the agent terminal is writable before dispatch.
+5. Close a fallback shell only after `terminal list` proves it is unused.
+6. Dispatch the issue through Orca with the lifecycle contract below.
+
+Launch command:
 
 ```text
 opencode --auto --agent orca-prd-worker --model <installed-model>
 ```
 
-Antigravity implementation command:
+`--auto` is mandatory. The worker profile grants editing, deletion, shell, Git, GitHub, skill, and OpenCode subagent capabilities while retaining narrow protection against destructive repository loss such as force-push and hard reset.
+
+## Model Selection
+
+Run `opencode models` and `agy models` before assigning models. Select by reasoning need, not variety.
+
+| Issue shape | Preferred worker |
+| --- | --- |
+| Cross-module architecture, difficult domain invariants, risky refactor | OpenCode `openai/gpt-5.6-terra` |
+| Focused feature with clear seams and good tests | OpenCode `openai/gpt-5.6-sol` |
+| Narrow mechanical change or documentation-heavy issue | OpenCode `openai/gpt-5.6-luna` |
+| Hard diagnosis before implementation | OpenCode Terra, with `diagnosing-bugs` inside the worker |
+
+The normal issue worker is OpenCode because it must load the `implement` skill and use OpenCode subagents. Antigravity (`agy`) can be used by the coordinator for supplemental planning, final PRD audit, or a second opinion:
 
 ```text
-agy --dangerously-skip-permissions --mode accept-edits --model <installed-model> --effort <low|medium|high>
+agy --dangerously-skip-permissions --mode plan --model claude-opus-4-6-thinking --effort high
+agy --dangerously-skip-permissions --mode plan --model gemini-3.6-flash-high --effort high
 ```
 
-If Orca cannot inject a lifecycle preamble into the installed `agy` TUI, dispatch for tracking without `--inject`, then send one prompt containing the exact Task spec and exact lifecycle/reporting commands. Verify the resulting Task and Dispatch with `task-list` and `dispatch-show`; do not silently downgrade to an untracked handoff.
+Do not substitute an `agy` process for the required OpenCode issue worker unless the user explicitly changes this contract.
 
-Every implementation Task spec must state:
+## Issue Worker Contract
 
-- The exact issue and base commit.
-- Read repository guidance and the full PRD.
-- Do not create or delegate to subagents.
-- Preserve issue scope and unrelated files.
-- Required tests and no-network constraints.
-- Inspect status, diff, and recent log before committing.
-- Commit only intended files with a repository-style message.
-- Send exactly one `worker_done` with outcome, commit hash, files, tests, failures, and residual risks, then idle.
+Every Task specification must require the worker to:
 
-## Phase 4: Communication Loop
+1. Load the `implement` skill before editing.
+2. Implement exactly the named issue against the named PRD branch/base SHA.
+3. Use the `implement` skill's internal OpenCode subagents for review. Those subagents receive the same effective non-interactive permissions needed to inspect, test, and fix the issue.
+4. Never create Orca workers or orchestration state.
+5. Preserve unrelated files and remain within issue scope.
+6. Run repository-required formatting, linting, tests, and no-network verification.
+7. Inspect `git status`, the complete diff, and recent history before committing.
+8. Create focused commits as needed; end with a clean worktree.
+9. Push the issue branch without force.
+10. Create a GitHub PR targeting the PRD branch, or update the existing issue PR.
+11. Include in the PR body:
+   - PRD and issue references.
+   - User-visible behavior and implementation summary.
+   - Important design decisions.
+   - Tests and commands run.
+   - Internal review findings and fixes.
+   - Known limitations or residual risks.
+   - Dependency and base-branch assumptions.
+12. Verify the PR URL and target branch.
+13. Send an Orca `merge_ready` message containing the issue ID, Task/Dispatch IDs, branch, commit SHA, PR URL, checks, review verdict, files changed, and residual risks.
+14. Immediately open one durable Orca `ask` with options `merged`, `changes-requested`, and `abort`, then wait. If waiting times out, resume the same ask by message ID; never create a duplicate question.
+15. Do not send `worker_done` while the PR is merely pending.
+16. When the coordinator replies `merged`, verify the PR is merged into the expected PRD branch and then send `worker_done` with the PR URL and merge commit. When the reply is `changes-requested`, implement the supplied feedback, rerun internal review/checks, update the PR, send a new `merge_ready`, and open a new ask.
 
-The coordinator owns communication continuously. Do not use terminal previews as completion signals.
+If internal review rejects the implementation, the same issue worker fixes it, recommits, reruns review, updates the remote branch/PR, and only then sends `merge_ready`.
 
-1. After dispatching the full ready wave, call `orchestration check --wait --types worker_done,escalation,question`.
-2. Process every message in the returned Delivery, not only the first one.
-3. Reply to every `question` through `orchestration reply`.
-4. Record every completion, verify its commit exists and its worktree is clean, then acknowledge the Delivery ID.
-5. Immediately continue with `check --ack <delivery_id> --wait ...` until every expected Dispatch settles.
-6. A timeout is only a checkpoint. Use `worker-show` and bounded `worker-read`; do not duplicate or replace a live worker.
-7. If a worker exits without `worker_done`, inspect its branch and worktree. If a valid clean commit exists, create a recovery review Task; otherwise retry with a fresh worker linked by `--retry-of`. Never infer success from prose in the terminal.
+## Coordinator Communication Loop
 
-## Phase 5: Independent Review Gate
+After dispatching a wave:
 
-For each completed implementation:
+1. Wait on Orca messages for `merge_ready`, `escalation`, and `question`.
+2. Process every message in each Delivery before acknowledging it.
+3. Reply to worker questions through Orca, not ad hoc terminal text.
+4. Acknowledge the Delivery and immediately continue waiting until all workers in the wave have reported or failed.
+5. Treat timeout as a liveness checkpoint. Use `worker-show` and bounded `worker-read`; never duplicate a live worker.
+6. Verify every reported branch, commit, clean worktree, PR URL, PR base, and checks independently with Git and `gh`.
+7. Keep the Orca Task incomplete after `merge_ready`; leave the worker's durable merge-decision ask pending.
 
-1. Create a fresh review worktree from the issue branch.
-2. Launch a different agent/model from the implementer when available.
-3. Use the read-only `orca-prd-reviewer` OpenCode profile, or `agy --mode plan` without edit authority.
-4. Explicitly prohibit subagents and edits in the review Task.
-5. Require findings-first output with severity, file/line references, acceptance-criteria coverage, verification gaps, and an explicit `approve` or `reject` verdict.
-6. Consume and acknowledge the reviewer's `worker_done` before taking integration action.
+Workers must not launch review workers whose completion is invisible to the coordinator. Internal OpenCode review subagents must finish before the parent issue worker sends `merge_ready`.
 
-On rejection, dispatch a fresh remediation agent into the same issue implementation worktree, require a new commit, and repeat independent review. Do not let the reviewer fix its own findings.
+## User Merge Gate
 
-## Phase 6: Integrate Or Publish
+When one or more dependency-ready issue PRs have valid `merge_ready` reports:
 
-### Merge To PRD Branch
+1. Present one concise batch to the user: `X pending PRs are ready for approval.`
+2. List each issue, PR URL, commit, checks, review verdict, and blocking risks.
+3. Ask the user to approve which PRs may be merged. Do not merge based on silence or a previous wave's approval.
+4. Keep workers and worktrees available while approval is pending.
 
-1. Verify the issue branch is clean and approved.
-2. Merge it into the PRD integration worktree with a non-fast-forward merge so issue provenance remains visible.
-3. Resolve conflicts in the integration worktree with a dedicated Terra integration agent when necessary.
-4. Run targeted checks after each merge and the full repository verification after each scheduling wave.
-5. Record the issue commit and merge commit in the issue comments, then mark it `done`.
-6. Recompute the DAG and dispatch newly unblocked issues from the new integration HEAD.
+After explicit approval:
 
-### GitHub PR Per Issue
+1. Recheck PR head SHA, base branch, review/check state, and mergeability.
+2. Merge each approved PR with the repository's normal non-force strategy.
+3. Verify GitHub reports it merged into the PRD branch.
+4. Fetch and fast-forward the PRD integration worktree.
+5. Run integration checks appropriate to the merged wave.
+6. Reply `merged` to that worker's pending Orca ask and include the verified merge commit.
+7. Wait for and acknowledge the worker's `worker_done`; this completes the Task through the Dispatch lifecycle rather than a manual override.
+8. Update the external issue to `done` or close it according to tracker policy.
+9. Stop the issue worker terminal and remove its clean Orca worktree.
+10. Recompute dependencies and immediately schedule the next ready wave.
 
-1. Verify the issue branch is clean and approved.
-2. Push the issue branch without force.
-3. Use `gh pr create` with the intended base branch.
-4. The PR body must include: issue/PRD link or path, behavior changed, files or modules affected, tests run, known limitations, independent review result, and dependency/base assumptions.
-5. Verify and record the returned PR URL in the issue comments, then mark it `done` according to the user's chosen policy.
-6. Do not describe a local branch as a PR.
+If a PR is not approved, leave its Task, worker, branch, PR, worktree, and merge-decision ask pending. If the user requests changes, reply `changes-requested` to the ask with the feedback; the worker updates the same PR and sends a new `merge_ready` report.
 
-## Phase 7: Cleanup
+## Failure Recovery
 
-Cleanup is part of completion, not optional housekeeping.
+- Worker exits before `merge_ready`: inspect branch and PR. Retry with a fresh OpenCode session in the same issue worktree and link the retry Dispatch.
+- Worker reports but PR is missing or targets the wrong base: keep Task incomplete and send corrective guidance.
+- PR checks fail: route failure details to the same issue worker; require a new commit, internal review, and updated `merge_ready`.
+- Merge conflict: use a fresh Terra integration worker in the issue worktree, rebase or merge the latest PRD branch without force-push unless the user explicitly permits it, rerun review/checks, and update the PR.
+- Dirty worktree during cleanup: preserve it and escalate. Never force-remove uncommitted work.
+- Orca restart or stale handles: re-resolve terminal handles and Dispatch state; never dual-send.
 
-1. Confirm the coordinator consumed and acknowledged `worker_done`.
-2. Confirm the implementation commit is merged into the PRD branch or pushed and attached to a verified PR.
-3. Stop/close the exact supervised agent terminal.
-4. Remove the review worktree after its report is consumed.
-5. Remove the implementation worktree after its commit is safe.
-6. Keep the PRD integration worktree until the whole PRD passes final review and verification.
-7. Never remove a dirty worktree. Escalate and preserve it.
+## Final PRD Completion
 
-## Final PRD Gate
+When every issue PR is merged:
 
-After all issues are integrated:
+1. Verify all Tasks and external issues are complete.
+2. Verify the PRD branch contains every issue merge and matches its remote.
+3. Run full formatting, linting, tests, and repository-specific verification in the PRD integration worktree.
+4. Use a fresh high-reasoning audit, optionally `agy` with Claude Opus thinking, against the full PRD diff.
+5. Remediate blocking final findings through a reviewed PR targeting the PRD branch and use the same user merge gate.
+6. Create or update the final PR from the PRD branch to the repository default branch with a complete issue/PR/test summary.
+7. Report the final PR URL and ask for final merge approval unless the user already authorized it.
+8. Remove disposable issue worktrees and terminals. Retain the PRD worktree until the final PR is merged or the user asks to preserve it.
 
-1. Dispatch one fresh high-reasoning reviewer against the complete PRD branch, comparing base-to-head with the PRD and repository standards.
-2. Remediate and re-review blocking findings.
-3. Run the repository's formatting, lint, and complete test commands in the PRD integration worktree.
-4. Verify every issue is `done`, every comment records commit/PR evidence, no Dispatch remains active, and no disposable issue/review worktree remains.
-5. Report the PRD branch or final PR URL, commits, verification, residual risks, and cleanup result.
+## Prohibited Failure Patterns
 
-## Failure Patterns To Avoid
-
-- One long-lived agent implementing multiple issues and accumulating context.
-- Workers blocked on permission prompts.
-- Empty fallback shell tabs mistaken for workers.
-- Workers creating untracked nested review agents.
-- Creating dependent work from an unreviewed or unmerged commit.
-- Marking Tasks complete manually before `worker_done`.
-- Reading terminal output instead of draining Orca Deliveries.
-- Leaving completed terminals and worktrees indefinitely.
-- Deleting a worktree before its commit is merged or pushed.
-- Choosing models for variety rather than task complexity.
+- Reusing one agent session across issues.
+- Interactive permission prompts blocking workers.
+- Separate Orca review workers for each issue when `implement` owns internal review.
+- Parent workers reporting before internal OpenCode subagents finish.
+- Completing Tasks when PRs are merely opened.
+- Starting dependents before blocker PRs merge.
+- Merging without a current user approval gate.
+- Creating issue PRs against `main` instead of the PRD branch.
+- Running from `main` without first creating and pushing a PRD branch.
+- Leaving merged issue workers/worktrees alive.
