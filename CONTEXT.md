@@ -88,6 +88,18 @@ _Avoid_: Data import, portfolio table
 A currently held Tracked asset with the Monetary Asset classification, shown as portfolio inventory but excluded from portfolio performance measurement.
 _Avoid_: Cash balance, performance asset
 
+**Portfolio view**:
+The user-facing view of current Transaction ledger inventory and its latest available Individual prices, shown alongside NAV and returns at their Effective valuation date.
+_Avoid_: NAV snapshot, current NAV valuation
+
+**Average cost**:
+The weighted-average Base currency acquisition cost per currently held unit, including buy fees; sells remove cost proportionally and splits change units without changing total cost.
+_Avoid_: Tax basis, FIFO cost
+
+**Open-position gain/loss**:
+The difference between a currently held position's current Base currency value and its remaining weighted-average cost; it excludes dividends and realized gains from sold units.
+_Avoid_: Total return, lifetime gain/loss
+
 ## Relationships
 
 - **NAV** is calculated at one **Effective valuation date**.
@@ -98,6 +110,7 @@ _Avoid_: Cash balance, performance asset
 - **NAV** uses **Historical market data**, not **Live quote** values.
 - An **Individual price** for a stock may use a **Live quote** for display.
 - Mutual funds use a single closing price and do not use **Live quote** values for display.
+- An ETF **Individual price** may use a **Live quote** when its **Market data source** supplies one; otherwise it uses the latest available **Historical market data**.
 - An **Individual price** display value may combine a stock **Live quote** with stale cached FX when live FX is unavailable, but that creates a **Market data limitation**.
 - A completed date is any date before today; same-day market-close calendars are intentionally not used.
 - A **Market data limitation** is part of the result of preparing market data when the limitation is user-actionable, not only diagnostic logging.
@@ -111,6 +124,7 @@ _Avoid_: Cash balance, performance asset
 - Market data can be represented as a native asset price, an FX rate, and a EUR valuation price for valuation and audit.
 - **Forward-filled market data** is allowed only between source observations and never beyond the last date returned by the source.
 - The **Base currency** has an implicit FX rate of 1.0.
+- Transaction ledger cost and dividend facts in the **Base currency** use the latest FX rate on or before each transaction date; when no such rate exists, those facts and dependent gain/loss facts are unavailable rather than estimated with a current or later FX rate.
 - A **Market data limitation** for FX is described by the non-**Base currency** that could not support conversion, not by a provider-specific currency pair string.
 - **Acceptable Morningstar lag** affects whether a **Market data limitation** is returned, not **NAV** calculation.
 - Stock and FX stale-data warnings are based on **Completed weekday** cadence, not exchange-specific holiday calendars.
@@ -127,19 +141,27 @@ _Avoid_: Cash balance, performance asset
 - Assets entering the portfolio ledger should have **Asset classification** available at creation time, including when created by import.
 - **Asset classification** attributes should be consistent with the top-level asset class; equity-specific attributes belong to equity assets, and fixed-income-specific attributes belong to fixed-income assets.
 - A **Tracked asset** may exist before, during, or after it is held in the portfolio.
+- A currently held **Tracked asset** remains visible in the portfolio view when no **Individual price** is available; its Transaction ledger quantity and cost facts remain available while price-dependent facts are unavailable.
+- The portfolio view's current performance-holdings total is unavailable when any currently held performance asset has no **Individual price**; a partial sum must not be presented as the complete total.
+- Every aggregate in the **Portfolio view** is either complete across all included holdings or unavailable; known per-holding facts remain visible when an aggregate is unavailable.
+- Portfolio composition uses current **Transaction ledger** inventory rather than holdings at the **Effective valuation date**; value-dependent composition is unavailable when any included holding has no **Individual price**.
 - Rolling correlation analysis compares **Tracked assets**, not arbitrary market symbols.
 - Correlation analysis uses aligned available **Base currency** series for each **Tracked asset** and benchmark; it does not force every series to one **Effective valuation date**.
 - The **Transaction ledger** is the source of truth for holdings and transaction CSV import/export.
 - **Transaction ledger** entries use positive quantities, prices, dividend amounts, and split ratios; fees are non-negative.
 - A dividend transaction records the total cash received for the asset, not the per-share dividend rate.
 - A split transaction records the new-units-per-old-unit ratio; the ratio multiplies existing quantity.
+- **Average cost** describes current portfolio inventory and does not perform tax-lot or realized-gain accounting.
 - A **Monetary holding** is displayed by the portfolio view but is excluded from aggregate portfolio value, allocation weights, gain/loss, NAV, returns, and risk metrics.
-- A **Monetary holding** retains its own quantity, average cost, Individual price, current value, dividends, and gain/loss for display.
+- A **Monetary holding** retains its own quantity, Average cost, Individual price, current value, dividends, and Open-position gain/loss for display.
 - The portfolio view presents performance holdings as `positions` and **Monetary holding** values separately as `monetary_positions`.
 - If a **Monetary holding** has no available Individual price, it remains visible with ledger-derived quantity and cost facts; its current price, price date, value, and gain/loss are unavailable rather than inferred from a transaction price.
 - The **Base currency** value of all **Monetary holding** values is reported separately from aggregate portfolio value and is unavailable when any open Monetary holding cannot be valued.
-- The portfolio view's Total value is the sum of aggregate portfolio value and the separate Monetary holding value; it is informational and does not participate in portfolio performance measurement.
+- The portfolio view's Total value is the sum of aggregate portfolio value and the separate Monetary holding value; it is unavailable when either subtotal is unavailable, and it does not participate in portfolio performance measurement.
+- The portfolio view's Total value may combine the latest available **Individual price** dates across holdings; it is an informational current estimate, not a synchronized NAV valuation.
 - Market data limitations for **Monetary holding** values are reported separately and do not imply a limitation on NAV or portfolio performance.
+- The **Portfolio view** reports **Market data limitation** values separately for NAV/history, current performance positions, and **Monetary holding** values; a limitation in one scope does not imply that another scope is invalid.
+- Dividends are reported as lifetime income for a **Tracked asset** and are not attributed to the units that remain after a partial sell.
 
 ## Example Dialogue
 
