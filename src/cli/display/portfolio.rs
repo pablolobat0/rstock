@@ -242,7 +242,7 @@ pub fn print_portfolio(result: &PortfolioResult) {
         }
         let _ = write!(
             totals,
-            "  G/L: {}",
+            "  Open-position G/L: {}",
             color_value(result.total_gain_loss, &gl_text)
         );
         println!("{totals}");

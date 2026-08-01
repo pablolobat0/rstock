@@ -654,9 +654,8 @@ async fn compute_monetary_position(
         .zip(individual_price.fx_rate)
         .map(|(price, rate)| total_qty * price * rate);
     let gain_loss = current_value
-        .zip(economics.dividends_received)
         .zip(economics.total_invested)
-        .map(|((value, dividends), invested)| value + dividends - invested);
+        .map(|(value, invested)| value - invested);
     let gain_loss_pct = gain_loss
         .zip(economics.total_invested)
         .map(|(gain_loss, invested)| {
@@ -793,7 +792,7 @@ fn compute_non_monetary_totals(rows: &[AssetPosition]) -> (f64, f64, f64, f64, f
     let total_current_value: f64 = included_rows.clone().map(|r| r.current_value).sum();
     let total_invested: f64 = included_rows.clone().map(|r| r.total_invested).sum();
     let total_dividends: f64 = included_rows.map(|r| r.dividends_received).sum();
-    let total_gain_loss = total_current_value + total_dividends - total_invested;
+    let total_gain_loss = total_current_value - total_invested;
     let total_gain_loss_pct = if total_invested == 0.0 {
         0.0
     } else {
@@ -981,7 +980,7 @@ async fn compute_asset_positions(
         let avg_cost = cost_basis / net_qty;
         let current_value = net_qty * current_price * exchange_rate;
         let total_invested_for_asset = cost_basis;
-        let gain_loss = current_value + dividends_received - total_invested_for_asset;
+        let gain_loss = current_value - total_invested_for_asset;
         let gain_loss_pct = if total_invested_for_asset == 0.0 {
             0.0
         } else {

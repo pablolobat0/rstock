@@ -95,3 +95,37 @@ async fn focused_current_positions_include_buy_after_effective_valuation_date() 
         "2025-06-05"
     );
 }
+
+#[tokio::test]
+async fn focused_current_positions_report_remaining_cost_dividends_and_open_gain_separately() {
+    let db = common::setup_test_db().await;
+    let asset_id =
+        common::insert_asset(&db, "XFAKECUR4", "Financial Facts Stock", "stock", "EUR").await;
+
+    // Two buys with fees produce a weighted cost of 79 EUR for six units.
+    common::insert_transaction(&db, asset_id, "2025-06-01", 2.0, 10.0, 1.0).await;
+    common::insert_transaction(&db, asset_id, "2025-06-02", 4.0, 14.0, 2.0).await;
+    common::insert_split_transaction(&db, asset_id, "2025-06-03", 2.0).await;
+    common::insert_dividend_transaction(&db, asset_id, "2025-06-04", 10.0, 1.0).await;
+    common::insert_sell_transaction(&db, asset_id, "2025-06-05", 3.0, 20.0, 0.0).await;
+
+    let mut sources = common::MockMarketDataSources::new();
+    sources
+        .historical_prices
+        .insert("XFAKECUR4".to_owned(), vec![("2025-06-10".to_owned(), 8.0)]);
+    let market_data = common::market_data_at(&sources, fixed_today());
+    let result = portfolio::get_current_positions(&db, &market_data)
+        .await
+        .unwrap();
+    let position = &result.positions[0];
+
+    // Split doubles units without changing total cost; the sell removes 25% of it.
+    assert!((position.total_qty - 9.0).abs() < 1e-9);
+    assert!((position.total_invested.unwrap() - 59.25).abs() < 1e-9);
+    assert!((position.avg_cost.unwrap() - 6.5833333333).abs() < 1e-9);
+    assert!((position.dividends_received.unwrap() - 9.0).abs() < 1e-9);
+    assert!((position.current_value.unwrap() - 72.0).abs() < 1e-9);
+    assert!((position.gain_loss.unwrap() - 12.75).abs() < 1e-9);
+    assert!((result.total_dividends.unwrap() - 9.0).abs() < 1e-9);
+    assert!((result.total_gain_loss.unwrap() - 12.75).abs() < 1e-9);
+}
