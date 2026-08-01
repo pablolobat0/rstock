@@ -36,7 +36,6 @@ pub async fn composition(
     market_data: &MarketData,
     output_format: OutputFormat,
 ) -> anyhow::Result<()> {
-    services::portfolio::trigger_rebuild_if_needed(db, market_data).await?;
     let result = services::composition::compute_composition(db, market_data).await?;
 
     if output_format.is_json() {
@@ -55,7 +54,6 @@ pub async fn correlation_matrix(
 ) -> anyhow::Result<()> {
     let (start_str, today_str, period_label) = correlation_date_range(&period);
 
-    services::portfolio::trigger_rebuild_if_needed(db, market_data).await?;
     let matrix =
         services::analytics::compute_correlation_data(db, &start_str, &today_str, market_data)
             .await?;

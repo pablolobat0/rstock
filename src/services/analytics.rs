@@ -10,6 +10,7 @@ use crate::models::{
 };
 use crate::services::market_data::MarketData;
 use crate::services::metrics;
+use crate::services::nav;
 
 pub struct PeriodMetricsResult {
     pub ytd: Option<PeriodMetrics>,
@@ -25,6 +26,8 @@ pub async fn compute_correlation_data(
     end_date: &str,
     market_data: &MarketData,
 ) -> anyhow::Result<CorrelationMatrix> {
+    nav::ensure_portfolio_history(db, market_data).await?;
+
     let latest = portfolio_history_repo::find_latest(db).await?;
     let held_assets = match &latest {
         Some(snap) => portfolio_asset_history_repo::find_by_date(db, &snap.date).await?,
