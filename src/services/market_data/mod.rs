@@ -20,20 +20,26 @@ pub use sources::{DefaultMarketDataSources, MarketDataSources, SourceObservation
 
 pub struct MarketData {
     sources: Box<dyn MarketDataSources>,
-    clock: Box<dyn Clock>,
+    today: NaiveDate,
 }
 
 impl MarketData {
     pub fn new(sources: Box<dyn MarketDataSources>) -> Self {
-        Self::new_with_clock(sources, Box::new(SystemClock))
+        Self::new_with_clock(sources, &SystemClock)
     }
 
-    pub fn new_with_clock(sources: Box<dyn MarketDataSources>, clock: Box<dyn Clock>) -> Self {
-        Self { sources, clock }
+    pub fn new_with_clock(sources: Box<dyn MarketDataSources>, clock: &dyn Clock) -> Self {
+        Self {
+            sources,
+            // Capture the date once per command's MarketData instance. A command that crosses
+            // midnight must not combine different definitions of today across portfolio, NAV,
+            // and individual-price work.
+            today: clock.today(),
+        }
     }
 
     pub fn today(&self) -> NaiveDate {
-        self.clock.today()
+        self.today
     }
 
     pub(crate) async fn stock_price_history(
