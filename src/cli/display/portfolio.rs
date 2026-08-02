@@ -263,7 +263,7 @@ fn print_monetary_positions(result: &PortfolioResult) {
     }
 }
 
-pub fn render_performance_positions(
+fn render_performance_positions(
     positions: &[&CurrentPosition],
     total_current_value: Option<f64>,
 ) -> String {
