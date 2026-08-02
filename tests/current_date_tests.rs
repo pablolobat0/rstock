@@ -28,6 +28,32 @@ async fn fixed_clock_excludes_future_transactions_from_current_inventory() {
 }
 
 #[tokio::test]
+async fn fixed_clock_excludes_future_sells_and_dividends_from_portfolio_inventory() {
+    let db = common::setup_test_db().await;
+    let asset_id = common::insert_monetary_fund_asset(
+        &db,
+        "XFAKECLOCKSELL",
+        "Clock Sell Fund",
+        "EUR",
+        "F000CLOCKSELL",
+    )
+    .await;
+    common::insert_transaction(&db, asset_id, "2025-06-09", 2.0, 100.0, 0.0).await;
+    common::insert_dividend_transaction(&db, asset_id, "2025-06-10", 10.0, 0.0).await;
+    common::insert_sell_transaction(&db, asset_id, "2025-06-11", 1.0, 100.0, 0.0).await;
+    common::insert_dividend_transaction(&db, asset_id, "2025-06-11", 20.0, 0.0).await;
+    common::insert_daily_price(&db, asset_id, "2025-06-09", 101.0, false).await;
+
+    let market_data = common::market_data_at(&common::MockMarketDataSources::new(), fixed_today());
+    let result = portfolio::get_portfolio(&db, &market_data).await.unwrap();
+
+    assert_eq!(result.monetary_positions.len(), 1);
+    let position = &result.monetary_positions[0];
+    assert!((position.total_qty - 2.0).abs() < 1e-9);
+    assert_eq!(position.dividends_received, Some(10.0));
+}
+
+#[tokio::test]
 async fn fixed_clock_limits_historical_market_data_to_latest_completed_date() {
     let db = common::setup_test_db().await;
     common::insert_asset(&db, "XFAKECLOCK2", "Clock Stock", "stock", "EUR").await;
