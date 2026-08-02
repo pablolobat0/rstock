@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::Context;
-use chrono::NaiveDate;
+use chrono::{Duration, NaiveDate};
 use sea_orm::DatabaseConnection;
 
 use crate::constants::{format_date, FLOAT_EPSILON, INITIAL_NAV};
@@ -127,6 +127,43 @@ pub async fn rebuild_portfolio_history(
         .await?;
 
         current += chrono::Duration::days(1);
+    }
+
+    Ok(())
+}
+
+/// Ensures portfolio history is current through the last completed date.
+pub async fn ensure_portfolio_history(
+    db: &DatabaseConnection,
+    market_data: &MarketData,
+) -> anyhow::Result<()> {
+    let yesterday = market_data.today() - Duration::days(1);
+    let yesterday_str = format_date(yesterday);
+
+    let latest_snapshot = portfolio_history_repo::find_latest(db).await?;
+    match &latest_snapshot {
+        Some(snapshot) if snapshot.date >= yesterday_str => {}
+        Some(snapshot) => {
+            let latest_date =
+                NaiveDate::parse_from_str(&snapshot.date, crate::constants::DATE_FORMAT)
+                    .context("invalid latest snapshot date")?;
+            rebuild_portfolio_history(
+                db,
+                latest_date + Duration::days(1),
+                yesterday,
+                Some(snapshot),
+                market_data,
+            )
+            .await?;
+        }
+        None => {
+            if let Some(transaction) = transaction_repo::find_earliest(db).await? {
+                let start =
+                    NaiveDate::parse_from_str(&transaction.date, crate::constants::DATE_FORMAT)
+                        .context("invalid first transaction date")?;
+                rebuild_portfolio_history(db, start, yesterday, None, market_data).await?;
+            }
+        }
     }
 
     Ok(())

@@ -358,7 +358,7 @@ pub fn market_data(sources: &MockMarketDataSources) -> MarketData {
 }
 
 pub fn market_data_at(sources: &MockMarketDataSources, today: chrono::NaiveDate) -> MarketData {
-    MarketData::new_with_clock(Box::new(sources.clone()), Box::new(FixedClock::new(today)))
+    MarketData::new_with_clock(Box::new(sources.clone()), &FixedClock::new(today))
 }
 
 #[async_trait::async_trait]

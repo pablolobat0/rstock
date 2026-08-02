@@ -36,7 +36,6 @@ pub async fn composition(
     market_data: &MarketData,
     output_format: OutputFormat,
 ) -> anyhow::Result<()> {
-    services::portfolio::trigger_rebuild_if_needed(db, market_data).await?;
     let result = services::composition::compute_composition(db, market_data).await?;
 
     if output_format.is_json() {
@@ -53,9 +52,8 @@ pub async fn correlation_matrix(
     period: CorrelationPeriod,
     output_format: OutputFormat,
 ) -> anyhow::Result<()> {
-    let (start_str, today_str, period_label) = correlation_date_range(&period);
+    let (start_str, today_str, period_label) = correlation_date_range(&period, market_data);
 
-    services::portfolio::trigger_rebuild_if_needed(db, market_data).await?;
     let matrix =
         services::analytics::compute_correlation_data(db, &start_str, &today_str, market_data)
             .await?;
@@ -76,7 +74,7 @@ pub async fn rolling_correlation(
     period: CorrelationPeriod,
     output_format: OutputFormat,
 ) -> anyhow::Result<()> {
-    let (start_str, today_str, period_label) = correlation_date_range(&period);
+    let (start_str, today_str, period_label) = correlation_date_range(&period, market_data);
 
     let result = services::analytics::compute_rolling_correlation_data(
         db,
@@ -97,30 +95,31 @@ pub async fn rolling_correlation(
     Ok(())
 }
 
-pub(crate) fn correlation_date_range(period: &CorrelationPeriod) -> (String, String, &'static str) {
-    let today = chrono::Local::now().date_naive();
+pub(crate) fn correlation_date_range(
+    period: &CorrelationPeriod,
+    market_data: &MarketData,
+) -> (String, String, &'static str) {
+    let today = market_data.today();
     let today_str = format_date(today);
 
-    let (start_date, period_label) = match period {
-        CorrelationPeriod::ThirtyDays => (today - chrono::Duration::days(THIRTY_DAYS), "30D"),
-        CorrelationPeriod::SixMonths => (today - chrono::Duration::days(SIX_MONTH_DAYS), "6M"),
-        CorrelationPeriod::OneYear => (today - chrono::Duration::days(ONE_YEAR_DAYS), "1Y"),
-        CorrelationPeriod::ThreeYears => (today - chrono::Duration::days(THREE_YEAR_DAYS), "3Y"),
-        CorrelationPeriod::FiveYears => (today - chrono::Duration::days(FIVE_YEAR_DAYS), "5Y"),
-    };
+    let (days, period_label) = correlation_period_metadata(period);
+    let start_date = today - chrono::Duration::days(days);
 
     let start_str = format_date(start_date);
     (start_str, today_str, period_label)
 }
 
+fn correlation_period_metadata(period: &CorrelationPeriod) -> (i64, &'static str) {
+    match period {
+        CorrelationPeriod::ThirtyDays => (THIRTY_DAYS, "30D"),
+        CorrelationPeriod::SixMonths => (SIX_MONTH_DAYS, "6M"),
+        CorrelationPeriod::OneYear => (ONE_YEAR_DAYS, "1Y"),
+        CorrelationPeriod::ThreeYears => (THREE_YEAR_DAYS, "3Y"),
+        CorrelationPeriod::FiveYears => (FIVE_YEAR_DAYS, "5Y"),
+    }
+}
+
 fn candidate_correlation_period(period: &CorrelationPeriod) -> CandidateCorrelationPeriod {
-    let days = match period {
-        CorrelationPeriod::ThirtyDays => THIRTY_DAYS,
-        CorrelationPeriod::SixMonths => SIX_MONTH_DAYS,
-        CorrelationPeriod::OneYear => ONE_YEAR_DAYS,
-        CorrelationPeriod::ThreeYears => THREE_YEAR_DAYS,
-        CorrelationPeriod::FiveYears => FIVE_YEAR_DAYS,
-    };
-    let (_, _, label) = correlation_date_range(period);
+    let (days, label) = correlation_period_metadata(period);
     CandidateCorrelationPeriod { label, days }
 }
