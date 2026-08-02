@@ -60,12 +60,13 @@ pub struct PortfolioResult {
     #[serde(rename = "positions")]
     pub rows: Vec<AssetPosition>,
     pub monetary_positions: Vec<MonetaryPosition>,
+    pub total_invested: Option<f64>,
+    pub total_current_value: Option<f64>,
     pub total_monetary_value: Option<f64>,
-    pub total_invested: f64,
-    pub total_current_value: f64,
-    pub total_dividends: f64,
-    pub total_open_position_gain_loss: f64,
-    pub total_open_position_gain_loss_pct: f64,
+    pub total_value: Option<f64>,
+    pub total_dividends: Option<f64>,
+    pub total_open_position_gain_loss: Option<f64>,
+    pub total_open_position_gain_loss_pct: Option<f64>,
     pub snapshot_date: Option<String>,
     pub nav: Option<f64>,
     pub daily_change: Option<f64>,
@@ -79,7 +80,8 @@ pub struct PortfolioResult {
     pub one_year_metrics: Option<PeriodMetrics>,
     pub three_year_metrics: Option<PeriodMetrics>,
     pub five_year_metrics: Option<PeriodMetrics>,
-    pub market_data_limitations: Vec<MarketDataLimitation>,
+    pub nav_market_data_limitations: Vec<MarketDataLimitation>,
+    pub current_position_market_data_limitations: Vec<MarketDataLimitation>,
     pub monetary_market_data_limitations: Vec<MarketDataLimitation>,
 }
 

@@ -292,3 +292,40 @@ async fn focused_current_positions_apply_identical_financial_facts_to_performanc
         monetary.open_position_gain_loss_pct
     );
 }
+
+#[tokio::test]
+async fn focused_current_positions_never_uses_later_fx_for_historical_ledger_facts() {
+    let db = common::setup_test_db().await;
+    let asset_id = common::insert_asset(&db, "XFAKEFX1", "USD Stock", "stock", "USD").await;
+    common::insert_transaction(&db, asset_id, "2025-06-02", 2.0, 10.0, 0.0).await;
+    common::insert_dividend_transaction(&db, asset_id, "2025-06-03", 3.0, 0.0).await;
+    common::insert_daily_price(&db, asset_id, "2025-06-09", 12.0, false).await;
+    // This rate supports the Individual price but must not be used for earlier ledger entries.
+    common::insert_exchange_rate(&db, "USD", "EUR", "2025-06-09", 0.9).await;
+
+    let result = portfolio::get_current_positions(
+        &db,
+        &common::market_data_at(&common::MockMarketDataSources::new(), fixed_today()),
+    )
+    .await
+    .unwrap();
+    let position = &result.positions[0];
+
+    assert_eq!(position.total_qty, 2.0);
+    assert_eq!(position.current_value, Some(21.6));
+    assert!(position.total_invested.is_none());
+    assert!(position.avg_cost.is_none());
+    assert!(position.dividends_received.is_none());
+    assert!(position.open_position_gain_loss.is_none());
+    assert!(result.total_current_value.is_some());
+    assert!(result.total_invested.is_none());
+    assert!(result.total_dividends.is_none());
+    assert!(result.total_open_position_gain_loss.is_none());
+    assert!(position
+        .market_data_limitations
+        .iter()
+        .any(|limitation| matches!(
+            limitation.subject,
+            rstock::models::MarketDataSubject::FxRate { ref currency } if currency == "USD"
+        )));
+}

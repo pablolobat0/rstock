@@ -32,7 +32,11 @@ fn both_dashboard_paths_emit_the_same_empty_json_contract() {
         assert_eq!(value["data"]["monetary_positions"], json!([]));
         assert_eq!(value["data"]["total_monetary_value"], 0.0);
         assert_eq!(value["data"]["monetary_market_data_limitations"], json!([]));
-        assert_eq!(value["data"]["market_data_limitations"], json!([]));
+        assert_eq!(value["data"]["nav_market_data_limitations"], json!([]));
+        assert_eq!(
+            value["data"]["current_position_market_data_limitations"],
+            json!([])
+        );
         assert!(value["data"]["nav"].is_null());
         assert!(value["data"].get("nav_history").is_none());
     }

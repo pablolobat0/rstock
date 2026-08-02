@@ -10,6 +10,7 @@ use crate::models::{
     MarketDataLimitation,
 };
 
+#[allow(dead_code)]
 pub(crate) async fn get_individual_price(
     db: &DatabaseConnection,
     asset: &Asset,
@@ -143,6 +144,7 @@ pub(crate) async fn prepare_individual_price_market_data(
         .await
 }
 
+#[allow(dead_code)]
 async fn get_display_price(
     db: &DatabaseConnection,
     asset: &Asset,
@@ -171,6 +173,7 @@ async fn get_display_price(
     Ok((price, date, limitation))
 }
 
+#[allow(dead_code)]
 async fn get_display_exchange_rate(
     db: &DatabaseConnection,
     asset: &Asset,

@@ -18,6 +18,7 @@ pub struct MarketDataValuation {
     pub base_currency_price: f64,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct IndividualPriceFallback {
     pub native_price: f64,
@@ -25,6 +26,7 @@ pub struct IndividualPriceFallback {
     pub fx_rate: f64,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct IndividualPrice {
     pub native_price: f64,
