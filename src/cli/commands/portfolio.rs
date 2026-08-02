@@ -52,7 +52,7 @@ pub async fn get(
         ChartPeriod::ThreeYears => (today - chrono::Duration::days(THREE_YEAR_DAYS), "3Y"),
         ChartPeriod::FiveYears => (today - chrono::Duration::days(FIVE_YEAR_DAYS), "5Y"),
         ChartPeriod::All => {
-            let inception = services::portfolio::get_inception_date(db).await?;
+            let inception = services::portfolio::get_inception_date(db, market_data).await?;
             match inception {
                 Some(date_str) => {
                     let d = NaiveDate::parse_from_str(&date_str, DATE_FORMAT)
@@ -65,7 +65,8 @@ pub async fn get(
     };
 
     let start_str = format_date(start_date);
-    let snapshots = services::portfolio::get_nav_snapshots(db, &start_str, &today_str).await?;
+    let snapshots =
+        services::portfolio::get_nav_snapshots(db, &start_str, &today_str, market_data).await?;
     display::print_nav_chart(&snapshots, period_label);
 
     Ok(())

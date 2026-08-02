@@ -2,9 +2,9 @@ mod common;
 
 use chrono::NaiveDate;
 use rstock::constants::format_date;
-use rstock::db::repos::{asset_repo, daily_price_repo};
+use rstock::db::repos::{asset_repo, daily_price_repo, portfolio_history_repo};
 use rstock::models::IndividualPriceFallback;
-use rstock::services::portfolio;
+use rstock::services::{analytics, composition, nav, portfolio};
 
 fn fixed_today() -> NaiveDate {
     NaiveDate::from_ymd_opt(2025, 6, 10).unwrap()
@@ -117,4 +117,122 @@ async fn fixed_clock_sets_live_stock_price_date() {
 
     assert_eq!(result.price_date, "2025-06-10");
     assert!((result.native_price - 125.0).abs() < 1e-9);
+}
+
+#[tokio::test]
+async fn nav_readiness_rebuilds_through_fixed_clock_cutoff_before_portfolio_view() {
+    let db = common::setup_test_db().await;
+    let asset_id = common::insert_asset(&db, "XFAKENAV1", "NAV Stock", "stock", "EUR").await;
+    common::insert_transaction(&db, asset_id, "2025-06-08", 1.0, 100.0, 0.0).await;
+
+    let mut sources = common::MockMarketDataSources::new();
+    sources.historical_prices.insert(
+        "XFAKENAV1".to_owned(),
+        vec![
+            ("2025-06-08".to_owned(), 100.0),
+            ("2025-06-09".to_owned(), 101.0),
+            ("2025-06-10".to_owned(), 102.0),
+        ],
+    );
+    let market_data = common::market_data_at(&sources, fixed_today());
+
+    nav::ensure_portfolio_history(&db, &market_data)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        portfolio_history_repo::find_latest(&db)
+            .await
+            .unwrap()
+            .map(|snapshot| snapshot.date),
+        Some("2025-06-09".to_owned())
+    );
+}
+
+#[tokio::test]
+async fn nav_chart_history_is_ready_without_portfolio_view_call_order() {
+    let db = common::setup_test_db().await;
+    let asset_id =
+        common::insert_asset(&db, "XFAKENAVCHART", "NAV Chart Stock", "stock", "EUR").await;
+    common::insert_transaction(&db, asset_id, "2025-06-08", 1.0, 100.0, 0.0).await;
+
+    let mut sources = common::MockMarketDataSources::new();
+    sources.historical_prices.insert(
+        "XFAKENAVCHART".to_owned(),
+        vec![
+            ("2025-06-08".to_owned(), 100.0),
+            ("2025-06-09".to_owned(), 101.0),
+        ],
+    );
+    let market_data = common::market_data_at(&sources, fixed_today());
+
+    let snapshots = portfolio::get_nav_snapshots(&db, "2025-06-08", "2025-06-09", &market_data)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        snapshots.last().map(|snapshot| snapshot.date.as_str()),
+        Some("2025-06-09")
+    );
+}
+
+#[tokio::test]
+async fn composition_does_not_rebuild_nav_history() {
+    let db = common::setup_test_db().await;
+    let asset_id =
+        common::insert_asset(&db, "XFAKEPOSITION1", "Current Stock", "stock", "EUR").await;
+    common::insert_transaction(&db, asset_id, "2025-06-09", 1.0, 100.0, 0.0).await;
+    common::insert_daily_price(&db, asset_id, "2025-06-09", 101.0, false).await;
+    let market_data = common::market_data_at(&common::MockMarketDataSources::new(), fixed_today());
+
+    composition::compute_composition(&db, &market_data)
+        .await
+        .unwrap();
+
+    assert!(portfolio_history_repo::find_latest(&db)
+        .await
+        .unwrap()
+        .is_none());
+}
+
+#[tokio::test]
+async fn asset_series_correlation_does_not_rebuild_nav_history() {
+    let db = common::setup_test_db().await;
+    let asset_id =
+        common::insert_asset(&db, "XFAKECORR1", "Correlation Stock", "stock", "EUR").await;
+    common::insert_transaction(&db, asset_id, "2025-06-01", 1.0, 100.0, 0.0).await;
+
+    let mut sources = common::MockMarketDataSources::new();
+    sources.historical_prices.insert(
+        "XFAKECORR1".to_owned(),
+        vec![
+            ("2025-06-01".to_owned(), 100.0),
+            ("2025-06-02".to_owned(), 101.0),
+        ],
+    );
+    sources.historical_prices.insert(
+        rstock::constants::BENCHMARK_TICKER.to_owned(),
+        vec![
+            ("2025-06-01".to_owned(), 200.0),
+            ("2025-06-02".to_owned(), 201.0),
+        ],
+    );
+    sources.exchange_rates.insert(
+        "USDEUR".to_owned(),
+        vec![
+            ("2025-06-01".to_owned(), 0.9),
+            ("2025-06-02".to_owned(), 0.9),
+        ],
+    );
+    let market_data = common::market_data_at(&sources, fixed_today());
+
+    let matrix = analytics::compute_correlation_data(&db, "2025-06-01", "2025-06-02", &market_data)
+        .await
+        .unwrap();
+
+    assert!(matrix.names.contains(&"Correlation Stock".to_owned()));
+    assert!(portfolio_history_repo::find_latest(&db)
+        .await
+        .unwrap()
+        .is_none());
 }

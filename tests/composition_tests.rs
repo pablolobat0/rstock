@@ -135,7 +135,7 @@ async fn test_composition_direct_stocks_only() {
     insert_daily_price(&db, id1, "2025-01-02", 100.0, false).await;
     insert_daily_price(&db, id2, "2025-01-02", 200.0, false).await;
 
-    // Insert portfolio snapshot (needed for get_asset_positions)
+    // Insert historical snapshots for the legacy asset-series setup.
     insert_portfolio_snapshot(&db, "2025-01-02", 100.0, 20.0).await;
     insert_asset_snapshot(&db, "2025-01-02", id1, 10.0, 100.0, 1000.0).await;
     insert_asset_snapshot(&db, "2025-01-02", id2, 5.0, 200.0, 1000.0).await;

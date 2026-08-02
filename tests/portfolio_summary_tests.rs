@@ -161,7 +161,7 @@ async fn test_portfolio_suppresses_acceptable_morningstar_lag_warning() {
     common::insert_daily_price(&db, asset_id, &price_date, 100.0, false).await;
 
     let market_data = common::market_data(&common::MockMarketDataSources::new());
-    let result = portfolio::get_asset_positions(&db, &market_data)
+    let result = portfolio::get_current_positions(&db, &market_data)
         .await
         .unwrap();
 
@@ -178,7 +178,7 @@ async fn test_portfolio_surfaces_excessive_morningstar_lag_warning() {
     common::insert_daily_price(&db, asset_id, &price_date, 100.0, false).await;
 
     let market_data = common::market_data(&common::MockMarketDataSources::new());
-    let result = portfolio::get_asset_positions(&db, &market_data)
+    let result = portfolio::get_current_positions(&db, &market_data)
         .await
         .unwrap();
 
@@ -202,7 +202,7 @@ async fn test_portfolio_surfaces_stock_stale_data_warning() {
     common::insert_daily_price(&db, asset_id, &price_date, 100.0, false).await;
 
     let market_data = common::market_data(&common::MockMarketDataSources::new());
-    let result = portfolio::get_asset_positions(&db, &market_data)
+    let result = portfolio::get_current_positions(&db, &market_data)
         .await
         .unwrap();
 
@@ -229,7 +229,7 @@ async fn test_portfolio_surfaces_fx_stale_data_warning() {
     common::insert_exchange_rate(&db, "USD", "EUR", &stale_fx_date, 0.90).await;
 
     let market_data = common::market_data(&common::MockMarketDataSources::new());
-    let result = portfolio::get_asset_positions(&db, &market_data)
+    let result = portfolio::get_current_positions(&db, &market_data)
         .await
         .unwrap();
 
