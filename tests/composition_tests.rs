@@ -1,5 +1,6 @@
 mod common;
 
+use std::path::Path;
 use std::process::Command;
 
 use rstock::models::{FundData, FundHolding, StockInfo};
@@ -454,12 +455,6 @@ async fn unavailable_position_makes_all_value_dependent_composition_unavailable(
         "XFAKEUNPRICED"
     );
     assert!(data.get("nav_market_data_limitations").is_none());
-
-    let human = rstock::cli::display::composition::format_composition(&result);
-    assert!(human.contains("Value-dependent composition: unavailable"));
-    assert!(human.contains("Current position market data limitations"));
-    assert!(human.contains("XFAKEUNPRICED"));
-    assert!(!human.contains("NAV market data limitations"));
 }
 
 #[tokio::test]
@@ -551,28 +546,8 @@ async fn test_composition_failed_stock_info() {
 #[test]
 fn composition_command_emits_one_json_envelope() {
     let home = tempfile::tempdir().expect("temporary HOME should be created");
-    let output = Command::new(env!("CARGO_BIN_EXE_rstock"))
+    let output = cli_command(home.path())
         .args(["analyze", "composition", "--json"])
-        .env("HOME", home.path())
-        .env(
-            "RSTOCK_SOURCE_TOKEN_PAGE_URL",
-            "https://example.invalid/token",
-        )
-        .env(
-            "RSTOCK_SOURCE_CHARTSERVICE_URL",
-            "https://example.invalid/chart",
-        )
-        .env(
-            "RSTOCK_SOURCE_HOLDINGS_URL",
-            "https://example.invalid/holdings",
-        )
-        .env("RSTOCK_SOURCE_QUOTE_URL", "https://example.invalid/quote")
-        .env("RSTOCK_SOURCE_SAL_API_KEY", "test")
-        .env("RSTOCK_SOURCE_USER_AGENT", "rstock-test")
-        .env(
-            "RSTOCK_SOURCE_TOKEN_CACHE_PATH",
-            home.path().join("token-cache.json"),
-        )
         .output()
         .expect("rstock should run");
 
@@ -591,4 +566,91 @@ fn composition_command_emits_one_json_envelope() {
         envelope["data"]["warnings"],
         json!(["Portfolio has no value."])
     );
+}
+
+#[test]
+fn composition_command_marks_unavailable_analysis_in_human_output() {
+    let home = tempfile::tempdir().expect("temporary HOME should be created");
+    run_cli_success(
+        home.path(),
+        &[
+            "portfolio",
+            "asset",
+            "add",
+            "--ticker",
+            "IE00XFAKE001",
+            "--name",
+            "Unavailable Fund",
+            "--type",
+            "fund",
+            "--asset-class",
+            "equity",
+            "--morningstar-code",
+            "F000UNAVAILABLE",
+        ],
+    );
+    let today = chrono::Local::now().format("%d-%m-%Y").to_string();
+    run_cli_success(
+        home.path(),
+        &[
+            "transaction",
+            "buy",
+            "--ticker",
+            "IE00XFAKE001",
+            "--date",
+            &today,
+            "--quantity",
+            "1",
+            "--price",
+            "100",
+        ],
+    );
+
+    let output = cli_command(home.path())
+        .args(["analyze", "composition"])
+        .output()
+        .expect("rstock should run");
+
+    assert!(
+        output.status.success(),
+        "rstock failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be UTF-8");
+    assert!(stdout.contains("Value-dependent composition: unavailable"));
+    assert!(stdout.contains("Current position market data limitations"));
+    assert!(stdout.contains("IE00XFAKE001"));
+    assert!(!stdout.contains("NAV market data limitations"));
+}
+
+fn run_cli_success(home: &Path, args: &[&str]) {
+    let output = cli_command(home)
+        .args(args)
+        .output()
+        .expect("rstock should run");
+    assert!(
+        output.status.success(),
+        "rstock failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn cli_command(home: &Path) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_rstock"));
+    command
+        .env("HOME", home)
+        .env("RSTOCK_SOURCE_TOKEN_PAGE_URL", "file:///nonexistent/token")
+        .env(
+            "RSTOCK_SOURCE_CHARTSERVICE_URL",
+            "file:///nonexistent/chart",
+        )
+        .env("RSTOCK_SOURCE_HOLDINGS_URL", "file:///nonexistent/holdings")
+        .env("RSTOCK_SOURCE_QUOTE_URL", "file:///nonexistent/quote")
+        .env("RSTOCK_SOURCE_SAL_API_KEY", "test")
+        .env("RSTOCK_SOURCE_USER_AGENT", "rstock-test")
+        .env(
+            "RSTOCK_SOURCE_TOKEN_CACHE_PATH",
+            home.join("token-cache.json"),
+        );
+    command
 }

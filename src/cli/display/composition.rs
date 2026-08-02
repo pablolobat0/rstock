@@ -23,7 +23,7 @@ pub fn print_composition(result: &CompositionResult) {
     print!("{}", format_composition(result));
 }
 
-pub fn format_composition(result: &CompositionResult) -> String {
+fn format_composition(result: &CompositionResult) -> String {
     let mut output = String::new();
     writeln!(
         output,
