@@ -2,8 +2,10 @@ use std::collections::HashMap;
 
 use sea_orm::DatabaseConnection;
 
-use crate::constants::{MIN_DATA_POINTS, ZERO_RETURN_THRESHOLD};
-use crate::db::repos::{asset_repo, portfolio_asset_history_repo, portfolio_history_repo};
+use crate::constants::{
+    is_benchmark_ticker, FLOAT_EPSILON, MIN_DATA_POINTS, ZERO_RETURN_THRESHOLD,
+};
+use crate::db::repos::{asset_repo, portfolio_history_repo, transaction_repo};
 use crate::models::{
     Asset, CorrelationMatrix, MarketDataLimitation, PeriodMetrics, PortfolioSnapshot,
     RollingCorrelationResult,
@@ -26,16 +28,7 @@ pub async fn compute_correlation_data(
     end_date: &str,
     market_data: &MarketData,
 ) -> anyhow::Result<CorrelationMatrix> {
-    nav::ensure_portfolio_history(db, market_data).await?;
-
-    let latest = portfolio_history_repo::find_latest(db).await?;
-    let held_assets = match &latest {
-        Some(snap) => portfolio_asset_history_repo::find_by_date(db, &snap.date).await?,
-        None => vec![],
-    };
-
-    let asset_ids: Vec<i32> = held_assets.iter().map(|s| s.asset_id).collect();
-    let assets = asset_repo::find_by_ids(db, asset_ids.into_iter()).await?;
+    let assets = current_correlation_assets(db, end_date).await?;
 
     let correlation_market_data = market_data
         .correlation_market_data(db, assets, start_date, end_date)
@@ -77,6 +70,33 @@ pub async fn compute_correlation_data(
         warnings,
         market_data_limitations: correlation_market_data.limitations,
     })
+}
+
+async fn current_correlation_assets(
+    db: &DatabaseConnection,
+    end_date: &str,
+) -> anyhow::Result<Vec<Asset>> {
+    let transactions = transaction_repo::find_all_ordered_by_date(db, None, Some(end_date)).await?;
+    let mut transactions_by_asset: HashMap<i32, Vec<crate::models::Transaction>> = HashMap::new();
+    for transaction in transactions {
+        transactions_by_asset
+            .entry(transaction.asset_id)
+            .or_default()
+            .push(transaction);
+    }
+
+    let assets = asset_repo::find_by_ids(db, transactions_by_asset.keys().copied()).await?;
+    Ok(assets
+        .into_iter()
+        .filter(|asset| !asset.is_monetary() && !is_benchmark_ticker(&asset.ticker))
+        .filter(|asset| {
+            transactions_by_asset
+                .get(&asset.id)
+                .is_some_and(|transactions| {
+                    crate::models::Transaction::compute_holdings(transactions) > FLOAT_EPSILON
+                })
+        })
+        .collect())
 }
 
 #[allow(clippy::implicit_hasher)]
@@ -153,6 +173,8 @@ pub async fn compute_all_period_metrics(
     five_year_date: &str,
     market_data: &MarketData,
 ) -> anyhow::Result<PeriodMetricsResult> {
+    nav::ensure_portfolio_history(db, market_data).await?;
+
     let widest_start = five_year_date
         .min(three_year_date)
         .min(one_year_date)

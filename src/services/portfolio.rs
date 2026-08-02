@@ -256,11 +256,17 @@ pub async fn get_nav_snapshots(
     db: &DatabaseConnection,
     start_date: &str,
     end_date: &str,
+    market_data: &MarketData,
 ) -> anyhow::Result<Vec<PortfolioSnapshot>> {
+    nav::ensure_portfolio_history(db, market_data).await?;
     portfolio_history_repo::find_between(db, start_date, end_date).await
 }
 
-pub async fn get_inception_date(db: &DatabaseConnection) -> anyhow::Result<Option<String>> {
+pub async fn get_inception_date(
+    db: &DatabaseConnection,
+    market_data: &MarketData,
+) -> anyhow::Result<Option<String>> {
+    nav::ensure_portfolio_history(db, market_data).await?;
     let earliest = portfolio_history_repo::find_earliest(db).await?;
     Ok(earliest.map(|s| s.date))
 }

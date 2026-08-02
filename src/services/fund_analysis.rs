@@ -25,7 +25,7 @@ pub async fn compute_fund_analysis(
     ms_code: &str,
     correlation_period: CandidateCorrelationPeriod,
 ) -> anyhow::Result<FundAnalysisResult> {
-    let today = chrono::Local::now().date_naive();
+    let today = market_data.today();
     let today_str = format_date(today);
 
     let asset = asset_repo::find_by_morningstar_code(db, ms_code).await?;
