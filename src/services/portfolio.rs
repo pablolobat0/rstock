@@ -26,10 +26,15 @@ pub async fn get_portfolio(
     let today = market_data.today();
     nav::ensure_portfolio_history(db, market_data).await?;
     let current_positions = get_current_positions(db, market_data).await?;
+    let mut nav_market_data_limitations =
+        nav::get_history_market_data_limitations(db, market_data).await?;
 
     let latest_snapshot = portfolio_history_repo::find_latest(db).await?;
     let Some(current_snapshot) = &latest_snapshot else {
-        return Ok(result_without_nav(current_positions));
+        return Ok(result_without_nav(
+            current_positions,
+            nav_market_data_limitations,
+        ));
     };
 
     let snapshot_date = current_snapshot.date.clone();
@@ -87,8 +92,6 @@ pub async fn get_portfolio(
     )
     .await?;
 
-    let mut nav_market_data_limitations =
-        nav::get_history_market_data_limitations(db, market_data).await?;
     extend_unique_limitations(
         &mut nav_market_data_limitations,
         period_metrics.market_data_limitations.clone(),
@@ -452,7 +455,10 @@ fn complete_sum(mut values: impl Iterator<Item = Option<f64>>) -> Option<f64> {
     values.try_fold(0.0, |sum, value| value.map(|value| sum + value))
 }
 
-fn result_without_nav(current_positions: CurrentPositions) -> PortfolioResult {
+fn result_without_nav(
+    current_positions: CurrentPositions,
+    nav_market_data_limitations: Vec<MarketDataLimitation>,
+) -> PortfolioResult {
     PortfolioResult {
         base_currency: BASE_CURRENCY.to_string(),
         rows: current_positions.positions,
@@ -483,7 +489,7 @@ fn result_without_nav(current_positions: CurrentPositions) -> PortfolioResult {
         one_year_metrics: None,
         three_year_metrics: None,
         five_year_metrics: None,
-        nav_market_data_limitations: Vec::new(),
+        nav_market_data_limitations,
         current_position_market_data_limitations: current_positions.market_data_limitations,
         monetary_market_data_limitations: current_positions.monetary_market_data_limitations,
     }
