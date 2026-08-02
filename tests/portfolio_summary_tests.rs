@@ -4,6 +4,7 @@ use chrono::Duration;
 use rstock::db::entities::portfolio_history;
 use rstock::db::repos::portfolio_history_repo;
 use rstock::services::metrics::compute_cagr;
+use rstock::services::nav;
 use rstock::services::portfolio;
 use sea_orm::{EntityTrait, Set};
 use serde_json::json;
@@ -567,4 +568,76 @@ async fn portfolio_view_applies_open_position_facts_equally_to_performance_and_m
         json_output["monetary_positions"][0]["open_position_gain_loss"],
         json!(12.75)
     );
+}
+
+#[tokio::test]
+async fn nav_limitations_ignore_closed_assets_and_start_at_the_open_holding_period() {
+    let db = common::setup_test_db().await;
+    let closed_id = common::insert_asset(&db, "XFAKECLOSED", "Closed", "stock", "EUR").await;
+    let open_id = common::insert_asset(&db, "XFAKEOPEN", "Open", "stock", "EUR").await;
+    common::insert_transaction(&db, closed_id, "2025-01-01", 1.0, 10.0, 0.0).await;
+    common::insert_sell_transaction(&db, closed_id, "2025-01-02", 1.0, 10.0, 0.0).await;
+    common::insert_transaction(&db, open_id, "2025-01-03", 1.0, 10.0, 0.0).await;
+
+    let mut sources = common::MockMarketDataSources::new();
+    sources.historical_prices.insert(
+        "XFAKEOPEN".to_owned(),
+        vec![
+            ("2025-01-03".to_owned(), 10.0),
+            ("2025-01-04".to_owned(), 11.0),
+        ],
+    );
+    let market_data = common::market_data_at(
+        &sources,
+        chrono::NaiveDate::from_ymd_opt(2025, 1, 5).unwrap(),
+    );
+
+    assert!(nav::get_history_market_data_limitations(&db, &market_data)
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+async fn performance_human_table_keeps_weight_and_marks_it_unavailable_when_totals_are_incomplete()
+{
+    let db = common::setup_test_db().await;
+    let first_id = common::insert_asset(&db, "XFAKEWEIGHT1", "First", "stock", "EUR").await;
+    let second_id = common::insert_asset(&db, "XFAKEWEIGHT2", "Second", "stock", "EUR").await;
+    let missing_id = common::insert_asset(&db, "XFAKEWEIGHT3", "Missing", "stock", "EUR").await;
+    for asset_id in [first_id, second_id, missing_id] {
+        common::insert_transaction(&db, asset_id, "2025-01-03", 1.0, 10.0, 0.0).await;
+    }
+    let mut sources = common::MockMarketDataSources::new();
+    sources.historical_prices.insert(
+        "XFAKEWEIGHT1".to_owned(),
+        vec![("2025-01-04".to_owned(), 100.0)],
+    );
+    sources.historical_prices.insert(
+        "XFAKEWEIGHT2".to_owned(),
+        vec![("2025-01-04".to_owned(), 300.0)],
+    );
+    let market_data = common::market_data_at(
+        &sources,
+        chrono::NaiveDate::from_ymd_opt(2025, 1, 5).unwrap(),
+    );
+    let positions = portfolio::get_current_positions(&db, &market_data)
+        .await
+        .unwrap();
+    let rows: Vec<_> = positions.positions.iter().collect();
+    let complete_rows: Vec<_> = rows
+        .iter()
+        .copied()
+        .filter(|position| position.current_value.is_some())
+        .collect();
+    let complete_table =
+        rstock::cli::display::render_performance_positions(&complete_rows, Some(400.0));
+    let unavailable_table =
+        rstock::cli::display::render_performance_positions(&rows, positions.total_current_value);
+
+    assert!(complete_table.contains("Weight"));
+    assert!(complete_table.contains("25,00%"));
+    assert!(complete_table.contains("75,00%"));
+    assert!(unavailable_table.contains("unavailable"));
+    assert!(!complete_table.contains("Monetary holdings:"));
 }

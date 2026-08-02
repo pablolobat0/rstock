@@ -13,5 +13,8 @@ pub use correlation::{print_correlation_matrix, print_rolling_correlation};
 pub use fund_analysis::print_fund_analysis;
 pub use fund_comparison::print_fund_comparison;
 pub use portfolio::print_portfolio;
+#[allow(unused_imports)]
+// Public library renderer used by integration tests and external callers.
+pub use portfolio::render_performance_positions;
 pub use simple::print_nav_chart;
 pub use transaction::{format_transaction_detail, print_transaction_list, transaction_list_output};

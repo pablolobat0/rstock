@@ -143,18 +143,11 @@ pub async fn get_history_market_data_limitations(
     let end_date = market_data.today() - Duration::days(1);
     let end = format_date(end_date);
     let transactions = transaction_repo::find_all_ordered_by_date(db, None, Some(&end)).await?;
-    let Some(start) = transactions
-        .iter()
-        .map(|transaction| &transaction.date)
-        .min()
-    else {
+    let open_holding_starts = open_holding_starts(&transactions);
+    if open_holding_starts.is_empty() {
         return Ok(Vec::new());
-    };
-    let assets = asset_repo::find_by_ids(
-        db,
-        transactions.iter().map(|transaction| transaction.asset_id),
-    )
-    .await?;
+    }
+    let assets = asset_repo::find_by_ids(db, open_holding_starts.keys().copied()).await?;
     let nav_assets: Vec<_> = assets
         .into_iter()
         .filter(|asset| !asset.is_monetary() && !is_benchmark_ticker(&asset.ticker))
@@ -162,11 +155,22 @@ pub async fn get_history_market_data_limitations(
     if nav_assets.is_empty() {
         return Ok(Vec::new());
     }
-
-    Ok(market_data
-        .prepare_valuation_market_data(db, &nav_assets, start, &end)
-        .await?
-        .limitations)
+    let mut limitations = Vec::new();
+    for asset in nav_assets {
+        let start = open_holding_starts
+            .get(&asset.id)
+            .context("open NAV holding has no opening transaction")?;
+        for limitation in market_data
+            .prepare_valuation_market_data(db, &[asset], start, &end)
+            .await?
+            .limitations
+        {
+            if !limitations.contains(&limitation) {
+                limitations.push(limitation);
+            }
+        }
+    }
+    Ok(limitations)
 }
 
 /// Ensures portfolio history is current through the last completed date.
@@ -204,6 +208,40 @@ pub async fn ensure_portfolio_history(
     }
 
     Ok(())
+}
+
+/// Returns the start date of each currently open holding period. Closed lots do
+/// not require current NAV market data, and a re-opened position starts anew.
+fn open_holding_starts(transactions: &[Transaction]) -> HashMap<i32, String> {
+    let mut holdings: HashMap<i32, (f64, Option<String>)> = HashMap::new();
+
+    for transaction in transactions {
+        let (quantity, opened_at) = holdings.entry(transaction.asset_id).or_insert((0.0, None));
+        if transaction.is_split() {
+            *quantity *= transaction.quantity;
+        } else if transaction.is_buy() {
+            if *quantity <= FLOAT_EPSILON {
+                *opened_at = Some(transaction.date.clone());
+            }
+            *quantity += transaction.quantity;
+        } else if transaction.is_sell() {
+            *quantity -= transaction.quantity;
+            if *quantity <= FLOAT_EPSILON {
+                *quantity = 0.0;
+                *opened_at = None;
+            }
+        }
+    }
+
+    holdings
+        .into_iter()
+        .filter_map(|(asset_id, (quantity, opened_at))| {
+            (quantity > FLOAT_EPSILON)
+                .then_some(opened_at)
+                .flatten()
+                .map(|date| (asset_id, date))
+        })
+        .collect()
 }
 
 /// Returns `(outstanding_shares, nav, dividend_income_eur)`.

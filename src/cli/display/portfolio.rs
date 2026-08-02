@@ -12,7 +12,7 @@ use crate::models::{
     PortfolioResult,
 };
 
-use super::types::MonetaryPortfolioRow;
+use super::types::{MonetaryPortfolioRow, PerformancePortfolioRow};
 
 use super::helpers::{
     color_for_value, color_value, format_eu, format_pct, format_plain, format_return_plain,
@@ -129,37 +129,10 @@ pub fn print_portfolio(result: &PortfolioResult) {
                 .unwrap_or(f64::NEG_INFINITY)
                 .total_cmp(&left.current_value.unwrap_or(f64::NEG_INFINITY))
         });
-        let display_rows: Vec<_> = sorted_rows
-            .iter()
-            .map(|position| position_display_row(position))
-            .collect();
-
-        let mut table = Table::new(&display_rows);
-        table.with(
-            Style::modern()
-                .horizontals([(1, HorizontalLine::inherit(Style::modern()).horizontal('═'))])
-                .verticals([(1, VerticalLine::inherit(Style::modern()))])
-                .remove_horizontal()
-                .remove_vertical(),
+        println!(
+            "{}",
+            render_performance_positions(&sorted_rows, result.total_current_value)
         );
-        // Right-align numeric columns from quantity through gain/loss percentage.
-        for col in 4..=13 {
-            table.modify(Columns::single(col), Alignment::right());
-        }
-        for (i, r) in sorted_rows.iter().enumerate() {
-            let Some(gain_loss) = r.open_position_gain_loss else {
-                continue;
-            };
-            let color = if gain_loss >= 0.0 {
-                Color::FG_GREEN
-            } else {
-                Color::FG_RED
-            };
-            // Gain/loss and percentage follow the dividends column.
-            table.modify(Cell::new(i + 1, 11), color.clone());
-            table.modify(Cell::new(i + 1, 12), color);
-        }
-        println!("{table}");
 
         println!();
         println!("{}", portfolio_totals_summary(result));
@@ -287,6 +260,72 @@ fn print_monetary_positions(result: &PortfolioResult) {
     } else {
         println!("Monetary value: unavailable");
         println!("Total value: unavailable");
+    }
+}
+
+pub fn render_performance_positions(
+    positions: &[&CurrentPosition],
+    total_current_value: Option<f64>,
+) -> String {
+    let display_rows: Vec<_> = positions
+        .iter()
+        .map(|position| performance_position_display_row(position, total_current_value))
+        .collect();
+    let mut table = Table::new(&display_rows);
+    table.with(
+        Style::modern()
+            .horizontals([(1, HorizontalLine::inherit(Style::modern()).horizontal('═'))])
+            .verticals([(1, VerticalLine::inherit(Style::modern()))])
+            .remove_horizontal()
+            .remove_vertical(),
+    );
+    for col in 4..=13 {
+        table.modify(Columns::single(col), Alignment::right());
+    }
+    for (index, position) in positions.iter().enumerate() {
+        let Some(gain_loss) = position.open_position_gain_loss else {
+            continue;
+        };
+        let color = if gain_loss >= 0.0 {
+            Color::FG_GREEN
+        } else {
+            Color::FG_RED
+        };
+        table.modify(Cell::new(index + 1, 11), color.clone());
+        table.modify(Cell::new(index + 1, 12), color);
+    }
+    table.to_string()
+}
+
+fn performance_position_display_row(
+    position: &CurrentPosition,
+    total_current_value: Option<f64>,
+) -> PerformancePortfolioRow {
+    let row = position_display_row(position);
+    let weight = position
+        .current_value
+        .zip(total_current_value)
+        .filter(|(_, total)| total.abs() > f64::EPSILON)
+        .map_or_else(
+            || "unavailable".to_string(),
+            |(value, total)| format_eu(&format!("{:.2}%", value / total * 100.0)),
+        );
+
+    PerformancePortfolioRow {
+        ticker: row.ticker,
+        name: row.name,
+        asset_type: row.asset_type,
+        currency: row.currency,
+        quantity: row.quantity,
+        avg_cost: row.avg_cost,
+        current_price: row.current_price,
+        price_date: row.price_date,
+        total_invested: row.total_invested,
+        current_value: row.current_value,
+        dividends: row.dividends,
+        open_position_gain_loss: row.open_position_gain_loss,
+        open_position_gain_loss_pct: row.open_position_gain_loss_pct,
+        weight,
     }
 }
 
