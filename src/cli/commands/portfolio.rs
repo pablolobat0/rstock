@@ -73,9 +73,12 @@ pub async fn get(
 }
 
 fn prepare_json_result(result: &mut crate::models::PortfolioResult) {
-    result
-        .rows
-        .sort_by(|left, right| right.current_value.total_cmp(&left.current_value));
+    result.rows.sort_by(|left, right| {
+        right
+            .current_value
+            .unwrap_or(f64::NEG_INFINITY)
+            .total_cmp(&left.current_value.unwrap_or(f64::NEG_INFINITY))
+    });
     result.monetary_positions.sort_by(|left, right| {
         right
             .current_value
@@ -216,11 +219,16 @@ mod tests {
             ],
             monetary_positions: vec![monetary_position("XFAKEM1", Some(200.0))],
             total_monetary_value: Some(200.0),
-            total_invested: 350.0,
-            total_current_value: 400.0,
-            total_dividends: 0.0,
-            total_open_position_gain_loss: 50.0,
-            total_open_position_gain_loss_pct: 14.29,
+            total_invested: Some(350.0),
+            total_current_value: Some(400.0),
+            total_monetary_invested: Some(200.0),
+            total_value: Some(600.0),
+            total_dividends: Some(0.0),
+            total_monetary_dividends: Some(0.0),
+            total_open_position_gain_loss: Some(50.0),
+            total_open_position_gain_loss_pct: Some(14.29),
+            total_monetary_open_position_gain_loss: Some(0.0),
+            total_monetary_open_position_gain_loss_pct: Some(0.0),
             snapshot_date: Some("2025-01-09".to_string()),
             nav: Some(110.0),
             daily_change: None,
@@ -234,9 +242,17 @@ mod tests {
             one_year_metrics: None,
             three_year_metrics: None,
             five_year_metrics: None,
-            market_data_limitations: vec![limitation],
+            nav_market_data_limitations: vec![limitation],
+            current_position_market_data_limitations: Vec::new(),
             monetary_market_data_limitations: Vec::new(),
         };
+        result.rows[0].current_price = None;
+        result.rows[0].price_date = None;
+        result.rows[0].current_value = None;
+        result.rows[0].open_position_gain_loss = None;
+        result.rows[0].open_position_gain_loss_pct = None;
+        result.total_current_value = None;
+        result.total_value = None;
         prepare_json_result(&mut result);
 
         let mut output = Vec::new();
@@ -251,8 +267,13 @@ mod tests {
         assert_eq!(value["data"]["total_monetary_value"], 200.0);
         assert_eq!(value["data"]["positions"][0]["currency"], "GBP");
         assert!(value["data"]["daily_change"].is_null());
+        assert!(value["data"]["positions"][1]["current_price"].is_null());
+        assert!(value["data"]["positions"][1]["price_date"].is_null());
+        assert!(value["data"]["positions"][1]["current_value"].is_null());
+        assert!(value["data"]["total_current_value"].is_null());
+        assert!(value["data"]["total_value"].is_null());
         assert_eq!(
-            value["data"]["market_data_limitations"][0]["subject"],
+            value["data"]["nav_market_data_limitations"][0]["subject"],
             json!({
                 "type": "asset",
                 "ticker": "XFAKE2",
@@ -261,7 +282,7 @@ mod tests {
             })
         );
         assert_eq!(
-            value["data"]["market_data_limitations"][0]["classification"],
+            value["data"]["nav_market_data_limitations"][0]["classification"],
             "actionable_reporting_lag"
         );
         assert!(value["data"].get("nav_history").is_none());
@@ -284,14 +305,14 @@ mod tests {
             equity_style: None,
             management: None,
             total_qty: 1.0,
-            avg_cost: 100.0,
-            current_price: current_value,
-            price_date: "2025-01-09".to_string(),
-            total_invested: 100.0,
-            current_value,
-            dividends_received: 0.0,
-            open_position_gain_loss: current_value - 100.0,
-            open_position_gain_loss_pct: current_value - 100.0,
+            avg_cost: Some(100.0),
+            current_price: Some(current_value),
+            price_date: Some("2025-01-09".to_string()),
+            total_invested: Some(100.0),
+            current_value: Some(current_value),
+            dividends_received: Some(0.0),
+            open_position_gain_loss: Some(current_value - 100.0),
+            open_position_gain_loss_pct: Some(current_value - 100.0),
             market_data_limitations,
         }
     }

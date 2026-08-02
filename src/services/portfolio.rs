@@ -13,7 +13,8 @@ use crate::db::repos::{
 };
 use crate::models::{
     cents_to_f64, Asset, AssetPosition, CurrentPosition, CurrentPositions, IndividualPriceFallback,
-    MarketDataLimitation, MonetaryPosition, PortfolioResult, PortfolioSnapshot, Transaction,
+    MarketDataLimitation, MarketDataLimitationClassification, MarketDataSubject, MonetaryPosition,
+    PortfolioResult, PortfolioSnapshot, Transaction,
 };
 use crate::services::market_data::MarketData;
 use crate::services::nav;
@@ -26,16 +27,15 @@ pub async fn get_portfolio(
 ) -> anyhow::Result<PortfolioResult> {
     let today = market_data.today();
     nav::ensure_portfolio_history(db, market_data).await?;
-
-    let (monetary_positions, total_monetary_value, monetary_market_data_limitations) =
-        compute_monetary_positions(db, market_data, today).await?;
+    let current_positions = get_current_positions(db, market_data).await?;
+    let mut nav_market_data_limitations =
+        nav::get_history_market_data_limitations(db, market_data).await?;
 
     let latest_snapshot = portfolio_history_repo::find_latest(db).await?;
     let Some(current_snapshot) = &latest_snapshot else {
-        return Ok(empty_result_with_monetary(
-            monetary_positions,
-            total_monetary_value,
-            monetary_market_data_limitations,
+        return Ok(result_without_nav(
+            current_positions,
+            nav_market_data_limitations,
         ));
     };
 
@@ -94,31 +94,28 @@ pub async fn get_portfolio(
     )
     .await?;
 
-    let rows = compute_asset_positions(db, &snapshot_date, market_data, today).await?;
-
-    let (
-        total_current_value,
-        total_invested,
-        total_dividends,
-        total_open_position_gain_loss,
-        total_open_position_gain_loss_pct,
-    ) = compute_non_monetary_totals(&rows);
-    let mut market_data_limitations = collect_market_data_limitations(&rows);
     extend_unique_limitations(
-        &mut market_data_limitations,
+        &mut nav_market_data_limitations,
         period_metrics.market_data_limitations.clone(),
     );
 
     Ok(PortfolioResult {
         base_currency: BASE_CURRENCY.to_string(),
-        rows,
-        monetary_positions,
-        total_monetary_value,
-        total_invested,
-        total_current_value,
-        total_dividends,
-        total_open_position_gain_loss,
-        total_open_position_gain_loss_pct,
+        rows: current_positions.positions,
+        monetary_positions: current_positions.monetary_positions,
+        total_current_value: current_positions.total_current_value,
+        total_monetary_value: current_positions.total_monetary_value,
+        total_value: current_positions.total_value,
+        total_invested: current_positions.total_invested,
+        total_monetary_invested: current_positions.total_monetary_invested,
+        total_dividends: current_positions.total_dividends,
+        total_monetary_dividends: current_positions.total_monetary_dividends,
+        total_open_position_gain_loss: current_positions.total_open_position_gain_loss,
+        total_open_position_gain_loss_pct: current_positions.total_open_position_gain_loss_pct,
+        total_monetary_open_position_gain_loss: current_positions
+            .total_monetary_open_position_gain_loss,
+        total_monetary_open_position_gain_loss_pct: current_positions
+            .total_monetary_open_position_gain_loss_pct,
         snapshot_date: Some(snapshot_date),
         nav: Some(current_nav),
         daily_change,
@@ -132,13 +129,13 @@ pub async fn get_portfolio(
         one_year_metrics: period_metrics.one_year,
         three_year_metrics: period_metrics.three_year,
         five_year_metrics: period_metrics.five_year,
-        market_data_limitations,
-        monetary_market_data_limitations,
+        nav_market_data_limitations,
+        current_position_market_data_limitations: current_positions.market_data_limitations,
+        monetary_market_data_limitations: current_positions.monetary_market_data_limitations,
     })
 }
 
 #[allow(clippy::too_many_lines)]
-#[allow(dead_code)] // Public library interface; CLI migration is a later ticket.
 pub async fn get_current_positions(
     db: &DatabaseConnection,
     market_data: &MarketData,
@@ -210,8 +207,18 @@ pub async fn get_current_positions(
         .zip(total_monetary_value)
         .map(|(a, b)| a + b);
     let total_invested = complete_sum(positions.iter().map(|position| position.total_invested));
+    let total_monetary_invested = complete_sum(
+        monetary_positions
+            .iter()
+            .map(|position| position.total_invested),
+    );
     let total_dividends =
         complete_sum(positions.iter().map(|position| position.dividends_received));
+    let total_monetary_dividends = complete_sum(
+        monetary_positions
+            .iter()
+            .map(|position| position.dividends_received),
+    );
     let total_open_position_gain_loss = complete_sum(
         positions
             .iter()
@@ -227,6 +234,20 @@ pub async fn get_current_positions(
                     (gain_loss / invested) * 100.0
                 }
             });
+    let total_monetary_open_position_gain_loss = complete_sum(
+        monetary_positions
+            .iter()
+            .map(|position| position.open_position_gain_loss),
+    );
+    let total_monetary_open_position_gain_loss_pct = total_monetary_open_position_gain_loss
+        .zip(total_monetary_invested)
+        .map(|(gain_loss, invested)| {
+            if invested.abs() < FLOAT_EPSILON {
+                0.0
+            } else {
+                (gain_loss / invested) * 100.0
+            }
+        });
 
     Ok(CurrentPositions {
         base_currency: BASE_CURRENCY.to_owned(),
@@ -236,9 +257,13 @@ pub async fn get_current_positions(
         total_monetary_value,
         total_value,
         total_invested,
+        total_monetary_invested,
         total_dividends,
+        total_monetary_dividends,
         total_open_position_gain_loss,
         total_open_position_gain_loss_pct,
+        total_monetary_open_position_gain_loss,
+        total_monetary_open_position_gain_loss_pct,
         market_data_limitations,
         monetary_market_data_limitations,
     })
@@ -265,16 +290,15 @@ pub async fn get_inception_date(
 
 // --- Private helpers ---
 
-#[allow(dead_code)]
 struct HoldingProjection {
     asset: Asset,
     total_qty: f64,
     earliest_transaction_date: String,
     total_invested: Option<f64>,
     dividends_received: Option<f64>,
+    market_data_limitations: Vec<MarketDataLimitation>,
 }
 
-#[allow(dead_code)]
 fn empty_current_positions() -> CurrentPositions {
     CurrentPositions {
         base_currency: BASE_CURRENCY.to_owned(),
@@ -284,15 +308,18 @@ fn empty_current_positions() -> CurrentPositions {
         total_monetary_value: Some(0.0),
         total_value: Some(0.0),
         total_invested: Some(0.0),
+        total_monetary_invested: Some(0.0),
         total_dividends: Some(0.0),
+        total_monetary_dividends: Some(0.0),
         total_open_position_gain_loss: Some(0.0),
         total_open_position_gain_loss_pct: Some(0.0),
+        total_monetary_open_position_gain_loss: Some(0.0),
+        total_monetary_open_position_gain_loss_pct: Some(0.0),
         market_data_limitations: Vec::new(),
         monetary_market_data_limitations: Vec::new(),
     }
 }
 
-#[allow(dead_code)]
 async fn project_open_holdings(
     db: &DatabaseConnection,
     market_data: &MarketData,
@@ -315,7 +342,6 @@ async fn project_open_holdings(
     Ok(projections)
 }
 
-#[allow(dead_code)]
 async fn project_holding(
     db: &DatabaseConnection,
     market_data: &MarketData,
@@ -325,6 +351,7 @@ async fn project_holding(
     let mut total_qty = 0.0;
     let mut total_invested = Some(0.0);
     let mut dividends_received = Some(0.0);
+    let mut market_data_limitations = Vec::new();
 
     for transaction in transactions {
         if transaction.is_split() {
@@ -332,8 +359,11 @@ async fn project_holding(
         } else if transaction.is_buy() {
             let native_cost = transaction.quantity * cents_to_f64(transaction.price_cents)
                 + cents_to_f64(transaction.fees_cents);
+            let (rate, limitations) =
+                transaction_exchange_rate(db, market_data, &asset, transaction).await?;
+            extend_unique_limitations(&mut market_data_limitations, limitations);
             total_invested = total_invested
-                .zip(transaction_exchange_rate(db, market_data, &asset, transaction).await?)
+                .zip(rate)
                 .map(|(cost, rate)| cost + native_cost * rate);
             total_qty += transaction.quantity;
         } else if transaction.is_sell() {
@@ -345,8 +375,11 @@ async fn project_holding(
         } else if transaction.is_dividend() {
             let native_dividend = transaction.quantity * cents_to_f64(transaction.price_cents)
                 - cents_to_f64(transaction.fees_cents);
+            let (rate, limitations) =
+                transaction_exchange_rate(db, market_data, &asset, transaction).await?;
+            extend_unique_limitations(&mut market_data_limitations, limitations);
             dividends_received = dividends_received
-                .zip(transaction_exchange_rate(db, market_data, &asset, transaction).await?)
+                .zip(rate)
                 .map(|(dividends, rate)| dividends + native_dividend * rate);
         }
     }
@@ -361,10 +394,10 @@ async fn project_holding(
             .clone(),
         total_invested,
         dividends_received,
+        market_data_limitations,
     })
 }
 
-#[allow(dead_code)]
 async fn current_position_from_projection(
     db: &DatabaseConnection,
     market_data: &MarketData,
@@ -412,26 +445,39 @@ async fn current_position_from_projection(
         dividends_received: projection.dividends_received,
         open_position_gain_loss,
         open_position_gain_loss_pct,
-        market_data_limitations: individual_price.limitations,
+        market_data_limitations: {
+            let mut limitations = projection.market_data_limitations;
+            extend_unique_limitations(&mut limitations, individual_price.limitations);
+            limitations
+        },
     })
 }
 
-#[allow(dead_code)]
 fn complete_sum(mut values: impl Iterator<Item = Option<f64>>) -> Option<f64> {
     values.try_fold(0.0, |sum, value| value.map(|value| sum + value))
 }
 
-fn empty_result() -> PortfolioResult {
+fn result_without_nav(
+    current_positions: CurrentPositions,
+    nav_market_data_limitations: Vec<MarketDataLimitation>,
+) -> PortfolioResult {
     PortfolioResult {
         base_currency: BASE_CURRENCY.to_string(),
-        rows: Vec::new(),
-        monetary_positions: Vec::new(),
-        total_monetary_value: Some(0.0),
-        total_invested: 0.0,
-        total_current_value: 0.0,
-        total_dividends: 0.0,
-        total_open_position_gain_loss: 0.0,
-        total_open_position_gain_loss_pct: 0.0,
+        rows: current_positions.positions,
+        monetary_positions: current_positions.monetary_positions,
+        total_current_value: current_positions.total_current_value,
+        total_monetary_value: current_positions.total_monetary_value,
+        total_value: current_positions.total_value,
+        total_invested: current_positions.total_invested,
+        total_monetary_invested: current_positions.total_monetary_invested,
+        total_dividends: current_positions.total_dividends,
+        total_monetary_dividends: current_positions.total_monetary_dividends,
+        total_open_position_gain_loss: current_positions.total_open_position_gain_loss,
+        total_open_position_gain_loss_pct: current_positions.total_open_position_gain_loss_pct,
+        total_monetary_open_position_gain_loss: current_positions
+            .total_monetary_open_position_gain_loss,
+        total_monetary_open_position_gain_loss_pct: current_positions
+            .total_monetary_open_position_gain_loss_pct,
         snapshot_date: None,
         nav: None,
         daily_change: None,
@@ -445,24 +491,54 @@ fn empty_result() -> PortfolioResult {
         one_year_metrics: None,
         three_year_metrics: None,
         five_year_metrics: None,
-        market_data_limitations: Vec::new(),
-        monetary_market_data_limitations: Vec::new(),
+        nav_market_data_limitations,
+        current_position_market_data_limitations: current_positions.market_data_limitations,
+        monetary_market_data_limitations: current_positions.monetary_market_data_limitations,
     }
 }
 
+#[allow(dead_code)]
 fn empty_result_with_monetary(
     monetary_positions: Vec<MonetaryPosition>,
     total_monetary_value: Option<f64>,
     monetary_market_data_limitations: Vec<MarketDataLimitation>,
 ) -> PortfolioResult {
+    let current_positions = empty_current_positions();
     PortfolioResult {
+        base_currency: BASE_CURRENCY.to_owned(),
+        rows: Vec::new(),
         monetary_positions,
+        total_current_value: current_positions.total_current_value,
         total_monetary_value,
+        total_value: None,
+        total_invested: current_positions.total_invested,
+        total_monetary_invested: None,
+        total_dividends: current_positions.total_dividends,
+        total_monetary_dividends: None,
+        total_open_position_gain_loss: current_positions.total_open_position_gain_loss,
+        total_open_position_gain_loss_pct: current_positions.total_open_position_gain_loss_pct,
+        total_monetary_open_position_gain_loss: None,
+        total_monetary_open_position_gain_loss_pct: None,
+        snapshot_date: None,
+        nav: None,
+        daily_change: None,
+        daily_change_pct: None,
+        inception_date: None,
+        ytd_return: None,
+        one_year_return: None,
+        three_year_return: None,
+        five_year_return: None,
+        ytd_metrics: None,
+        one_year_metrics: None,
+        three_year_metrics: None,
+        five_year_metrics: None,
+        nav_market_data_limitations: Vec::new(),
+        current_position_market_data_limitations: Vec::new(),
         monetary_market_data_limitations,
-        ..empty_result()
     }
 }
 
+#[allow(dead_code)]
 async fn compute_monetary_positions(
     db: &DatabaseConnection,
     market_data: &MarketData,
@@ -482,9 +558,10 @@ async fn compute_monetary_positions(
         return Ok((Vec::new(), Some(0.0), Vec::new()));
     }
 
-    let mut transactions_by_asset: HashMap<i32, Vec<Transaction>> = HashMap::new();
     let today = format_date(current_date);
-    for transaction in transaction_repo::find_all_ordered_by_date(db, None, Some(&today)).await? {
+    let transactions = transaction_repo::find_all_ordered_by_date(db, None, Some(&today)).await?;
+    let mut transactions_by_asset: HashMap<i32, Vec<Transaction>> = HashMap::new();
+    for transaction in transactions {
         if assets.contains_key(&transaction.asset_id) {
             transactions_by_asset
                 .entry(transaction.asset_id)
@@ -492,7 +569,6 @@ async fn compute_monetary_positions(
                 .push(transaction);
         }
     }
-
     let open_assets: Vec<&Asset> = assets
         .values()
         .filter(|asset| {
@@ -534,14 +610,11 @@ async fn compute_monetary_positions(
         extend_unique_limitations(&mut limitations, position.market_data_limitations.clone());
         positions.push(position);
     }
-
-    let total_value = positions
-        .iter()
-        .map(|position| position.current_value)
-        .sum();
+    let total_value = complete_sum(positions.iter().map(|position| position.current_value));
     Ok((positions, total_value, limitations))
 }
 
+#[allow(dead_code)]
 async fn compute_monetary_position(
     db: &DatabaseConnection,
     market_data: &MarketData,
@@ -549,13 +622,11 @@ async fn compute_monetary_position(
     transactions: &[Transaction],
 ) -> anyhow::Result<MonetaryPosition> {
     let economics = compute_monetary_ledger_economics(db, market_data, asset, transactions).await?;
-    let total_qty = economics.total_qty;
-
     let individual_price = market_data.individual_price_if_available(db, asset).await?;
     let current_value = individual_price
         .native_price
         .zip(individual_price.fx_rate)
-        .map(|(price, rate)| total_qty * price * rate);
+        .map(|(price, rate)| economics.total_qty * price * rate);
     let open_position_gain_loss = current_value
         .zip(economics.total_invested)
         .map(|(value, invested)| value - invested);
@@ -566,11 +637,11 @@ async fn compute_monetary_position(
                 if invested.abs() < FLOAT_EPSILON {
                     0.0
                 } else {
-                    (gain_loss / invested) * 100.0
+                    gain_loss / invested * 100.0
                 }
             });
 
-    Ok(MonetaryPosition {
+    Ok(CurrentPosition {
         ticker: asset.ticker.clone(),
         name: asset.name.clone(),
         asset_type: asset.asset_type.clone(),
@@ -579,7 +650,7 @@ async fn compute_monetary_position(
         asset_class: asset.asset_class.clone(),
         equity_style: asset.equity_style.clone(),
         management: asset.management.clone(),
-        total_qty,
+        total_qty: economics.total_qty,
         avg_cost: economics.avg_cost,
         current_price: individual_price.native_price,
         price_date: individual_price.price_date,
@@ -592,6 +663,7 @@ async fn compute_monetary_position(
     })
 }
 
+#[allow(dead_code)]
 struct MonetaryLedgerEconomics {
     total_qty: f64,
     avg_cost: Option<f64>,
@@ -599,55 +671,25 @@ struct MonetaryLedgerEconomics {
     dividends_received: Option<f64>,
 }
 
+#[allow(dead_code)]
 async fn compute_monetary_ledger_economics(
     db: &DatabaseConnection,
     market_data: &MarketData,
     asset: &Asset,
     transactions: &[Transaction],
 ) -> anyhow::Result<MonetaryLedgerEconomics> {
-    let mut quantity = 0.0;
-    let mut cost_basis = Some(0.0);
-    let mut dividends = Some(0.0);
-
-    for transaction in transactions {
-        if transaction.is_split() {
-            quantity *= transaction.quantity;
-        } else if transaction.is_buy() {
-            let native_cost = transaction.quantity * cents_to_f64(transaction.price_cents)
-                + cents_to_f64(transaction.fees_cents);
-            let rate = transaction_exchange_rate(db, market_data, asset, transaction).await?;
-            cost_basis = cost_basis
-                .zip(rate)
-                .map(|(basis, rate)| basis + native_cost * rate);
-            quantity += transaction.quantity;
-        } else if transaction.is_sell() {
-            if quantity > FLOAT_EPSILON {
-                let sold_fraction = (transaction.quantity / quantity).min(1.0);
-                cost_basis = cost_basis.map(|basis| basis * (1.0 - sold_fraction));
-            }
-            quantity -= transaction.quantity;
-        } else if transaction.is_dividend() {
-            let native_dividend = transaction.quantity * cents_to_f64(transaction.price_cents)
-                - cents_to_f64(transaction.fees_cents);
-            let rate = transaction_exchange_rate(db, market_data, asset, transaction).await?;
-            dividends = dividends
-                .zip(rate)
-                .map(|(total, rate)| total + native_dividend * rate);
-        }
-    }
-
-    let avg_cost = cost_basis.map(|basis| {
-        if quantity > FLOAT_EPSILON {
-            basis / quantity
-        } else {
-            0.0
-        }
-    });
+    let projection = project_holding(db, market_data, asset.clone(), transactions).await?;
     Ok(MonetaryLedgerEconomics {
-        total_qty: quantity,
-        avg_cost,
-        total_invested: cost_basis,
-        dividends_received: dividends,
+        total_qty: projection.total_qty,
+        avg_cost: projection.total_invested.map(|cost| {
+            if projection.total_qty > FLOAT_EPSILON {
+                cost / projection.total_qty
+            } else {
+                0.0
+            }
+        }),
+        total_invested: projection.total_invested,
+        dividends_received: projection.dividends_received,
     })
 }
 
@@ -656,28 +698,29 @@ async fn transaction_exchange_rate(
     market_data: &MarketData,
     asset: &Asset,
     transaction: &Transaction,
-) -> anyhow::Result<Option<f64>> {
+) -> anyhow::Result<(Option<f64>, Vec<MarketDataLimitation>)> {
     if asset.currency == BASE_CURRENCY {
-        Ok(Some(1.0))
+        Ok((Some(1.0), Vec::new()))
     } else {
-        market_data
+        let rate = market_data
             .get_asset_exchange_rate(db, asset, &transaction.date)
-            .await
+            .await?;
+        let limitations = if rate.is_none() {
+            let date = NaiveDate::parse_from_str(&transaction.date, DATE_FORMAT)
+                .context("invalid transaction date")?;
+            vec![MarketDataLimitation {
+                subject: MarketDataSubject::FxRate {
+                    currency: asset.currency.clone(),
+                },
+                latest_available_date: None,
+                requested_end_date: date,
+                classification: MarketDataLimitationClassification::ActionableMissingData,
+            }]
+        } else {
+            Vec::new()
+        };
+        Ok((rate, limitations))
     }
-}
-
-fn collect_market_data_limitations(rows: &[AssetPosition]) -> Vec<MarketDataLimitation> {
-    let mut limitations = Vec::new();
-
-    for row in rows {
-        for limitation in &row.market_data_limitations {
-            if !limitations.contains(limitation) {
-                limitations.push(limitation.clone());
-            }
-        }
-    }
-
-    limitations
 }
 
 fn extend_unique_limitations(
@@ -691,18 +734,41 @@ fn extend_unique_limitations(
     }
 }
 
-fn compute_non_monetary_totals(rows: &[AssetPosition]) -> (f64, f64, f64, f64, f64) {
-    let included_rows = rows.iter().filter(|row| !row.is_monetary());
-    let total_current_value: f64 = included_rows.clone().map(|r| r.current_value).sum();
-    let total_invested: f64 = included_rows.clone().map(|r| r.total_invested).sum();
-    let total_dividends: f64 = included_rows.map(|r| r.dividends_received).sum();
-    let total_open_position_gain_loss = total_current_value - total_invested;
-    let total_open_position_gain_loss_pct = if total_invested == 0.0 {
-        0.0
-    } else {
-        (total_open_position_gain_loss / total_invested) * 100.0
-    };
+#[allow(dead_code)]
+fn collect_market_data_limitations(rows: &[AssetPosition]) -> Vec<MarketDataLimitation> {
+    let mut limitations = Vec::new();
+    for row in rows {
+        extend_unique_limitations(&mut limitations, row.market_data_limitations.clone());
+    }
+    limitations
+}
 
+#[allow(dead_code)]
+#[allow(clippy::type_complexity)]
+fn compute_non_monetary_totals(
+    rows: &[AssetPosition],
+) -> (
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+) {
+    let total_current_value = complete_sum(rows.iter().map(|row| row.current_value));
+    let total_invested = complete_sum(rows.iter().map(|row| row.total_invested));
+    let total_dividends = complete_sum(rows.iter().map(|row| row.dividends_received));
+    let total_open_position_gain_loss =
+        complete_sum(rows.iter().map(|row| row.open_position_gain_loss));
+    let total_open_position_gain_loss_pct =
+        total_open_position_gain_loss
+            .zip(total_invested)
+            .map(|(gain_loss, invested)| {
+                if invested.abs() < FLOAT_EPSILON {
+                    0.0
+                } else {
+                    gain_loss / invested * 100.0
+                }
+            });
     (
         total_current_value,
         total_invested,
@@ -765,6 +831,7 @@ async fn calc_return(
     }
 }
 
+#[allow(dead_code)]
 #[allow(clippy::too_many_lines)]
 async fn compute_asset_positions(
     db: &DatabaseConnection,
@@ -777,141 +844,94 @@ async fn compute_asset_positions(
         .into_iter()
         .map(|snapshot| (snapshot.asset_id, snapshot))
         .collect();
-
     let today = format_date(today);
+    let transactions = transaction_repo::find_all_ordered_by_date(db, None, Some(&today)).await?;
     let mut transactions_by_asset: HashMap<i32, Vec<Transaction>> = HashMap::new();
-    for transaction in transaction_repo::find_all_ordered_by_date(db, None, Some(&today)).await? {
+    for transaction in transactions {
         transactions_by_asset
             .entry(transaction.asset_id)
             .or_default()
             .push(transaction);
     }
-    if transactions_by_asset.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let asset_ids: Vec<i32> = transactions_by_asset.keys().copied().collect();
-    let assets = asset_repo::find_by_ids(db, asset_ids).await?;
-    let mut rows: Vec<AssetPosition> = Vec::new();
-
-    for asset_model in &assets {
-        if asset_model.is_monetary() || is_benchmark_ticker(&asset_model.ticker) {
+    let assets = asset_repo::find_by_ids(db, transactions_by_asset.keys().copied()).await?;
+    let mut rows = Vec::new();
+    for asset in assets {
+        if asset.is_monetary() || is_benchmark_ticker(&asset.ticker) {
             continue;
         }
-
-        let Some(transactions) = transactions_by_asset.get(&asset_model.id) else {
-            continue;
-        };
-        let net_qty = Transaction::compute_holdings(transactions);
-        if net_qty <= FLOAT_EPSILON {
+        let transactions = transactions_by_asset
+            .get(&asset.id)
+            .context("asset has no ordered transactions")?;
+        if Transaction::compute_holdings(transactions) <= FLOAT_EPSILON {
             continue;
         }
-
-        let (current_price, price_date, exchange_rate, market_data_limitations) =
-            if let Some(snapshot) = snapshots_by_asset.get(&asset_model.id) {
-                let individual_price = market_data
-                    .individual_price(
-                        db,
-                        asset_model,
-                        IndividualPriceFallback {
-                            native_price: snapshot.closing_price,
-                            price_date: snapshot.date.clone(),
-                            fx_rate: snapshot.exchange_rate,
-                        },
-                    )
-                    .await?;
-                (
-                    individual_price.native_price,
-                    individual_price.price_date,
-                    individual_price.fx_rate,
-                    individual_price.limitations,
+        let projection = project_holding(db, market_data, asset.clone(), transactions).await?;
+        let individual_price = if let Some(snapshot) = snapshots_by_asset.get(&asset.id) {
+            market_data
+                .individual_price(
+                    db,
+                    &asset,
+                    IndividualPriceFallback {
+                        native_price: snapshot.closing_price,
+                        price_date: snapshot.date.clone(),
+                        fx_rate: snapshot.exchange_rate,
+                    },
                 )
-            } else {
-                let individual_price = market_data
-                    .individual_price_if_available(db, asset_model)
-                    .await?;
-                let (Some(current_price), Some(price_date), Some(exchange_rate)) = (
-                    individual_price.native_price,
-                    individual_price.price_date,
-                    individual_price.fx_rate,
-                ) else {
-                    tracing::warn!(
-                        ticker = %asset_model.ticker,
-                        "omitting current holding because individual valuation data is unavailable"
-                    );
-                    continue;
-                };
-                (
-                    current_price,
-                    price_date,
-                    exchange_rate,
-                    individual_price.limitations,
-                )
-            };
-
-        let mut ledger_qty = 0.0;
-        let mut cost_basis = 0.0;
-        let mut dividends_received = 0.0;
-        for transaction in transactions {
-            if transaction.is_split() {
-                ledger_qty *= transaction.quantity;
-            } else if transaction.is_buy() {
-                let native_cost = transaction.quantity * cents_to_f64(transaction.price_cents)
-                    + cents_to_f64(transaction.fees_cents);
-                let tx_rate = market_data
-                    .get_asset_exchange_rate(db, asset_model, &transaction.date)
-                    .await?
-                    .unwrap_or(exchange_rate);
-                cost_basis += native_cost * tx_rate;
-                ledger_qty += transaction.quantity;
-            } else if transaction.is_sell() {
-                if ledger_qty > FLOAT_EPSILON {
-                    let sold_fraction = (transaction.quantity / ledger_qty).min(1.0);
-                    cost_basis *= 1.0 - sold_fraction;
-                }
-                ledger_qty -= transaction.quantity;
-            } else if transaction.is_dividend() {
-                let native_dividend = transaction.quantity * cents_to_f64(transaction.price_cents)
-                    - cents_to_f64(transaction.fees_cents);
-                let tx_rate = market_data
-                    .get_asset_exchange_rate(db, asset_model, &transaction.date)
-                    .await?
-                    .unwrap_or(exchange_rate);
-                dividends_received += native_dividend * tx_rate;
-            }
-        }
-
-        let avg_cost = cost_basis / net_qty;
-        let current_value = net_qty * current_price * exchange_rate;
-        let total_invested_for_asset = cost_basis;
-        let open_position_gain_loss = current_value - total_invested_for_asset;
-        let open_position_gain_loss_pct = if total_invested_for_asset == 0.0 {
-            0.0
+                .await?
         } else {
-            (open_position_gain_loss / total_invested_for_asset) * 100.0
+            let available = market_data
+                .individual_price_if_available(db, &asset)
+                .await?;
+            let (Some(native_price), Some(price_date), Some(fx_rate)) = (
+                available.native_price,
+                available.price_date,
+                available.fx_rate,
+            ) else {
+                continue;
+            };
+            crate::models::IndividualPrice {
+                native_price,
+                price_date,
+                fx_rate,
+                base_currency_price: native_price * fx_rate,
+                limitations: available.limitations,
+            }
         };
-
-        rows.push(AssetPosition {
-            ticker: asset_model.ticker.clone(),
-            name: asset_model.name.clone(),
-            asset_type: asset_model.asset_type.clone(),
-            currency: asset_model.currency.clone(),
-            morningstar_code: asset_model.morningstar_code.clone(),
-            asset_class: asset_model.asset_class.clone(),
-            equity_style: asset_model.equity_style.clone(),
-            management: asset_model.management.clone(),
-            total_qty: net_qty,
-            avg_cost,
-            current_price,
-            price_date,
-            total_invested: total_invested_for_asset,
+        let current_value = Some(projection.total_qty * individual_price.base_currency_price);
+        let open_position_gain_loss = current_value
+            .zip(projection.total_invested)
+            .map(|(value, invested)| value - invested);
+        let open_position_gain_loss_pct = open_position_gain_loss
+            .zip(projection.total_invested)
+            .map(|(gain_loss, invested)| {
+                if invested.abs() < FLOAT_EPSILON {
+                    0.0
+                } else {
+                    gain_loss / invested * 100.0
+                }
+            });
+        rows.push(CurrentPosition {
+            ticker: asset.ticker,
+            name: asset.name,
+            asset_type: asset.asset_type,
+            currency: asset.currency,
+            morningstar_code: asset.morningstar_code,
+            asset_class: asset.asset_class,
+            equity_style: asset.equity_style,
+            management: asset.management,
+            total_qty: projection.total_qty,
+            avg_cost: projection
+                .total_invested
+                .map(|invested| invested / projection.total_qty),
+            current_price: Some(individual_price.native_price),
+            price_date: Some(individual_price.price_date),
+            total_invested: projection.total_invested,
             current_value,
-            dividends_received,
+            dividends_received: projection.dividends_received,
             open_position_gain_loss,
             open_position_gain_loss_pct,
-            market_data_limitations,
+            market_data_limitations: individual_price.limitations,
         });
     }
-
     Ok(rows)
 }

@@ -4,6 +4,7 @@ use chrono::Duration;
 use rstock::db::entities::portfolio_history;
 use rstock::db::repos::portfolio_history_repo;
 use rstock::services::metrics::compute_cagr;
+use rstock::services::nav;
 use rstock::services::portfolio;
 use sea_orm::{EntityTrait, Set};
 use serde_json::json;
@@ -282,14 +283,14 @@ async fn test_portfolio_includes_holding_bought_after_effective_valuation_date()
         .find(|position| position.ticker == "XFAKES4")
         .unwrap();
     assert!((position.total_qty - 6.0).abs() < 1e-9);
-    assert!((position.avg_cost - (61.0 / 6.0)).abs() < 1e-9);
-    assert!((position.total_invested - 61.0).abs() < 1e-9);
-    assert!((position.current_price - 11.0).abs() < 1e-9);
-    assert!((position.current_value - 66.0).abs() < 1e-9);
+    assert!((position.avg_cost.unwrap() - (61.0 / 6.0)).abs() < 1e-9);
+    assert!((position.total_invested.unwrap() - 61.0).abs() < 1e-9);
+    assert!((position.current_price.unwrap() - 11.0).abs() < 1e-9);
+    assert!((position.current_value.unwrap() - 66.0).abs() < 1e-9);
 }
 
 #[tokio::test]
-async fn test_unpriced_post_snapshot_holding_does_not_hide_priced_positions() {
+async fn test_unpriced_post_snapshot_holding_remains_visible_with_unavailable_facts() {
     let db = common::setup_test_db().await;
     let snapshot_date = date_string(0);
     let today = rstock::constants::format_date(chrono::Local::now().date_naive());
@@ -316,8 +317,29 @@ async fn test_unpriced_post_snapshot_holding_does_not_hide_priced_positions() {
     let market_data = common::market_data(&common::MockMarketDataSources::new());
     let result = portfolio::get_portfolio(&db, &market_data).await.unwrap();
 
-    assert_eq!(result.rows.len(), 1);
-    assert_eq!(result.rows[0].ticker, "XFAKES5");
+    assert_eq!(result.rows.len(), 2);
+    let unpriced = result
+        .rows
+        .iter()
+        .find(|position| position.ticker == "XFAKES6")
+        .unwrap();
+    assert_eq!(unpriced.total_qty, 1.0);
+    assert_eq!(unpriced.total_invested, Some(5.0));
+    assert!(unpriced.current_price.is_none());
+    assert!(unpriced.price_date.is_none());
+    assert!(unpriced.current_value.is_none());
+    assert!(unpriced.open_position_gain_loss.is_none());
+    assert!(result.total_current_value.is_none());
+    assert!(result.total_value.is_none());
+    assert_eq!(result.current_position_market_data_limitations.len(), 1);
+    let json = serde_json::to_value(&result).unwrap();
+    assert!(json["positions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|position| position["ticker"] == "XFAKES6")
+        .unwrap()["current_value"]
+        .is_null());
 }
 
 #[tokio::test]
@@ -343,7 +365,7 @@ async fn test_portfolio_returns_monetary_only_holdings_separately() {
     assert!((position.open_position_gain_loss.unwrap() - 20.0).abs() < 1e-9);
     assert!((result.total_monetary_value.unwrap() - 2020.0).abs() < 1e-9);
     assert!(result.nav.is_none());
-    assert!(result.market_data_limitations.is_empty());
+    assert!(result.nav_market_data_limitations.is_empty());
     assert!(result.monetary_market_data_limitations.is_empty());
 }
 
@@ -376,7 +398,7 @@ async fn test_portfolio_keeps_monetary_holding_when_price_is_missing() {
     assert!(position.open_position_gain_loss_pct.is_none());
     assert_eq!(position.market_data_limitations.len(), 1);
     assert!(result.total_monetary_value.is_none());
-    assert!(result.market_data_limitations.is_empty());
+    assert!(result.nav_market_data_limitations.is_empty());
     assert_eq!(result.monetary_market_data_limitations.len(), 1);
 }
 
@@ -475,9 +497,9 @@ async fn test_monetary_snapshot_is_not_returned_as_performance_position() {
     assert_eq!(result.rows[0].ticker, "XFAKES3");
     assert_eq!(result.monetary_positions.len(), 1);
     assert_eq!(result.monetary_positions[0].ticker, "XFAKEM5");
-    assert!((result.total_invested - 1000.0).abs() < 1e-9);
-    assert!((result.total_current_value - 1100.0).abs() < 1e-9);
-    assert!((result.total_open_position_gain_loss - 100.0).abs() < 1e-9);
+    assert!((result.total_invested.unwrap() - 1000.0).abs() < 1e-9);
+    assert!((result.total_current_value.unwrap() - 1100.0).abs() < 1e-9);
+    assert!((result.total_open_position_gain_loss.unwrap() - 100.0).abs() < 1e-9);
     assert!((result.nav.unwrap() - 100.0).abs() < 1e-9);
 }
 
@@ -517,18 +539,15 @@ async fn portfolio_view_applies_open_position_facts_equally_to_performance_and_m
     let monetary = &result.monetary_positions[0];
 
     assert!((performance.total_qty - 9.0).abs() < 1e-9);
-    assert!((performance.total_invested - 59.25).abs() < 1e-9);
-    assert!((performance.avg_cost - 6.583_333_333_3).abs() < 1e-9);
-    assert!((performance.dividends_received - 9.0).abs() < 1e-9);
-    assert!((performance.open_position_gain_loss - 12.75).abs() < 1e-9);
-    assert_eq!(Some(performance.total_invested), monetary.total_invested);
-    assert_eq!(Some(performance.avg_cost), monetary.avg_cost);
+    assert!((performance.total_invested.unwrap() - 59.25).abs() < 1e-9);
+    assert!((performance.avg_cost.unwrap() - 6.583_333_333_3).abs() < 1e-9);
+    assert!((performance.dividends_received.unwrap() - 9.0).abs() < 1e-9);
+    assert!((performance.open_position_gain_loss.unwrap() - 12.75).abs() < 1e-9);
+    assert_eq!(performance.total_invested, monetary.total_invested);
+    assert_eq!(performance.avg_cost, monetary.avg_cost);
+    assert_eq!(performance.dividends_received, monetary.dividends_received);
     assert_eq!(
-        Some(performance.dividends_received),
-        monetary.dividends_received
-    );
-    assert_eq!(
-        Some(performance.open_position_gain_loss),
+        performance.open_position_gain_loss,
         monetary.open_position_gain_loss
     );
 
@@ -549,4 +568,32 @@ async fn portfolio_view_applies_open_position_facts_equally_to_performance_and_m
         json_output["monetary_positions"][0]["open_position_gain_loss"],
         json!(12.75)
     );
+}
+
+#[tokio::test]
+async fn nav_limitations_ignore_closed_assets_and_start_at_the_open_holding_period() {
+    let db = common::setup_test_db().await;
+    let closed_id = common::insert_asset(&db, "XFAKECLOSED", "Closed", "stock", "EUR").await;
+    let open_id = common::insert_asset(&db, "XFAKEOPEN", "Open", "stock", "EUR").await;
+    common::insert_transaction(&db, closed_id, "2025-01-01", 1.0, 10.0, 0.0).await;
+    common::insert_sell_transaction(&db, closed_id, "2025-01-02", 1.0, 10.0, 0.0).await;
+    common::insert_transaction(&db, open_id, "2025-01-03", 1.0, 10.0, 0.0).await;
+
+    let mut sources = common::MockMarketDataSources::new();
+    sources.historical_prices.insert(
+        "XFAKEOPEN".to_owned(),
+        vec![
+            ("2025-01-03".to_owned(), 10.0),
+            ("2025-01-04".to_owned(), 11.0),
+        ],
+    );
+    let market_data = common::market_data_at(
+        &sources,
+        chrono::NaiveDate::from_ymd_opt(2025, 1, 5).unwrap(),
+    );
+
+    assert!(nav::get_history_market_data_limitations(&db, &market_data)
+        .await
+        .unwrap()
+        .is_empty());
 }

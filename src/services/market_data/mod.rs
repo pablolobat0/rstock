@@ -131,6 +131,7 @@ impl MarketData {
         historical::get_exchange_rate_for_asset(db, asset, date).await
     }
 
+    #[allow(dead_code)]
     pub async fn individual_price(
         &self,
         db: &DatabaseConnection,
