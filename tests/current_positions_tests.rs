@@ -97,18 +97,75 @@ async fn focused_current_positions_include_buy_after_effective_valuation_date() 
 }
 
 #[tokio::test]
+async fn focused_current_positions_apply_fixed_clock_individual_price_semantics() {
+    let db = common::setup_test_db().await;
+    let live_etf_id = common::insert_etf_asset(&db, "XFAKEETF3", "Live ETF", "EUR", "ETF3").await;
+    let fallback_etf_id =
+        common::insert_etf_asset(&db, "XFAKEETF4", "Fallback ETF", "EUR", "ETF4").await;
+    let fund_id = common::insert_fund_asset(&db, "XFAKEF3", "Fund", "EUR", "FUND3").await;
+    let stock_id = common::insert_asset(&db, "XFAKES6", "Stock", "stock", "EUR").await;
+
+    for asset_id in [live_etf_id, fallback_etf_id, fund_id, stock_id] {
+        common::insert_transaction(&db, asset_id, "2025-06-02", 1.0, 90.0, 0.0).await;
+        common::insert_daily_price(&db, asset_id, "2025-06-09", 100.0, false).await;
+    }
+
+    let mut sources = common::MockMarketDataSources::new();
+    sources
+        .historical_prices
+        .insert("ETF3".to_owned(), vec![("2025-06-10".to_owned(), 125.0)]);
+    sources
+        .historical_prices
+        .insert("ETF4".to_owned(), vec![("2025-06-08".to_owned(), 999.0)]);
+    sources
+        .historical_prices
+        .insert("FUND3".to_owned(), vec![("2025-06-10".to_owned(), 130.0)]);
+    sources
+        .historical_prices
+        .insert("XFAKES6".to_owned(), vec![("2025-06-10".to_owned(), 126.0)]);
+    let result =
+        portfolio::get_current_positions(&db, &common::market_data_at(&sources, fixed_today()))
+            .await
+            .unwrap();
+    let position = |ticker: &str| {
+        result
+            .positions
+            .iter()
+            .find(|position| position.ticker == ticker)
+            .unwrap()
+    };
+    assert_eq!(position("XFAKEETF3").current_price, Some(125.0));
+    assert_eq!(
+        position("XFAKEETF3").price_date.as_deref(),
+        Some("2025-06-10")
+    );
+    assert_eq!(position("XFAKEETF4").current_price, Some(100.0));
+    assert_eq!(
+        position("XFAKEETF4").price_date.as_deref(),
+        Some("2025-06-09")
+    );
+    assert_eq!(position("XFAKEF3").current_price, Some(100.0));
+    assert_eq!(
+        position("XFAKEF3").price_date.as_deref(),
+        Some("2025-06-09")
+    );
+    assert_eq!(position("XFAKES6").current_price, Some(126.0));
+    assert_eq!(
+        position("XFAKES6").price_date.as_deref(),
+        Some("2025-06-10")
+    );
+}
+
+#[tokio::test]
 async fn focused_current_positions_report_remaining_cost_dividends_and_open_gain_separately() {
     let db = common::setup_test_db().await;
     let asset_id =
         common::insert_asset(&db, "XFAKECUR4", "Financial Facts Stock", "stock", "EUR").await;
-
-    // Two buys with fees produce a weighted cost of 79 EUR for six units.
     common::insert_transaction(&db, asset_id, "2025-06-01", 2.0, 10.0, 1.0).await;
     common::insert_transaction(&db, asset_id, "2025-06-02", 4.0, 14.0, 2.0).await;
     common::insert_split_transaction(&db, asset_id, "2025-06-03", 2.0).await;
     common::insert_dividend_transaction(&db, asset_id, "2025-06-04", 10.0, 1.0).await;
     common::insert_sell_transaction(&db, asset_id, "2025-06-05", 3.0, 20.0, 0.0).await;
-
     let mut sources = common::MockMarketDataSources::new();
     sources
         .historical_prices
