@@ -238,6 +238,9 @@ async fn focused_current_positions_keep_sell_and_dividend_facts_separate_from_mo
     assert!((result.total_invested.unwrap() - 60.0).abs() < 1e-9);
     assert!((result.total_dividends.unwrap() - 5.0).abs() < 1e-9);
     assert!((result.total_open_position_gain_loss.unwrap() - 12.0).abs() < 1e-9);
+    assert!((result.total_monetary_invested.unwrap() - 600.0).abs() < 1e-9);
+    assert!((result.total_monetary_dividends.unwrap() - 20.0).abs() < 1e-9);
+    assert!((result.total_monetary_open_position_gain_loss.unwrap() - 30.0).abs() < 1e-9);
 }
 
 #[tokio::test]
@@ -321,6 +324,7 @@ async fn focused_current_positions_never_uses_later_fx_for_historical_ledger_fac
     assert!(result.total_invested.is_none());
     assert!(result.total_dividends.is_none());
     assert!(result.total_open_position_gain_loss.is_none());
+    assert!(result.total_monetary_invested.is_some());
     assert!(position
         .market_data_limitations
         .iter()
