@@ -1,3 +1,5 @@
+use anyhow::Context;
+use chrono::NaiveDate;
 use sea_orm::DatabaseConnection;
 
 use super::{historical, policy, MarketData};
@@ -60,16 +62,12 @@ pub(crate) async fn get_individual_price_if_available(
     let yesterday_str = format_date(yesterday);
     let mut limitations = Vec::new();
 
-    let price = if asset.asset_type == AssetType::Stock {
-        match fetch_live_asset_price(asset, &today_str, market_data).await {
-            Ok(price) => price.map(|price| (price, today_str.clone())),
-            Err(error) => {
-                tracing::warn!(ticker = %asset.ticker, error = %error, "failed to fetch live asset price");
-                None
-            }
+    let price = match fetch_same_day_asset_price(asset, today, market_data).await {
+        Ok(price) => price.map(|price| (price, today_str.clone())),
+        Err(error) => {
+            tracing::warn!(ticker = %asset.ticker, error = %error, "failed to fetch live asset price");
+            None
         }
-    } else {
-        None
     };
     let price = match price {
         Some(price) => Some(price),
@@ -153,13 +151,12 @@ async fn get_display_price(
     fallback: &IndividualPriceFallback,
     market_data: &MarketData,
 ) -> anyhow::Result<(f64, String, Option<MarketDataLimitation>)> {
-    if asset.asset_type == AssetType::Stock {
-        if let Some(live_price) = fetch_live_asset_price(asset, today, market_data)
-            .await
-            .unwrap_or(None)
-        {
-            return Ok((live_price, today.to_owned(), None));
-        }
+    let today_date = policy::parse_market_data_date(today, "live asset price date")?;
+    if let Some(live_price) = fetch_same_day_asset_price(asset, today_date, market_data)
+        .await
+        .unwrap_or(None)
+    {
+        return Ok((live_price, today.to_owned(), None));
     }
 
     let (price, date) =
@@ -212,16 +209,33 @@ async fn get_display_exchange_rate(
     Ok((rate, limitations))
 }
 
-async fn fetch_live_asset_price(
+async fn fetch_same_day_asset_price(
     asset: &Asset,
-    date: &str,
+    date: NaiveDate,
     market_data: &MarketData,
 ) -> anyhow::Result<Option<f64>> {
-    let date = policy::parse_market_data_date(date, "live asset price date")?;
-    let prices = market_data
-        .stock_price_history(&asset.ticker, date, date)
-        .await?;
-    Ok(prices.last().map(|observation| observation.value))
+    let observations = match asset.asset_type {
+        AssetType::Stock => {
+            market_data
+                .stock_price_history(&asset.ticker, date, date)
+                .await?
+        }
+        AssetType::Etf => {
+            let code = asset.morningstar_code.as_deref().with_context(|| {
+                format!(
+                    "missing Morningstar code for required ETF {} ({})",
+                    asset.ticker, asset.name
+                )
+            })?;
+            market_data.fund_price_history(code, date, date).await?
+        }
+        AssetType::Fund => return Ok(None),
+    };
+
+    Ok(observations
+        .into_iter()
+        .find(|observation| observation.date == date)
+        .map(|observation| observation.value))
 }
 
 async fn fetch_live_exchange_rate(
