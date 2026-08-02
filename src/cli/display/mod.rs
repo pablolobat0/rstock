@@ -3,7 +3,7 @@ mod correlation;
 mod fund_analysis;
 mod fund_comparison;
 mod helpers;
-mod portfolio;
+pub mod portfolio;
 mod simple;
 mod transaction;
 mod types;

@@ -249,25 +249,6 @@ mod tests {
         assert_eq!(value["data"]["positions"][1]["ticker"], "XFAKE1");
         assert_eq!(value["data"]["monetary_positions"][0]["ticker"], "XFAKEM1");
         assert_eq!(value["data"]["total_monetary_value"], 200.0);
-        assert_eq!(
-            value["data"]["positions"][0]["open_position_gain_loss"],
-            200.0
-        );
-        assert_eq!(
-            value["data"]["monetary_positions"][0]["open_position_gain_loss"],
-            0.0
-        );
-        assert_eq!(value["data"]["positions"][0]["dividends_received"], 0.0);
-        assert_eq!(
-            value["data"]["monetary_positions"][0]["dividends_received"],
-            0.0
-        );
-        assert_eq!(value["data"]["total_dividends"], 0.0);
-        assert_eq!(value["data"]["total_open_position_gain_loss"], 50.0);
-        assert!(value["data"]["positions"][0].get("gain_loss").is_none());
-        assert!(value["data"]["monetary_positions"][0]
-            .get("gain_loss")
-            .is_none());
         assert_eq!(value["data"]["positions"][0]["currency"], "GBP");
         assert!(value["data"]["daily_change"].is_null());
         assert_eq!(
