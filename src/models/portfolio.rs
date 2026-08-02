@@ -188,12 +188,13 @@ pub struct TopHolding {
 
 #[derive(serde::Serialize)]
 pub struct CompositionResult {
-    pub asset_class_breakdown: Vec<AllocationEntry>,
-    pub equity_style_breakdown: Vec<AllocationEntry>,
-    pub management_breakdown: Vec<AllocationEntry>,
-    pub sector_breakdown: Vec<AllocationEntry>,
-    pub country_breakdown: Vec<AllocationEntry>,
-    pub market_cap_breakdown: Vec<AllocationEntry>,
-    pub top_holdings: Vec<TopHolding>,
+    pub asset_class_breakdown: Option<Vec<AllocationEntry>>,
+    pub equity_style_breakdown: Option<Vec<AllocationEntry>>,
+    pub management_breakdown: Option<Vec<AllocationEntry>>,
+    pub sector_breakdown: Option<Vec<AllocationEntry>>,
+    pub country_breakdown: Option<Vec<AllocationEntry>>,
+    pub market_cap_breakdown: Option<Vec<AllocationEntry>>,
+    pub top_holdings: Option<Vec<TopHolding>>,
+    pub market_data_limitations: Vec<MarketDataLimitation>,
     pub warnings: Vec<String>,
 }
