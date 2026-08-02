@@ -143,7 +143,8 @@ pub async fn get_current_positions(
     db: &DatabaseConnection,
     market_data: &MarketData,
 ) -> anyhow::Result<CurrentPositions> {
-    let today = format_date(market_data.today());
+    let current_date = market_data.today();
+    let today = format_date(current_date);
     let transactions = transaction_repo::find_all_ordered_by_date(db, None, Some(&today)).await?;
     if transactions.is_empty() {
         return Ok(empty_current_positions());
@@ -162,7 +163,7 @@ pub async fn get_current_positions(
         return Ok(empty_current_positions());
     }
 
-    let end_date = format_date(market_data.today() - Duration::days(1));
+    let end_date = format_date(current_date - Duration::days(1));
     let earliest_transaction_date = projections
         .iter()
         .map(|projection| projection.earliest_transaction_date.as_str())
@@ -208,24 +209,10 @@ pub async fn get_current_positions(
     let total_value = total_current_value
         .zip(total_monetary_value)
         .map(|(a, b)| a + b);
-    let total_invested = complete_sum(
-        positions
-            .iter()
-            .chain(&monetary_positions)
-            .map(|position| position.total_invested),
-    );
-    let total_dividends = complete_sum(
-        positions
-            .iter()
-            .chain(&monetary_positions)
-            .map(|position| position.dividends_received),
-    );
-    let total_gain_loss = complete_sum(
-        positions
-            .iter()
-            .chain(&monetary_positions)
-            .map(|position| position.gain_loss),
-    );
+    let total_invested = complete_sum(positions.iter().map(|position| position.total_invested));
+    let total_dividends =
+        complete_sum(positions.iter().map(|position| position.dividends_received));
+    let total_gain_loss = complete_sum(positions.iter().map(|position| position.gain_loss));
     let total_gain_loss_pct = total_gain_loss
         .zip(total_invested)
         .map(|(gain_loss, invested)| {
