@@ -51,11 +51,11 @@ pub struct PortfolioRow {
     pub total_invested: String,
     #[tabled(rename = "Value")]
     pub current_value: String,
-    #[tabled(rename = "Divs")]
+    #[tabled(rename = "Lifetime Dividends")]
     pub dividends: String,
-    #[tabled(rename = "Open-position G/L")]
+    #[tabled(rename = "Open-position Gain/Loss")]
     pub gain_loss: String,
-    #[tabled(rename = "Open-position G/L %")]
+    #[tabled(rename = "Open-position Gain/Loss %")]
     pub gain_loss_pct: String,
     #[tabled(rename = "Weight")]
     pub weight: String,
@@ -83,11 +83,11 @@ pub struct MonetaryPortfolioRow {
     pub total_invested: String,
     #[tabled(rename = "Value")]
     pub current_value: String,
-    #[tabled(rename = "Divs")]
+    #[tabled(rename = "Lifetime Dividends")]
     pub dividends: String,
-    #[tabled(rename = "Open-position G/L")]
+    #[tabled(rename = "Open-position Gain/Loss")]
     pub gain_loss: String,
-    #[tabled(rename = "Open-position G/L %")]
+    #[tabled(rename = "Open-position Gain/Loss %")]
     pub gain_loss_pct: String,
 }
 

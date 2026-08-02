@@ -140,11 +140,7 @@ pub fn print_portfolio(result: &PortfolioResult) {
                 let gl_text = format_eu(&format!("{}{:.2}", sign, r.gain_loss));
                 let gl_pct_text = format_eu(&format!("{}{:.2}%", sign, r.gain_loss_pct));
 
-                let divs_text = if r.dividends_received > 0.0 {
-                    format_eu(&format!("{:.2}", r.dividends_received))
-                } else {
-                    String::new()
-                };
+                let divs_text = format_dividends(r.dividends_received);
 
                 PortfolioRow {
                     ticker: if r.asset_type == AssetType::Stock {
@@ -242,7 +238,7 @@ pub fn print_portfolio(result: &PortfolioResult) {
         }
         let _ = write!(
             totals,
-            "  Open-position G/L: {}",
+            "  Open-position Gain/Loss: {}",
             color_value(result.total_gain_loss, &gl_text)
         );
         println!("{totals}");
@@ -399,8 +395,7 @@ fn monetary_display_row(position: &MonetaryPosition) -> MonetaryPortfolioRow {
         current_value: format_optional_amount(position.current_value),
         dividends: position
             .dividends_received
-            .filter(|value| *value > 0.0)
-            .map(|value| format_eu(&format!("{value:.2}")))
+            .map(format_dividends)
             .unwrap_or_default(),
         gain_loss: gain_loss.unwrap_or_default(),
         gain_loss_pct: gain_loss_pct.unwrap_or_default(),
@@ -411,6 +406,10 @@ fn format_optional_amount(value: Option<f64>) -> String {
     value
         .map(|value| format_eu(&format!("{value:.2}")))
         .unwrap_or_default()
+}
+
+fn format_dividends(value: f64) -> String {
+    format_eu(&format!("{value:.2}"))
 }
 
 pub(super) fn format_market_data_limitation_warning(limitation: &MarketDataLimitation) -> String {
@@ -448,5 +447,42 @@ pub(super) fn format_market_data_limitation_warning(limitation: &MarketDataLimit
         MarketDataSubject::FxRate { currency } => format!(
             "Market data limitation: FX rate {currency} has latest rate from {latest_available_date}; requested through {requested_end_date}."
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tabled::Table;
+
+    use super::{format_dividends, PortfolioRow};
+
+    #[test]
+    fn human_output_keeps_non_positive_lifetime_dividends_visible() {
+        assert_eq!(format_dividends(0.0), "0,00");
+        assert_eq!(format_dividends(-1.5), "-1,50");
+    }
+
+    #[test]
+    fn human_output_names_open_position_gain_loss_and_lifetime_dividends() {
+        let table = Table::new(vec![PortfolioRow {
+            ticker: "XFAKE1".to_string(),
+            name: "Fake holding".to_string(),
+            asset_type: "stock".to_string(),
+            currency: "EUR".to_string(),
+            quantity: "1".to_string(),
+            avg_cost: "10,00".to_string(),
+            current_price: "10,00".to_string(),
+            price_date: "10-06-2025".to_string(),
+            total_invested: "10,00".to_string(),
+            current_value: "10,00".to_string(),
+            dividends: "0,00".to_string(),
+            gain_loss: "0,00".to_string(),
+            gain_loss_pct: "0,00%".to_string(),
+            weight: "100,0%".to_string(),
+        }])
+        .to_string();
+
+        assert!(table.contains("Lifetime Dividends"));
+        assert!(table.contains("Open-position Gain/Loss"));
     }
 }

@@ -182,3 +182,50 @@ async fn focused_current_positions_keep_sell_and_dividend_facts_separate_from_mo
     assert!((result.total_dividends.unwrap() - 5.0).abs() < 1e-9);
     assert!((result.total_gain_loss.unwrap() - 12.0).abs() < 1e-9);
 }
+
+#[tokio::test]
+async fn focused_current_positions_apply_identical_financial_facts_to_performance_and_monetary_holdings(
+) {
+    let db = common::setup_test_db().await;
+    let stock_id =
+        common::insert_asset(&db, "XFAKECUR6", "Performance Stock", "stock", "EUR").await;
+    let monetary_id = common::insert_monetary_fund_asset(
+        &db,
+        "XFAKECUR7",
+        "Monetary Fund",
+        "EUR",
+        "F000CURRENT3",
+    )
+    .await;
+    for asset_id in [stock_id, monetary_id] {
+        common::insert_transaction(&db, asset_id, "2025-06-01", 2.0, 10.0, 1.0).await;
+        common::insert_transaction(&db, asset_id, "2025-06-02", 4.0, 14.0, 2.0).await;
+        common::insert_split_transaction(&db, asset_id, "2025-06-03", 2.0).await;
+        common::insert_dividend_transaction(&db, asset_id, "2025-06-04", 10.0, 1.0).await;
+        common::insert_sell_transaction(&db, asset_id, "2025-06-05", 3.0, 20.0, 0.0).await;
+    }
+
+    let mut sources = common::MockMarketDataSources::new();
+    sources
+        .historical_prices
+        .insert("XFAKECUR6".to_owned(), vec![("2025-06-09".to_owned(), 8.0)]);
+    sources.historical_prices.insert(
+        "F000CURRENT3".to_owned(),
+        vec![("2025-06-09".to_owned(), 8.0)],
+    );
+    let market_data = common::market_data_at(&sources, fixed_today());
+
+    let result = portfolio::get_current_positions(&db, &market_data)
+        .await
+        .unwrap();
+    let performance = &result.positions[0];
+    let monetary = &result.monetary_positions[0];
+
+    assert!((performance.total_qty - 9.0).abs() < 1e-9);
+    assert_eq!(performance.total_invested, monetary.total_invested);
+    assert_eq!(performance.avg_cost, monetary.avg_cost);
+    assert_eq!(performance.dividends_received, monetary.dividends_received);
+    assert_eq!(performance.current_value, monetary.current_value);
+    assert_eq!(performance.gain_loss, monetary.gain_loss);
+    assert_eq!(performance.gain_loss_pct, monetary.gain_loss_pct);
+}

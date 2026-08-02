@@ -106,7 +106,9 @@ pub struct CurrentPosition {
     pub total_invested: Option<f64>,
     pub current_value: Option<f64>,
     pub dividends_received: Option<f64>,
+    #[serde(rename = "open_position_gain_loss")]
     pub gain_loss: Option<f64>,
+    #[serde(rename = "open_position_gain_loss_pct")]
     pub gain_loss_pct: Option<f64>,
     pub market_data_limitations: Vec<MarketDataLimitation>,
 }
@@ -128,7 +130,9 @@ pub struct AssetPosition {
     pub total_invested: f64,
     pub current_value: f64,
     pub dividends_received: f64,
+    #[serde(rename = "open_position_gain_loss")]
     pub gain_loss: f64,
+    #[serde(rename = "open_position_gain_loss_pct")]
     pub gain_loss_pct: f64,
     pub market_data_limitations: Vec<MarketDataLimitation>,
 }
@@ -150,7 +154,9 @@ pub struct MonetaryPosition {
     pub total_invested: Option<f64>,
     pub current_value: Option<f64>,
     pub dividends_received: Option<f64>,
+    #[serde(rename = "open_position_gain_loss")]
     pub gain_loss: Option<f64>,
+    #[serde(rename = "open_position_gain_loss_pct")]
     pub gain_loss_pct: Option<f64>,
     pub market_data_limitations: Vec<MarketDataLimitation>,
 }

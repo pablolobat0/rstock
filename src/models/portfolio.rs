@@ -64,7 +64,9 @@ pub struct PortfolioResult {
     pub total_invested: f64,
     pub total_current_value: f64,
     pub total_dividends: f64,
+    #[serde(rename = "total_open_position_gain_loss")]
     pub total_gain_loss: f64,
+    #[serde(rename = "total_open_position_gain_loss_pct")]
     pub total_gain_loss_pct: f64,
     pub snapshot_date: Option<String>,
     pub nav: Option<f64>,
@@ -94,7 +96,9 @@ pub struct CurrentPositions {
     pub total_value: Option<f64>,
     pub total_invested: Option<f64>,
     pub total_dividends: Option<f64>,
+    #[serde(rename = "total_open_position_gain_loss")]
     pub total_gain_loss: Option<f64>,
+    #[serde(rename = "total_open_position_gain_loss_pct")]
     pub total_gain_loss_pct: Option<f64>,
     pub market_data_limitations: Vec<MarketDataLimitation>,
     pub monetary_market_data_limitations: Vec<MarketDataLimitation>,
