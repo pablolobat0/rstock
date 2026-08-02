@@ -390,7 +390,7 @@ fn format_dividends(value: f64) -> String {
     format_eu(&format!("{value:.2}"))
 }
 
-pub fn portfolio_totals_summary(result: &PortfolioResult) -> String {
+fn portfolio_totals_summary(result: &PortfolioResult) -> String {
     let sign = if result.total_open_position_gain_loss >= 0.0 {
         "+"
     } else {
