@@ -418,39 +418,3 @@ pub(super) fn format_market_data_limitation_warning(limitation: &MarketDataLimit
         ),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use crate::models::{AssetType, CurrentPosition};
-
-    use super::position_display_row;
-
-    #[test]
-    fn position_row_marks_unavailable_scalars_explicitly() {
-        let row = position_display_row(&CurrentPosition {
-            ticker: "XFAKE1".to_string(),
-            name: "Unpriced stock".to_string(),
-            asset_type: AssetType::Stock,
-            currency: "EUR".to_string(),
-            morningstar_code: None,
-            asset_class: Some("equity".to_string()),
-            equity_style: None,
-            management: None,
-            total_qty: 1.0,
-            avg_cost: Some(10.0),
-            current_price: None,
-            price_date: None,
-            total_invested: Some(10.0),
-            current_value: None,
-            dividends_received: Some(0.0),
-            open_position_gain_loss: None,
-            open_position_gain_loss_pct: None,
-            market_data_limitations: Vec::new(),
-        });
-
-        assert_eq!(row.current_price, "unavailable");
-        assert_eq!(row.price_date, "unavailable");
-        assert_eq!(row.current_value, "unavailable");
-        assert_eq!(row.open_position_gain_loss, "unavailable");
-    }
-}

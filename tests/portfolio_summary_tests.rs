@@ -331,6 +331,14 @@ async fn test_unpriced_post_snapshot_holding_remains_visible_with_unavailable_fa
     assert!(result.total_current_value.is_none());
     assert!(result.total_value.is_none());
     assert_eq!(result.current_position_market_data_limitations.len(), 1);
+    let json = serde_json::to_value(&result).unwrap();
+    assert!(json["positions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|position| position["ticker"] == "XFAKES6")
+        .unwrap()["current_value"]
+        .is_null());
 }
 
 #[tokio::test]
