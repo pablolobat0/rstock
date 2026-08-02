@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use anyhow::Context;
 use futures::future::join_all;
 use sea_orm::DatabaseConnection;
 
@@ -57,9 +58,9 @@ pub async fn compute_composition(
     let mut warnings: Vec<String> = Vec::new();
 
     for pos in &portfolio.positions {
-        let current_value = pos.current_value.ok_or_else(|| {
-            anyhow::anyhow!("complete current position value contained an unvalued position")
-        })?;
+        let current_value = pos
+            .current_value
+            .context("complete current position value contained an unvalued position")?;
         let portfolio_weight = (current_value / total_value) * 100.0;
         let equity_weight = if total_equity_value > 0.0 {
             (current_value / total_equity_value) * 100.0

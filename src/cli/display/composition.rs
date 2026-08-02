@@ -19,32 +19,6 @@ struct BreakdownRow {
     weight: String,
 }
 
-fn write_breakdown(output: &mut String, title: &str, entries: &[AllocationEntry]) {
-    if entries.is_empty() {
-        return;
-    }
-
-    writeln!(output, "{}\n", title.bold()).expect("writing to a String cannot fail");
-
-    let rows: Vec<BreakdownRow> = entries
-        .iter()
-        .map(|e| BreakdownRow {
-            label: e.label.clone(),
-            weight: format_eu(&format!("{:.2}%", e.weight)),
-        })
-        .collect();
-
-    let mut table = Table::new(&rows);
-    table.with(
-        Style::modern()
-            .horizontals([(1, HorizontalLine::inherit(Style::modern()).horizontal('═'))])
-            .remove_horizontal()
-            .remove_vertical(),
-    );
-    table.modify(Columns::single(1), Alignment::right());
-    writeln!(output, "{table}\n").expect("writing to a String cannot fail");
-}
-
 pub fn print_composition(result: &CompositionResult) {
     print!("{}", format_composition(result));
 }
@@ -58,26 +32,21 @@ pub fn format_composition(result: &CompositionResult) -> String {
     )
     .expect("writing to a String cannot fail");
 
-    if let Some(entries) = &result.asset_class_breakdown {
-        write_breakdown(&mut output, "Asset Class", entries);
-    } else {
+    if result.asset_class_breakdown.is_none() {
         writeln!(output, "Value-dependent composition: unavailable\n")
             .expect("writing to a String cannot fail");
     }
-    if let Some(entries) = &result.equity_style_breakdown {
-        write_breakdown(&mut output, "Equity Style", entries);
-    }
-    if let Some(entries) = &result.management_breakdown {
-        write_breakdown(&mut output, "Management", entries);
-    }
-    if let Some(entries) = &result.sector_breakdown {
-        write_breakdown(&mut output, "Sector Allocation", entries);
-    }
-    if let Some(entries) = &result.country_breakdown {
-        write_breakdown(&mut output, "Country Allocation", entries);
-    }
-    if let Some(entries) = &result.market_cap_breakdown {
-        write_breakdown(&mut output, "Market Cap", entries);
+    for (title, entries) in [
+        ("Asset Class", &result.asset_class_breakdown),
+        ("Equity Style", &result.equity_style_breakdown),
+        ("Management", &result.management_breakdown),
+        ("Sector Allocation", &result.sector_breakdown),
+        ("Country Allocation", &result.country_breakdown),
+        ("Market Cap", &result.market_cap_breakdown),
+    ] {
+        if let Some(entries) = entries {
+            write_breakdown(&mut output, title, entries);
+        }
     }
 
     if let Some(top_holdings) = &result.top_holdings {
@@ -129,4 +98,30 @@ pub fn format_composition(result: &CompositionResult) -> String {
     }
     writeln!(output).expect("writing to a String cannot fail");
     output
+}
+
+fn write_breakdown(output: &mut String, title: &str, entries: &[AllocationEntry]) {
+    if entries.is_empty() {
+        return;
+    }
+
+    writeln!(output, "{}\n", title.bold()).expect("writing to a String cannot fail");
+
+    let rows: Vec<BreakdownRow> = entries
+        .iter()
+        .map(|e| BreakdownRow {
+            label: e.label.clone(),
+            weight: format_eu(&format!("{:.2}%", e.weight)),
+        })
+        .collect();
+
+    let mut table = Table::new(&rows);
+    table.with(
+        Style::modern()
+            .horizontals([(1, HorizontalLine::inherit(Style::modern()).horizontal('═'))])
+            .remove_horizontal()
+            .remove_vertical(),
+    );
+    table.modify(Columns::single(1), Alignment::right());
+    writeln!(output, "{table}\n").expect("writing to a String cannot fail");
 }

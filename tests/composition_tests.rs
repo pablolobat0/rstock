@@ -2,7 +2,7 @@ mod common;
 
 use std::process::Command;
 
-use rstock::models::StockInfo;
+use rstock::models::{FundData, FundHolding, StockInfo};
 use rstock::services::composition::compute_composition;
 use sea_orm::{EntityTrait, Set};
 use serde_json::{json, Value};
@@ -210,6 +210,73 @@ async fn test_composition_direct_stocks_only() {
         .unwrap()
         .iter()
         .any(|holding| holding["ticker"] == "XFAKE1"));
+}
+
+#[tokio::test]
+async fn complete_composition_preserves_fund_look_through() {
+    let db = setup_test_db().await;
+    let fund = asset::ActiveModel {
+        ticker: Set("XFAKEFUND".to_owned()),
+        name: Set("Equity Fund".to_owned()),
+        asset_type: Set("fund".to_owned()),
+        currency: Set("EUR".to_owned()),
+        created_at: Set("2025-01-01T00:00:00".to_owned()),
+        asset_class: Set(Some("equity".to_owned())),
+        management: Set(Some("passive".to_owned())),
+        morningstar_code: Set(Some("F000FAKE".to_owned())),
+        ..Default::default()
+    };
+    let fund_id = asset::Entity::insert(fund)
+        .exec(&db)
+        .await
+        .unwrap()
+        .last_insert_id;
+    insert_transaction(&db, fund_id, "2025-06-01", 1.0, 100.0, 0.0).await;
+    insert_daily_price(&db, fund_id, "2025-06-04", 100.0, false).await;
+
+    let mut sources = MockMarketDataSources::new();
+    sources.fund_data.insert(
+        "F000FAKE".to_owned(),
+        FundData {
+            fund_currency: Some("EUR".to_owned()),
+            total_holdings: Some(2),
+            portfolio_date: Some("2025-05-31".to_owned()),
+            holdings: vec![
+                FundHolding {
+                    name: "Underlying One".to_owned(),
+                    weighting: 60.0,
+                    ticker: Some("XUNDER1".to_owned()),
+                    sector: Some("Technology".to_owned()),
+                    country: Some("US".to_owned()),
+                    currency: Some("USD".to_owned()),
+                },
+                FundHolding {
+                    name: "Underlying Two".to_owned(),
+                    weighting: 40.0,
+                    ticker: Some("XUNDER2".to_owned()),
+                    sector: Some("Healthcare".to_owned()),
+                    country: Some("DE".to_owned()),
+                    currency: Some("EUR".to_owned()),
+                },
+            ],
+        },
+    );
+    let market_data = common::market_data_at(
+        &sources,
+        chrono::NaiveDate::from_ymd_opt(2025, 6, 5).unwrap(),
+    );
+
+    let result = compute_composition(&db, &market_data).await.unwrap();
+
+    let sectors = result.sector_breakdown.as_ref().unwrap();
+    assert_eq!(sectors.len(), 2);
+    assert!(sectors
+        .iter()
+        .any(|entry| entry.label == "Technology" && (entry.weight - 60.0).abs() < 1e-9));
+    let holdings = result.top_holdings.as_ref().unwrap();
+    assert_eq!(holdings.len(), 2);
+    assert_eq!(holdings[0].ticker.as_deref(), Some("XUNDER1"));
+    assert!((holdings[0].weight - 60.0).abs() < 1e-9);
 }
 
 #[tokio::test]
