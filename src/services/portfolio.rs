@@ -101,9 +101,15 @@ pub async fn get_portfolio(
         total_monetary_value: current_positions.total_monetary_value,
         total_value: current_positions.total_value,
         total_invested: current_positions.total_invested,
+        total_monetary_invested: current_positions.total_monetary_invested,
         total_dividends: current_positions.total_dividends,
+        total_monetary_dividends: current_positions.total_monetary_dividends,
         total_open_position_gain_loss: current_positions.total_open_position_gain_loss,
         total_open_position_gain_loss_pct: current_positions.total_open_position_gain_loss_pct,
+        total_monetary_open_position_gain_loss: current_positions
+            .total_monetary_open_position_gain_loss,
+        total_monetary_open_position_gain_loss_pct: current_positions
+            .total_monetary_open_position_gain_loss_pct,
         snapshot_date: Some(snapshot_date),
         nav: Some(current_nav),
         daily_change,
@@ -196,8 +202,18 @@ pub async fn get_current_positions(
         .zip(total_monetary_value)
         .map(|(a, b)| a + b);
     let total_invested = complete_sum(positions.iter().map(|position| position.total_invested));
+    let total_monetary_invested = complete_sum(
+        monetary_positions
+            .iter()
+            .map(|position| position.total_invested),
+    );
     let total_dividends =
         complete_sum(positions.iter().map(|position| position.dividends_received));
+    let total_monetary_dividends = complete_sum(
+        monetary_positions
+            .iter()
+            .map(|position| position.dividends_received),
+    );
     let total_open_position_gain_loss = complete_sum(
         positions
             .iter()
@@ -213,6 +229,20 @@ pub async fn get_current_positions(
                     (gain_loss / invested) * 100.0
                 }
             });
+    let total_monetary_open_position_gain_loss = complete_sum(
+        monetary_positions
+            .iter()
+            .map(|position| position.open_position_gain_loss),
+    );
+    let total_monetary_open_position_gain_loss_pct = total_monetary_open_position_gain_loss
+        .zip(total_monetary_invested)
+        .map(|(gain_loss, invested)| {
+            if invested.abs() < FLOAT_EPSILON {
+                0.0
+            } else {
+                (gain_loss / invested) * 100.0
+            }
+        });
 
     Ok(CurrentPositions {
         base_currency: BASE_CURRENCY.to_owned(),
@@ -222,9 +252,13 @@ pub async fn get_current_positions(
         total_monetary_value,
         total_value,
         total_invested,
+        total_monetary_invested,
         total_dividends,
+        total_monetary_dividends,
         total_open_position_gain_loss,
         total_open_position_gain_loss_pct,
+        total_monetary_open_position_gain_loss,
+        total_monetary_open_position_gain_loss_pct,
         market_data_limitations,
         monetary_market_data_limitations,
     })
@@ -271,9 +305,13 @@ fn empty_current_positions() -> CurrentPositions {
         total_monetary_value: Some(0.0),
         total_value: Some(0.0),
         total_invested: Some(0.0),
+        total_monetary_invested: Some(0.0),
         total_dividends: Some(0.0),
+        total_monetary_dividends: Some(0.0),
         total_open_position_gain_loss: Some(0.0),
         total_open_position_gain_loss_pct: Some(0.0),
+        total_monetary_open_position_gain_loss: Some(0.0),
+        total_monetary_open_position_gain_loss_pct: Some(0.0),
         market_data_limitations: Vec::new(),
         monetary_market_data_limitations: Vec::new(),
     }
@@ -429,9 +467,15 @@ fn result_without_nav(current_positions: CurrentPositions) -> PortfolioResult {
         total_monetary_value: current_positions.total_monetary_value,
         total_value: current_positions.total_value,
         total_invested: current_positions.total_invested,
+        total_monetary_invested: current_positions.total_monetary_invested,
         total_dividends: current_positions.total_dividends,
+        total_monetary_dividends: current_positions.total_monetary_dividends,
         total_open_position_gain_loss: current_positions.total_open_position_gain_loss,
         total_open_position_gain_loss_pct: current_positions.total_open_position_gain_loss_pct,
+        total_monetary_open_position_gain_loss: current_positions
+            .total_monetary_open_position_gain_loss,
+        total_monetary_open_position_gain_loss_pct: current_positions
+            .total_monetary_open_position_gain_loss_pct,
         snapshot_date: None,
         nav: None,
         daily_change: None,

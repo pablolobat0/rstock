@@ -131,7 +131,7 @@ pub fn print_portfolio(result: &PortfolioResult) {
         });
         let display_rows: Vec<_> = sorted_rows
             .iter()
-            .map(|position| monetary_display_row(position))
+            .map(|position| position_display_row(position))
             .collect();
 
         let mut table = Table::new(&display_rows);
@@ -142,7 +142,7 @@ pub fn print_portfolio(result: &PortfolioResult) {
                 .remove_horizontal()
                 .remove_vertical(),
         );
-        // Right-align numeric columns: Quantity(4) through Weight(13)
+        // Right-align numeric columns from quantity through gain/loss percentage.
         for col in 4..=13 {
             table.modify(Columns::single(col), Alignment::right());
         }
@@ -155,7 +155,7 @@ pub fn print_portfolio(result: &PortfolioResult) {
             } else {
                 Color::FG_RED
             };
-            // G/L = column 11, G/L % = column 12 (after Divs column)
+            // Gain/loss and percentage follow the dividends column.
             table.modify(Cell::new(i + 1, 11), color.clone());
             table.modify(Cell::new(i + 1, 12), color);
         }
@@ -173,7 +173,7 @@ pub fn print_portfolio(result: &PortfolioResult) {
         println!();
         println!("As of:          {}", display_date(snapshot_date));
         println!(
-            "Portfolio Value: {}",
+            "Performance positions value: {}",
             format_optional_amount(result.total_current_value)
         );
         if let Some(nav) = result.nav {
@@ -253,7 +253,7 @@ fn print_monetary_positions(result: &PortfolioResult) {
     });
     let display_rows: Vec<MonetaryPortfolioRow> = positions
         .iter()
-        .map(|position| monetary_display_row(position))
+        .map(|position| position_display_row(position))
         .collect();
     let mut table = Table::new(&display_rows);
     table.with(
@@ -290,7 +290,7 @@ fn print_monetary_positions(result: &PortfolioResult) {
     }
 }
 
-fn monetary_display_row(position: &CurrentPosition) -> MonetaryPortfolioRow {
+fn position_display_row(position: &CurrentPosition) -> MonetaryPortfolioRow {
     let open_position_gain_loss = position.open_position_gain_loss.map(|value| {
         let sign = if value >= 0.0 { "+" } else { "" };
         format_eu(&format!("{sign}{value:.2}"))
