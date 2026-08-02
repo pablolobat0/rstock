@@ -1,7 +1,7 @@
 use crate::db::entities::{portfolio_asset_history, portfolio_history};
 use serde::Serialize;
 
-use super::{AssetPosition, CurrentPosition, MarketDataLimitation, MonetaryPosition};
+use super::{CurrentPosition, MarketDataLimitation};
 
 pub struct PortfolioSnapshot {
     pub date: String,
@@ -58,8 +58,8 @@ pub struct PeriodMetrics {
 pub struct PortfolioResult {
     pub base_currency: String,
     #[serde(rename = "positions")]
-    pub rows: Vec<AssetPosition>,
-    pub monetary_positions: Vec<MonetaryPosition>,
+    pub rows: Vec<CurrentPosition>,
+    pub monetary_positions: Vec<CurrentPosition>,
     pub total_invested: Option<f64>,
     pub total_current_value: Option<f64>,
     pub total_monetary_invested: Option<f64>,
@@ -90,7 +90,6 @@ pub struct PortfolioResult {
 }
 
 #[derive(Serialize)]
-#[allow(dead_code)] // Used through the library portfolio interface while CLI callers migrate.
 pub struct CurrentPositions {
     pub base_currency: String,
     pub positions: Vec<CurrentPosition>,

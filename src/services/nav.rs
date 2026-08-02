@@ -13,8 +13,96 @@ use crate::models::{
 };
 use crate::services::market_data::MarketData;
 
+/// Returns ensured NAV history for a caller-selected display range.
+pub async fn get_portfolio_history(
+    db: &DatabaseConnection,
+    start_date: &str,
+    end_date: &str,
+    market_data: &MarketData,
+) -> anyhow::Result<Vec<PortfolioSnapshot>> {
+    ensure_portfolio_history(db, market_data).await?;
+    portfolio_history_repo::find_between(db, start_date, end_date).await
+}
+
+/// Ensures portfolio history is ready through the Effective valuation date
+/// supported by Historical market data for the latest completed date.
+pub async fn ensure_portfolio_history(
+    db: &DatabaseConnection,
+    market_data: &MarketData,
+) -> anyhow::Result<()> {
+    let yesterday = market_data.today() - Duration::days(1);
+    let yesterday_str = format_date(yesterday);
+
+    let latest_snapshot = portfolio_history_repo::find_latest(db).await?;
+    match &latest_snapshot {
+        Some(snapshot) if snapshot.date >= yesterday_str => {}
+        Some(snapshot) => {
+            let latest_date =
+                NaiveDate::parse_from_str(&snapshot.date, crate::constants::DATE_FORMAT)
+                    .context("invalid latest snapshot date")?;
+            rebuild_portfolio_history(
+                db,
+                latest_date + Duration::days(1),
+                yesterday,
+                Some(snapshot),
+                market_data,
+            )
+            .await?;
+        }
+        None => {
+            if let Some(transaction) = transaction_repo::find_earliest(db).await? {
+                let start =
+                    NaiveDate::parse_from_str(&transaction.date, crate::constants::DATE_FORMAT)
+                        .context("invalid first transaction date")?;
+                rebuild_portfolio_history(db, start, yesterday, None, market_data).await?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Returns the historical-market-data limitations that constrain NAV without
+/// mixing them with Individual-price limitations used by current positions.
+pub(crate) async fn get_history_market_data_limitations(
+    db: &DatabaseConnection,
+    market_data: &MarketData,
+) -> anyhow::Result<Vec<MarketDataLimitation>> {
+    let end_date = market_data.today() - Duration::days(1);
+    let end = format_date(end_date);
+    let transactions = transaction_repo::find_all_ordered_by_date(db, None, Some(&end)).await?;
+    let open_holding_starts = open_holding_starts(&transactions);
+    if open_holding_starts.is_empty() {
+        return Ok(Vec::new());
+    }
+    let assets = asset_repo::find_by_ids(db, open_holding_starts.keys().copied()).await?;
+    let nav_assets: Vec<_> = assets
+        .into_iter()
+        .filter(|asset| !asset.is_monetary() && !is_benchmark_ticker(&asset.ticker))
+        .collect();
+    if nav_assets.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut limitations = Vec::new();
+    for asset in nav_assets {
+        let start = open_holding_starts
+            .get(&asset.id)
+            .context("open NAV holding has no opening transaction")?;
+        for limitation in market_data
+            .prepare_valuation_market_data(db, &[asset], start, &end)
+            .await?
+            .limitations
+        {
+            if !limitations.contains(&limitation) {
+                limitations.push(limitation);
+            }
+        }
+    }
+    Ok(limitations)
+}
+
 #[allow(clippy::too_many_lines)]
-pub async fn rebuild_portfolio_history(
+async fn rebuild_portfolio_history(
     db: &DatabaseConnection,
     start_date: NaiveDate,
     end_date: NaiveDate,
@@ -134,82 +222,6 @@ pub async fn rebuild_portfolio_history(
     Ok(())
 }
 
-/// Returns the historical-market-data limitations that constrain NAV without
-/// mixing them with Individual-price limitations used by current positions.
-pub async fn get_history_market_data_limitations(
-    db: &DatabaseConnection,
-    market_data: &MarketData,
-) -> anyhow::Result<Vec<MarketDataLimitation>> {
-    let end_date = market_data.today() - Duration::days(1);
-    let end = format_date(end_date);
-    let transactions = transaction_repo::find_all_ordered_by_date(db, None, Some(&end)).await?;
-    let open_holding_starts = open_holding_starts(&transactions);
-    if open_holding_starts.is_empty() {
-        return Ok(Vec::new());
-    }
-    let assets = asset_repo::find_by_ids(db, open_holding_starts.keys().copied()).await?;
-    let nav_assets: Vec<_> = assets
-        .into_iter()
-        .filter(|asset| !asset.is_monetary() && !is_benchmark_ticker(&asset.ticker))
-        .collect();
-    if nav_assets.is_empty() {
-        return Ok(Vec::new());
-    }
-    let mut limitations = Vec::new();
-    for asset in nav_assets {
-        let start = open_holding_starts
-            .get(&asset.id)
-            .context("open NAV holding has no opening transaction")?;
-        for limitation in market_data
-            .prepare_valuation_market_data(db, &[asset], start, &end)
-            .await?
-            .limitations
-        {
-            if !limitations.contains(&limitation) {
-                limitations.push(limitation);
-            }
-        }
-    }
-    Ok(limitations)
-}
-
-/// Ensures portfolio history is current through the last completed date.
-pub async fn ensure_portfolio_history(
-    db: &DatabaseConnection,
-    market_data: &MarketData,
-) -> anyhow::Result<()> {
-    let yesterday = market_data.today() - Duration::days(1);
-    let yesterday_str = format_date(yesterday);
-
-    let latest_snapshot = portfolio_history_repo::find_latest(db).await?;
-    match &latest_snapshot {
-        Some(snapshot) if snapshot.date >= yesterday_str => {}
-        Some(snapshot) => {
-            let latest_date =
-                NaiveDate::parse_from_str(&snapshot.date, crate::constants::DATE_FORMAT)
-                    .context("invalid latest snapshot date")?;
-            rebuild_portfolio_history(
-                db,
-                latest_date + Duration::days(1),
-                yesterday,
-                Some(snapshot),
-                market_data,
-            )
-            .await?;
-        }
-        None => {
-            if let Some(transaction) = transaction_repo::find_earliest(db).await? {
-                let start =
-                    NaiveDate::parse_from_str(&transaction.date, crate::constants::DATE_FORMAT)
-                        .context("invalid first transaction date")?;
-                rebuild_portfolio_history(db, start, yesterday, None, market_data).await?;
-            }
-        }
-    }
-
-    Ok(())
-}
-
 /// Returns the start date of each currently open holding period. Closed lots do
 /// not require current NAV market data, and a re-opened position starts anew.
 fn open_holding_starts(transactions: &[Transaction]) -> HashMap<i32, String> {
@@ -246,7 +258,7 @@ fn open_holding_starts(transactions: &[Transaction]) -> HashMap<i32, String> {
 
 /// Returns `(outstanding_shares, nav, dividend_income_eur)`.
 #[allow(clippy::implicit_hasher)]
-pub fn process_day_transactions(
+fn process_day_transactions(
     day_txs: &[&Transaction],
     holdings: &mut HashMap<i32, f64>,
     outstanding_shares: f64,

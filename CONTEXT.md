@@ -25,7 +25,7 @@ Persisted market data for completed dates, used to build reproducible NAV histor
 _Avoid_: Live quote
 
 **Live quote**:
-Non-persisted same-day stock price or FX rate used for current display before the market day is complete.
+Non-persisted same-day asset price or FX rate used for current display before the market day is complete. Stocks may supply one, ETFs may supply one through a capable Market data source, and mutual funds do not.
 _Avoid_: Historical market data
 
 **Market data limitation**:
@@ -110,7 +110,7 @@ _Avoid_: Total return, lifetime gain/loss
 - **NAV** uses **Historical market data**, not **Live quote** values.
 - An **Individual price** for a stock may use a **Live quote** for display.
 - Mutual funds use a single closing price and do not use **Live quote** values for display.
-- An ETF **Individual price** may use a **Live quote** when its **Market data source** supplies one; otherwise it uses the latest available **Historical market data**.
+- An ETF **Individual price** requests a same-day observation through the existing fund-price capability of `MarketDataSources`; when the configured **Market data source** supplies one it is a **Live quote**, otherwise the ETF uses the latest available **Historical market data**.
 - An **Individual price** display value may combine a stock **Live quote** with stale cached FX when live FX is unavailable, but that creates a **Market data limitation**.
 - A completed date is any date before today; same-day market-close calendars are intentionally not used.
 - A **Market data limitation** is part of the result of preparing market data when the limitation is user-actionable, not only diagnostic logging.
@@ -142,6 +142,8 @@ _Avoid_: Total return, lifetime gain/loss
 - **Asset classification** attributes should be consistent with the top-level asset class; equity-specific attributes belong to equity assets, and fixed-income-specific attributes belong to fixed-income assets.
 - A **Tracked asset** may exist before, during, or after it is held in the portfolio.
 - A currently held **Tracked asset** remains visible in the portfolio view when no **Individual price** is available; its Transaction ledger quantity and cost facts remain available while price-dependent facts are unavailable.
+- One **Transaction ledger** projection derives current quantity, remaining cost, dividends, and **Open-position gain/loss** for both performance and **Monetary holding** positions; classification changes where the position contributes, not how its ledger facts are calculated.
+- Position facts are independently available: missing historical FX can make cost or dividend facts unavailable without hiding a known quantity or current value, while a missing **Individual price** makes current value and dependent **Open-position gain/loss** unavailable without hiding ledger facts.
 - The portfolio view's current performance-holdings total is unavailable when any currently held performance asset has no **Individual price**; a partial sum must not be presented as the complete total.
 - Every aggregate in the **Portfolio view** is either complete across all included holdings or unavailable; known per-holding facts remain visible when an aggregate is unavailable.
 - Portfolio composition uses current **Transaction ledger** inventory rather than holdings at the **Effective valuation date**; value-dependent composition is unavailable when any included holding has no **Individual price**.
@@ -162,6 +164,7 @@ _Avoid_: Total return, lifetime gain/loss
 - Market data limitations for **Monetary holding** values are reported separately and do not imply a limitation on NAV or portfolio performance.
 - The **Portfolio view** reports **Market data limitation** values separately for NAV/history, current performance positions, and **Monetary holding** values; a limitation in one scope does not imply that another scope is invalid.
 - Dividends are reported as lifetime income for a **Tracked asset** and are not attributed to the units that remain after a partial sell.
+- **Open-position gain/loss** uses only current value and remaining weighted-average cost; dividends and realized gains from sold units are separate facts and never contribute to it.
 
 ## Example Dialogue
 

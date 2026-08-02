@@ -333,3 +333,75 @@ async fn focused_current_positions_never_uses_later_fx_for_historical_ledger_fac
             rstock::models::MarketDataSubject::FxRate { ref currency } if currency == "USD"
         )));
 }
+
+#[tokio::test]
+async fn focused_current_positions_use_latest_fx_on_or_before_each_transaction_date() {
+    let db = common::setup_test_db().await;
+    let asset_id = common::insert_asset(&db, "XFAKEFX2", "USD Stock", "stock", "USD").await;
+    common::insert_transaction(&db, asset_id, "2025-06-02", 2.0, 10.0, 1.0).await;
+    common::insert_transaction(&db, asset_id, "2025-06-04", 1.0, 20.0, 2.0).await;
+    common::insert_dividend_transaction(&db, asset_id, "2025-06-04", 10.0, 1.0).await;
+    common::insert_daily_price(&db, asset_id, "2025-06-09", 15.0, false).await;
+    common::insert_exchange_rate(&db, "USD", "EUR", "2025-06-01", 0.8).await;
+    common::insert_exchange_rate(&db, "USD", "EUR", "2025-06-03", 0.9).await;
+    common::insert_exchange_rate(&db, "USD", "EUR", "2025-06-05", 1.2).await;
+    common::insert_exchange_rate(&db, "USD", "EUR", "2025-06-09", 1.0).await;
+
+    let result = portfolio::get_current_positions(
+        &db,
+        &common::market_data_at(&common::MockMarketDataSources::new(), fixed_today()),
+    )
+    .await
+    .unwrap();
+    let position = &result.positions[0];
+
+    // Buy costs are 21 * 0.8 and 22 * 0.9; the dividend is (10 - 1) * 0.9.
+    assert!((position.total_invested.unwrap() - 36.6).abs() < 1e-9);
+    assert!((position.avg_cost.unwrap() - 12.2).abs() < 1e-9);
+    assert!((position.dividends_received.unwrap() - 8.1).abs() < 1e-9);
+    assert!((position.current_value.unwrap() - 45.0).abs() < 1e-9);
+    assert!((position.open_position_gain_loss.unwrap() - 8.4).abs() < 1e-9);
+    assert!((result.total_invested.unwrap() - 36.6).abs() < 1e-9);
+    assert!((result.total_dividends.unwrap() - 8.1).abs() < 1e-9);
+    assert!((result.total_open_position_gain_loss.unwrap() - 8.4).abs() < 1e-9);
+}
+
+#[tokio::test]
+async fn focused_current_positions_keep_independent_facts_when_only_dividend_fx_is_missing() {
+    let db = common::setup_test_db().await;
+    let asset_id = common::insert_asset(&db, "XFAKEFX3", "USD Stock", "stock", "USD").await;
+    common::insert_dividend_transaction(&db, asset_id, "2025-06-01", 3.0, 0.0).await;
+    common::insert_transaction(&db, asset_id, "2025-06-02", 2.0, 10.0, 0.0).await;
+    common::insert_daily_price(&db, asset_id, "2025-06-09", 12.0, false).await;
+    common::insert_exchange_rate(&db, "USD", "EUR", "2025-06-02", 0.8).await;
+    common::insert_exchange_rate(&db, "USD", "EUR", "2025-06-09", 0.9).await;
+
+    let result = portfolio::get_current_positions(
+        &db,
+        &common::market_data_at(&common::MockMarketDataSources::new(), fixed_today()),
+    )
+    .await
+    .unwrap();
+    let position = &result.positions[0];
+
+    assert_eq!(position.total_qty, 2.0);
+    assert_eq!(position.total_invested, Some(16.0));
+    assert_eq!(position.avg_cost, Some(8.0));
+    assert_eq!(position.current_value, Some(21.6));
+    assert_eq!(position.dividends_received, None);
+    assert!((position.open_position_gain_loss.unwrap() - 5.6).abs() < 1e-9);
+    assert!((position.open_position_gain_loss_pct.unwrap() - 35.0).abs() < 1e-9);
+    assert_eq!(result.total_current_value, Some(21.6));
+    assert_eq!(result.total_invested, Some(16.0));
+    assert_eq!(result.total_dividends, None);
+    assert!((result.total_open_position_gain_loss.unwrap() - 5.6).abs() < 1e-9);
+    assert!((result.total_open_position_gain_loss_pct.unwrap() - 35.0).abs() < 1e-9);
+    assert_eq!(result.total_value, Some(21.6));
+    assert!(position
+        .market_data_limitations
+        .iter()
+        .any(|limitation| matches!(
+            limitation.subject,
+            rstock::models::MarketDataSubject::FxRate { ref currency } if currency == "USD"
+        )));
+}
