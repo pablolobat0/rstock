@@ -4,11 +4,36 @@ use std::process::{Command, Output};
 use serde_json::{json, Value};
 
 fn run(home: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_rstock"))
+    command(home)
         .args(args)
-        .env("HOME", home)
         .output()
         .expect("rstock should run")
+}
+
+fn command(home: &Path) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_rstock"));
+    command
+        .env("HOME", home)
+        .env(
+            "RSTOCK_SOURCE_TOKEN_PAGE_URL",
+            "https://example.invalid/token",
+        )
+        .env(
+            "RSTOCK_SOURCE_CHARTSERVICE_URL",
+            "https://example.invalid/chart",
+        )
+        .env(
+            "RSTOCK_SOURCE_HOLDINGS_URL",
+            "https://example.invalid/holdings",
+        )
+        .env("RSTOCK_SOURCE_QUOTE_URL", "https://example.invalid/quote")
+        .env("RSTOCK_SOURCE_SAL_API_KEY", "test")
+        .env("RSTOCK_SOURCE_USER_AGENT", "rstock-test")
+        .env(
+            "RSTOCK_SOURCE_TOKEN_CACHE_PATH",
+            home.join("token-cache.json"),
+        );
+    command
 }
 
 fn run_success(home: &Path, args: &[&str]) -> Output {

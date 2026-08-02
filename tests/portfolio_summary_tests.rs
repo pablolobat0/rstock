@@ -6,6 +6,7 @@ use rstock::db::repos::portfolio_history_repo;
 use rstock::services::metrics::compute_cagr;
 use rstock::services::portfolio;
 use sea_orm::{EntityTrait, Set};
+use serde_json::json;
 
 fn date_string(days_before_yesterday: i64) -> String {
     let yesterday = chrono::Local::now().date_naive() - Duration::days(1);
@@ -478,4 +479,74 @@ async fn test_monetary_snapshot_is_not_returned_as_performance_position() {
     assert!((result.total_current_value - 1100.0).abs() < 1e-9);
     assert!((result.total_open_position_gain_loss - 100.0).abs() < 1e-9);
     assert!((result.nav.unwrap() - 100.0).abs() < 1e-9);
+}
+
+#[tokio::test]
+async fn portfolio_view_applies_open_position_facts_equally_to_performance_and_monetary_holdings() {
+    let db = common::setup_test_db().await;
+    let stock_id =
+        common::insert_asset(&db, "XFAKEFACT1", "Performance Stock", "stock", "EUR").await;
+    let monetary_id =
+        common::insert_monetary_fund_asset(&db, "XFAKEFACT2", "Monetary Fund", "EUR", "F000FACTS")
+            .await;
+    for asset_id in [stock_id, monetary_id] {
+        common::insert_transaction(&db, asset_id, "2025-06-01", 2.0, 10.0, 1.0).await;
+        common::insert_transaction(&db, asset_id, "2025-06-02", 4.0, 14.0, 2.0).await;
+        common::insert_split_transaction(&db, asset_id, "2025-06-03", 2.0).await;
+        common::insert_dividend_transaction(&db, asset_id, "2025-06-04", 10.0, 1.0).await;
+        common::insert_sell_transaction(&db, asset_id, "2025-06-05", 3.0, 20.0, 0.0).await;
+    }
+    common::insert_portfolio_snapshot(&db, "2025-06-09", 100.0, 1.0).await;
+    common::insert_portfolio_asset_snapshot(&db, "2025-06-09", stock_id, 9.0, 8.0, 72.0, 1.0).await;
+
+    let mut sources = common::MockMarketDataSources::new();
+    sources.historical_prices.insert(
+        "XFAKEFACT1".to_owned(),
+        vec![("2025-06-09".to_owned(), 8.0)],
+    );
+    sources
+        .historical_prices
+        .insert("F000FACTS".to_owned(), vec![("2025-06-09".to_owned(), 8.0)]);
+    let market_data = common::market_data_at(
+        &sources,
+        chrono::NaiveDate::from_ymd_opt(2025, 6, 10).unwrap(),
+    );
+
+    let result = portfolio::get_portfolio(&db, &market_data).await.unwrap();
+    let performance = &result.rows[0];
+    let monetary = &result.monetary_positions[0];
+
+    assert!((performance.total_qty - 9.0).abs() < 1e-9);
+    assert!((performance.total_invested - 59.25).abs() < 1e-9);
+    assert!((performance.avg_cost - 6.583_333_333_3).abs() < 1e-9);
+    assert!((performance.dividends_received - 9.0).abs() < 1e-9);
+    assert!((performance.open_position_gain_loss - 12.75).abs() < 1e-9);
+    assert_eq!(Some(performance.total_invested), monetary.total_invested);
+    assert_eq!(Some(performance.avg_cost), monetary.avg_cost);
+    assert_eq!(
+        Some(performance.dividends_received),
+        monetary.dividends_received
+    );
+    assert_eq!(
+        Some(performance.open_position_gain_loss),
+        monetary.open_position_gain_loss
+    );
+
+    let json_output = serde_json::to_value(&result).unwrap();
+    assert_eq!(
+        json_output["positions"][0]["dividends_received"],
+        json!(9.0)
+    );
+    assert_eq!(
+        json_output["positions"][0]["open_position_gain_loss"],
+        json!(12.75)
+    );
+    assert_eq!(
+        json_output["monetary_positions"][0]["dividends_received"],
+        json!(9.0)
+    );
+    assert_eq!(
+        json_output["monetary_positions"][0]["open_position_gain_loss"],
+        json!(12.75)
+    );
 }
