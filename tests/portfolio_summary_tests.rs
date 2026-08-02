@@ -339,7 +339,7 @@ async fn test_portfolio_returns_monetary_only_holdings_separately() {
     assert!((position.total_qty - 20.0).abs() < 1e-9);
     assert!((position.current_price.unwrap() - 101.0).abs() < 1e-9);
     assert!((position.current_value.unwrap() - 2020.0).abs() < 1e-9);
-    assert!((position.gain_loss.unwrap() - 20.0).abs() < 1e-9);
+    assert!((position.open_position_gain_loss.unwrap() - 20.0).abs() < 1e-9);
     assert!((result.total_monetary_value.unwrap() - 2020.0).abs() < 1e-9);
     assert!(result.nav.is_none());
     assert!(result.market_data_limitations.is_empty());
@@ -371,8 +371,8 @@ async fn test_portfolio_keeps_monetary_holding_when_price_is_missing() {
     assert!(position.current_price.is_none());
     assert!(position.price_date.is_none());
     assert!(position.current_value.is_none());
-    assert!(position.gain_loss.is_none());
-    assert!(position.gain_loss_pct.is_none());
+    assert!(position.open_position_gain_loss.is_none());
+    assert!(position.open_position_gain_loss_pct.is_none());
     assert_eq!(position.market_data_limitations.len(), 1);
     assert!(result.total_monetary_value.is_none());
     assert!(result.market_data_limitations.is_empty());
@@ -425,7 +425,7 @@ async fn test_monetary_cost_basis_accounts_for_splits() {
     assert!((position.total_qty - 20.0).abs() < 1e-9);
     assert!((position.avg_cost.unwrap() - 50.0).abs() < 1e-9);
     assert!((position.total_invested.unwrap() - 1000.0).abs() < 1e-9);
-    assert!((position.gain_loss.unwrap() - 200.0).abs() < 1e-9);
+    assert!((position.open_position_gain_loss.unwrap() - 200.0).abs() < 1e-9);
 }
 
 #[tokio::test]
@@ -476,6 +476,6 @@ async fn test_monetary_snapshot_is_not_returned_as_performance_position() {
     assert_eq!(result.monetary_positions[0].ticker, "XFAKEM5");
     assert!((result.total_invested - 1000.0).abs() < 1e-9);
     assert!((result.total_current_value - 1100.0).abs() < 1e-9);
-    assert!((result.total_gain_loss - 100.0).abs() < 1e-9);
+    assert!((result.total_open_position_gain_loss - 100.0).abs() < 1e-9);
     assert!((result.nav.unwrap() - 100.0).abs() < 1e-9);
 }

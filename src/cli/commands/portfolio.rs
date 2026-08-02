@@ -219,8 +219,8 @@ mod tests {
             total_invested: 350.0,
             total_current_value: 400.0,
             total_dividends: 0.0,
-            total_gain_loss: 50.0,
-            total_gain_loss_pct: 14.29,
+            total_open_position_gain_loss: 50.0,
+            total_open_position_gain_loss_pct: 14.29,
             snapshot_date: Some("2025-01-09".to_string()),
             nav: Some(110.0),
             daily_change: None,
@@ -257,6 +257,12 @@ mod tests {
             value["data"]["monetary_positions"][0]["open_position_gain_loss"],
             0.0
         );
+        assert_eq!(value["data"]["positions"][0]["dividends_received"], 0.0);
+        assert_eq!(
+            value["data"]["monetary_positions"][0]["dividends_received"],
+            0.0
+        );
+        assert_eq!(value["data"]["total_dividends"], 0.0);
         assert_eq!(value["data"]["total_open_position_gain_loss"], 50.0);
         assert!(value["data"]["positions"][0].get("gain_loss").is_none());
         assert!(value["data"]["monetary_positions"][0]
@@ -303,8 +309,8 @@ mod tests {
             total_invested: 100.0,
             current_value,
             dividends_received: 0.0,
-            gain_loss: current_value - 100.0,
-            gain_loss_pct: current_value - 100.0,
+            open_position_gain_loss: current_value - 100.0,
+            open_position_gain_loss_pct: current_value - 100.0,
             market_data_limitations,
         }
     }
@@ -326,8 +332,8 @@ mod tests {
             total_invested: Some(200.0),
             current_value,
             dividends_received: Some(0.0),
-            gain_loss: current_value.map(|value| value - 200.0),
-            gain_loss_pct: current_value.map(|value| (value - 200.0) / 2.0),
+            open_position_gain_loss: current_value.map(|value| value - 200.0),
+            open_position_gain_loss_pct: current_value.map(|value| (value - 200.0) / 2.0),
             market_data_limitations: Vec::new(),
         }
     }

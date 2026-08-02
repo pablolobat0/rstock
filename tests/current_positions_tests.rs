@@ -125,9 +125,9 @@ async fn focused_current_positions_report_remaining_cost_dividends_and_open_gain
     assert!((position.avg_cost.unwrap() - 6.5833333333).abs() < 1e-9);
     assert!((position.dividends_received.unwrap() - 9.0).abs() < 1e-9);
     assert!((position.current_value.unwrap() - 72.0).abs() < 1e-9);
-    assert!((position.gain_loss.unwrap() - 12.75).abs() < 1e-9);
+    assert!((position.open_position_gain_loss.unwrap() - 12.75).abs() < 1e-9);
     assert!((result.total_dividends.unwrap() - 9.0).abs() < 1e-9);
-    assert!((result.total_gain_loss.unwrap() - 12.75).abs() < 1e-9);
+    assert!((result.total_open_position_gain_loss.unwrap() - 12.75).abs() < 1e-9);
 }
 
 #[tokio::test]
@@ -169,18 +169,18 @@ async fn focused_current_positions_keep_sell_and_dividend_facts_separate_from_mo
     assert!((position.total_qty - 6.0).abs() < 1e-9);
     assert!((position.total_invested.unwrap() - 60.0).abs() < 1e-9);
     assert!((position.dividends_received.unwrap() - 5.0).abs() < 1e-9);
-    assert!((position.gain_loss.unwrap() - 12.0).abs() < 1e-9);
+    assert!((position.open_position_gain_loss.unwrap() - 12.0).abs() < 1e-9);
     let monetary_position = &result.monetary_positions[0];
     assert!((monetary_position.total_qty - 6.0).abs() < 1e-9);
     assert!((monetary_position.total_invested.unwrap() - 600.0).abs() < 1e-9);
     assert!((monetary_position.dividends_received.unwrap() - 20.0).abs() < 1e-9);
-    assert!((monetary_position.gain_loss.unwrap() - 30.0).abs() < 1e-9);
+    assert!((monetary_position.open_position_gain_loss.unwrap() - 30.0).abs() < 1e-9);
     assert!((result.total_current_value.unwrap() - 72.0).abs() < 1e-9);
     assert!((result.total_monetary_value.unwrap() - 630.0).abs() < 1e-9);
     assert!((result.total_value.unwrap() - 702.0).abs() < 1e-9);
     assert!((result.total_invested.unwrap() - 60.0).abs() < 1e-9);
     assert!((result.total_dividends.unwrap() - 5.0).abs() < 1e-9);
-    assert!((result.total_gain_loss.unwrap() - 12.0).abs() < 1e-9);
+    assert!((result.total_open_position_gain_loss.unwrap() - 12.0).abs() < 1e-9);
 }
 
 #[tokio::test]
@@ -226,6 +226,12 @@ async fn focused_current_positions_apply_identical_financial_facts_to_performanc
     assert_eq!(performance.avg_cost, monetary.avg_cost);
     assert_eq!(performance.dividends_received, monetary.dividends_received);
     assert_eq!(performance.current_value, monetary.current_value);
-    assert_eq!(performance.gain_loss, monetary.gain_loss);
-    assert_eq!(performance.gain_loss_pct, monetary.gain_loss_pct);
+    assert_eq!(
+        performance.open_position_gain_loss,
+        monetary.open_position_gain_loss
+    );
+    assert_eq!(
+        performance.open_position_gain_loss_pct,
+        monetary.open_position_gain_loss_pct
+    );
 }
