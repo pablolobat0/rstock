@@ -73,9 +73,9 @@ All business logic lives here. Key modules:
 
 **`market_data/individual_price.rs`** — Private implementation for display-time Individual price values for portfolio rows. Stocks and FX may use non-persisted Live quote values, funds and ETFs use cached Historical market data semantics, and snapshot fallback preserves row rendering when current display data is unavailable.
 
-**`portfolio.rs`** — `get_portfolio()` builds the current position table (per-asset quantity, avg cost, gain/loss) and computes return metrics for the portfolio view. Portfolio rows use the `market_data` Module root for Individual price values and carry Market data limitation values to display formatting. Monetary holdings are derived separately from the Transaction ledger and do not participate in NAV or aggregate performance values.
+**`portfolio.rs`** — `get_current_positions()` builds focused current Transaction ledger inventory without NAV history, while `get_portfolio()` combines current positions with NAV, return, and risk facts after requesting NAV readiness. Position rows use the `market_data` Module root for Individual price values and carry Market data limitation values to display formatting. Monetary holdings remain separate from performance positions and do not participate in NAV or aggregate performance values.
 
-**`analytics.rs`** — Computes correlation and risk-metric inputs from portfolio history and benchmark prices.
+**`analytics.rs`** — Computes asset-series correlation from current Transaction ledger holdings and historical Base currency series, and computes portfolio risk metrics from NAV history and benchmark prices. Asset-series correlation does not rebuild NAV history.
 
 **`composition.rs`** — Builds portfolio composition analytics with look-through aggregation and top holdings.
 
@@ -323,7 +323,7 @@ Historical market data preparation caches source observations and fills gaps bet
 ```
 main.rs
   └─> portfolio::get_portfolio()
-        ├─> Check if NAV snapshots are stale (last snapshot < yesterday)
+        ├─> nav::ensure_portfolio_history()
         ├─> If stale: nav::rebuild_portfolio_history()
         │     ├─> market_data.prepare_valuation_market_data()
         │     └─> Day-by-day NAV computation loop using strict valuation reads
@@ -395,8 +395,8 @@ main.rs
 ```
 main.rs
   └─> composition::compute_composition()
-        ├─> portfolio::trigger_rebuild_if_needed()
-        ├─> Aggregate classifications and look-through holdings
+        ├─> Load current Transaction ledger positions and Individual prices
+        ├─> Aggregate classifications and look-through holdings without rebuilding NAV
         └─> Return composition result
   └─> display::print_composition()
 ```
@@ -406,7 +406,8 @@ main.rs
 ```
 main.rs
   └─> analytics::compute_correlation_data()
-        ├─> portfolio_asset_history_repo (load daily returns per asset)
+        ├─> Derive current held assets from the Transaction ledger
+        ├─> Request historical Base currency asset and benchmark series
         ├─> Compute pairwise Pearson correlations
         └─> Return N×N matrix
   └─> display::print_correlation_matrix()

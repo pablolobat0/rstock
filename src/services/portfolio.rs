@@ -25,7 +25,7 @@ pub async fn get_portfolio(
     market_data: &MarketData,
 ) -> anyhow::Result<PortfolioResult> {
     let today = market_data.today();
-    trigger_rebuild_if_needed_at(db, market_data, today).await?;
+    nav::ensure_portfolio_history(db, market_data).await?;
 
     let (monetary_positions, total_monetary_value, monetary_market_data_limitations) =
         compute_monetary_positions(db, market_data, today).await?;
@@ -252,111 +252,21 @@ pub async fn get_current_positions(
     })
 }
 
-pub async fn get_asset_positions(
-    db: &DatabaseConnection,
-    market_data: &MarketData,
-) -> anyhow::Result<PortfolioResult> {
-    let today = market_data.today();
-    trigger_rebuild_if_needed_at(db, market_data, today).await?;
-
-    let (monetary_positions, total_monetary_value, monetary_market_data_limitations) =
-        compute_monetary_positions(db, market_data, today).await?;
-
-    let latest_snapshot = portfolio_history_repo::find_latest(db).await?;
-    let snapshot_date = if let Some(snapshot) = &latest_snapshot {
-        snapshot.date.clone()
-    } else {
-        return Ok(empty_result_with_monetary(
-            monetary_positions,
-            total_monetary_value,
-            monetary_market_data_limitations,
-        ));
-    };
-
-    let rows = compute_asset_positions(db, &snapshot_date, market_data, today).await?;
-
-    let (
-        total_current_value,
-        total_invested,
-        total_dividends,
-        total_gain_loss,
-        total_gain_loss_pct,
-    ) = compute_non_monetary_totals(&rows);
-    let market_data_limitations = collect_market_data_limitations(&rows);
-
-    Ok(PortfolioResult {
-        base_currency: BASE_CURRENCY.to_string(),
-        rows,
-        monetary_positions,
-        total_monetary_value,
-        total_invested,
-        total_current_value,
-        total_dividends,
-        total_gain_loss,
-        total_gain_loss_pct,
-        snapshot_date: None,
-        nav: None,
-        daily_change: None,
-        daily_change_pct: None,
-        inception_date: None,
-        ytd_return: None,
-        one_year_return: None,
-        three_year_return: None,
-        five_year_return: None,
-        ytd_metrics: None,
-        one_year_metrics: None,
-        three_year_metrics: None,
-        five_year_metrics: None,
-        market_data_limitations,
-        monetary_market_data_limitations,
-    })
-}
-
-pub async fn trigger_rebuild_if_needed(
-    db: &DatabaseConnection,
-    market_data: &MarketData,
-) -> anyhow::Result<()> {
-    trigger_rebuild_if_needed_at(db, market_data, market_data.today()).await
-}
-
-async fn trigger_rebuild_if_needed_at(
-    db: &DatabaseConnection,
-    market_data: &MarketData,
-    today: NaiveDate,
-) -> anyhow::Result<()> {
-    let yesterday = today - Duration::days(1);
-    let yesterday_str = format_date(yesterday);
-
-    let latest_snapshot = portfolio_history_repo::find_latest(db).await?;
-    match &latest_snapshot {
-        Some(snap) if snap.date >= yesterday_str => {}
-        Some(snap) => {
-            let latest_date = NaiveDate::parse_from_str(&snap.date, DATE_FORMAT)
-                .context("invalid latest snapshot date")?;
-            let next_day = latest_date + chrono::Duration::days(1);
-            nav::rebuild_portfolio_history(db, next_day, yesterday, Some(snap), market_data)
-                .await?;
-        }
-        None => {
-            if let Some(tx) = transaction_repo::find_earliest(db).await? {
-                let start = NaiveDate::parse_from_str(&tx.date, DATE_FORMAT)
-                    .context("invalid first transaction date")?;
-                nav::rebuild_portfolio_history(db, start, yesterday, None, market_data).await?;
-            }
-        }
-    }
-    Ok(())
-}
-
 pub async fn get_nav_snapshots(
     db: &DatabaseConnection,
     start_date: &str,
     end_date: &str,
+    market_data: &MarketData,
 ) -> anyhow::Result<Vec<PortfolioSnapshot>> {
+    nav::ensure_portfolio_history(db, market_data).await?;
     portfolio_history_repo::find_between(db, start_date, end_date).await
 }
 
-pub async fn get_inception_date(db: &DatabaseConnection) -> anyhow::Result<Option<String>> {
+pub async fn get_inception_date(
+    db: &DatabaseConnection,
+    market_data: &MarketData,
+) -> anyhow::Result<Option<String>> {
+    nav::ensure_portfolio_history(db, market_data).await?;
     let earliest = portfolio_history_repo::find_earliest(db).await?;
     Ok(earliest.map(|s| s.date))
 }
