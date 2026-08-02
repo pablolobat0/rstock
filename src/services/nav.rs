@@ -4,11 +4,13 @@ use anyhow::Context;
 use chrono::{Duration, NaiveDate};
 use sea_orm::DatabaseConnection;
 
-use crate::constants::{format_date, FLOAT_EPSILON, INITIAL_NAV};
+use crate::constants::{format_date, is_benchmark_ticker, FLOAT_EPSILON, INITIAL_NAV};
 use crate::db::repos::{
     asset_repo, portfolio_asset_history_repo, portfolio_history_repo, transaction_repo,
 };
-use crate::models::{cents_to_f64, Asset, AssetSnapshot, PortfolioSnapshot, Transaction};
+use crate::models::{
+    cents_to_f64, Asset, AssetSnapshot, MarketDataLimitation, PortfolioSnapshot, Transaction,
+};
 use crate::services::market_data::MarketData;
 
 #[allow(clippy::too_many_lines)]
@@ -130,6 +132,41 @@ pub async fn rebuild_portfolio_history(
     }
 
     Ok(())
+}
+
+/// Returns the historical-market-data limitations that constrain NAV without
+/// mixing them with Individual-price limitations used by current positions.
+pub async fn get_history_market_data_limitations(
+    db: &DatabaseConnection,
+    market_data: &MarketData,
+) -> anyhow::Result<Vec<MarketDataLimitation>> {
+    let end_date = market_data.today() - Duration::days(1);
+    let end = format_date(end_date);
+    let transactions = transaction_repo::find_all_ordered_by_date(db, None, Some(&end)).await?;
+    let Some(start) = transactions
+        .iter()
+        .map(|transaction| &transaction.date)
+        .min()
+    else {
+        return Ok(Vec::new());
+    };
+    let assets = asset_repo::find_by_ids(
+        db,
+        transactions.iter().map(|transaction| transaction.asset_id),
+    )
+    .await?;
+    let nav_assets: Vec<_> = assets
+        .into_iter()
+        .filter(|asset| !asset.is_monetary() && !is_benchmark_ticker(&asset.ticker))
+        .collect();
+    if nav_assets.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    Ok(market_data
+        .prepare_valuation_market_data(db, &nav_assets, start, &end)
+        .await?
+        .limitations)
 }
 
 /// Ensures portfolio history is current through the last completed date.

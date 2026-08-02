@@ -87,7 +87,8 @@ pub async fn get_portfolio(
     )
     .await?;
 
-    let mut nav_market_data_limitations = Vec::new();
+    let mut nav_market_data_limitations =
+        nav::get_history_market_data_limitations(db, market_data).await?;
     extend_unique_limitations(
         &mut nav_market_data_limitations,
         period_metrics.market_data_limitations.clone(),
