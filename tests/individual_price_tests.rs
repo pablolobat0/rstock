@@ -41,7 +41,10 @@ async fn fixed_clock_etf_display_uses_capability_based_live_quote() {
     let mut sources = common::MockMarketDataSources::new();
     sources
         .historical_prices
-        .insert(asset.ticker.clone(), vec![("2025-06-10".to_owned(), 125.0)]);
+        .insert("ETF1".to_owned(), vec![("2025-06-10".to_owned(), 125.0)]);
+    sources
+        .historical_prices
+        .insert(asset.ticker.clone(), vec![("2025-06-10".to_owned(), 999.0)]);
 
     let result = common::market_data_at(&sources, fixed_today())
         .individual_price(&db, &asset, fixed_fallback("2025-06-09"))
@@ -63,7 +66,10 @@ async fn fixed_clock_etf_display_falls_back_to_historical_price_with_limitation(
         .await
         .unwrap()
         .unwrap();
-    let sources = common::MockMarketDataSources::new();
+    let mut sources = common::MockMarketDataSources::new();
+    sources
+        .historical_prices
+        .insert("ETF2".to_owned(), vec![("2025-06-09".to_owned(), 999.0)]);
 
     let result = common::market_data_at(&sources, fixed_today())
         .individual_price(&db, &asset, fixed_fallback("2025-05-29"))
