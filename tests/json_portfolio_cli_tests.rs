@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::process::Command;
 
 use serde_json::{json, Value};
@@ -11,9 +12,8 @@ fn both_dashboard_paths_emit_the_same_empty_json_contract() {
 
     for args in cases {
         let home = tempfile::tempdir().expect("temporary HOME should be created");
-        let output = Command::new(env!("CARGO_BIN_EXE_rstock"))
+        let output = command(home.path())
             .args(*args)
-            .env("HOME", home.path())
             .output()
             .expect("rstock should run");
 
@@ -41,9 +41,8 @@ fn both_dashboard_paths_emit_the_same_empty_json_contract() {
 #[test]
 fn empty_dashboard_keeps_human_table_and_chart_messages() {
     let home = tempfile::tempdir().expect("temporary HOME should be created");
-    let output = Command::new(env!("CARGO_BIN_EXE_rstock"))
+    let output = command(home.path())
         .arg("get")
-        .env("HOME", home.path())
         .output()
         .expect("rstock should run");
 
@@ -56,4 +55,30 @@ fn empty_dashboard_keeps_human_table_and_chart_messages() {
     assert!(stdout.contains("No positions found."));
     assert!(stdout.contains("Not enough data to display NAV chart."));
     assert!(!stdout.trim_start().starts_with('{'));
+}
+
+fn command(home: &Path) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_rstock"));
+    command
+        .env("HOME", home)
+        .env(
+            "RSTOCK_SOURCE_TOKEN_PAGE_URL",
+            "https://example.invalid/token",
+        )
+        .env(
+            "RSTOCK_SOURCE_CHARTSERVICE_URL",
+            "https://example.invalid/chart",
+        )
+        .env(
+            "RSTOCK_SOURCE_HOLDINGS_URL",
+            "https://example.invalid/holdings",
+        )
+        .env("RSTOCK_SOURCE_QUOTE_URL", "https://example.invalid/quote")
+        .env("RSTOCK_SOURCE_SAL_API_KEY", "test")
+        .env("RSTOCK_SOURCE_USER_AGENT", "rstock-test")
+        .env(
+            "RSTOCK_SOURCE_TOKEN_CACHE_PATH",
+            home.join("token-cache.json"),
+        );
+    command
 }

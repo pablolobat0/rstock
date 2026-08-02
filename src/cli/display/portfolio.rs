@@ -127,7 +127,11 @@ pub fn print_portfolio(result: &PortfolioResult) {
             .rows
             .iter()
             .map(|r| {
-                let sign = if r.gain_loss >= 0.0 { "+" } else { "" };
+                let sign = if r.open_position_gain_loss >= 0.0 {
+                    "+"
+                } else {
+                    ""
+                };
                 let weight = if total_current_value > 0.0 {
                     format_eu(&format!(
                         "{:.1}%",
@@ -137,14 +141,11 @@ pub fn print_portfolio(result: &PortfolioResult) {
                     "0,0%".to_string()
                 };
 
-                let gl_text = format_eu(&format!("{}{:.2}", sign, r.gain_loss));
-                let gl_pct_text = format_eu(&format!("{}{:.2}%", sign, r.gain_loss_pct));
+                let gl_text = format_eu(&format!("{}{:.2}", sign, r.open_position_gain_loss));
+                let gl_pct_text =
+                    format_eu(&format!("{}{:.2}%", sign, r.open_position_gain_loss_pct));
 
-                let divs_text = if r.dividends_received > 0.0 {
-                    format_eu(&format!("{:.2}", r.dividends_received))
-                } else {
-                    String::new()
-                };
+                let divs_text = format_dividends(r.dividends_received);
 
                 PortfolioRow {
                     ticker: if r.asset_type == AssetType::Stock {
@@ -166,8 +167,8 @@ pub fn print_portfolio(result: &PortfolioResult) {
                     total_invested: format_eu(&format!("{:.2}", r.total_invested)),
                     current_value: format_eu(&format!("{:.2}", r.current_value)),
                     dividends: divs_text,
-                    gain_loss: gl_text,
-                    gain_loss_pct: gl_pct_text,
+                    open_position_gain_loss: gl_text,
+                    open_position_gain_loss_pct: gl_pct_text,
                     weight,
                 }
             })
@@ -206,7 +207,7 @@ pub fn print_portfolio(result: &PortfolioResult) {
             table.modify(Columns::single(col), Alignment::right());
         }
         for (i, r) in sorted_rows.iter().enumerate() {
-            let color = if r.gain_loss >= 0.0 {
+            let color = if r.open_position_gain_loss >= 0.0 {
                 Color::FG_GREEN
             } else {
                 Color::FG_RED
@@ -217,35 +218,8 @@ pub fn print_portfolio(result: &PortfolioResult) {
         }
         println!("{table}");
 
-        let sign = if result.total_gain_loss >= 0.0 {
-            "+"
-        } else {
-            ""
-        };
-        let gl_text = format!(
-            "{} ({})",
-            format_eu(&format!("{}{:.2}", sign, result.total_gain_loss)),
-            format_eu(&format!("{}{:.2}%", sign, result.total_gain_loss_pct)),
-        );
         println!();
-        let mut totals = format!(
-            "Invested: {}  Value: {}",
-            format_eu(&format!("{:.2}", result.total_invested)),
-            format_eu(&format!("{:.2}", result.total_current_value)),
-        );
-        if result.total_dividends > 0.0 {
-            let _ = write!(
-                totals,
-                "  Divs: {}",
-                format_eu(&format!("{:.2}", result.total_dividends))
-            );
-        }
-        let _ = write!(
-            totals,
-            "  G/L: {}",
-            color_value(result.total_gain_loss, &gl_text)
-        );
-        println!("{totals}");
+        println!("{}", portfolio_totals_summary(result));
     }
 
     if !result.monetary_positions.is_empty() {
@@ -341,8 +315,8 @@ fn print_monetary_positions(result: &PortfolioResult) {
         table.modify(Columns::single(col), Alignment::right());
     }
     for (index, position) in positions.iter().enumerate() {
-        if let Some(gain_loss) = position.gain_loss {
-            let color = if gain_loss >= 0.0 {
+        if let Some(open_position_gain_loss) = position.open_position_gain_loss {
+            let color = if open_position_gain_loss >= 0.0 {
                 Color::FG_GREEN
             } else {
                 Color::FG_RED
@@ -365,11 +339,11 @@ fn print_monetary_positions(result: &PortfolioResult) {
 }
 
 fn monetary_display_row(position: &MonetaryPosition) -> MonetaryPortfolioRow {
-    let gain_loss = position.gain_loss.map(|value| {
+    let open_position_gain_loss = position.open_position_gain_loss.map(|value| {
         let sign = if value >= 0.0 { "+" } else { "" };
         format_eu(&format!("{sign}{value:.2}"))
     });
-    let gain_loss_pct = position.gain_loss_pct.map(|value| {
+    let open_position_gain_loss_pct = position.open_position_gain_loss_pct.map(|value| {
         let sign = if value >= 0.0 { "+" } else { "" };
         format_eu(&format!("{sign}{value:.2}%"))
     });
@@ -399,11 +373,10 @@ fn monetary_display_row(position: &MonetaryPosition) -> MonetaryPortfolioRow {
         current_value: format_optional_amount(position.current_value),
         dividends: position
             .dividends_received
-            .filter(|value| *value > 0.0)
-            .map(|value| format_eu(&format!("{value:.2}")))
+            .map(format_dividends)
             .unwrap_or_default(),
-        gain_loss: gain_loss.unwrap_or_default(),
-        gain_loss_pct: gain_loss_pct.unwrap_or_default(),
+        open_position_gain_loss: open_position_gain_loss.unwrap_or_default(),
+        open_position_gain_loss_pct: open_position_gain_loss_pct.unwrap_or_default(),
     }
 }
 
@@ -411,6 +384,45 @@ fn format_optional_amount(value: Option<f64>) -> String {
     value
         .map(|value| format_eu(&format!("{value:.2}")))
         .unwrap_or_default()
+}
+
+fn format_dividends(value: f64) -> String {
+    format_eu(&format!("{value:.2}"))
+}
+
+fn portfolio_totals_summary(result: &PortfolioResult) -> String {
+    let sign = if result.total_open_position_gain_loss >= 0.0 {
+        "+"
+    } else {
+        ""
+    };
+    let gl_text = format!(
+        "{} ({})",
+        format_eu(&format!(
+            "{}{:.2}",
+            sign, result.total_open_position_gain_loss
+        )),
+        format_eu(&format!(
+            "{}{:.2}%",
+            sign, result.total_open_position_gain_loss_pct
+        )),
+    );
+    let mut totals = format!(
+        "Invested: {}  Value: {}",
+        format_eu(&format!("{:.2}", result.total_invested)),
+        format_eu(&format!("{:.2}", result.total_current_value)),
+    );
+    let _ = write!(
+        totals,
+        "  Lifetime Dividends: {}",
+        format_dividends(result.total_dividends)
+    );
+    let _ = write!(
+        totals,
+        "  Open-position Gain/Loss: {}",
+        color_value(result.total_open_position_gain_loss, &gl_text)
+    );
+    totals
 }
 
 pub(super) fn format_market_data_limitation_warning(limitation: &MarketDataLimitation) -> String {

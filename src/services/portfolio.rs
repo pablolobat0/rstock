@@ -100,8 +100,8 @@ pub async fn get_portfolio(
         total_current_value,
         total_invested,
         total_dividends,
-        total_gain_loss,
-        total_gain_loss_pct,
+        total_open_position_gain_loss,
+        total_open_position_gain_loss_pct,
     ) = compute_non_monetary_totals(&rows);
     let mut market_data_limitations = collect_market_data_limitations(&rows);
     extend_unique_limitations(
@@ -117,8 +117,8 @@ pub async fn get_portfolio(
         total_invested,
         total_current_value,
         total_dividends,
-        total_gain_loss,
-        total_gain_loss_pct,
+        total_open_position_gain_loss,
+        total_open_position_gain_loss_pct,
         snapshot_date: Some(snapshot_date),
         nav: Some(current_nav),
         daily_change,
@@ -212,16 +212,21 @@ pub async fn get_current_positions(
     let total_invested = complete_sum(positions.iter().map(|position| position.total_invested));
     let total_dividends =
         complete_sum(positions.iter().map(|position| position.dividends_received));
-    let total_gain_loss = complete_sum(positions.iter().map(|position| position.gain_loss));
-    let total_gain_loss_pct = total_gain_loss
-        .zip(total_invested)
-        .map(|(gain_loss, invested)| {
-            if invested.abs() < FLOAT_EPSILON {
-                0.0
-            } else {
-                (gain_loss / invested) * 100.0
-            }
-        });
+    let total_open_position_gain_loss = complete_sum(
+        positions
+            .iter()
+            .map(|position| position.open_position_gain_loss),
+    );
+    let total_open_position_gain_loss_pct =
+        total_open_position_gain_loss
+            .zip(total_invested)
+            .map(|(gain_loss, invested)| {
+                if invested.abs() < FLOAT_EPSILON {
+                    0.0
+                } else {
+                    (gain_loss / invested) * 100.0
+                }
+            });
 
     Ok(CurrentPositions {
         base_currency: BASE_CURRENCY.to_owned(),
@@ -232,8 +237,8 @@ pub async fn get_current_positions(
         total_value,
         total_invested,
         total_dividends,
-        total_gain_loss,
-        total_gain_loss_pct,
+        total_open_position_gain_loss,
+        total_open_position_gain_loss_pct,
         market_data_limitations,
         monetary_market_data_limitations,
     })
@@ -280,8 +285,8 @@ fn empty_current_positions() -> CurrentPositions {
         total_value: Some(0.0),
         total_invested: Some(0.0),
         total_dividends: Some(0.0),
-        total_gain_loss: Some(0.0),
-        total_gain_loss_pct: Some(0.0),
+        total_open_position_gain_loss: Some(0.0),
+        total_open_position_gain_loss_pct: Some(0.0),
         market_data_limitations: Vec::new(),
         monetary_market_data_limitations: Vec::new(),
     }
@@ -375,18 +380,19 @@ async fn current_position_from_projection(
     let avg_cost = projection
         .total_invested
         .map(|cost| cost / projection.total_qty);
-    let gain_loss = current_value
+    let open_position_gain_loss = current_value
         .zip(projection.total_invested)
         .map(|(value, cost)| value - cost);
-    let gain_loss_pct = gain_loss
-        .zip(projection.total_invested)
-        .map(|(gain_loss, cost)| {
-            if cost.abs() < FLOAT_EPSILON {
-                0.0
-            } else {
-                (gain_loss / cost) * 100.0
-            }
-        });
+    let open_position_gain_loss_pct =
+        open_position_gain_loss
+            .zip(projection.total_invested)
+            .map(|(gain_loss, cost)| {
+                if cost.abs() < FLOAT_EPSILON {
+                    0.0
+                } else {
+                    (gain_loss / cost) * 100.0
+                }
+            });
 
     Ok(CurrentPosition {
         ticker: projection.asset.ticker,
@@ -404,8 +410,8 @@ async fn current_position_from_projection(
         total_invested: projection.total_invested,
         current_value,
         dividends_received: projection.dividends_received,
-        gain_loss,
-        gain_loss_pct,
+        open_position_gain_loss,
+        open_position_gain_loss_pct,
         market_data_limitations: individual_price.limitations,
     })
 }
@@ -424,8 +430,8 @@ fn empty_result() -> PortfolioResult {
         total_invested: 0.0,
         total_current_value: 0.0,
         total_dividends: 0.0,
-        total_gain_loss: 0.0,
-        total_gain_loss_pct: 0.0,
+        total_open_position_gain_loss: 0.0,
+        total_open_position_gain_loss_pct: 0.0,
         snapshot_date: None,
         nav: None,
         daily_change: None,
@@ -550,19 +556,19 @@ async fn compute_monetary_position(
         .native_price
         .zip(individual_price.fx_rate)
         .map(|(price, rate)| total_qty * price * rate);
-    let gain_loss = current_value
-        .zip(economics.dividends_received)
+    let open_position_gain_loss = current_value
         .zip(economics.total_invested)
-        .map(|((value, dividends), invested)| value + dividends - invested);
-    let gain_loss_pct = gain_loss
-        .zip(economics.total_invested)
-        .map(|(gain_loss, invested)| {
-            if invested.abs() < FLOAT_EPSILON {
-                0.0
-            } else {
-                (gain_loss / invested) * 100.0
-            }
-        });
+        .map(|(value, invested)| value - invested);
+    let open_position_gain_loss_pct =
+        open_position_gain_loss
+            .zip(economics.total_invested)
+            .map(|(gain_loss, invested)| {
+                if invested.abs() < FLOAT_EPSILON {
+                    0.0
+                } else {
+                    (gain_loss / invested) * 100.0
+                }
+            });
 
     Ok(MonetaryPosition {
         ticker: asset.ticker.clone(),
@@ -580,8 +586,8 @@ async fn compute_monetary_position(
         total_invested: economics.total_invested,
         current_value,
         dividends_received: economics.dividends_received,
-        gain_loss,
-        gain_loss_pct,
+        open_position_gain_loss,
+        open_position_gain_loss_pct,
         market_data_limitations: individual_price.limitations,
     })
 }
@@ -690,19 +696,19 @@ fn compute_non_monetary_totals(rows: &[AssetPosition]) -> (f64, f64, f64, f64, f
     let total_current_value: f64 = included_rows.clone().map(|r| r.current_value).sum();
     let total_invested: f64 = included_rows.clone().map(|r| r.total_invested).sum();
     let total_dividends: f64 = included_rows.map(|r| r.dividends_received).sum();
-    let total_gain_loss = total_current_value + total_dividends - total_invested;
-    let total_gain_loss_pct = if total_invested == 0.0 {
+    let total_open_position_gain_loss = total_current_value - total_invested;
+    let total_open_position_gain_loss_pct = if total_invested == 0.0 {
         0.0
     } else {
-        (total_gain_loss / total_invested) * 100.0
+        (total_open_position_gain_loss / total_invested) * 100.0
     };
 
     (
         total_current_value,
         total_invested,
         total_dividends,
-        total_gain_loss,
-        total_gain_loss_pct,
+        total_open_position_gain_loss,
+        total_open_position_gain_loss_pct,
     )
 }
 
@@ -878,11 +884,11 @@ async fn compute_asset_positions(
         let avg_cost = cost_basis / net_qty;
         let current_value = net_qty * current_price * exchange_rate;
         let total_invested_for_asset = cost_basis;
-        let gain_loss = current_value + dividends_received - total_invested_for_asset;
-        let gain_loss_pct = if total_invested_for_asset == 0.0 {
+        let open_position_gain_loss = current_value - total_invested_for_asset;
+        let open_position_gain_loss_pct = if total_invested_for_asset == 0.0 {
             0.0
         } else {
-            (gain_loss / total_invested_for_asset) * 100.0
+            (open_position_gain_loss / total_invested_for_asset) * 100.0
         };
 
         rows.push(AssetPosition {
@@ -901,8 +907,8 @@ async fn compute_asset_positions(
             total_invested: total_invested_for_asset,
             current_value,
             dividends_received,
-            gain_loss,
-            gain_loss_pct,
+            open_position_gain_loss,
+            open_position_gain_loss_pct,
             market_data_limitations,
         });
     }

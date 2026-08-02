@@ -317,6 +317,25 @@ fn composition_command_emits_one_json_envelope() {
     let output = Command::new(env!("CARGO_BIN_EXE_rstock"))
         .args(["analyze", "composition", "--json"])
         .env("HOME", home.path())
+        .env(
+            "RSTOCK_SOURCE_TOKEN_PAGE_URL",
+            "https://example.invalid/token",
+        )
+        .env(
+            "RSTOCK_SOURCE_CHARTSERVICE_URL",
+            "https://example.invalid/chart",
+        )
+        .env(
+            "RSTOCK_SOURCE_HOLDINGS_URL",
+            "https://example.invalid/holdings",
+        )
+        .env("RSTOCK_SOURCE_QUOTE_URL", "https://example.invalid/quote")
+        .env("RSTOCK_SOURCE_SAL_API_KEY", "test")
+        .env("RSTOCK_SOURCE_USER_AGENT", "rstock-test")
+        .env(
+            "RSTOCK_SOURCE_TOKEN_CACHE_PATH",
+            home.path().join("token-cache.json"),
+        )
         .output()
         .expect("rstock should run");
 
