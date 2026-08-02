@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-use anyhow::Context;
 use futures::future::join_all;
 use sea_orm::DatabaseConnection;
 
@@ -20,27 +19,19 @@ pub async fn compute_composition(
 ) -> anyhow::Result<CompositionResult> {
     let portfolio = get_current_positions(db, market_data).await?;
     let Some(total_value) = portfolio.total_current_value else {
-        return Ok(CompositionResult {
-            asset_class_breakdown: Vec::new(),
-            equity_style_breakdown: Vec::new(),
-            management_breakdown: Vec::new(),
-            sector_breakdown: Vec::new(),
-            country_breakdown: Vec::new(),
-            market_cap_breakdown: Vec::new(),
-            top_holdings: Vec::new(),
-            warnings: vec!["Portfolio value unavailable.".to_owned()],
-        });
+        return Ok(unavailable_composition(portfolio.market_data_limitations));
     };
 
     if total_value <= 0.0 {
         return Ok(CompositionResult {
-            asset_class_breakdown: Vec::new(),
-            equity_style_breakdown: Vec::new(),
-            management_breakdown: Vec::new(),
-            sector_breakdown: Vec::new(),
-            country_breakdown: Vec::new(),
-            market_cap_breakdown: Vec::new(),
-            top_holdings: Vec::new(),
+            asset_class_breakdown: Some(Vec::new()),
+            equity_style_breakdown: Some(Vec::new()),
+            management_breakdown: Some(Vec::new()),
+            sector_breakdown: Some(Vec::new()),
+            country_breakdown: Some(Vec::new()),
+            market_cap_breakdown: Some(Vec::new()),
+            top_holdings: Some(Vec::new()),
+            market_data_limitations: portfolio.market_data_limitations,
             warnings: vec!["Portfolio has no value.".to_owned()],
         });
     }
@@ -66,9 +57,9 @@ pub async fn compute_composition(
     let mut warnings: Vec<String> = Vec::new();
 
     for pos in &portfolio.positions {
-        let current_value = pos
-            .current_value
-            .context("complete current portfolio value requires every position to be valued")?;
+        let current_value = pos.current_value.ok_or_else(|| {
+            anyhow::anyhow!("complete current position value contained an unvalued position")
+        })?;
         let portfolio_weight = (current_value / total_value) * 100.0;
         let equity_weight = if total_equity_value > 0.0 {
             (current_value / total_equity_value) * 100.0
@@ -199,18 +190,38 @@ pub async fn compute_composition(
     top_holdings.truncate(15);
 
     Ok(CompositionResult {
-        asset_class_breakdown: map_to_sorted_entries(asset_class_map),
-        equity_style_breakdown: map_to_sorted_entries(equity_style_map),
-        management_breakdown: map_to_sorted_entries(management_map),
-        sector_breakdown: map_to_sorted_entries(normalize_to_100(sector_map)),
-        country_breakdown: map_to_sorted_entries(normalize_to_100(country_map)),
-        market_cap_breakdown: map_to_sorted_entries(normalize_to_100(market_cap_map)),
-        top_holdings,
+        asset_class_breakdown: Some(map_to_sorted_entries(asset_class_map)),
+        equity_style_breakdown: Some(map_to_sorted_entries(equity_style_map)),
+        management_breakdown: Some(map_to_sorted_entries(management_map)),
+        sector_breakdown: Some(map_to_sorted_entries(normalize_to_100(sector_map))),
+        country_breakdown: Some(map_to_sorted_entries(normalize_to_100(country_map))),
+        market_cap_breakdown: Some(map_to_sorted_entries(normalize_to_100(market_cap_map))),
+        top_holdings: Some(top_holdings),
+        market_data_limitations: portfolio.market_data_limitations,
         warnings,
     })
 }
 
 // --- Private helpers ---
+
+fn unavailable_composition(
+    market_data_limitations: Vec<crate::models::MarketDataLimitation>,
+) -> CompositionResult {
+    CompositionResult {
+        asset_class_breakdown: None,
+        equity_style_breakdown: None,
+        management_breakdown: None,
+        sector_breakdown: None,
+        country_breakdown: None,
+        market_cap_breakdown: None,
+        top_holdings: None,
+        market_data_limitations,
+        warnings: vec![
+            "Value-dependent composition is unavailable because a current performance position cannot be valued."
+                .to_owned(),
+        ],
+    }
+}
 
 fn classify_market_cap(market_cap: f64) -> MarketCapCategory {
     if market_cap >= LARGE_CAP_THRESHOLD {

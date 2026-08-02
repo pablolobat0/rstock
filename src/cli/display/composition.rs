@@ -1,3 +1,5 @@
+use std::fmt::Write;
+
 use colored::Colorize;
 use tabled::settings::object::Columns;
 use tabled::settings::style::HorizontalLine;
@@ -17,13 +19,12 @@ struct BreakdownRow {
     weight: String,
 }
 
-fn print_breakdown(title: &str, entries: &[AllocationEntry]) {
+fn write_breakdown(output: &mut String, title: &str, entries: &[AllocationEntry]) {
     if entries.is_empty() {
         return;
     }
 
-    println!("{}", title.bold());
-    println!();
+    writeln!(output, "{}\n", title.bold()).expect("writing to a String cannot fail");
 
     let rows: Vec<BreakdownRow> = entries
         .iter()
@@ -41,56 +42,91 @@ fn print_breakdown(title: &str, entries: &[AllocationEntry]) {
             .remove_vertical(),
     );
     table.modify(Columns::single(1), Alignment::right());
-    println!("{table}");
-    println!();
+    writeln!(output, "{table}\n").expect("writing to a String cannot fail");
 }
 
 pub fn print_composition(result: &CompositionResult) {
-    println!();
-    println!("{}", "Portfolio Composition Analysis".bold().underline());
-    println!();
+    print!("{}", format_composition(result));
+}
 
-    print_breakdown("Asset Class", &result.asset_class_breakdown);
-    print_breakdown("Equity Style", &result.equity_style_breakdown);
-    print_breakdown("Management", &result.management_breakdown);
-    print_breakdown("Sector Allocation", &result.sector_breakdown);
-    print_breakdown("Country Allocation", &result.country_breakdown);
-    print_breakdown("Market Cap", &result.market_cap_breakdown);
+pub fn format_composition(result: &CompositionResult) -> String {
+    let mut output = String::new();
+    writeln!(
+        output,
+        "\n{}\n",
+        "Portfolio Composition Analysis".bold().underline()
+    )
+    .expect("writing to a String cannot fail");
 
-    if !result.top_holdings.is_empty() {
-        println!("{}", "Top Holdings".bold());
-        println!();
+    if let Some(entries) = &result.asset_class_breakdown {
+        write_breakdown(&mut output, "Asset Class", entries);
+    } else {
+        writeln!(output, "Value-dependent composition: unavailable\n")
+            .expect("writing to a String cannot fail");
+    }
+    if let Some(entries) = &result.equity_style_breakdown {
+        write_breakdown(&mut output, "Equity Style", entries);
+    }
+    if let Some(entries) = &result.management_breakdown {
+        write_breakdown(&mut output, "Management", entries);
+    }
+    if let Some(entries) = &result.sector_breakdown {
+        write_breakdown(&mut output, "Sector Allocation", entries);
+    }
+    if let Some(entries) = &result.country_breakdown {
+        write_breakdown(&mut output, "Country Allocation", entries);
+    }
+    if let Some(entries) = &result.market_cap_breakdown {
+        write_breakdown(&mut output, "Market Cap", entries);
+    }
 
-        let rows: Vec<TopHoldingRow> = result
-            .top_holdings
-            .iter()
-            .map(|h| TopHoldingRow {
-                name: h.name.clone(),
-                ticker: h.ticker.clone().unwrap_or_default(),
-                weight: format_eu(&format!("{:.2}%", h.weight)),
-                country: h.country.clone().unwrap_or_default(),
-                sector: h.sector.clone().unwrap_or_default(),
-            })
-            .collect();
+    if let Some(top_holdings) = &result.top_holdings {
+        if !top_holdings.is_empty() {
+            writeln!(output, "{}\n", "Top Holdings".bold())
+                .expect("writing to a String cannot fail");
 
-        let mut table = Table::new(&rows);
-        table.with(
-            Style::modern()
-                .horizontals([(1, HorizontalLine::inherit(Style::modern()).horizontal('═'))])
-                .remove_horizontal()
-                .remove_vertical(),
-        );
-        table.modify(Columns::single(2), Alignment::right());
-        println!("{table}");
-        println!();
+            let rows: Vec<TopHoldingRow> = top_holdings
+                .iter()
+                .map(|h| TopHoldingRow {
+                    name: h.name.clone(),
+                    ticker: h.ticker.clone().unwrap_or_default(),
+                    weight: format_eu(&format!("{:.2}%", h.weight)),
+                    country: h.country.clone().unwrap_or_default(),
+                    sector: h.sector.clone().unwrap_or_default(),
+                })
+                .collect();
+
+            let mut table = Table::new(&rows);
+            table.with(
+                Style::modern()
+                    .horizontals([(1, HorizontalLine::inherit(Style::modern()).horizontal('═'))])
+                    .remove_horizontal()
+                    .remove_vertical(),
+            );
+            table.modify(Columns::single(2), Alignment::right());
+            writeln!(output, "{table}\n").expect("writing to a String cannot fail");
+        }
+    }
+
+    if !result.market_data_limitations.is_empty() {
+        writeln!(
+            output,
+            "{}\n",
+            "Current position market data limitations:".yellow()
+        )
+        .expect("writing to a String cannot fail");
+        for limitation in &result.market_data_limitations {
+            let warning = super::portfolio::format_market_data_limitation_warning(limitation);
+            writeln!(output, "  - {warning}").expect("writing to a String cannot fail");
+        }
     }
 
     if !result.warnings.is_empty() {
-        println!("{}", "Warnings:".yellow());
-        println!();
+        writeln!(output, "\n{}\n", "Warnings:".yellow()).expect("writing to a String cannot fail");
         for w in &result.warnings {
-            println!("  - {w}");
+            writeln!(output, "  - {w}").expect("writing to a String cannot fail");
         }
     }
-    println!();
+    writeln!(output).expect("writing to a String cannot fail");
+    output
 }

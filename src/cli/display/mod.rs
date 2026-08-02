@@ -1,4 +1,4 @@
-mod composition;
+pub mod composition;
 mod correlation;
 mod fund_analysis;
 mod fund_comparison;

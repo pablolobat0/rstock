@@ -173,17 +173,18 @@ async fn test_composition_direct_stocks_only() {
         .unwrap();
 
     // Asset class breakdown: both are equity
-    assert_eq!(result.asset_class_breakdown.len(), 1);
-    assert_eq!(result.asset_class_breakdown[0].label, "equity");
+    let asset_class_breakdown = result.asset_class_breakdown.as_ref().unwrap();
+    assert_eq!(asset_class_breakdown.len(), 1);
+    assert_eq!(asset_class_breakdown[0].label, "equity");
 
     // Sector breakdown: Technology and Healthcare
-    assert_eq!(result.sector_breakdown.len(), 2);
+    assert_eq!(result.sector_breakdown.as_ref().unwrap().len(), 2);
 
     // Country breakdown: US and Germany
-    assert_eq!(result.country_breakdown.len(), 2);
+    assert_eq!(result.country_breakdown.as_ref().unwrap().len(), 2);
 
     // Market cap: one large (50B), one mid (5B)
-    assert_eq!(result.market_cap_breakdown.len(), 2);
+    assert_eq!(result.market_cap_breakdown.as_ref().unwrap().len(), 2);
 
     let envelope = composition_envelope(&result);
     assert_eq!(envelope["command"], "analyze.composition");
@@ -196,6 +197,7 @@ async fn test_composition_direct_stocks_only() {
         "country_breakdown",
         "market_cap_breakdown",
         "top_holdings",
+        "market_data_limitations",
         "warnings",
     ] {
         assert!(data[field].is_array(), "{field} should be an array");
@@ -236,8 +238,9 @@ async fn test_composition_unclassified_asset() {
         .unwrap();
 
     // Unclassified asset
-    assert_eq!(result.asset_class_breakdown.len(), 1);
-    assert_eq!(result.asset_class_breakdown[0].label, "Unclassified");
+    let breakdown = result.asset_class_breakdown.as_ref().unwrap();
+    assert_eq!(breakdown.len(), 1);
+    assert_eq!(breakdown[0].label, "Unclassified");
 }
 
 #[tokio::test]
@@ -249,7 +252,7 @@ async fn test_composition_empty_portfolio() {
         .await
         .unwrap();
 
-    assert!(result.asset_class_breakdown.is_empty());
+    assert!(result.asset_class_breakdown.as_ref().unwrap().is_empty());
     assert!(!result.warnings.is_empty());
 
     let envelope = composition_envelope(&result);
@@ -266,6 +269,173 @@ async fn test_composition_empty_portfolio() {
         assert_eq!(data[field], json!([]), "{field} should remain empty");
     }
     assert_eq!(data["warnings"], json!(["Portfolio has no value."]));
+}
+
+#[tokio::test]
+async fn composition_uses_current_post_snapshot_inventory() {
+    let db = setup_test_db().await;
+    let old_id = insert_classified_asset(
+        &db,
+        "XFAKEOLD",
+        "Existing Equity",
+        "stock",
+        "EUR",
+        Some("equity"),
+        Some("growth"),
+        Some("active"),
+    )
+    .await;
+    let new_id = insert_classified_asset(
+        &db,
+        "XFAKENEW",
+        "New Bond",
+        "stock",
+        "EUR",
+        Some("fixed income"),
+        None,
+        Some("passive"),
+    )
+    .await;
+    insert_transaction(&db, old_id, "2025-06-01", 1.0, 100.0, 0.0).await;
+    insert_transaction(&db, new_id, "2025-06-03", 1.0, 100.0, 0.0).await;
+    insert_daily_price(&db, old_id, "2025-06-04", 100.0, false).await;
+    insert_daily_price(&db, new_id, "2025-06-04", 100.0, false).await;
+    insert_portfolio_snapshot(&db, "2025-06-02", 100.0, 1.0).await;
+    insert_asset_snapshot(&db, "2025-06-02", old_id, 1.0, 100.0, 100.0).await;
+
+    let mut sources = MockMarketDataSources::new();
+    sources.stock_info.insert(
+        "XFAKEOLD".to_owned(),
+        mock_stock_info("XFAKEOLD", Some("Technology"), None, Some("US"), None),
+    );
+    sources.stock_info.insert(
+        "XFAKENEW".to_owned(),
+        mock_stock_info("XFAKENEW", None, None, Some("US"), None),
+    );
+    let market_data = common::market_data_at(
+        &sources,
+        chrono::NaiveDate::from_ymd_opt(2025, 6, 5).unwrap(),
+    );
+
+    let result = compute_composition(&db, &market_data).await.unwrap();
+
+    let breakdown = result.asset_class_breakdown.as_ref().unwrap();
+    assert_eq!(breakdown.len(), 2);
+    assert!(breakdown.iter().any(|entry| entry.label == "equity"));
+    assert!(breakdown.iter().any(|entry| entry.label == "fixed income"));
+    assert_eq!(
+        rstock::db::repos::portfolio_history_repo::find_latest(&db)
+            .await
+            .unwrap()
+            .unwrap()
+            .date,
+        "2025-06-02"
+    );
+}
+
+#[tokio::test]
+async fn unavailable_position_makes_all_value_dependent_composition_unavailable() {
+    let db = setup_test_db().await;
+    let priced_id = insert_classified_asset(
+        &db,
+        "XFAKEPRICED",
+        "Priced Equity",
+        "stock",
+        "EUR",
+        Some("equity"),
+        Some("growth"),
+        Some("active"),
+    )
+    .await;
+    let unpriced_id = insert_classified_asset(
+        &db,
+        "XFAKEUNPRICED",
+        "Unpriced Equity",
+        "stock",
+        "EUR",
+        Some("equity"),
+        Some("value"),
+        Some("passive"),
+    )
+    .await;
+    insert_transaction(&db, priced_id, "2025-06-01", 1.0, 100.0, 0.0).await;
+    insert_transaction(&db, unpriced_id, "2025-06-01", 1.0, 100.0, 0.0).await;
+    insert_daily_price(&db, priced_id, "2025-06-04", 100.0, false).await;
+    let market_data = common::market_data_at(
+        &MockMarketDataSources::new(),
+        chrono::NaiveDate::from_ymd_opt(2025, 6, 5).unwrap(),
+    );
+
+    let result = compute_composition(&db, &market_data).await.unwrap();
+
+    assert!(result.asset_class_breakdown.is_none());
+    assert!(result.equity_style_breakdown.is_none());
+    assert!(result.management_breakdown.is_none());
+    assert!(result.sector_breakdown.is_none());
+    assert!(result.country_breakdown.is_none());
+    assert!(result.market_cap_breakdown.is_none());
+    assert!(result.top_holdings.is_none());
+    assert_eq!(result.market_data_limitations.len(), 1);
+    assert!(result.warnings[0].contains("current performance position"));
+
+    let envelope = composition_envelope(&result);
+    let data = &envelope["data"];
+    assert!(data["asset_class_breakdown"].is_null());
+    assert!(data["top_holdings"].is_null());
+    assert_eq!(
+        data["market_data_limitations"][0]["subject"]["ticker"],
+        "XFAKEUNPRICED"
+    );
+    assert!(data.get("nav_market_data_limitations").is_none());
+
+    let human = rstock::cli::display::composition::format_composition(&result);
+    assert!(human.contains("Value-dependent composition: unavailable"));
+    assert!(human.contains("Current position market data limitations"));
+    assert!(human.contains("XFAKEUNPRICED"));
+    assert!(!human.contains("NAV market data limitations"));
+}
+
+#[tokio::test]
+async fn composition_excludes_monetary_holdings_from_weights() {
+    let db = setup_test_db().await;
+    let stock_id = insert_classified_asset(
+        &db,
+        "XFAKEPERF",
+        "Performance Equity",
+        "stock",
+        "EUR",
+        Some("equity"),
+        Some("growth"),
+        Some("active"),
+    )
+    .await;
+    let monetary_id =
+        common::insert_monetary_fund_asset(&db, "XFAKEMONEY", "Monetary Fund", "EUR", "F000MONEY")
+            .await;
+    insert_transaction(&db, stock_id, "2025-06-01", 1.0, 100.0, 0.0).await;
+    insert_transaction(&db, monetary_id, "2025-06-01", 100.0, 100.0, 0.0).await;
+    insert_daily_price(&db, stock_id, "2025-06-04", 100.0, false).await;
+    insert_daily_price(&db, monetary_id, "2025-06-04", 100.0, false).await;
+    let mut sources = MockMarketDataSources::new();
+    sources.stock_info.insert(
+        "XFAKEPERF".to_owned(),
+        mock_stock_info("XFAKEPERF", Some("Technology"), None, Some("US"), None),
+    );
+    let market_data = common::market_data_at(
+        &sources,
+        chrono::NaiveDate::from_ymd_opt(2025, 6, 5).unwrap(),
+    );
+
+    let result = compute_composition(&db, &market_data).await.unwrap();
+
+    let breakdown = result.asset_class_breakdown.as_ref().unwrap();
+    assert_eq!(breakdown.len(), 1);
+    assert_eq!(breakdown[0].label, "equity");
+    assert!((breakdown[0].weight - 100.0).abs() < 1e-9);
+    let top_holdings = result.top_holdings.as_ref().unwrap();
+    assert_eq!(top_holdings.len(), 1);
+    assert_eq!(top_holdings[0].ticker.as_deref(), Some("XFAKEPERF"));
+    assert!((top_holdings[0].weight - 100.0).abs() < 1e-9);
 }
 
 #[tokio::test]
