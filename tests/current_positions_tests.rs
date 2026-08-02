@@ -95,3 +95,56 @@ async fn focused_current_positions_include_buy_after_effective_valuation_date() 
         "2025-06-05"
     );
 }
+
+#[tokio::test]
+async fn focused_current_positions_keep_sell_and_dividend_facts_separate_from_monetary_aggregates()
+{
+    let db = common::setup_test_db().await;
+    let stock_id = common::insert_asset(&db, "XFAKECUR4", "Current Stock", "stock", "EUR").await;
+    let monetary_id = common::insert_monetary_fund_asset(
+        &db,
+        "XFAKECUR5",
+        "Current Monetary Fund",
+        "EUR",
+        "F000CURRENT2",
+    )
+    .await;
+    common::insert_transaction(&db, stock_id, "2025-06-02", 10.0, 10.0, 0.0).await;
+    common::insert_dividend_transaction(&db, stock_id, "2025-06-03", 5.0, 0.0).await;
+    common::insert_sell_transaction(&db, stock_id, "2025-06-04", 4.0, 12.0, 0.0).await;
+    common::insert_transaction(&db, monetary_id, "2025-06-02", 10.0, 100.0, 0.0).await;
+    common::insert_dividend_transaction(&db, monetary_id, "2025-06-03", 20.0, 0.0).await;
+    common::insert_sell_transaction(&db, monetary_id, "2025-06-04", 4.0, 105.0, 0.0).await;
+
+    let mut sources = common::MockMarketDataSources::new();
+    sources.historical_prices.insert(
+        "XFAKECUR4".to_owned(),
+        vec![("2025-06-09".to_owned(), 12.0)],
+    );
+    sources.historical_prices.insert(
+        "F000CURRENT2".to_owned(),
+        vec![("2025-06-09".to_owned(), 105.0)],
+    );
+    let market_data = common::market_data_at(&sources, fixed_today());
+
+    let result = portfolio::get_current_positions(&db, &market_data)
+        .await
+        .unwrap();
+
+    let position = &result.positions[0];
+    assert!((position.total_qty - 6.0).abs() < 1e-9);
+    assert!((position.total_invested.unwrap() - 60.0).abs() < 1e-9);
+    assert!((position.dividends_received.unwrap() - 5.0).abs() < 1e-9);
+    assert!((position.gain_loss.unwrap() - 12.0).abs() < 1e-9);
+    let monetary_position = &result.monetary_positions[0];
+    assert!((monetary_position.total_qty - 6.0).abs() < 1e-9);
+    assert!((monetary_position.total_invested.unwrap() - 600.0).abs() < 1e-9);
+    assert!((monetary_position.dividends_received.unwrap() - 20.0).abs() < 1e-9);
+    assert!((monetary_position.gain_loss.unwrap() - 30.0).abs() < 1e-9);
+    assert!((result.total_current_value.unwrap() - 72.0).abs() < 1e-9);
+    assert!((result.total_monetary_value.unwrap() - 630.0).abs() < 1e-9);
+    assert!((result.total_value.unwrap() - 702.0).abs() < 1e-9);
+    assert!((result.total_invested.unwrap() - 60.0).abs() < 1e-9);
+    assert!((result.total_dividends.unwrap() - 5.0).abs() < 1e-9);
+    assert!((result.total_gain_loss.unwrap() - 12.0).abs() < 1e-9);
+}
