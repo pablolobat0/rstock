@@ -42,6 +42,7 @@ pub async fn ensure_portfolio_history(
     let yesterday_str = format_date(yesterday);
 
     let latest_snapshot = portfolio_history_repo::find_latest(db).await?;
+    let mut market_data_limitations = Vec::new();
     match &latest_snapshot {
         Some(snapshot) if snapshot.date >= yesterday_str => {}
         Some(snapshot) => {
@@ -56,6 +57,7 @@ pub async fn ensure_portfolio_history(
                 market_data,
             )
             .await?;
+            market_data_limitations = history_market_data_limitations(db, market_data).await?;
         }
         None => {
             if let Some(transaction) = transaction_repo::find_earliest(db).await? {
@@ -63,13 +65,14 @@ pub async fn ensure_portfolio_history(
                     NaiveDate::parse_from_str(&transaction.date, crate::constants::DATE_FORMAT)
                         .context("invalid first transaction date")?;
                 rebuild_portfolio_history(db, start, yesterday, None, market_data).await?;
+                market_data_limitations = history_market_data_limitations(db, market_data).await?;
             }
         }
     }
 
     Ok(PortfolioHistoryReadiness {
         latest_snapshot: portfolio_history_repo::find_latest(db).await?,
-        market_data_limitations: history_market_data_limitations(db, market_data).await?,
+        market_data_limitations,
     })
 }
 
