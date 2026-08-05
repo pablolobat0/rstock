@@ -23,13 +23,11 @@ pub async fn get_portfolio(
     market_data: &MarketData,
 ) -> anyhow::Result<PortfolioResult> {
     let today = market_data.today();
-    nav::ensure_portfolio_history(db, market_data).await?;
+    let nav_readiness = nav::ensure_portfolio_history(db, market_data).await?;
     let current_positions = get_current_positions(db, market_data).await?;
-    let mut nav_market_data_limitations =
-        nav::get_history_market_data_limitations(db, market_data).await?;
+    let mut nav_market_data_limitations = nav_readiness.market_data_limitations;
 
-    let latest_snapshot = portfolio_history_repo::find_latest(db).await?;
-    let Some(current_snapshot) = &latest_snapshot else {
+    let Some(current_snapshot) = &nav_readiness.latest_snapshot else {
         return Ok(result_without_nav(
             current_positions,
             nav_market_data_limitations,

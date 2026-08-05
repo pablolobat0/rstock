@@ -67,7 +67,7 @@ Verbosity mapping: default=WARN, `-v`=INFO, `-vv`=DEBUG, `-vvv`=TRACE.
 
 All business logic lives here. Key modules:
 
-**`nav.rs`** — Core NAV unitization engine. The public `ensure_portfolio_history()` interface owns readiness for the latest completed date and invokes a private rebuild loop when history is absent or stale. The loop advances only through the Effective valuation date supported by required Historical market data, processes share issuance and redemption, and calculates end-of-day portfolio value through strict valuation reads.
+**`nav.rs`** — Core NAV unitization engine. The public `ensure_portfolio_history()` interface owns readiness for the latest completed date and returns the latest snapshot together with NAV-scoped Market data limitations; it invokes a private rebuild loop when history is absent or stale. The loop advances only through the Effective valuation date supported by required Historical market data, processes share issuance and redemption, and calculates end-of-day portfolio value through strict valuation reads.
 
 **`market_data/historical.rs`** — Private implementation for reproducible Historical market data used by NAV and benchmark analytics. It fetches and caches required asset prices, infers required FX from supplied assets, hides provider-specific FX pair construction from external callers, calculates the Effective valuation date, returns actionable Market data limitation values, and exposes strict valuation reads through the `market_data` Module root.
 

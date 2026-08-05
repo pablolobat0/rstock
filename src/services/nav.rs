@@ -13,6 +13,14 @@ use crate::models::{
 };
 use crate::services::market_data::MarketData;
 
+/// NAV history made ready for consumers, together with the limitations that
+/// bound the resulting historical valuation scope.
+#[derive(Debug)]
+pub struct PortfolioHistoryReadiness {
+    pub latest_snapshot: Option<PortfolioSnapshot>,
+    pub market_data_limitations: Vec<MarketDataLimitation>,
+}
+
 /// Returns ensured NAV history for a caller-selected display range.
 pub async fn get_portfolio_history(
     db: &DatabaseConnection,
@@ -29,7 +37,7 @@ pub async fn get_portfolio_history(
 pub async fn ensure_portfolio_history(
     db: &DatabaseConnection,
     market_data: &MarketData,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<PortfolioHistoryReadiness> {
     let yesterday = market_data.today() - Duration::days(1);
     let yesterday_str = format_date(yesterday);
 
@@ -59,12 +67,13 @@ pub async fn ensure_portfolio_history(
         }
     }
 
-    Ok(())
+    Ok(PortfolioHistoryReadiness {
+        latest_snapshot: portfolio_history_repo::find_latest(db).await?,
+        market_data_limitations: history_market_data_limitations(db, market_data).await?,
+    })
 }
 
-/// Returns the historical-market-data limitations that constrain NAV without
-/// mixing them with Individual-price limitations used by current positions.
-pub(crate) async fn get_history_market_data_limitations(
+async fn history_market_data_limitations(
     db: &DatabaseConnection,
     market_data: &MarketData,
 ) -> anyhow::Result<Vec<MarketDataLimitation>> {

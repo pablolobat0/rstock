@@ -3,6 +3,7 @@ use serde::Serialize;
 
 use super::{CurrentPosition, MarketDataLimitation};
 
+#[derive(Debug)]
 pub struct PortfolioSnapshot {
     pub date: String,
     pub asset_value: f64,
