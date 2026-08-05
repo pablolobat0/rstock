@@ -36,7 +36,7 @@ Within each file, order functions top-to-bottom like a book: if function A calls
 **Service functions** use verb-first naming:
 - `get_portfolio()`, `compute_fund_analysis()`
 - `buy()`, `sell()`, `dividend()`, `split()`
-- `rebuild_portfolio_history()`
+- `ensure_portfolio_history()`
 - `fill_prices_for_range()`, `get_closing_price()`
 - `compute_breakdown()`, `compute_correlation_data()`
 - `generate_monitor_report()`
@@ -50,7 +50,7 @@ Three categories of model structs:
 |----------|----------|---------|
 | Input structs | `AssetInfo`, `BuyOrder`, `SellOrder`, `DividendOrder`, `SplitOrder` | Data from CLI/caller, pre-persistence |
 | DB-backed structs | `Asset`, `Transaction` | Domain objects with id, converted from entity::Model |
-| Display structs | `AssetPosition`, `PortfolioResult`, `CorrelationMatrix`, `CompositionResult`, `FundAnalysisResult`, `MonitorReport` | Computed values ready for rendering |
+| Display structs | `CurrentPosition`, `CurrentPositions`, `PortfolioResult`, `CorrelationMatrix`, `CompositionResult`, `FundAnalysisResult`, `MonitorReport` | Computed values ready for rendering |
 
 ### General
 
@@ -87,6 +87,8 @@ All test utilities are in `tests/common/mod.rs`:
 - **Assertions**: For floating-point comparisons, use `(value * 100.0).round() / 100.0` for 2-decimal precision or `assert!((a - b).abs() < epsilon)` for tolerance-based checks
 - **No fixtures or property testing**: Tests build their own state imperatively using the helper functions
 - **Test location**: Integration tests in `tests/` directory. Unit tests inline with `#[cfg(test)]` modules (e.g., `src/models/transaction.rs`)
+- **Fixed clock**: Date-sensitive portfolio tests inject `FixedClock` through `MarketData` (normally via `market_data_at()`) and assert behavior through `get_current_positions()` or `get_portfolio()`. Tests specifically covering NAV-readiness ownership may call `ensure_portfolio_history()`. Do not call private rebuild helpers or rely on the machine date for these contracts
+- **Nullable facts**: Test unavailable position facts independently and assert that aggregates are complete across their scope or `None`; do not accept partial sums as totals
 
 ### Test Files
 
@@ -96,6 +98,9 @@ All test utilities are in `tests/common/mod.rs`:
 | `tests/integration_test.rs` | End-to-end scenarios combining buys, price changes, and portfolio queries |
 | `tests/daily_price_tests.rs` | Price caching and forward-fill logic |
 | `tests/portfolio_summary_tests.rs` | Portfolio computation and return calculations |
+| `tests/current_positions_tests.rs` | Focused Transaction ledger inventory, shared performance/Monetary projection, nullable facts, and complete aggregates |
+| `tests/current_date_tests.rs` | Fixed-clock portfolio and NAV-readiness behavior |
+| `tests/individual_price_tests.rs` | Fixed-clock Live quote, Historical fallback, ETF capability, and mutual fund closing-price semantics |
 | `tests/dividend_tests.rs` | Dividend recording and NAV cash accumulation |
 | `tests/correlation_tests.rs` | Portfolio asset correlation matrix computation |
 | `tests/monitor_tests.rs` | Momentum indicators and monitor report generation |

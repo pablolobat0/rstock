@@ -166,7 +166,7 @@ async fn nav_chart_history_is_ready_without_portfolio_view_call_order() {
     );
     let market_data = common::market_data_at(&sources, fixed_today());
 
-    let snapshots = portfolio::get_nav_snapshots(&db, "2025-06-08", "2025-06-09", &market_data)
+    let snapshots = nav::get_portfolio_history(&db, "2025-06-08", "2025-06-09", &market_data)
         .await
         .unwrap();
 

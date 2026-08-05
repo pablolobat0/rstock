@@ -17,7 +17,7 @@ rstock tracks your investment portfolio from the terminal. It records buy/sell t
 - **Multi-currency support** — All portfolio values converted to EUR base currency with cached FX rates
 - **Performance tracking** — Portfolio and fund metrics including total return, CAGR, volatility, max drawdown, beta, Sharpe ratio, and Sortino ratio
 - **ASCII NAV chart** — Terminal-rendered portfolio performance chart via `textplots`
-- **Colored portfolio table** — Per-asset breakdown with gain/loss highlighting and dividend tracking
+- **Colored portfolio table** — Current ledger positions with separately reported open-position gain/loss and dividends
 - **Portfolio composition** — Asset class, style, management, sector, country, and market-cap breakdowns with top holdings
 - **Correlation analysis** — Portfolio asset correlation matrix over configurable periods
 - **Fund deep-dive analysis** — `analyze fund` with performance, top holdings, equity-only allocation tables, and snapshot diffs
@@ -155,7 +155,7 @@ src/
 ├── utils.rs            # Shared interactive helpers
 ├── lib.rs              # Public module exports
 ├── models/
-│   ├── asset.rs        # AssetType enum, AssetInfo, Asset, AssetPosition
+│   ├── asset.rs        # AssetType enum, AssetInfo, Asset, CurrentPosition
 │   ├── portfolio.rs    # PortfolioSnapshot, CorrelationMatrix, composition and holdings models
 │   ├── fund_analysis.rs# Fund analysis result and metrics models
 │   ├── transaction.rs  # BuyOrder, SellOrder, DividendOrder, SplitOrder, TxType, Transaction
@@ -185,8 +185,9 @@ tests/                         # Integration tests + common test utilities
 1. `src/cli` parses commands via clap derive macros
 2. `main.rs` dispatches to service functions
 3. Services request valuation, Individual price, and correlation inputs through `MarketData`
-4. NAV engine computes daily snapshots using unitization
-5. The CLI boundary selects human rendering or one compact JSON envelope
+4. Public NAV readiness ensures daily snapshots through a private rebuild loop when needed
+5. The focused current-positions interface projects ledger inventory without requiring NAV; the full Portfolio view adds NAV, returns, and risk
+6. The CLI boundary selects human rendering or one compact JSON envelope
 
 ### Key design decisions
 
@@ -194,7 +195,7 @@ tests/                         # Integration tests + common test utilities
 - **Daily prices as floats** — `daily_asset_prices` stores `f64` directly (API values)
 - **NAV unitization** — First deposit sets NAV = 100.0; subsequent deposits issue shares at previous day's EOD NAV
 - **Incremental rebuild** — Portfolio history rebuilds only from the last known snapshot
-- **Effective end date** — Snapshots are never built for today; the end date is further limited by the slowest data source (handles fund NAV reporting delays)
+- **Effective valuation date** — Snapshots are never built for today; valuation is further limited by the slowest data source (handles fund NAV reporting delays)
 - **Shared CAGR calculation** — CAGR is centralized in `src/services/metrics.rs` and uses actual elapsed dates
 - **Fund snapshot versioning** — Fund holdings snapshots are keyed by Morningstar's reported portfolio date, not by the local command run date
 - **Centralized constants** — All magic numbers live in `src/constants.rs`

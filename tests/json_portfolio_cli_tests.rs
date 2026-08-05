@@ -1,10 +1,10 @@
 use std::path::Path;
 use std::process::Command;
 
-use sea_orm::{ActiveModelTrait, Database, Set};
+use sea_orm::{ActiveModelTrait, ColumnTrait, Database, EntityTrait, QueryFilter, Set};
 use serde_json::{json, Value};
 
-use rstock::db::entities::portfolio_history;
+use rstock::db::entities::{asset, daily_asset_price, portfolio_history};
 
 #[test]
 fn both_dashboard_paths_emit_the_same_empty_json_contract() {
@@ -67,7 +67,6 @@ fn empty_dashboard_keeps_human_table_and_chart_messages() {
 #[tokio::test]
 async fn dashboard_keeps_weight_and_marks_unavailable_values_in_human_output() {
     let home = tempfile::tempdir().expect("temporary HOME should be created");
-    let today = chrono::Local::now().format("%d-%m-%Y").to_string();
     run_success(
         home.path(),
         &[
@@ -75,13 +74,15 @@ async fn dashboard_keeps_weight_and_marks_unavailable_values_in_human_output() {
             "asset",
             "add",
             "-t",
-            "XFAKE1",
+            "IE00XFAKE001",
             "-n",
             "Unavailable asset",
             "-T",
-            "stock",
+            "fund",
             "--asset-class",
             "equity",
+            "--morningstar-code",
+            "F00000XFAKE",
         ],
     );
     run_success(
@@ -90,16 +91,16 @@ async fn dashboard_keeps_weight_and_marks_unavailable_values_in_human_output() {
             "transaction",
             "buy",
             "-t",
-            "XFAKE1",
+            "IE00XFAKE001",
             "-d",
-            &today,
+            "01-01-2020",
             "-q",
             "1",
             "-p",
             "10",
         ],
     );
-    insert_current_snapshot(home.path()).await;
+    insert_offline_nav_fixture(home.path()).await;
 
     let output = command(home.path())
         .arg("get")
@@ -116,16 +117,31 @@ async fn dashboard_keeps_weight_and_marks_unavailable_values_in_human_output() {
     assert!(stdout.contains("Performance positions value: unavailable"));
 }
 
-async fn insert_current_snapshot(home: &Path) {
-    let snapshot_date = chrono::Local::now().date_naive().to_string();
+async fn insert_offline_nav_fixture(home: &Path) {
     let db = Database::connect(format!(
         "sqlite:{}?mode=rwc",
         home.join(".rstock/rstock.db").display()
     ))
     .await
     .expect("CLI database should be available");
+    let asset = asset::Entity::find()
+        .filter(asset::Column::Ticker.eq("IE00XFAKE001"))
+        .one(&db)
+        .await
+        .expect("asset lookup should succeed")
+        .expect("test asset should exist");
+    daily_asset_price::ActiveModel {
+        id: sea_orm::ActiveValue::NotSet,
+        asset_id: Set(asset.id),
+        date: Set("9999-12-30".to_owned()),
+        closing_price: Set(10.0),
+        is_api_failure: Set(false),
+    }
+    .insert(&db)
+    .await
+    .expect("out-of-window cached price should be inserted");
     portfolio_history::ActiveModel {
-        date: Set(snapshot_date),
+        date: Set("9999-12-31".to_owned()),
         asset_value: Set(0.0),
         total_value: Set(0.0),
         outstanding_shares: Set(0.0),
@@ -133,7 +149,7 @@ async fn insert_current_snapshot(home: &Path) {
     }
     .insert(&db)
     .await
-    .expect("current portfolio snapshot should be inserted");
+    .expect("NAV readiness snapshot should be inserted");
 }
 
 fn run_success(home: &Path, args: &[&str]) {
@@ -152,19 +168,13 @@ fn command(home: &Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_rstock"));
     command
         .env("HOME", home)
-        .env(
-            "RSTOCK_SOURCE_TOKEN_PAGE_URL",
-            "https://example.invalid/token",
-        )
+        .env("RSTOCK_SOURCE_TOKEN_PAGE_URL", "file:///nonexistent/token")
         .env(
             "RSTOCK_SOURCE_CHARTSERVICE_URL",
-            "https://example.invalid/chart",
+            "file:///nonexistent/chart",
         )
-        .env(
-            "RSTOCK_SOURCE_HOLDINGS_URL",
-            "https://example.invalid/holdings",
-        )
-        .env("RSTOCK_SOURCE_QUOTE_URL", "https://example.invalid/quote")
+        .env("RSTOCK_SOURCE_HOLDINGS_URL", "file:///nonexistent/holdings")
+        .env("RSTOCK_SOURCE_QUOTE_URL", "file:///nonexistent/quote")
         .env("RSTOCK_SOURCE_SAL_API_KEY", "test")
         .env("RSTOCK_SOURCE_USER_AGENT", "rstock-test")
         .env(

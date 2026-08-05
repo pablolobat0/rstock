@@ -51,22 +51,19 @@ pub async fn get(
         ChartPeriod::OneYear => (today - chrono::Duration::days(ONE_YEAR_DAYS), "1Y"),
         ChartPeriod::ThreeYears => (today - chrono::Duration::days(THREE_YEAR_DAYS), "3Y"),
         ChartPeriod::FiveYears => (today - chrono::Duration::days(FIVE_YEAR_DAYS), "5Y"),
-        ChartPeriod::All => {
-            let inception = services::portfolio::get_inception_date(db, market_data).await?;
-            match inception {
-                Some(date_str) => {
-                    let d = NaiveDate::parse_from_str(&date_str, DATE_FORMAT)
-                        .context("invalid inception date")?;
-                    (d, "All")
-                }
-                None => (today, "All"),
+        ChartPeriod::All => match result.inception_date.as_deref() {
+            Some(date_str) => {
+                let d = NaiveDate::parse_from_str(date_str, DATE_FORMAT)
+                    .context("invalid inception date")?;
+                (d, "All")
             }
-        }
+            None => (today, "All"),
+        },
     };
 
     let start_str = format_date(start_date);
     let snapshots =
-        services::portfolio::get_nav_snapshots(db, &start_str, &today_str, market_data).await?;
+        services::nav::get_portfolio_history(db, &start_str, &today_str, market_data).await?;
     display::print_nav_chart(&snapshots, period_label);
 
     Ok(())
@@ -193,8 +190,8 @@ mod tests {
 
     use crate::cli::output;
     use crate::models::{
-        AssetPosition, AssetType, MarketDataLimitation, MarketDataLimitationClassification,
-        MarketDataSubject, MonetaryPosition, PortfolioResult,
+        AssetType, CurrentPosition, MarketDataLimitation, MarketDataLimitationClassification,
+        MarketDataSubject, PortfolioResult,
     };
 
     use super::prepare_json_result;
@@ -294,8 +291,8 @@ mod tests {
         currency: &str,
         current_value: f64,
         market_data_limitations: Vec<MarketDataLimitation>,
-    ) -> AssetPosition {
-        AssetPosition {
+    ) -> CurrentPosition {
+        CurrentPosition {
             ticker: ticker.to_string(),
             name: format!("{ticker} name"),
             asset_type: AssetType::Fund,
@@ -317,8 +314,8 @@ mod tests {
         }
     }
 
-    fn monetary_position(ticker: &str, current_value: Option<f64>) -> MonetaryPosition {
-        MonetaryPosition {
+    fn monetary_position(ticker: &str, current_value: Option<f64>) -> CurrentPosition {
+        CurrentPosition {
             ticker: ticker.to_string(),
             name: format!("{ticker} name"),
             asset_type: AssetType::Fund,

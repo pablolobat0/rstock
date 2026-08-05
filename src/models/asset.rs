@@ -89,7 +89,6 @@ impl Asset {
 }
 
 #[derive(Serialize)]
-#[allow(dead_code)] // Used through the library portfolio interface while CLI callers migrate.
 pub struct CurrentPosition {
     pub ticker: String,
     pub name: String,
@@ -110,8 +109,3 @@ pub struct CurrentPosition {
     pub open_position_gain_loss_pct: Option<f64>,
     pub market_data_limitations: Vec<MarketDataLimitation>,
 }
-
-/// Compatibility aliases retain the two portfolio-view collections while both
-/// use identical availability-aware position semantics.
-pub type AssetPosition = CurrentPosition;
-pub type MonetaryPosition = CurrentPosition;
