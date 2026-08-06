@@ -389,7 +389,7 @@ async fn test_missing_price_for_asset_fails_without_partial_snapshots() {
 }
 
 #[tokio::test]
-async fn test_missing_first_day_asset_valuation_fails_without_seed_snapshot() {
+async fn test_missing_first_day_asset_valuation_is_unavailable_without_seed_snapshot() {
     let db = common::setup_test_db().await;
     let mut mock = common::MockMarketDataSources::new();
 
@@ -398,13 +398,49 @@ async fn test_missing_first_day_asset_valuation_fails_without_seed_snapshot() {
     mock.historical_prices
         .insert("XFAKE1".to_owned(), vec![("2025-01-03".to_owned(), 50.0)]);
 
-    let result = nav::ensure_portfolio_history(&db, &nav_market_data(&mock)).await;
+    let readiness = nav::ensure_portfolio_history(&db, &nav_market_data(&mock))
+        .await
+        .expect("missing initial valuation is a readable NAV outcome");
 
-    let error = result.expect_err("missing first-day valuation should fail NAV rebuild");
-    assert!(error
-        .to_string()
-        .contains("missing required historical market data for asset XFAKE1"));
+    assert!(readiness.latest_snapshot.is_none());
+    assert!(readiness.market_data_limitations.iter().any(|limitation| {
+        matches!(
+            limitation.subject,
+            MarketDataSubject::Asset { ref ticker, .. } if ticker == "XFAKE1"
+        ) && limitation.classification == MarketDataLimitationClassification::ActionableMissingData
+    }));
     assert!(common::get_all_snapshots(&db).await.is_empty());
+}
+
+#[tokio::test]
+async fn test_incremental_missing_first_day_asset_valuation_preserves_existing_history() {
+    let db = common::setup_test_db().await;
+    let held_asset = common::insert_asset(&db, "XFAKEOLD", "Existing Stock", "stock", "EUR").await;
+    let new_asset = common::insert_asset(&db, "XFAKENEW", "New Stock", "stock", "EUR").await;
+    common::insert_portfolio_snapshot(&db, "2025-01-02", 100.0, 1.0).await;
+    common::insert_portfolio_asset_snapshot(&db, "2025-01-02", held_asset, 1.0, 100.0, 100.0, 1.0)
+        .await;
+    common::insert_daily_price(&db, held_asset, "2025-01-02", 100.0, false).await;
+    common::insert_transaction(&db, new_asset, "2025-01-03", 1.0, 50.0, 0.0).await;
+
+    let mut mock = common::MockMarketDataSources::new();
+    mock.historical_prices
+        .insert("XFAKENEW".to_owned(), vec![("2025-01-04".to_owned(), 50.0)]);
+
+    let readiness = nav::ensure_portfolio_history(&db, &nav_market_data(&mock))
+        .await
+        .expect("missing incremental valuation is a readable NAV outcome");
+
+    assert_eq!(readiness.latest_snapshot.unwrap().date, "2025-01-02");
+    assert!(readiness.market_data_limitations.iter().any(|limitation| {
+        matches!(
+            limitation.subject,
+            MarketDataSubject::Asset { ref ticker, .. } if ticker == "XFAKENEW"
+        ) && limitation.classification == MarketDataLimitationClassification::ActionableMissingData
+    }));
+    assert!(common::get_portfolio_snapshot(&db, "2025-01-03")
+        .await
+        .is_none());
 }
 
 /// Non-EUR asset with no FX data -> NAV readiness is unavailable without a

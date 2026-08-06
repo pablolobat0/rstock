@@ -135,6 +135,15 @@ impl MarketData {
         historical::get_required_asset_valuation_data(db, asset, date).await
     }
 
+    pub(crate) async fn get_required_asset_valuation_limitations(
+        &self,
+        db: &DatabaseConnection,
+        asset: &Asset,
+        date: NaiveDate,
+    ) -> anyhow::Result<Vec<crate::models::MarketDataLimitation>> {
+        historical::get_required_asset_valuation_limitations(db, asset, date).await
+    }
+
     pub async fn get_asset_exchange_rate(
         &self,
         db: &DatabaseConnection,
