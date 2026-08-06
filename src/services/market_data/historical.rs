@@ -7,7 +7,9 @@ use sea_orm::DatabaseConnection;
 use super::{policy, MarketData, SourceObservation};
 use crate::constants::{format_date, BASE_CURRENCY, FUND_API_PADDING_DAYS};
 use crate::db::repos::{daily_price_repo, exchange_rate_repo};
-use crate::models::{Asset, AssetType, MarketDataValuation, ValuationMarketData};
+use crate::models::{
+    Asset, AssetType, MarketDataValuation, ValuationMarketData, ValuationMarketDataAvailability,
+};
 
 struct LatestMarketDataDate {
     date: String,
@@ -23,6 +25,21 @@ pub(crate) async fn prepare_valuation_market_data(
     prepare_historical_market_data(db, assets, start_date, end_date, market_data).await
 }
 
+pub(crate) async fn fill_historical_market_data_cache(
+    db: &DatabaseConnection,
+    assets: &[Asset],
+    start_date: &str,
+    end_date: &str,
+    market_data: &MarketData,
+) -> anyhow::Result<()> {
+    fill_nav_asset_prices(db, assets, start_date, end_date, market_data).await?;
+    let currencies = infer_required_currencies(assets);
+    if !currencies.is_empty() {
+        fill_nav_exchange_rates(db, &currencies, start_date, end_date, market_data).await?;
+    }
+    Ok(())
+}
+
 pub(crate) async fn get_required_asset_valuation_data(
     db: &DatabaseConnection,
     asset: &Asset,
@@ -36,6 +53,28 @@ pub(crate) async fn get_required_asset_valuation_data(
                 asset.ticker, asset.name
             )
         })
+}
+
+/// Reports whether the cache has every historical input needed to value an
+/// asset on one specific date. Callers use this after preparation to avoid a
+/// strict valuation read turning an expected market-data gap into an error.
+pub(crate) async fn get_required_asset_valuation_limitations(
+    db: &DatabaseConnection,
+    asset: &Asset,
+    date: NaiveDate,
+) -> anyhow::Result<Vec<crate::models::MarketDataLimitation>> {
+    let date_string = format_date(date);
+    let mut limitations = Vec::new();
+    if get_closing_price(db, asset, &date_string).await?.is_none() {
+        limitations.push(policy::missing_asset_limitation(asset, date));
+    }
+    if get_exchange_rate_for_asset(db, asset, &date_string)
+        .await?
+        .is_none()
+    {
+        limitations.push(policy::missing_fx_limitation(&asset.currency, date));
+    }
+    Ok(limitations)
 }
 
 async fn get_asset_valuation_data(
@@ -149,6 +188,37 @@ async fn prepare_historical_market_data(
     end_date: &str,
     market_data: &MarketData,
 ) -> anyhow::Result<ValuationMarketData> {
+    let availability =
+        prepare_historical_market_data_inner(db, assets, start_date, end_date, market_data, true)
+            .await?;
+    Ok(ValuationMarketData {
+        effective_end: availability.effective_end,
+        limitations: availability.limitations,
+    })
+}
+
+/// Same preparation as `prepare_historical_market_data` but unavailable required
+/// data is reported as `data_available = false` plus limitations instead of a
+/// hard error, so NAV readiness can represent an unavailable valuation scope
+/// without masking genuine DB, parsing, or invariant errors.
+pub(crate) async fn prepare_valuation_market_data_if_available(
+    db: &DatabaseConnection,
+    assets: &[Asset],
+    start_date: &str,
+    end_date: &str,
+    market_data: &MarketData,
+) -> anyhow::Result<ValuationMarketDataAvailability> {
+    prepare_historical_market_data_inner(db, assets, start_date, end_date, market_data, false).await
+}
+
+async fn prepare_historical_market_data_inner(
+    db: &DatabaseConnection,
+    assets: &[Asset],
+    start_date: &str,
+    end_date: &str,
+    market_data: &MarketData,
+    strict: bool,
+) -> anyhow::Result<ValuationMarketDataAvailability> {
     let requested_end =
         policy::parse_market_data_date(end_date, "historical market data end date")?;
     let currencies = infer_required_currencies(assets);
@@ -163,14 +233,20 @@ async fn prepare_historical_market_data(
     let mut latest_required_dates = Vec::with_capacity(assets.len() + currencies.len() + 1);
     latest_required_dates.push(requested_end);
     let mut limitations = Vec::new();
+    let mut data_available = true;
 
     for asset in assets {
         let Some(latest_date) = latest_asset_dates.get(&asset.id) else {
-            bail!(
-                "missing required historical market data for asset {} ({})",
-                asset.ticker,
-                asset.name
-            );
+            if strict {
+                bail!(
+                    "missing required historical market data for asset {} ({})",
+                    asset.ticker,
+                    asset.name
+                );
+            }
+            data_available = false;
+            limitations.push(policy::missing_asset_limitation(asset, requested_end));
+            continue;
         };
         let latest_available_date =
             policy::parse_market_data_date(&latest_date.date, "asset price date")?;
@@ -184,7 +260,14 @@ async fn prepare_historical_market_data(
 
     for currency in currencies {
         let Some(latest_date) = latest_rate_dates.get(&currency) else {
-            bail!("missing required historical market data for FX rate {currency}{BASE_CURRENCY}");
+            if strict {
+                bail!(
+                    "missing required historical market data for FX rate {currency}{BASE_CURRENCY}"
+                );
+            }
+            data_available = false;
+            limitations.push(policy::missing_fx_limitation(&currency, requested_end));
+            continue;
         };
         let latest_available_date =
             policy::parse_market_data_date(&latest_date.date, "FX rate date")?;
@@ -201,9 +284,10 @@ async fn prepare_historical_market_data(
         .min()
         .context("historical market data preparation had no date requirements")?;
 
-    Ok(ValuationMarketData {
+    Ok(ValuationMarketDataAvailability {
         effective_end,
         limitations,
+        data_available,
     })
 }
 
@@ -315,7 +399,7 @@ async fn fill_historical_asset_prices(
 
     let requested_end =
         policy::parse_market_data_date(end_date, "historical asset price end date")?;
-    let latest_completed_date = chrono::Local::now().date_naive() - chrono::Duration::days(1);
+    let latest_completed_date = market_data.today() - chrono::Duration::days(1);
 
     let price_map: HashMap<String, f64> = match prices {
         Ok(prices) => prices
@@ -450,7 +534,7 @@ async fn fill_historical_exchange_rates(
         .await;
 
     let requested_end = policy::parse_market_data_date(end_date, "historical FX end date")?;
-    let latest_completed_date = chrono::Local::now().date_naive() - chrono::Duration::days(1);
+    let latest_completed_date = market_data.today() - chrono::Duration::days(1);
 
     let rate_map: HashMap<String, f64> = match rates {
         Ok(rates) => rates

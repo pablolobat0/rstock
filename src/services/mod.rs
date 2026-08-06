@@ -1,5 +1,6 @@
 pub mod analytics;
 pub mod assets;
+pub mod clock;
 pub mod composition;
 pub mod export;
 pub mod fund_analysis;

@@ -128,14 +128,6 @@ pub async fn insert_split(
     Ok(result.id)
 }
 
-pub async fn find_earliest(db: &DatabaseConnection) -> anyhow::Result<Option<Transaction>> {
-    let result = transaction::Entity::find()
-        .order_by_asc(transaction::Column::Date)
-        .one(db)
-        .await?;
-    Ok(result.map(Transaction::from))
-}
-
 pub async fn find_by_id(db: &DatabaseConnection, id: i32) -> anyhow::Result<Option<Transaction>> {
     let result = transaction::Entity::find_by_id(id).one(db).await?;
     Ok(result.map(Transaction::from))

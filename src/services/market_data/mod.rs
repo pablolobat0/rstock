@@ -10,20 +10,36 @@ use sea_orm::DatabaseConnection;
 use crate::db::repos::asset_repo;
 use crate::models::{
     Asset, AssetClassification, CorrelationMarketData, CorrelationMarketDataSeries, FundData,
-    FundQuoteMetadata, IndividualPrice, IndividualPriceFallback, MarketDataValuation, StockInfo,
-    ValuationMarketData,
+    FundQuoteMetadata, IndividualPrice, IndividualPriceAvailability, IndividualPriceFallback,
+    MarketDataValuation, StockInfo, ValuationMarketData, ValuationMarketDataAvailability,
 };
+use crate::services::clock::{Clock, SystemClock};
 use crate::services::metrics;
 
 pub use sources::{DefaultMarketDataSources, MarketDataSources, SourceObservation};
 
 pub struct MarketData {
     sources: Box<dyn MarketDataSources>,
+    today: NaiveDate,
 }
 
 impl MarketData {
     pub fn new(sources: Box<dyn MarketDataSources>) -> Self {
-        Self { sources }
+        Self::new_with_clock(sources, &SystemClock)
+    }
+
+    pub fn new_with_clock(sources: Box<dyn MarketDataSources>, clock: &dyn Clock) -> Self {
+        Self {
+            sources,
+            // Capture the date once per command's MarketData instance. A command that crosses
+            // midnight must not combine different definitions of today across portfolio, NAV,
+            // and individual-price work.
+            today: clock.today(),
+        }
+    }
+
+    pub fn today(&self) -> NaiveDate {
+        self.today
     }
 
     pub(crate) async fn stock_price_history(
@@ -88,6 +104,19 @@ impl MarketData {
         historical::prepare_valuation_market_data(db, assets, start_date, end_date, self).await
     }
 
+    pub async fn prepare_valuation_market_data_if_available(
+        &self,
+        db: &DatabaseConnection,
+        assets: &[Asset],
+        start_date: &str,
+        end_date: &str,
+    ) -> anyhow::Result<ValuationMarketDataAvailability> {
+        historical::prepare_valuation_market_data_if_available(
+            db, assets, start_date, end_date, self,
+        )
+        .await
+    }
+
     pub async fn get_required_asset_exchange_rates(
         &self,
         db: &DatabaseConnection,
@@ -106,6 +135,15 @@ impl MarketData {
         historical::get_required_asset_valuation_data(db, asset, date).await
     }
 
+    pub(crate) async fn get_required_asset_valuation_limitations(
+        &self,
+        db: &DatabaseConnection,
+        asset: &Asset,
+        date: NaiveDate,
+    ) -> anyhow::Result<Vec<crate::models::MarketDataLimitation>> {
+        historical::get_required_asset_valuation_limitations(db, asset, date).await
+    }
+
     pub async fn get_asset_exchange_rate(
         &self,
         db: &DatabaseConnection,
@@ -115,6 +153,7 @@ impl MarketData {
         historical::get_exchange_rate_for_asset(db, asset, date).await
     }
 
+    #[allow(dead_code)]
     pub async fn individual_price(
         &self,
         db: &DatabaseConnection,
@@ -122,6 +161,27 @@ impl MarketData {
         fallback: IndividualPriceFallback,
     ) -> anyhow::Result<IndividualPrice> {
         individual_price::get_individual_price(db, asset, fallback, self).await
+    }
+
+    pub async fn prepare_individual_price_market_data(
+        &self,
+        db: &DatabaseConnection,
+        assets: &[Asset],
+        start_date: &str,
+        end_date: &str,
+    ) -> anyhow::Result<()> {
+        individual_price::prepare_individual_price_market_data(
+            db, assets, start_date, end_date, self,
+        )
+        .await
+    }
+
+    pub async fn individual_price_if_available(
+        &self,
+        db: &DatabaseConnection,
+        asset: &Asset,
+    ) -> anyhow::Result<IndividualPriceAvailability> {
+        individual_price::get_individual_price_if_available(db, asset, self).await
     }
 
     pub async fn correlation_market_data(

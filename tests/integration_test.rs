@@ -1,14 +1,14 @@
 mod common;
 
 use chrono::NaiveDate;
-use rstock::db::repos::portfolio_history_repo;
-use rstock::services::nav;
+use rstock::models::BuyOrder;
+use rstock::services::{nav, transactions};
 
-/// Full flow: insert asset + 2 transactions + daily prices -> rebuild ->
+/// Full flow: insert asset + 2 transactions + daily prices -> ensure history ->
 /// verify portfolio_history rows and values for specific dates.
 /// Also verifies portfolio_asset_history rows are created.
 #[tokio::test]
-async fn test_full_buy_rebuild_summary_flow() {
+async fn test_full_buy_history_summary_flow() {
     let db = common::setup_test_db().await;
     let mock = common::MockMarketDataSources::new();
 
@@ -19,7 +19,7 @@ async fn test_full_buy_rebuild_summary_flow() {
     // Buy 2: 5 shares @ $160 on Jan 6 with $5 fees
     common::insert_transaction(&db, asset_id, "2025-01-06", 5.0, 160.0, 5.0).await;
 
-    // After inserting transactions (no rebuild), portfolio_history should be empty
+    // Before readiness is requested, portfolio_history should be empty.
     let snapshots = common::get_all_snapshots(&db).await;
     assert!(
         snapshots.is_empty(),
@@ -38,14 +38,10 @@ async fn test_full_buy_rebuild_summary_flow() {
         common::insert_daily_price(&db, asset_id, date, price, false).await;
     }
 
-    // Trigger rebuild (simulating what get_portfolio_summary does)
-    let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(
+    // Request history readiness through the public interface.
+    nav::ensure_portfolio_history(
         &db,
-        start,
-        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
-        None,
-        &common::market_data(&mock),
+        &common::market_data_at(&mock, NaiveDate::from_ymd_opt(2025, 2, 1).unwrap()),
     )
     .await
     .unwrap();
@@ -93,10 +89,10 @@ async fn test_full_buy_rebuild_summary_flow() {
     assert!((asset_snaps_d7[0].closing_price - 165.0).abs() < 0.01);
 }
 
-/// Build history for buy 1, add buy 2, rebuild from buy 2 date ->
+/// Build history for buy 1, add buy 2 through the accepted interface ->
 /// verify outstanding_shares increased, NAV didn't jump.
 #[tokio::test]
-async fn test_incremental_rebuild_after_second_buy() {
+async fn test_incremental_history_after_second_buy() {
     let db = common::setup_test_db().await;
     let mock = common::MockMarketDataSources::new();
 
@@ -117,13 +113,9 @@ async fn test_incremental_rebuild_after_second_buy() {
     }
 
     // Build initial history
-    let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(
+    nav::ensure_portfolio_history(
         &db,
-        start,
-        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
-        None,
-        &common::market_data(&mock),
+        &common::market_data_at(&mock, NaiveDate::from_ymd_opt(2025, 2, 1).unwrap()),
     )
     .await
     .unwrap();
@@ -136,20 +128,23 @@ async fn test_incremental_rebuild_after_second_buy() {
     assert!((snap_d5_before.asset_value - 2200.0).abs() < 0.01);
     assert!((snap_d5_before.nav - 110.0).abs() < 0.01);
 
-    // Add second buy on Jan 6: 10 shares @ $110
-    common::insert_transaction(&db, asset_id, "2025-01-06", 10.0, 110.0, 0.0).await;
-
-    // Rebuild from Jan 6 (incremental, using Jan 5 snapshot as prev)
-    let prev_snap = portfolio_history_repo::find_at_or_before(&db, "2025-01-05")
-        .await
-        .unwrap();
-    let start_d6 = NaiveDate::from_ymd_opt(2025, 1, 6).unwrap();
-    nav::rebuild_portfolio_history(
+    // The accepted transaction interface records the buy and invalidates Jan 6 onward.
+    transactions::buy(
         &db,
-        start_d6,
-        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
-        prev_snap.as_ref(),
-        &common::market_data(&mock),
+        "XFAKE1".to_owned(),
+        BuyOrder {
+            date: "2025-01-06".to_owned(),
+            quantity: 10.0,
+            price: 110.0,
+            fees: 0.0,
+        },
+    )
+    .await
+    .unwrap();
+
+    nav::ensure_portfolio_history(
+        &db,
+        &common::market_data_at(&mock, NaiveDate::from_ymd_opt(2025, 2, 1).unwrap()),
     )
     .await
     .unwrap();

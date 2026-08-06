@@ -15,7 +15,7 @@ use crate::models::{
 };
 use crate::services::fund_metrics::{compute_standard_fund_metrics, format_source_observations};
 use crate::services::market_data::MarketData;
-use crate::services::{analytics, metrics, portfolio};
+use crate::services::{analytics, metrics, nav};
 
 const COVERAGE_TOLERANCE_DAYS: i64 = 7;
 
@@ -25,7 +25,7 @@ pub async fn compute_fund_analysis(
     ms_code: &str,
     correlation_period: CandidateCorrelationPeriod,
 ) -> anyhow::Result<FundAnalysisResult> {
-    let today = chrono::Local::now().date_naive();
+    let today = market_data.today();
     let today_str = format_date(today);
 
     let asset = asset_repo::find_by_morningstar_code(db, ms_code).await?;
@@ -115,7 +115,7 @@ async fn compute_candidate_correlation(
     period: CandidateCorrelationPeriod,
 ) -> CandidateCorrelationResult {
     let period_label = period.label.to_owned();
-    let rebuild_error = portfolio::trigger_rebuild_if_needed(db, market_data)
+    let rebuild_error = nav::ensure_portfolio_history(db, market_data)
         .await
         .err()
         .map(|error| {

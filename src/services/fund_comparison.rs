@@ -37,9 +37,10 @@ pub async fn compare_funds(
         bail!("cannot compare a fund with itself; provide two different fund codes");
     }
 
+    let today = market_data.today();
     let (fund_a, fund_b) = tokio::try_join!(
-        build_comparison_side(db, market_data, code_a),
-        build_comparison_side(db, market_data, code_b),
+        build_comparison_side(db, market_data, code_a, today),
+        build_comparison_side(db, market_data, code_b, today),
     )?;
 
     let equity_a = equity_holdings(&fund_a.holdings);
@@ -59,7 +60,7 @@ pub async fn compare_funds(
             &compute_breakdown(&equity_b, |h| h.currency.clone()),
         ),
         common_holdings: compute_common_holdings(&fund_a.holdings, &fund_b.holdings),
-        correlation: compute_correlation(&fund_a.prices, &fund_b.prices, period),
+        correlation: compute_correlation(&fund_a.prices, &fund_b.prices, period, today),
         fund_a: fund_a.side,
         fund_b: fund_b.side,
     })
@@ -69,8 +70,8 @@ async fn build_comparison_side(
     db: &DatabaseConnection,
     market_data: &MarketData,
     code: &str,
+    today: NaiveDate,
 ) -> anyhow::Result<FundComparisonData> {
-    let today = chrono::Local::now().date_naive();
     let today_str = format_date(today);
     let local_name = asset_repo::find_by_morningstar_code(db, code)
         .await?
@@ -161,20 +162,20 @@ fn compute_correlation(
     prices_a: &[(String, f64)],
     prices_b: &[(String, f64)],
     period: FundComparisonPeriod,
+    today: NaiveDate,
 ) -> FundComparisonCorrelation {
-    let requested_end = chrono::Local::now().date_naive();
-    let requested_start = requested_end - chrono::Duration::days(period.days);
+    let requested_start = today - chrono::Duration::days(period.days);
     let period_label = period.label.to_owned();
 
-    if let Some(reason) = coverage_reason(prices_a, requested_start, requested_end, "first fund") {
+    if let Some(reason) = coverage_reason(prices_a, requested_start, today, "first fund") {
         return unavailable_correlation(period_label, reason);
     }
-    if let Some(reason) = coverage_reason(prices_b, requested_start, requested_end, "second fund") {
+    if let Some(reason) = coverage_reason(prices_b, requested_start, today, "second fund") {
         return unavailable_correlation(period_label, reason);
     }
 
     let start_str = format_date(requested_start);
-    let end_str = format_date(requested_end);
+    let end_str = format_date(today);
     let window_a = window_prices(prices_a, &start_str, &end_str);
     let window_b = window_prices(prices_b, &start_str, &end_str);
     let returns_a = metrics::compute_log_returns(&window_a);

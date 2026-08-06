@@ -3,12 +3,12 @@ mod common;
 use chrono::Duration;
 use common::{
     insert_asset, insert_fund_asset, insert_portfolio_asset_snapshot, insert_portfolio_snapshot,
-    market_data, setup_test_db, MockMarketDataSources,
+    market_data, market_data_at, setup_test_db, MockMarketDataSources,
 };
 use rstock::constants::format_date;
 use rstock::constants::BENCHMARK_TICKER;
 use rstock::db::entities::fund_holdings_snapshot;
-use rstock::db::repos::fund_holdings_snapshot_repo;
+use rstock::db::repos::{fund_holdings_snapshot_repo, portfolio_history_repo};
 use rstock::models::{
     CandidateCorrelationPeriod, FundComparisonPeriod, FundData, FundHolding, FundQuoteMetadata,
     HoldingChangeType,
@@ -803,6 +803,49 @@ async fn test_fund_analysis_candidate_correlation_uses_nav_and_current_holdings(
         missing_row.reason.as_deref(),
         Some("asset price history unavailable")
     );
+}
+
+#[tokio::test]
+async fn test_fund_analysis_ensures_nav_history_before_portfolio_view() {
+    let db = setup_test_db().await;
+    let asset_id = insert_asset(&db, "XREADYNAV", "Ready NAV Asset", "stock", "EUR").await;
+    let today = chrono::NaiveDate::from_ymd_opt(2025, 6, 10).unwrap();
+    let end = today - Duration::days(1);
+    let dates = date_range(end - Duration::days(30), end);
+    common::insert_transaction(&db, asset_id, &dates[0], 1.0, 100.0, 0.0).await;
+
+    let mut sources = MockMarketDataSources::new();
+    sources
+        .fund_data
+        .insert("XREADYCORR".to_owned(), fund_data());
+    sources
+        .historical_prices
+        .insert("XREADYCORR".to_owned(), linear_prices(&dates, 100.0, 1.0));
+    sources
+        .historical_prices
+        .insert("XREADYNAV".to_owned(), linear_prices(&dates, 50.0, 0.5));
+    let market_data = market_data_at(&sources, today);
+
+    let result = compute_fund_analysis(
+        &db,
+        &market_data,
+        "XREADYCORR",
+        CandidateCorrelationPeriod {
+            label: "30D",
+            days: 30,
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        portfolio_history_repo::find_latest(&db)
+            .await
+            .unwrap()
+            .map(|snapshot| snapshot.date),
+        Some(format_date(end))
+    );
+    assert!(result.candidate_correlation.rows[0].correlation.is_some());
 }
 
 #[tokio::test]

@@ -1,28 +1,26 @@
 mod common;
 
-use std::collections::HashMap;
-
 use chrono::NaiveDate;
-use rstock::db::repos::portfolio_history_repo;
-use rstock::models::{f64_to_cents, Asset, AssetType, Transaction, TxType};
-use rstock::services::nav;
+use rstock::models::{
+    BuyOrder, MarketDataLimitation, MarketDataLimitationClassification, MarketDataSubject,
+};
+use rstock::services::{nav, transactions};
 
-/// No transactions -> rebuild returns Ok, no portfolio_history rows.
+fn nav_market_data(
+    sources: &common::MockMarketDataSources,
+) -> rstock::services::market_data::MarketData {
+    common::market_data_at(sources, NaiveDate::from_ymd_opt(2025, 2, 1).unwrap())
+}
+
+/// No transactions -> readiness returns Ok, no portfolio_history rows.
 #[tokio::test]
 async fn test_empty_portfolio() {
     let db = common::setup_test_db().await;
     let mock = common::MockMarketDataSources::new();
 
-    let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(
-        &db,
-        start,
-        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
-        None,
-        &common::market_data(&mock),
-    )
-    .await
-    .unwrap();
+    nav::ensure_portfolio_history(&db, &nav_market_data(&mock))
+        .await
+        .unwrap();
 
     let snapshots = common::get_all_snapshots(&db).await;
     assert!(snapshots.is_empty());
@@ -40,16 +38,9 @@ async fn test_single_buy_initial_nav() {
     // EOD price is $50
     common::insert_daily_price(&db, asset_id, "2025-01-02", 50.0, false).await;
 
-    let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(
-        &db,
-        start,
-        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
-        None,
-        &common::market_data(&mock),
-    )
-    .await
-    .unwrap();
+    nav::ensure_portfolio_history(&db, &nav_market_data(&mock))
+        .await
+        .unwrap();
 
     let snap = common::get_portfolio_snapshot(&db, "2025-01-02")
         .await
@@ -75,16 +66,9 @@ async fn test_nav_reflects_price_change() {
     common::insert_daily_price(&db, asset_id, "2025-01-02", 50.0, false).await;
     common::insert_daily_price(&db, asset_id, "2025-01-03", 100.0, false).await;
 
-    let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(
-        &db,
-        start,
-        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
-        None,
-        &common::market_data(&mock),
-    )
-    .await
-    .unwrap();
+    nav::ensure_portfolio_history(&db, &nav_market_data(&mock))
+        .await
+        .unwrap();
 
     let snap_d1 = common::get_portfolio_snapshot(&db, "2025-01-02")
         .await
@@ -125,16 +109,9 @@ async fn test_second_buy_no_nav_jump() {
         common::insert_daily_price(&db, asset_id, date, price, false).await;
     }
 
-    let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(
-        &db,
-        start,
-        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
-        None,
-        &common::market_data(&mock),
-    )
-    .await
-    .unwrap();
+    nav::ensure_portfolio_history(&db, &nav_market_data(&mock))
+        .await
+        .unwrap();
 
     let snap_d4 = common::get_portfolio_snapshot(&db, "2025-01-05")
         .await
@@ -171,16 +148,9 @@ async fn test_same_day_multiple_buys() {
     common::insert_transaction(&db, asset_id, "2025-01-02", 5.0, 50.0, 0.0).await;
     common::insert_daily_price(&db, asset_id, "2025-01-02", 50.0, false).await;
 
-    let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(
-        &db,
-        start,
-        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
-        None,
-        &common::market_data(&mock),
-    )
-    .await
-    .unwrap();
+    nav::ensure_portfolio_history(&db, &nav_market_data(&mock))
+        .await
+        .unwrap();
 
     let snap = common::get_portfolio_snapshot(&db, "2025-01-02")
         .await
@@ -212,16 +182,9 @@ async fn test_weekend_forward_fill() {
     );
     common::insert_transaction(&db, asset_id, "2025-01-03", 10.0, 50.0, 0.0).await;
 
-    let start = NaiveDate::from_ymd_opt(2025, 1, 3).unwrap();
-    nav::rebuild_portfolio_history(
-        &db,
-        start,
-        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
-        None,
-        &common::market_data(&mock),
-    )
-    .await
-    .unwrap();
+    nav::ensure_portfolio_history(&db, &nav_market_data(&mock))
+        .await
+        .unwrap();
 
     let snap_fri = common::get_portfolio_snapshot(&db, "2025-01-03")
         .await
@@ -242,10 +205,9 @@ async fn test_weekend_forward_fill() {
     assert_eq!(snap_fri.outstanding_shares, snap_sun.outstanding_shares);
 }
 
-/// Full history exists, rebuild from mid-date -> only recalculates from that date;
-/// earlier history unchanged.
+/// Extending ready history leaves earlier snapshots unchanged.
 #[tokio::test]
-async fn test_rebuild_from_specific_date() {
+async fn test_incremental_readiness_preserves_existing_history() {
     let db = common::setup_test_db().await;
     let mock = common::MockMarketDataSources::new();
 
@@ -260,14 +222,10 @@ async fn test_rebuild_from_specific_date() {
         common::insert_daily_price(&db, asset_id, date, price, false).await;
     }
 
-    // Build full history
-    let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(
+    // Build history through Jan 3.
+    nav::ensure_portfolio_history(
         &db,
-        start,
-        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
-        None,
-        &common::market_data(&mock),
+        &common::market_data_at(&mock, NaiveDate::from_ymd_opt(2025, 1, 4).unwrap()),
     )
     .await
     .unwrap();
@@ -276,17 +234,10 @@ async fn test_rebuild_from_specific_date() {
         .await
         .unwrap();
 
-    // Rebuild from day 4 only (incremental, using day 3 snapshot as prev)
-    let prev_snap = portfolio_history_repo::find_at_or_before(&db, "2025-01-03")
-        .await
-        .unwrap();
-    let start_d4 = NaiveDate::from_ymd_opt(2025, 1, 4).unwrap();
-    nav::rebuild_portfolio_history(
+    // A later clock extends history from day 4 without touching prior snapshots.
+    nav::ensure_portfolio_history(
         &db,
-        start_d4,
-        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
-        prev_snap.as_ref(),
-        &common::market_data(&mock),
+        &common::market_data_at(&mock, NaiveDate::from_ymd_opt(2025, 1, 6).unwrap()),
     )
     .await
     .unwrap();
@@ -317,8 +268,7 @@ async fn test_rebuild_from_specific_date() {
     assert!((snap_d3_after.nav - 110.0).abs() < 0.01);
 }
 
-/// History built up to day 10, insert buy on day 3, rebuild from day 3
-/// -> correctly recomputes days 3 onwards.
+/// A backdated buy invalidates and correctly recomputes history from its date.
 #[tokio::test]
 async fn test_back_dated_buy() {
     let db = common::setup_test_db().await;
@@ -334,39 +284,32 @@ async fn test_back_dated_buy() {
     }
 
     // Build initial history
-    let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(
-        &db,
-        start,
-        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
-        None,
-        &common::market_data(&mock),
-    )
-    .await
-    .unwrap();
+    nav::ensure_portfolio_history(&db, &nav_market_data(&mock))
+        .await
+        .unwrap();
 
     let snap_d5_before = common::get_portfolio_snapshot(&db, "2025-01-05")
         .await
         .unwrap();
     assert_eq!(snap_d5_before.outstanding_shares, 5.0); // 500/100
 
-    // Add a back-dated buy on day 3
-    common::insert_transaction(&db, asset_id, "2025-01-03", 10.0, 50.0, 0.0).await;
-
-    // Rebuild from day 3 (incremental, using day 2 snapshot as prev)
-    let prev_snap = portfolio_history_repo::find_at_or_before(&db, "2025-01-02")
-        .await
-        .unwrap();
-    let start_d3 = NaiveDate::from_ymd_opt(2025, 1, 3).unwrap();
-    nav::rebuild_portfolio_history(
+    // The accepted transaction interface invalidates snapshots from the backdated buy onward.
+    transactions::buy(
         &db,
-        start_d3,
-        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
-        prev_snap.as_ref(),
-        &common::market_data(&mock),
+        "XFAKE1".to_owned(),
+        BuyOrder {
+            date: "2025-01-03".to_owned(),
+            quantity: 10.0,
+            price: 50.0,
+            fees: 0.0,
+        },
     )
     .await
     .unwrap();
+
+    nav::ensure_portfolio_history(&db, &nav_market_data(&mock))
+        .await
+        .unwrap();
 
     let snap_d5_after = common::get_portfolio_snapshot(&db, "2025-01-05")
         .await
@@ -395,16 +338,9 @@ async fn test_multiple_assets() {
     common::insert_daily_price(&db, asset_a, "2025-01-02", 50.0, false).await;
     common::insert_daily_price(&db, asset_b, "2025-01-02", 100.0, false).await;
 
-    let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(
-        &db,
-        start,
-        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
-        None,
-        &common::market_data(&mock),
-    )
-    .await
-    .unwrap();
+    nav::ensure_portfolio_history(&db, &nav_market_data(&mock))
+        .await
+        .unwrap();
 
     let snap = common::get_portfolio_snapshot(&db, "2025-01-02")
         .await
@@ -421,7 +357,8 @@ async fn test_multiple_assets() {
     assert!((snap.asset_value - 1000.0).abs() < 0.01);
 }
 
-/// Asset has no market data -> NAV rebuild fails before writing partial snapshots.
+/// Asset has no market data -> NAV readiness is unavailable (no snapshot, no
+/// partial snapshots written) with an actionable Asset limitation.
 #[tokio::test]
 async fn test_missing_price_for_asset_fails_without_partial_snapshots() {
     let db = common::setup_test_db().await;
@@ -430,25 +367,29 @@ async fn test_missing_price_for_asset_fails_without_partial_snapshots() {
     let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
 
-    let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    let result = nav::rebuild_portfolio_history(
-        &db,
-        start,
-        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
-        None,
-        &common::market_data(&mock),
-    )
-    .await;
+    let readiness = nav::ensure_portfolio_history(&db, &nav_market_data(&mock))
+        .await
+        .expect("unavailable historical market data is a tolerated NAV outcome");
 
-    let error = result.expect_err("missing asset market data should fail NAV rebuild");
-    assert!(error
-        .to_string()
-        .contains("missing required historical market data for asset XFAKE1"));
+    assert!(readiness.latest_snapshot.is_none());
+    assert_eq!(
+        readiness.market_data_limitations,
+        vec![MarketDataLimitation {
+            subject: MarketDataSubject::Asset {
+                ticker: "XFAKE1".to_owned(),
+                name: "Test Stock".to_owned(),
+                asset_type: rstock::models::AssetType::Stock,
+            },
+            latest_available_date: None,
+            requested_end_date: NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
+            classification: MarketDataLimitationClassification::ActionableMissingData,
+        }]
+    );
     assert!(common::get_all_snapshots(&db).await.is_empty());
 }
 
 #[tokio::test]
-async fn test_missing_first_day_asset_valuation_fails_without_seed_snapshot() {
+async fn test_missing_first_day_asset_valuation_is_unavailable_without_seed_snapshot() {
     let db = common::setup_test_db().await;
     let mut mock = common::MockMarketDataSources::new();
 
@@ -457,24 +398,54 @@ async fn test_missing_first_day_asset_valuation_fails_without_seed_snapshot() {
     mock.historical_prices
         .insert("XFAKE1".to_owned(), vec![("2025-01-03".to_owned(), 50.0)]);
 
-    let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    let result = nav::rebuild_portfolio_history(
-        &db,
-        start,
-        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
-        None,
-        &common::market_data(&mock),
-    )
-    .await;
+    let readiness = nav::ensure_portfolio_history(&db, &nav_market_data(&mock))
+        .await
+        .expect("missing initial valuation is a readable NAV outcome");
 
-    let error = result.expect_err("missing first-day valuation should fail NAV rebuild");
-    assert!(error
-        .to_string()
-        .contains("missing required historical market data for asset XFAKE1"));
+    assert!(readiness.latest_snapshot.is_none());
+    assert!(readiness.market_data_limitations.iter().any(|limitation| {
+        matches!(
+            limitation.subject,
+            MarketDataSubject::Asset { ref ticker, .. } if ticker == "XFAKE1"
+        ) && limitation.classification == MarketDataLimitationClassification::ActionableMissingData
+    }));
     assert!(common::get_all_snapshots(&db).await.is_empty());
 }
 
-/// Non-EUR asset with no FX data -> NAV rebuild fails before writing partial snapshots.
+#[tokio::test]
+async fn test_incremental_missing_first_day_asset_valuation_preserves_existing_history() {
+    let db = common::setup_test_db().await;
+    let held_asset = common::insert_asset(&db, "XFAKEOLD", "Existing Stock", "stock", "EUR").await;
+    let new_asset = common::insert_asset(&db, "XFAKENEW", "New Stock", "stock", "EUR").await;
+    common::insert_portfolio_snapshot(&db, "2025-01-02", 100.0, 1.0).await;
+    common::insert_portfolio_asset_snapshot(&db, "2025-01-02", held_asset, 1.0, 100.0, 100.0, 1.0)
+        .await;
+    common::insert_daily_price(&db, held_asset, "2025-01-02", 100.0, false).await;
+    common::insert_transaction(&db, new_asset, "2025-01-03", 1.0, 50.0, 0.0).await;
+
+    let mut mock = common::MockMarketDataSources::new();
+    mock.historical_prices
+        .insert("XFAKENEW".to_owned(), vec![("2025-01-04".to_owned(), 50.0)]);
+
+    let readiness = nav::ensure_portfolio_history(&db, &nav_market_data(&mock))
+        .await
+        .expect("missing incremental valuation is a readable NAV outcome");
+
+    assert_eq!(readiness.latest_snapshot.unwrap().date, "2025-01-02");
+    assert!(readiness.market_data_limitations.iter().any(|limitation| {
+        matches!(
+            limitation.subject,
+            MarketDataSubject::Asset { ref ticker, .. } if ticker == "XFAKENEW"
+        ) && limitation.classification == MarketDataLimitationClassification::ActionableMissingData
+    }));
+    assert!(common::get_portfolio_snapshot(&db, "2025-01-03")
+        .await
+        .is_none());
+}
+
+/// Non-EUR asset with no FX data -> NAV readiness is unavailable without a
+/// snapshot or partial data, with an actionable FX limitation alongside the
+/// stale price limitation for the valued asset.
 #[tokio::test]
 async fn test_missing_fx_rate_fails_without_partial_snapshots() {
     let db = common::setup_test_db().await;
@@ -487,20 +458,34 @@ async fn test_missing_fx_rate_fails_without_partial_snapshots() {
         vec![("2025-01-02".to_owned(), 100.0)],
     );
 
-    let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    let result = nav::rebuild_portfolio_history(
-        &db,
-        start,
-        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
-        None,
-        &common::market_data(&mock),
-    )
-    .await;
+    let readiness = nav::ensure_portfolio_history(&db, &nav_market_data(&mock))
+        .await
+        .expect("unavailable FX data is a readable NAV outcome");
 
-    let error = result.expect_err("missing FX market data should fail NAV rebuild");
-    assert!(error
-        .to_string()
-        .contains("missing required historical market data for FX rate USDEUR"));
+    assert!(readiness.latest_snapshot.is_none());
+    assert_eq!(
+        readiness.market_data_limitations,
+        vec![
+            MarketDataLimitation {
+                subject: MarketDataSubject::Asset {
+                    ticker: "XFAKEUSD".to_owned(),
+                    name: "US Stock".to_owned(),
+                    asset_type: rstock::models::AssetType::Stock.into(),
+                },
+                latest_available_date: Some(NaiveDate::from_ymd_opt(2025, 1, 2).unwrap()),
+                requested_end_date: NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
+                classification: MarketDataLimitationClassification::ActionableStaleData,
+            },
+            MarketDataLimitation {
+                subject: MarketDataSubject::FxRate {
+                    currency: "USD".to_owned(),
+                },
+                latest_available_date: None,
+                requested_end_date: NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
+                classification: MarketDataLimitationClassification::ActionableMissingData,
+            },
+        ]
+    );
     assert!(common::get_all_snapshots(&db).await.is_empty());
 }
 
@@ -544,9 +529,7 @@ async fn test_effective_valuation_date_uses_minimum_required_market_data_date() 
         ],
     );
 
-    let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    let end = NaiveDate::from_ymd_opt(2025, 1, 10).unwrap();
-    nav::rebuild_portfolio_history(&db, start, end, None, &common::market_data(&mock))
+    nav::ensure_portfolio_history(&db, &nav_market_data(&mock))
         .await
         .unwrap();
 
@@ -570,15 +553,9 @@ async fn test_nav_market_data_uses_stock_ticker_for_price_lookup() {
         vec![("2025-01-02".to_owned(), 50.0)],
     );
 
-    nav::rebuild_portfolio_history(
-        &db,
-        NaiveDate::from_ymd_opt(2025, 1, 2).unwrap(),
-        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
-        None,
-        &common::market_data(&mock),
-    )
-    .await
-    .unwrap();
+    nav::ensure_portfolio_history(&db, &nav_market_data(&mock))
+        .await
+        .unwrap();
 
     assert!(common::get_portfolio_snapshot(&db, "2025-01-02")
         .await
@@ -598,15 +575,9 @@ async fn test_nav_market_data_uses_fund_morningstar_code_for_price_lookup() {
         vec![("2025-01-02".to_owned(), 50.0)],
     );
 
-    nav::rebuild_portfolio_history(
-        &db,
-        NaiveDate::from_ymd_opt(2025, 1, 2).unwrap(),
-        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
-        None,
-        &common::market_data(&mock),
-    )
-    .await
-    .unwrap();
+    nav::ensure_portfolio_history(&db, &nav_market_data(&mock))
+        .await
+        .unwrap();
 
     assert!(common::get_portfolio_snapshot(&db, "2025-01-02")
         .await
@@ -623,15 +594,9 @@ async fn test_nav_market_data_uses_etf_morningstar_code_for_price_lookup() {
     mock.historical_prices
         .insert("MSTARETF".to_owned(), vec![("2025-01-02".to_owned(), 50.0)]);
 
-    nav::rebuild_portfolio_history(
-        &db,
-        NaiveDate::from_ymd_opt(2025, 1, 2).unwrap(),
-        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
-        None,
-        &common::market_data(&mock),
-    )
-    .await
-    .unwrap();
+    nav::ensure_portfolio_history(&db, &nav_market_data(&mock))
+        .await
+        .unwrap();
 
     assert!(common::get_portfolio_snapshot(&db, "2025-01-02")
         .await
@@ -646,14 +611,7 @@ async fn test_nav_market_data_fails_when_fund_morningstar_code_is_missing() {
     let asset_id = common::insert_asset(&db, "XFAKEFUND", "Test Fund", "fund", "EUR").await;
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
 
-    let result = nav::rebuild_portfolio_history(
-        &db,
-        NaiveDate::from_ymd_opt(2025, 1, 2).unwrap(),
-        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
-        None,
-        &common::market_data(&mock),
-    )
-    .await;
+    let result = nav::ensure_portfolio_history(&db, &nav_market_data(&mock)).await;
 
     let error = result.expect_err("missing Morningstar code should fail NAV preparation");
     assert!(error
@@ -675,16 +633,9 @@ async fn test_per_asset_history_created() {
     common::insert_daily_price(&db, asset_id, "2025-01-02", 50.0, false).await;
     common::insert_daily_price(&db, asset_id, "2025-01-03", 55.0, false).await;
 
-    let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(
-        &db,
-        start,
-        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
-        None,
-        &common::market_data(&mock),
-    )
-    .await
-    .unwrap();
+    nav::ensure_portfolio_history(&db, &nav_market_data(&mock))
+        .await
+        .unwrap();
 
     let asset_snaps_d1 = common::get_asset_snapshots(&db, "2025-01-02").await;
     assert_eq!(asset_snaps_d1.len(), 1);
@@ -714,16 +665,9 @@ async fn test_per_asset_history_multiple_assets() {
     common::insert_daily_price(&db, asset_a, "2025-01-02", 50.0, false).await;
     common::insert_daily_price(&db, asset_b, "2025-01-02", 100.0, false).await;
 
-    let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(
-        &db,
-        start,
-        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
-        None,
-        &common::market_data(&mock),
-    )
-    .await
-    .unwrap();
+    nav::ensure_portfolio_history(&db, &nav_market_data(&mock))
+        .await
+        .unwrap();
 
     let asset_snaps = common::get_asset_snapshots(&db, "2025-01-02").await;
     assert_eq!(asset_snaps.len(), 2);
@@ -743,75 +687,9 @@ async fn test_per_asset_history_multiple_assets() {
     assert!((snap_b.market_value - 500.0).abs() < 0.01);
 }
 
-/// Unit test for the pure process_day_transactions function (no DB).
+/// Insert transaction directly -> portfolio_history is empty until readiness is requested.
 #[tokio::test]
-async fn test_process_day_transactions_pure() {
-    // Simulate first buy: 10 shares @ $50
-    let tx1 = Transaction {
-        id: 0,
-        asset_id: 1,
-        tx_type: TxType::Buy,
-        date: "2025-01-02".to_owned(),
-        quantity: 10.0,
-        price_cents: f64_to_cents(50.0),
-        fees_cents: 0,
-    };
-
-    let asset = Asset {
-        id: 1,
-        ticker: "XFAKE1".to_owned(),
-
-        name: "Test".to_owned(),
-        asset_type: AssetType::Stock,
-        currency: "EUR".to_owned(),
-        morningstar_code: None,
-        asset_class: None,
-        equity_style: None,
-        bond_credit: None,
-        bond_duration: None,
-        management: None,
-    };
-    let asset_map: HashMap<i32, &Asset> = [(1, &asset)].into_iter().collect();
-    let day_rates: HashMap<i32, f64> = [(1, 1.0)].into_iter().collect();
-
-    let mut holdings: HashMap<i32, f64> = HashMap::new();
-    let txs: Vec<&Transaction> = vec![&tx1];
-
-    let (os, nav_val, _div) =
-        nav::process_day_transactions(&txs, &mut holdings, 0.0, 100.0, &asset_map, &day_rates)
-            .unwrap();
-
-    // First buy: deposit=500, NAV=100, shares=5
-    assert!((os - 5.0).abs() < 0.01);
-    assert!((nav_val - 100.0).abs() < 0.01);
-    assert_eq!(*holdings.get(&1).unwrap(), 10.0);
-
-    // Simulate second buy at NAV=100
-    let tx2 = Transaction {
-        id: 0,
-        asset_id: 1,
-        tx_type: TxType::Buy,
-        date: "2025-01-03".to_owned(),
-        quantity: 5.0,
-        price_cents: f64_to_cents(60.0),
-        fees_cents: 0,
-    };
-
-    let txs2: Vec<&Transaction> = vec![&tx2];
-    let (os2, nav_val2, _div2) =
-        nav::process_day_transactions(&txs2, &mut holdings, os, nav_val, &asset_map, &day_rates)
-            .unwrap();
-
-    // Second buy: deposit=300, shares_issued=300/100=3, outstanding=5+3=8
-    assert!((os2 - 8.0).abs() < 0.01);
-    assert!((nav_val2 - 100.0).abs() < 0.01);
-    assert_eq!(*holdings.get(&1).unwrap(), 15.0);
-}
-
-/// Insert transaction directly (no rebuild) -> portfolio_history is empty.
-/// Then call rebuild -> portfolio_history is populated.
-#[tokio::test]
-async fn test_lazy_rebuild_no_history_on_buy() {
+async fn test_lazy_history_readiness() {
     let db = common::setup_test_db().await;
     let mock = common::MockMarketDataSources::new();
 
@@ -819,21 +697,14 @@ async fn test_lazy_rebuild_no_history_on_buy() {
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
     common::insert_daily_price(&db, asset_id, "2025-01-02", 50.0, false).await;
 
-    // No rebuild called yet -> portfolio_history should be empty
+    // Readiness has not been requested yet, so portfolio_history should be empty.
     let snapshots = common::get_all_snapshots(&db).await;
     assert!(snapshots.is_empty());
 
-    // Now trigger rebuild
-    let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(
-        &db,
-        start,
-        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
-        None,
-        &common::market_data(&mock),
-    )
-    .await
-    .unwrap();
+    // The public readiness interface populates history lazily.
+    nav::ensure_portfolio_history(&db, &nav_market_data(&mock))
+        .await
+        .unwrap();
 
     // portfolio_history should now have rows
     let snapshots = common::get_all_snapshots(&db).await;
@@ -870,9 +741,7 @@ async fn test_single_usd_asset_nav() {
         ],
     );
 
-    let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    let end = NaiveDate::from_ymd_opt(2025, 1, 3).unwrap();
-    nav::rebuild_portfolio_history(&db, start, end, None, &common::market_data(&mock))
+    nav::ensure_portfolio_history(&db, &nav_market_data(&mock))
         .await
         .unwrap();
 
@@ -893,6 +762,26 @@ async fn test_single_usd_asset_nav() {
         .unwrap();
     assert!((snap2.total_value - 1012.0).abs() < 0.01);
     assert!((snap2.nav - (1012.0 / 9.0)).abs() < 0.01);
+}
+
+/// A genuine readiness/preparation error is not swallowed into a readable NAV:
+/// a fund without its Morningstar code must propagate as an Err rather than be
+/// masked as an unavailable-NAV limitation.
+#[tokio::test]
+async fn ensure_portfolio_history_propagates_genuine_errors() {
+    let db = common::setup_test_db().await;
+    let mock = common::MockMarketDataSources::new();
+
+    let asset_id = common::insert_asset(&db, "XFAKEFUND", "Test Fund", "fund", "EUR").await;
+    common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
+
+    let result = nav::ensure_portfolio_history(&db, &nav_market_data(&mock)).await;
+
+    let error = result.expect_err("missing Morningstar code must not be masked by availability");
+    assert!(error
+        .to_string()
+        .contains("missing Morningstar code for required fund XFAKEFUND (Test Fund)"));
+    assert!(common::get_all_snapshots(&db).await.is_empty());
 }
 
 /// Mixed EUR + USD portfolio. Verify deposits and valuations convert correctly.
@@ -918,9 +807,7 @@ async fn test_mixed_currency_portfolio() {
     mock.exchange_rates
         .insert("USDEUR".to_owned(), vec![("2025-01-02".to_owned(), 0.90)]);
 
-    let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    let end = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(&db, start, end, None, &common::market_data(&mock))
+    nav::ensure_portfolio_history(&db, &nav_market_data(&mock))
         .await
         .unwrap();
 
@@ -967,9 +854,7 @@ async fn test_eur_only_unchanged() {
         ],
     );
 
-    let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    let end = NaiveDate::from_ymd_opt(2025, 1, 3).unwrap();
-    nav::rebuild_portfolio_history(&db, start, end, None, &common::market_data(&mock))
+    nav::ensure_portfolio_history(&db, &nav_market_data(&mock))
         .await
         .unwrap();
 
@@ -1006,16 +891,9 @@ async fn test_sell_reduces_holdings() {
     common::insert_daily_price(&db, asset_id, "2025-01-02", 50.0, false).await;
     common::insert_daily_price(&db, asset_id, "2025-01-03", 50.0, false).await;
 
-    let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(
-        &db,
-        start,
-        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
-        None,
-        &common::market_data(&mock),
-    )
-    .await
-    .unwrap();
+    nav::ensure_portfolio_history(&db, &nav_market_data(&mock))
+        .await
+        .unwrap();
 
     let asset_snaps = common::get_asset_snapshots(&db, "2025-01-03").await;
     assert_eq!(asset_snaps.len(), 1);
@@ -1036,16 +914,9 @@ async fn test_sell_nav_unchanged_at_fair_value() {
     common::insert_daily_price(&db, asset_id, "2025-01-02", 50.0, false).await;
     common::insert_daily_price(&db, asset_id, "2025-01-03", 50.0, false).await;
 
-    let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(
-        &db,
-        start,
-        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
-        None,
-        &common::market_data(&mock),
-    )
-    .await
-    .unwrap();
+    nav::ensure_portfolio_history(&db, &nav_market_data(&mock))
+        .await
+        .unwrap();
 
     let snap_d1 = common::get_portfolio_snapshot(&db, "2025-01-02")
         .await
@@ -1079,16 +950,9 @@ async fn test_sell_preserves_nav_after_gain() {
     common::insert_daily_price(&db, asset_id, "2025-01-03", 100.0, false).await;
     common::insert_daily_price(&db, asset_id, "2025-01-04", 100.0, false).await;
 
-    let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(
-        &db,
-        start,
-        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
-        None,
-        &common::market_data(&mock),
-    )
-    .await
-    .unwrap();
+    nav::ensure_portfolio_history(&db, &nav_market_data(&mock))
+        .await
+        .unwrap();
 
     let snap_d2 = common::get_portfolio_snapshot(&db, "2025-01-03")
         .await
@@ -1121,16 +985,9 @@ async fn test_sell_with_fees() {
     common::insert_daily_price(&db, asset_id, "2025-01-02", 50.0, false).await;
     common::insert_daily_price(&db, asset_id, "2025-01-03", 50.0, false).await;
 
-    let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(
-        &db,
-        start,
-        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
-        None,
-        &common::market_data(&mock),
-    )
-    .await
-    .unwrap();
+    nav::ensure_portfolio_history(&db, &nav_market_data(&mock))
+        .await
+        .unwrap();
 
     let snap = common::get_portfolio_snapshot(&db, "2025-01-03")
         .await
@@ -1158,16 +1015,9 @@ async fn test_full_liquidation() {
     common::insert_daily_price(&db, asset_id, "2025-01-02", 50.0, false).await;
     common::insert_daily_price(&db, asset_id, "2025-01-03", 50.0, false).await;
 
-    let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(
-        &db,
-        start,
-        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
-        None,
-        &common::market_data(&mock),
-    )
-    .await
-    .unwrap();
+    nav::ensure_portfolio_history(&db, &nav_market_data(&mock))
+        .await
+        .unwrap();
 
     let snap = common::get_portfolio_snapshot(&db, "2025-01-03")
         .await
@@ -1177,77 +1027,6 @@ async fn test_full_liquidation() {
     // Holdings = 0, asset_value = 0
     assert!((snap.outstanding_shares).abs() < 0.01);
     assert!((snap.asset_value).abs() < 0.01);
-}
-
-/// Unit test: process_day_transactions with a sell.
-#[tokio::test]
-async fn test_process_day_transactions_sell_pure() {
-    let asset = Asset {
-        id: 1,
-        ticker: "XFAKE1".to_owned(),
-
-        name: "Test".to_owned(),
-        asset_type: AssetType::Stock,
-        currency: "EUR".to_owned(),
-        morningstar_code: None,
-        asset_class: None,
-        equity_style: None,
-        bond_credit: None,
-        bond_duration: None,
-        management: None,
-    };
-    let asset_map: HashMap<i32, &Asset> = [(1, &asset)].into_iter().collect();
-    let day_rates: HashMap<i32, f64> = [(1, 1.0)].into_iter().collect();
-
-    // First: buy 10 @ $50
-    let buy_tx = Transaction {
-        id: 0,
-        asset_id: 1,
-        tx_type: TxType::Buy,
-        date: "2025-01-02".to_owned(),
-        quantity: 10.0,
-        price_cents: f64_to_cents(50.0),
-        fees_cents: 0,
-    };
-
-    let mut holdings: HashMap<i32, f64> = HashMap::new();
-    let (os, nav_val, _div) = nav::process_day_transactions(
-        &vec![&buy_tx],
-        &mut holdings,
-        0.0,
-        100.0,
-        &asset_map,
-        &day_rates,
-    )
-    .unwrap();
-    assert!((os - 5.0).abs() < 0.01);
-    assert_eq!(*holdings.get(&1).unwrap(), 10.0);
-
-    // Now sell 5 @ $50 at NAV=100
-    let sell_tx = Transaction {
-        id: 0,
-        asset_id: 1,
-        tx_type: TxType::Sell,
-        date: "2025-01-03".to_owned(),
-        quantity: 5.0,
-        price_cents: f64_to_cents(50.0),
-        fees_cents: 0,
-    };
-
-    let (os2, nav_val2, _div2) = nav::process_day_transactions(
-        &vec![&sell_tx],
-        &mut holdings,
-        os,
-        nav_val,
-        &asset_map,
-        &day_rates,
-    )
-    .unwrap();
-
-    // withdrawal = 5*50 = 250, redeemed = 250/100 = 2.5, os = 5-2.5 = 2.5
-    assert!((os2 - 2.5).abs() < 0.01);
-    assert!((nav_val2 - 100.0).abs() < 0.01);
-    assert_eq!(*holdings.get(&1).unwrap(), 5.0);
 }
 
 /// Sell redeems shares correctly: verify outstanding_shares math.
@@ -1269,16 +1048,9 @@ async fn test_sell_redeems_shares() {
     common::insert_daily_price(&db, asset_id, "2025-01-03", 80.0, false).await;
     common::insert_daily_price(&db, asset_id, "2025-01-04", 80.0, false).await;
 
-    let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(
-        &db,
-        start,
-        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
-        None,
-        &common::market_data(&mock),
-    )
-    .await
-    .unwrap();
+    nav::ensure_portfolio_history(&db, &nav_market_data(&mock))
+        .await
+        .unwrap();
 
     let snap_d3 = common::get_portfolio_snapshot(&db, "2025-01-03")
         .await
@@ -1311,16 +1083,9 @@ async fn test_forward_split_doubles_holdings() {
     common::insert_split_transaction(&db, asset_id, "2025-01-03", 2.0).await;
     common::insert_daily_price(&db, asset_id, "2025-01-03", 50.0, false).await;
 
-    let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(
-        &db,
-        start,
-        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
-        None,
-        &common::market_data(&mock),
-    )
-    .await
-    .unwrap();
+    nav::ensure_portfolio_history(&db, &nav_market_data(&mock))
+        .await
+        .unwrap();
 
     // Day 1: 10 shares * $100 = $1000, NAV=100, os=10
     let snap_d1 = common::get_portfolio_snapshot(&db, "2025-01-02")
@@ -1359,16 +1124,9 @@ async fn test_reverse_split_quarters_holdings() {
     common::insert_split_transaction(&db, asset_id, "2025-01-03", 0.25).await;
     common::insert_daily_price(&db, asset_id, "2025-01-03", 40.0, false).await;
 
-    let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(
-        &db,
-        start,
-        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
-        None,
-        &common::market_data(&mock),
-    )
-    .await
-    .unwrap();
+    nav::ensure_portfolio_history(&db, &nav_market_data(&mock))
+        .await
+        .unwrap();
 
     // Day 1: 100 * $10 = $1000
     let snap_d1 = common::get_portfolio_snapshot(&db, "2025-01-02")
@@ -1409,16 +1167,9 @@ async fn test_split_mid_history_nav_continuity() {
     // Price continues to $45 on day 4
     common::insert_daily_price(&db, asset_id, "2025-01-07", 45.0, false).await;
 
-    let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    nav::rebuild_portfolio_history(
-        &db,
-        start,
-        NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
-        None,
-        &common::market_data(&mock),
-    )
-    .await
-    .unwrap();
+    nav::ensure_portfolio_history(&db, &nav_market_data(&mock))
+        .await
+        .unwrap();
 
     // Day 1: 10 * $50 = $500, NAV=100, os=5
     let snap_d1 = common::get_portfolio_snapshot(&db, "2025-01-02")
@@ -1444,49 +1195,4 @@ async fn test_split_mid_history_nav_continuity() {
         .await
         .unwrap();
     assert!((snap_d4.nav - 180.0).abs() < 0.01);
-}
-
-/// Unit test: process_day_transactions with a split (no DB).
-#[tokio::test]
-async fn test_process_day_transactions_split_pure() {
-    let split_tx = Transaction {
-        id: 0,
-        asset_id: 1,
-        tx_type: TxType::Split,
-        date: "2025-01-03".to_owned(),
-        quantity: 2.0,
-        price_cents: 0,
-        fees_cents: 0,
-    };
-
-    let asset = Asset {
-        id: 1,
-        ticker: "XFAKE1".to_owned(),
-
-        name: "Test".to_owned(),
-        asset_type: AssetType::Stock,
-        currency: "EUR".to_owned(),
-        morningstar_code: None,
-        asset_class: None,
-        equity_style: None,
-        bond_credit: None,
-        bond_duration: None,
-        management: None,
-    };
-    let asset_map: HashMap<i32, &Asset> = [(1, &asset)].into_iter().collect();
-    let day_rates: HashMap<i32, f64> = [(1, 1.0)].into_iter().collect();
-
-    let mut holdings: HashMap<i32, f64> = [(1, 10.0)].into_iter().collect();
-    let txs: Vec<&Transaction> = vec![&split_tx];
-
-    let (os, nav_val, div) =
-        nav::process_day_transactions(&txs, &mut holdings, 5.0, 100.0, &asset_map, &day_rates)
-            .unwrap();
-
-    // Split should not change outstanding_shares, nav, or dividends
-    assert!((os - 5.0).abs() < 0.01);
-    assert!((nav_val - 100.0).abs() < 0.01);
-    assert!((div - 0.0).abs() < 0.01);
-    // Holdings should be doubled
-    assert_eq!(*holdings.get(&1).unwrap(), 20.0);
 }

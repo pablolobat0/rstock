@@ -1,8 +1,9 @@
 use crate::db::entities::{portfolio_asset_history, portfolio_history};
 use serde::Serialize;
 
-use super::{AssetPosition, MarketDataLimitation};
+use super::{CurrentPosition, MarketDataLimitation};
 
+#[derive(Debug)]
 pub struct PortfolioSnapshot {
     pub date: String,
     pub asset_value: f64,
@@ -58,12 +59,19 @@ pub struct PeriodMetrics {
 pub struct PortfolioResult {
     pub base_currency: String,
     #[serde(rename = "positions")]
-    pub rows: Vec<AssetPosition>,
-    pub total_invested: f64,
-    pub total_current_value: f64,
-    pub total_dividends: f64,
-    pub total_gain_loss: f64,
-    pub total_gain_loss_pct: f64,
+    pub rows: Vec<CurrentPosition>,
+    pub monetary_positions: Vec<CurrentPosition>,
+    pub total_invested: Option<f64>,
+    pub total_current_value: Option<f64>,
+    pub total_monetary_invested: Option<f64>,
+    pub total_monetary_value: Option<f64>,
+    pub total_value: Option<f64>,
+    pub total_dividends: Option<f64>,
+    pub total_monetary_dividends: Option<f64>,
+    pub total_open_position_gain_loss: Option<f64>,
+    pub total_open_position_gain_loss_pct: Option<f64>,
+    pub total_monetary_open_position_gain_loss: Option<f64>,
+    pub total_monetary_open_position_gain_loss_pct: Option<f64>,
     pub snapshot_date: Option<String>,
     pub nav: Option<f64>,
     pub daily_change: Option<f64>,
@@ -77,7 +85,29 @@ pub struct PortfolioResult {
     pub one_year_metrics: Option<PeriodMetrics>,
     pub three_year_metrics: Option<PeriodMetrics>,
     pub five_year_metrics: Option<PeriodMetrics>,
+    pub nav_market_data_limitations: Vec<MarketDataLimitation>,
+    pub current_position_market_data_limitations: Vec<MarketDataLimitation>,
+    pub monetary_market_data_limitations: Vec<MarketDataLimitation>,
+}
+
+#[derive(Serialize)]
+pub struct CurrentPositions {
+    pub base_currency: String,
+    pub positions: Vec<CurrentPosition>,
+    pub monetary_positions: Vec<CurrentPosition>,
+    pub total_current_value: Option<f64>,
+    pub total_monetary_value: Option<f64>,
+    pub total_value: Option<f64>,
+    pub total_invested: Option<f64>,
+    pub total_monetary_invested: Option<f64>,
+    pub total_dividends: Option<f64>,
+    pub total_monetary_dividends: Option<f64>,
+    pub total_open_position_gain_loss: Option<f64>,
+    pub total_open_position_gain_loss_pct: Option<f64>,
+    pub total_monetary_open_position_gain_loss: Option<f64>,
+    pub total_monetary_open_position_gain_loss_pct: Option<f64>,
     pub market_data_limitations: Vec<MarketDataLimitation>,
+    pub monetary_market_data_limitations: Vec<MarketDataLimitation>,
 }
 
 #[derive(Serialize)]
@@ -158,12 +188,13 @@ pub struct TopHolding {
 
 #[derive(serde::Serialize)]
 pub struct CompositionResult {
-    pub asset_class_breakdown: Vec<AllocationEntry>,
-    pub equity_style_breakdown: Vec<AllocationEntry>,
-    pub management_breakdown: Vec<AllocationEntry>,
-    pub sector_breakdown: Vec<AllocationEntry>,
-    pub country_breakdown: Vec<AllocationEntry>,
-    pub market_cap_breakdown: Vec<AllocationEntry>,
-    pub top_holdings: Vec<TopHolding>,
+    pub asset_class_breakdown: Option<Vec<AllocationEntry>>,
+    pub equity_style_breakdown: Option<Vec<AllocationEntry>>,
+    pub management_breakdown: Option<Vec<AllocationEntry>>,
+    pub sector_breakdown: Option<Vec<AllocationEntry>>,
+    pub country_breakdown: Option<Vec<AllocationEntry>>,
+    pub market_cap_breakdown: Option<Vec<AllocationEntry>>,
+    pub top_holdings: Option<Vec<TopHolding>>,
+    pub market_data_limitations: Vec<MarketDataLimitation>,
     pub warnings: Vec<String>,
 }

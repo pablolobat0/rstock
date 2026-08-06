@@ -67,15 +67,15 @@ Verbosity mapping: default=WARN, `-v`=INFO, `-vv`=DEBUG, `-vvv`=TRACE.
 
 All business logic lives here. Key modules:
 
-**`nav.rs`** — Core NAV unitization engine. `rebuild_portfolio_history()` iterates calendar days from a start date to the effective end date, computing daily portfolio snapshots. `process_day_transactions()` handles share issuance (buys) and redemption (sells). `compute_day_asset_values()` calculates end-of-day portfolio value through strict Historical market data valuation reads.
+**`nav.rs`** — Core NAV unitization engine. The public `ensure_portfolio_history()` interface owns readiness for the latest completed date and returns the latest snapshot together with NAV-scoped Market data limitations; it invokes a private rebuild loop when history is absent or stale. The loop advances only through the Effective valuation date supported by required Historical market data, processes share issuance and redemption, and calculates end-of-day portfolio value through strict valuation reads.
 
 **`market_data/historical.rs`** — Private implementation for reproducible Historical market data used by NAV and benchmark analytics. It fetches and caches required asset prices, infers required FX from supplied assets, hides provider-specific FX pair construction from external callers, calculates the Effective valuation date, returns actionable Market data limitation values, and exposes strict valuation reads through the `market_data` Module root.
 
-**`market_data/individual_price.rs`** — Private implementation for display-time Individual price values for portfolio rows. Stocks and FX may use non-persisted Live quote values, funds and ETFs use cached Historical market data semantics, and snapshot fallback preserves row rendering when current display data is unavailable.
+**`market_data/individual_price.rs`** — Private implementation for display-time Individual price values for portfolio rows. Stocks request same-day observations, and ETFs request them through the fund-price capability already exposed by `MarketDataSources`; neither caller depends on a concrete source Adapter. A same-day observation is a Live quote. If an ETF source cannot supply one, the row falls back to the latest Historical market data. Mutual funds retain closing-price semantics and never use same-day Live quotes.
 
-**`portfolio.rs`** — `get_portfolio()` builds the current position table (per-asset quantity, avg cost, gain/loss) and computes return metrics for the portfolio view. Portfolio rows use the `market_data` Module root for Individual price values and carry Market data limitation values to display formatting.
+**`portfolio.rs`** — `get_current_positions()` is the focused current-inventory interface and does not require NAV history. `get_portfolio()` is the full Portfolio view: it requests NAV readiness, reuses current positions, and adds NAV, return, and risk facts. One Transaction ledger projection derives quantity, remaining cost, dividends, and Open-position gain/loss identically for performance and Monetary positions. Facts are independently nullable when their required historical FX or Individual price is unavailable; each aggregate is complete across its included positions or unavailable. NAV/history, current performance-position, and Monetary-position Market data limitations remain separate scopes.
 
-**`analytics.rs`** — Computes correlation and risk-metric inputs from portfolio history and benchmark prices.
+**`analytics.rs`** — Computes asset-series correlation from current Transaction ledger holdings and historical Base currency series, and computes portfolio risk metrics from NAV history and benchmark prices. Asset-series correlation does not rebuild NAV history.
 
 **`composition.rs`** — Builds portfolio composition analytics with look-through aggregation and top holdings.
 
@@ -115,7 +115,7 @@ Domain structs organized by concept:
 - `AssetType` enum — Stock, Fund, Etf (derives `ValueEnum` for clap integration)
 - `AssetInfo` — Input struct for creating/updating assets
 - `Asset` — DB-backed struct with id (converted from `asset::Model`)
-- `AssetPosition` — Display-ready holding with current price, gain/loss, avg cost
+- `CurrentPosition` — Current Transaction ledger holding with independently nullable cost, dividend, Individual price, value, and Open-position gain/loss facts
 
 **`transaction.rs`**:
 - `TxType` enum — Buy, Sell, Dividend, Split (with `Display`/`FromStr` for DB serialization)
@@ -126,7 +126,8 @@ Domain structs organized by concept:
 **`portfolio.rs`**:
 - `PortfolioSnapshot` — Daily NAV snapshot (date, asset_value, total_value, outstanding_shares, nav)
 - `AssetSnapshot` — Per-asset daily position (quantity, closing_price, market_value, exchange_rate)
-- `PortfolioResult` — Query result with asset rows and aggregated totals (including total_dividends)
+- `CurrentPositions` — Focused current inventory with performance and Monetary positions, complete-or-unavailable aggregates, and separate limitation scopes; it does not require NAV history
+- `PortfolioResult` — Full Portfolio view combining `CurrentPositions` facts with nullable NAV, return, and risk facts after NAV readiness is ensured
 - `PeriodMetrics` — Per-period volatility, max drawdown, beta, Sharpe ratio, and Sortino ratio
 - `CorrelationMatrix` — N×N asset correlation matrix with labels and warnings
 - `AllocationEntry`, `TopHolding`, `CompositionResult`, `FundHolding` — Composition and holdings models
@@ -269,20 +270,20 @@ The NAV engine (`src/services/nav.rs`) uses the same valuation method as mutual 
 
    d. **Store snapshot**: Write the day's `portfolio_history` and `portfolio_asset_history` records.
 
-3. **Effective end date**: The rebuild never extends beyond yesterday, and further limits to the earliest "last available date" across all assets' prices and exchange rates. This prevents extrapolation when data sources lag.
+3. **Effective valuation date**: The rebuild never extends beyond yesterday, and further limits to the earliest latest-available date across all assets' prices and exchange rates. This prevents extrapolation when data sources lag.
 
-4. **Incremental rebuild**: On subsequent runs, the engine starts from the day after the last known snapshot (or rebuilds from a given date when snapshots are invalidated by new transactions).
+4. **Readiness and incremental rebuild**: Callers use `ensure_portfolio_history()`. It starts the private rebuild loop on the day after the latest snapshot, or from the first required date when invalidation removed later snapshots.
 
-## NAV Return vs G/L%
+## NAV Return vs Open-Position G/L%
 
-The `get` command displays two return figures that can differ:
+The `get` command displays two figures that answer different questions:
 
-- **G/L% (money-weighted)**: Simple `(current_value - total_invested) / total_invested`. Treats all deposits equally regardless of timing.
+- **Open-position G/L%**: `(current_value - remaining_weighted_average_cost) / remaining_weighted_average_cost` for units still held. It excludes dividends and realized gains from sold units.
 - **NAV return (time-weighted)**: Measures portfolio unit performance from inception (NAV 100.0). Unaffected by deposit timing because each deposit issues new shares at the current NAV.
 
-These diverge whenever deposits are made at different NAVs (e.g., DCA over time). If you add money after the portfolio has already gained, G/L% is diluted by the higher average cost, while NAV return is not — it reflects investment skill independent of cash flow timing. This is the same distinction mutual funds use: NAV return measures how the fund performed, not how much a specific investor gained.
+These diverge whenever cash-flow timing, dividends, or sales matter. NAV measures performance independent of external cash flows, while Open-position G/L describes only the unrealized price result of inventory that remains open.
 
-Example: a first deposit at NAV 100 and a second deposit at NAV 129 will show a higher NAV return than G/L%, because G/L% blends the returns of both deposits while NAV tracks per-unit growth from inception.
+Example: after a partial sale, realized proceeds and gains no longer contribute to Open-position G/L, while historical NAV performance remains represented in the NAV series.
 
 ## Price Data Pipeline
 
@@ -323,17 +324,15 @@ Historical market data preparation caches source observations and fills gaps bet
 ```
 main.rs
   └─> portfolio::get_portfolio()
-        ├─> Check if NAV snapshots are stale (last snapshot < yesterday)
-        ├─> If stale: nav::rebuild_portfolio_history()
-        │     ├─> market_data.prepare_valuation_market_data()
-        │     └─> Day-by-day NAV computation loop using strict valuation reads
-        ├─> Compute return metrics (YTD, 1Y, 3Y, 5Y)
-        └─> metrics::compute_risk_metrics() (beta, Sharpe, Sortino)
-  └─> portfolio::get_portfolio()
-        ├─> Load latest portfolio_asset_history
-        ├─> For each position: individual_price::get_asset_display_market_data()
-        ├─> Compute avg cost, gain/loss
-        └─> Aggregate totals and Market data limitation values
+        ├─> nav::ensure_portfolio_history()
+        │     └─> If stale: private day-by-day rebuild using strict valuation reads
+        ├─> portfolio::get_current_positions()
+        │     ├─> Project all open holdings once from the Transaction ledger
+        │     ├─> Resolve each position's Individual price through MarketData
+        │     ├─> Separate performance and Monetary positions
+        │     └─> Build complete-or-unavailable aggregates for each scope
+        ├─> Compute NAV return and risk facts
+        └─> Keep NAV, current-position, and Monetary limitations separate
   └─> display::print_portfolio()
   └─> display::print_nav_chart()
 ```
@@ -394,8 +393,8 @@ main.rs
 ```
 main.rs
   └─> composition::compute_composition()
-        ├─> portfolio::trigger_rebuild_if_needed()
-        ├─> Aggregate classifications and look-through holdings
+        ├─> Load current Transaction ledger positions and Individual prices
+        ├─> Aggregate classifications and look-through holdings without rebuilding NAV
         └─> Return composition result
   └─> display::print_composition()
 ```
@@ -405,7 +404,8 @@ main.rs
 ```
 main.rs
   └─> analytics::compute_correlation_data()
-        ├─> portfolio_asset_history_repo (load daily returns per asset)
+        ├─> Derive current held assets from the Transaction ledger
+        ├─> Request historical Base currency asset and benchmark series
         ├─> Compute pairwise Pearson correlations
         └─> Return N×N matrix
   └─> display::print_correlation_matrix()

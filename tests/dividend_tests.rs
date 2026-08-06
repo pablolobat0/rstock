@@ -6,10 +6,8 @@ use common::{
     insert_dividend_transaction, insert_transaction, MockMarketDataSources,
 };
 use rstock::models::f64_to_cents;
-use rstock::services::nav;
-use std::collections::HashMap;
-
 use rstock::models::{Transaction, TxType};
+use rstock::services::nav;
 
 /// Cash dividend increases total_value (and therefore NAV) without changing outstanding_shares.
 #[tokio::test]
@@ -27,10 +25,11 @@ async fn test_cash_dividend_increases_nav() {
     // Dividend of 50 total on day 2
     insert_dividend_transaction(&db, asset_id, "2025-01-03", 50.0, 0.0).await;
 
-    let market_data = common::market_data(&MockMarketDataSources::new());
-    let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    let end = NaiveDate::from_ymd_opt(2025, 1, 3).unwrap();
-    nav::rebuild_portfolio_history(&db, start, end, None, &market_data)
+    let market_data = common::market_data_at(
+        &MockMarketDataSources::new(),
+        NaiveDate::from_ymd_opt(2025, 1, 4).unwrap(),
+    );
+    nav::ensure_portfolio_history(&db, &market_data)
         .await
         .unwrap();
 
@@ -61,10 +60,11 @@ async fn test_dividend_with_fees() {
     // Dividend 50 with 10 in fees → net 40
     insert_dividend_transaction(&db, asset_id, "2025-01-03", 50.0, 10.0).await;
 
-    let market_data = common::market_data(&MockMarketDataSources::new());
-    let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    let end = NaiveDate::from_ymd_opt(2025, 1, 3).unwrap();
-    nav::rebuild_portfolio_history(&db, start, end, None, &market_data)
+    let market_data = common::market_data_at(
+        &MockMarketDataSources::new(),
+        NaiveDate::from_ymd_opt(2025, 1, 4).unwrap(),
+    );
+    nav::ensure_portfolio_history(&db, &market_data)
         .await
         .unwrap();
 
@@ -86,10 +86,11 @@ async fn test_dividend_does_not_change_holdings() {
 
     insert_dividend_transaction(&db, asset_id, "2025-01-03", 50.0, 0.0).await;
 
-    let market_data = common::market_data(&MockMarketDataSources::new());
-    let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    let end = NaiveDate::from_ymd_opt(2025, 1, 3).unwrap();
-    nav::rebuild_portfolio_history(&db, start, end, None, &market_data)
+    let market_data = common::market_data_at(
+        &MockMarketDataSources::new(),
+        NaiveDate::from_ymd_opt(2025, 1, 4).unwrap(),
+    );
+    nav::ensure_portfolio_history(&db, &market_data)
         .await
         .unwrap();
 
@@ -111,23 +112,25 @@ async fn test_incremental_rebuild_preserves_cash_balance() {
 
     insert_dividend_transaction(&db, asset_id, "2025-01-03", 50.0, 0.0).await;
 
-    let market_data = common::market_data(&MockMarketDataSources::new());
+    let initial_market_data = common::market_data_at(
+        &MockMarketDataSources::new(),
+        NaiveDate::from_ymd_opt(2025, 1, 4).unwrap(),
+    );
 
     // Build up to day 2
-    let start = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
-    let end = NaiveDate::from_ymd_opt(2025, 1, 3).unwrap();
-    nav::rebuild_portfolio_history(&db, start, end, None, &market_data)
+    nav::ensure_portfolio_history(&db, &initial_market_data)
         .await
         .unwrap();
 
     let snap_day2 = get_portfolio_snapshot(&db, "2025-01-03").await.unwrap();
     assert!((snap_day2.total_value - 1050.0).abs() < 0.01);
 
-    // Incremental rebuild from day 3 using prev snapshot
-    let prev_snap = rstock::models::PortfolioSnapshot::from(snap_day2);
-    let start2 = NaiveDate::from_ymd_opt(2025, 1, 6).unwrap();
-    let end2 = NaiveDate::from_ymd_opt(2025, 1, 6).unwrap();
-    nav::rebuild_portfolio_history(&db, start2, end2, Some(&prev_snap), &market_data)
+    // The later fixed clock makes the public readiness interface extend history incrementally.
+    let later_market_data = common::market_data_at(
+        &MockMarketDataSources::new(),
+        NaiveDate::from_ymd_opt(2025, 1, 7).unwrap(),
+    );
+    nav::ensure_portfolio_history(&db, &later_market_data)
         .await
         .unwrap();
 
@@ -150,76 +153,4 @@ fn test_dividend_signed_quantity_is_zero() {
         fees_cents: 0,
     };
     assert!((tx.signed_quantity()).abs() < f64::EPSILON);
-}
-
-/// Unit test: process_day_transactions with a dividend returns income.
-#[tokio::test]
-async fn test_process_day_transactions_dividend_pure() {
-    let asset = rstock::models::Asset {
-        id: 1,
-        ticker: "XFAKE1".to_owned(),
-        name: "FakeStock".to_owned(),
-        asset_type: rstock::models::AssetType::Stock,
-        currency: "EUR".to_owned(),
-        morningstar_code: None,
-        asset_class: None,
-        equity_style: None,
-        bond_credit: None,
-        bond_duration: None,
-        management: None,
-    };
-    let asset_map: HashMap<i32, &rstock::models::Asset> = HashMap::from([(1, &asset)]);
-    let day_rates: HashMap<i32, f64> = [(1, 1.0)].into_iter().collect();
-
-    // First buy to establish holdings and shares
-    let buy_tx = Transaction {
-        id: 0,
-        asset_id: 1,
-        tx_type: TxType::Buy,
-        date: "2025-01-02".to_owned(),
-        quantity: 10.0,
-        price_cents: f64_to_cents(100.0),
-        fees_cents: 0,
-    };
-    let mut holdings: HashMap<i32, f64> = HashMap::new();
-    let (os, nav_val, div_income) = nav::process_day_transactions(
-        &vec![&buy_tx],
-        &mut holdings,
-        0.0,
-        100.0,
-        &asset_map,
-        &day_rates,
-    )
-    .unwrap();
-    assert!((os - 10.0).abs() < 0.01); // 1000/100 = 10
-    assert!((div_income).abs() < 0.01); // no dividend
-
-    // Now process a dividend
-    let div_tx = Transaction {
-        id: 0,
-        asset_id: 1,
-        tx_type: TxType::Dividend,
-        date: "2025-01-03".to_owned(),
-        quantity: 1.0,
-        price_cents: f64_to_cents(50.0),
-        fees_cents: 0,
-    };
-    let (os2, nav_val2, div_income2) = nav::process_day_transactions(
-        &vec![&div_tx],
-        &mut holdings,
-        os,
-        nav_val,
-        &asset_map,
-        &day_rates,
-    )
-    .unwrap();
-
-    // Outstanding shares unchanged
-    assert!((os2 - os).abs() < 0.01);
-    // NAV unchanged (price hasn't been recalculated yet, that happens after)
-    assert!((nav_val2 - nav_val).abs() < 0.01);
-    // Dividend income returned
-    assert!((div_income2 - 50.0).abs() < 0.01);
-    // Holdings unchanged
-    assert_eq!(*holdings.get(&1).unwrap(), 10.0);
 }

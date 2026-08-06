@@ -14,8 +14,16 @@ use rstock::services::metrics::{
     align_return_series_with_dates, align_return_series_with_dates_unfiltered,
     compute_rolling_correlation, summarize_rolling_correlation,
 };
-use rstock::services::nav::rebuild_portfolio_history;
 use serde_json::{json, Value};
+
+fn correlation_market_data(
+    sources: &MockMarketDataSources,
+) -> rstock::services::market_data::MarketData {
+    common::market_data_at(
+        sources,
+        chrono::NaiveDate::from_ymd_opt(2025, 6, 1).unwrap(),
+    )
+}
 
 fn correlation_envelope<T: serde::Serialize>(command: &str, result: &T) -> (String, Value) {
     let mut output = Vec::new();
@@ -102,18 +110,11 @@ async fn test_perfectly_correlated_assets() {
         insert_daily_price(&db, id_b, &date, base_b * m, false).await;
     }
 
-    // Build portfolio history
-    let start = chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
-    let end = chrono::NaiveDate::from_ymd_opt(2025, 1, 25).unwrap();
-    rebuild_portfolio_history(&db, start, end, None, &common::market_data(&fetcher))
-        .await
-        .unwrap();
-
     let matrix = compute_correlation_data(
         &db,
         "2025-01-01",
         "2025-01-25",
-        &common::market_data(&fetcher),
+        &correlation_market_data(&fetcher),
     )
     .await
     .unwrap();
@@ -161,17 +162,11 @@ async fn test_negatively_correlated_assets() {
         insert_daily_price(&db, id_b, &date, price_b, false).await;
     }
 
-    let start = chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
-    let end = chrono::NaiveDate::from_ymd_opt(2025, 1, 25).unwrap();
-    rebuild_portfolio_history(&db, start, end, None, &common::market_data(&fetcher))
-        .await
-        .unwrap();
-
     let matrix = compute_correlation_data(
         &db,
         "2025-01-01",
         "2025-01-25",
-        &common::market_data(&fetcher),
+        &correlation_market_data(&fetcher),
     )
     .await
     .unwrap();
@@ -202,17 +197,11 @@ async fn test_diagonal_is_one() {
         insert_daily_price(&db, id_a, &date, price, false).await;
     }
 
-    let start = chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
-    let end = chrono::NaiveDate::from_ymd_opt(2025, 1, 25).unwrap();
-    rebuild_portfolio_history(&db, start, end, None, &common::market_data(&fetcher))
-        .await
-        .unwrap();
-
     let matrix = compute_correlation_data(
         &db,
         "2025-01-01",
         "2025-01-25",
-        &common::market_data(&fetcher),
+        &correlation_market_data(&fetcher),
     )
     .await
     .unwrap();
@@ -246,17 +235,11 @@ async fn test_usd_asset_uses_eur_conversion() {
         insert_exchange_rate(&db, "USD", "EUR", &date, 0.92).await;
     }
 
-    let start = chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
-    let end = chrono::NaiveDate::from_ymd_opt(2025, 1, 25).unwrap();
-    rebuild_portfolio_history(&db, start, end, None, &common::market_data(&fetcher))
-        .await
-        .unwrap();
-
     let matrix = compute_correlation_data(
         &db,
         "2025-01-01",
         "2025-01-25",
-        &common::market_data(&fetcher),
+        &correlation_market_data(&fetcher),
     )
     .await
     .unwrap();
@@ -283,7 +266,7 @@ async fn test_correlation_market_data_returns_tracked_and_benchmark_series_separ
     let id_eur = insert_asset(&db, "XFAKE1", "Fake EUR", "stock", "EUR").await;
     let id_usd = insert_asset(&db, "XFAKE2", "Fake USD", "stock", "USD").await;
 
-    let market_data = common::market_data(&fetcher);
+    let market_data = correlation_market_data(&fetcher);
     let tracked_assets = asset_repo::find_by_ids(&db, [id_eur, id_usd].into_iter())
         .await
         .unwrap();
@@ -327,17 +310,11 @@ async fn test_insufficient_data_produces_warning() {
         insert_daily_price(&db, id_a, &date, 100.0 + i as f64, false).await;
     }
 
-    let start = chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
-    let end = chrono::NaiveDate::from_ymd_opt(2025, 1, 5).unwrap();
-    rebuild_portfolio_history(&db, start, end, None, &common::market_data(&fetcher))
-        .await
-        .unwrap();
-
     let matrix = compute_correlation_data(
         &db,
         "2025-01-01",
         "2025-01-05",
-        &common::market_data(&fetcher),
+        &correlation_market_data(&fetcher),
     )
     .await
     .unwrap();
@@ -358,17 +335,11 @@ async fn test_correlation_matrix_carries_market_data_limitations() {
     seed_source_prices(&mut fetcher, "XFAKE1", 100.0, 25);
     insert_transaction(&db, id_a, "2025-01-01", 1.0, 100.0, 0.0).await;
 
-    let start = chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
-    let end = chrono::NaiveDate::from_ymd_opt(2025, 1, 25).unwrap();
-    rebuild_portfolio_history(&db, start, end, None, &common::market_data(&fetcher))
-        .await
-        .unwrap();
-
     let matrix = compute_correlation_data(
         &db,
         "2025-01-01",
         "2025-02-10",
-        &common::market_data(&fetcher),
+        &correlation_market_data(&fetcher),
     )
     .await
     .unwrap();
@@ -390,21 +361,11 @@ async fn test_correlation_matrix_json_preserves_nulls_warnings_and_limitations()
     seed_source_prices(&mut fetcher, "XFAKE1", 100.0, 5);
     insert_transaction(&db, id_a, "2025-01-01", 1.0, 100.0, 0.0).await;
 
-    rebuild_portfolio_history(
-        &db,
-        chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
-        chrono::NaiveDate::from_ymd_opt(2025, 1, 5).unwrap(),
-        None,
-        &common::market_data(&fetcher),
-    )
-    .await
-    .unwrap();
-
     let matrix = compute_correlation_data(
         &db,
         "2025-01-01",
         "2025-02-10",
-        &common::market_data(&fetcher),
+        &correlation_market_data(&fetcher),
     )
     .await
     .unwrap();
@@ -590,7 +551,7 @@ async fn test_rolling_correlation_for_pair() {
         "XFAKE1",
         "XFAKE2",
         "1Y",
-        &common::market_data(&fetcher),
+        &correlation_market_data(&fetcher),
     )
     .await
     .unwrap();
@@ -619,7 +580,7 @@ async fn test_rolling_correlation_carries_market_data_limitations() {
         "XFAKE1",
         "XFAKE2",
         "1Y",
-        &common::market_data(&fetcher),
+        &correlation_market_data(&fetcher),
     )
     .await
     .unwrap();
@@ -649,7 +610,7 @@ async fn test_rolling_correlation_json_preserves_context_summary_points_and_limi
         "XFAKE1",
         "XFAKE2",
         "1Y",
-        &common::market_data(&fetcher),
+        &correlation_market_data(&fetcher),
     )
     .await
     .unwrap();
@@ -696,7 +657,7 @@ async fn test_insufficient_rolling_correlation_json_uses_normal_schema() {
         "XFAKE1",
         "XFAKE2",
         "30D",
-        &common::market_data(&fetcher),
+        &correlation_market_data(&fetcher),
     )
     .await
     .unwrap();
@@ -734,7 +695,7 @@ async fn test_period_metrics_carry_benchmark_market_data_limitations() {
         "2025-01-01",
         "2025-01-01",
         "2025-01-01",
-        &common::market_data(&fetcher),
+        &correlation_market_data(&fetcher),
     )
     .await
     .unwrap();
@@ -773,7 +734,7 @@ async fn test_rolling_correlation_rejects_unknown_identifier() {
         "XFAKE1",
         "XUNKNOWN",
         "1Y",
-        &common::market_data(&fetcher),
+        &correlation_market_data(&fetcher),
     )
     .await;
     let Err(err) = result else {
@@ -824,7 +785,7 @@ async fn test_rolling_correlation_uses_morningstar_code_for_funds_and_etfs() {
         "IE00XFAKE1",
         "IE00XFAKE2",
         "1Y",
-        &common::market_data(&fetcher),
+        &correlation_market_data(&fetcher),
     )
     .await
     .unwrap();

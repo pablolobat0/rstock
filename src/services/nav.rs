@@ -1,21 +1,197 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::Context;
-use chrono::NaiveDate;
+use chrono::{Duration, NaiveDate};
 use sea_orm::DatabaseConnection;
 
 use crate::constants::{format_date, FLOAT_EPSILON, INITIAL_NAV};
 use crate::db::repos::{
     asset_repo, portfolio_asset_history_repo, portfolio_history_repo, transaction_repo,
 };
-use crate::models::{cents_to_f64, Asset, AssetSnapshot, PortfolioSnapshot, Transaction};
+use crate::models::{
+    cents_to_f64, Asset, AssetSnapshot, MarketDataLimitation, PortfolioSnapshot, Transaction,
+    ValuationMarketDataAvailability,
+};
 use crate::services::market_data::MarketData;
 
+/// NAV history made ready for consumers, together with the limitations that
+/// bound the resulting historical valuation scope.
+#[derive(Debug)]
+pub struct PortfolioHistoryReadiness {
+    pub latest_snapshot: Option<PortfolioSnapshot>,
+    pub market_data_limitations: Vec<MarketDataLimitation>,
+}
+
+/// Returns ensured NAV history for a caller-selected display range.
+pub async fn get_portfolio_history(
+    db: &DatabaseConnection,
+    start_date: &str,
+    end_date: &str,
+    market_data: &MarketData,
+) -> anyhow::Result<Vec<PortfolioSnapshot>> {
+    ensure_portfolio_history(db, market_data).await?;
+    portfolio_history_repo::find_between(db, start_date, end_date).await
+}
+
+/// Ensures portfolio history is ready through the Effective valuation date
+/// supported by Historical market data for the latest completed date.
+///
+/// Unavailable required market data for a currently held performance asset is a
+/// normal outcome: it is represented as a readiness with no latest snapshot and
+/// NAV-scoped `Market data limitation` values rather than a hard error. Only
+/// genuine failures (DB, date parsing, missing Morningstar code, invariants)
+/// propagate as errors.
+pub async fn ensure_portfolio_history(
+    db: &DatabaseConnection,
+    market_data: &MarketData,
+) -> anyhow::Result<PortfolioHistoryReadiness> {
+    let yesterday = market_data.today() - Duration::days(1);
+    let yesterday_str = format_date(yesterday);
+
+    let latest_snapshot = portfolio_history_repo::find_latest(db).await?;
+    let mut market_data_limitations = Vec::new();
+    match &latest_snapshot {
+        Some(snapshot) if snapshot.date >= yesterday_str => {}
+        Some(snapshot) => {
+            let latest_date =
+                NaiveDate::parse_from_str(&snapshot.date, crate::constants::DATE_FORMAT)
+                    .context("invalid latest snapshot date")?;
+            let start = latest_date + Duration::days(1);
+            let availability =
+                nav_market_data_availability(db, market_data, start, yesterday, Some(snapshot))
+                    .await?;
+            if availability.data_available {
+                rebuild_portfolio_history(
+                    db,
+                    start,
+                    yesterday,
+                    availability.effective_end,
+                    Some(snapshot),
+                    market_data,
+                )
+                .await?;
+            }
+            market_data_limitations = availability.limitations;
+        }
+        None => {
+            let transactions =
+                transaction_repo::find_all_ordered_by_date(db, None, Some(&yesterday_str)).await?;
+            if let Some(transaction) = transactions.first() {
+                let start =
+                    NaiveDate::parse_from_str(&transaction.date, crate::constants::DATE_FORMAT)
+                        .context("invalid first transaction date")?;
+                let availability =
+                    nav_market_data_availability(db, market_data, start, yesterday, None).await?;
+                if availability.data_available {
+                    rebuild_portfolio_history(
+                        db,
+                        start,
+                        yesterday,
+                        availability.effective_end,
+                        None,
+                        market_data,
+                    )
+                    .await?;
+                }
+                market_data_limitations = availability.limitations;
+            }
+        }
+    }
+
+    Ok(PortfolioHistoryReadiness {
+        latest_snapshot: portfolio_history_repo::find_latest(db).await?,
+        market_data_limitations,
+    })
+}
+
+/// Prepares valuation market data once for the holdings that must be valued
+/// across `[start, end]` and reports whether every required asset price and FX
+/// rate is available. The single preparation pass both fills the cache the
+/// rebuild will reuse and yields the NAV-scoped limitations; no second pass is
+/// needed to reconstruct them after a failed rebuild.
+async fn nav_market_data_availability(
+    db: &DatabaseConnection,
+    market_data: &MarketData,
+    start: NaiveDate,
+    end: NaiveDate,
+    prev_snapshot: Option<&PortfolioSnapshot>,
+) -> anyhow::Result<ValuationMarketDataAvailability> {
+    let start_str = format_date(start);
+    let end_str = format_date(end);
+    let mut holdings: HashMap<i32, f64> = HashMap::new();
+    if let Some(snapshot) = prev_snapshot {
+        let asset_rows = portfolio_asset_history_repo::find_by_date(db, &snapshot.date).await?;
+        for row in asset_rows {
+            holdings.insert(row.asset_id, row.quantity);
+        }
+    }
+    let transactions =
+        transaction_repo::find_all_ordered_by_date(db, Some(&start_str), Some(&end_str)).await?;
+    let needed_ids: HashSet<i32> = holdings
+        .keys()
+        .copied()
+        .chain(transactions.iter().map(|tx| tx.asset_id))
+        .collect();
+    if needed_ids.is_empty() {
+        return Ok(ValuationMarketDataAvailability {
+            effective_end: end,
+            limitations: Vec::new(),
+            data_available: true,
+        });
+    }
+    let assets = asset_repo::find_by_ids(db, needed_ids).await?;
+    let nav_assets: Vec<Asset> = assets
+        .iter()
+        .filter(|asset| !asset.is_monetary())
+        .cloned()
+        .collect();
+    let mut availability = market_data
+        .prepare_valuation_market_data_if_available(db, &nav_assets, &start_str, &end_str)
+        .await?;
+    if availability.data_available {
+        let mut first_valuation_dates: HashMap<i32, NaiveDate> = holdings
+            .into_iter()
+            .filter(|(_, quantity)| *quantity > FLOAT_EPSILON)
+            .map(|(asset_id, _)| (asset_id, start))
+            .collect();
+        for transaction in transactions
+            .iter()
+            .filter(|transaction| transaction.is_buy())
+        {
+            let transaction_date =
+                NaiveDate::parse_from_str(&transaction.date, crate::constants::DATE_FORMAT)
+                    .context("invalid transaction date")?;
+            first_valuation_dates
+                .entry(transaction.asset_id)
+                .or_insert(transaction_date);
+        }
+
+        for asset in &nav_assets {
+            let Some(first_valuation_date) = first_valuation_dates.get(&asset.id) else {
+                continue;
+            };
+            let limitations = market_data
+                .get_required_asset_valuation_limitations(db, asset, *first_valuation_date)
+                .await?;
+            if !limitations.is_empty() {
+                availability.data_available = false;
+                for limitation in limitations {
+                    if !availability.limitations.contains(&limitation) {
+                        availability.limitations.push(limitation);
+                    }
+                }
+            }
+        }
+    }
+    Ok(availability)
+}
+
 #[allow(clippy::too_many_lines)]
-pub async fn rebuild_portfolio_history(
+async fn rebuild_portfolio_history(
     db: &DatabaseConnection,
     start_date: NaiveDate,
     end_date: NaiveDate,
+    effective_end: NaiveDate,
     prev_snapshot: Option<&PortfolioSnapshot>,
     market_data: &MarketData,
 ) -> anyhow::Result<()> {
@@ -57,11 +233,6 @@ pub async fn rebuild_portfolio_history(
         .filter(|asset| !asset.is_monetary())
         .cloned()
         .collect();
-
-    let valuation_market_data = market_data
-        .prepare_valuation_market_data(db, &nav_assets, &start_str, &end_str)
-        .await?;
-    let effective_end = valuation_market_data.effective_end;
 
     let mut tx_by_date: HashMap<String, Vec<&Transaction>> = HashMap::new();
     for tx in &transactions {
@@ -134,7 +305,7 @@ pub async fn rebuild_portfolio_history(
 
 /// Returns `(outstanding_shares, nav, dividend_income_eur)`.
 #[allow(clippy::implicit_hasher)]
-pub fn process_day_transactions(
+fn process_day_transactions(
     day_txs: &[&Transaction],
     holdings: &mut HashMap<i32, f64>,
     outstanding_shares: f64,

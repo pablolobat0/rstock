@@ -33,7 +33,11 @@ pub async fn get(
 
     display::print_portfolio(&result);
 
-    let today = chrono::Local::now().date_naive();
+    if result.rows.is_empty() && !result.monetary_positions.is_empty() {
+        return Ok(());
+    }
+
+    let today = market_data.today();
     let today_str = format_date(today);
 
     let (start_date, period_label) = match period {
@@ -47,30 +51,37 @@ pub async fn get(
         ChartPeriod::OneYear => (today - chrono::Duration::days(ONE_YEAR_DAYS), "1Y"),
         ChartPeriod::ThreeYears => (today - chrono::Duration::days(THREE_YEAR_DAYS), "3Y"),
         ChartPeriod::FiveYears => (today - chrono::Duration::days(FIVE_YEAR_DAYS), "5Y"),
-        ChartPeriod::All => {
-            let inception = services::portfolio::get_inception_date(db).await?;
-            match inception {
-                Some(date_str) => {
-                    let d = NaiveDate::parse_from_str(&date_str, DATE_FORMAT)
-                        .context("invalid inception date")?;
-                    (d, "All")
-                }
-                None => (today, "All"),
+        ChartPeriod::All => match result.inception_date.as_deref() {
+            Some(date_str) => {
+                let d = NaiveDate::parse_from_str(date_str, DATE_FORMAT)
+                    .context("invalid inception date")?;
+                (d, "All")
             }
-        }
+            None => (today, "All"),
+        },
     };
 
     let start_str = format_date(start_date);
-    let snapshots = services::portfolio::get_nav_snapshots(db, &start_str, &today_str).await?;
+    let snapshots =
+        services::nav::get_portfolio_history(db, &start_str, &today_str, market_data).await?;
     display::print_nav_chart(&snapshots, period_label);
 
     Ok(())
 }
 
 fn prepare_json_result(result: &mut crate::models::PortfolioResult) {
-    result
-        .rows
-        .sort_by(|left, right| right.current_value.total_cmp(&left.current_value));
+    result.rows.sort_by(|left, right| {
+        right
+            .current_value
+            .unwrap_or(f64::NEG_INFINITY)
+            .total_cmp(&left.current_value.unwrap_or(f64::NEG_INFINITY))
+    });
+    result.monetary_positions.sort_by(|left, right| {
+        right
+            .current_value
+            .unwrap_or(f64::NEG_INFINITY)
+            .total_cmp(&left.current_value.unwrap_or(f64::NEG_INFINITY))
+    });
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -179,7 +190,7 @@ mod tests {
 
     use crate::cli::output;
     use crate::models::{
-        AssetPosition, AssetType, MarketDataLimitation, MarketDataLimitationClassification,
+        AssetType, CurrentPosition, MarketDataLimitation, MarketDataLimitationClassification,
         MarketDataSubject, PortfolioResult,
     };
 
@@ -193,7 +204,7 @@ mod tests {
                 name: "Fake Fund".to_string(),
                 asset_type: AssetType::Fund,
             },
-            latest_available_date: NaiveDate::from_ymd_opt(2025, 1, 9).unwrap(),
+            latest_available_date: Some(NaiveDate::from_ymd_opt(2025, 1, 9).unwrap()),
             requested_end_date: NaiveDate::from_ymd_opt(2025, 1, 10).unwrap(),
             classification: MarketDataLimitationClassification::ActionableReportingLag,
         };
@@ -203,11 +214,18 @@ mod tests {
                 position("XFAKE1", "USD", 100.0, Vec::new()),
                 position("XFAKE2", "GBP", 300.0, vec![limitation.clone()]),
             ],
-            total_invested: 350.0,
-            total_current_value: 400.0,
-            total_dividends: 0.0,
-            total_gain_loss: 50.0,
-            total_gain_loss_pct: 14.29,
+            monetary_positions: vec![monetary_position("XFAKEM1", Some(200.0))],
+            total_monetary_value: Some(200.0),
+            total_invested: Some(350.0),
+            total_current_value: Some(400.0),
+            total_monetary_invested: Some(200.0),
+            total_value: Some(600.0),
+            total_dividends: Some(0.0),
+            total_monetary_dividends: Some(0.0),
+            total_open_position_gain_loss: Some(50.0),
+            total_open_position_gain_loss_pct: Some(14.29),
+            total_monetary_open_position_gain_loss: Some(0.0),
+            total_monetary_open_position_gain_loss_pct: Some(0.0),
             snapshot_date: Some("2025-01-09".to_string()),
             nav: Some(110.0),
             daily_change: None,
@@ -221,8 +239,17 @@ mod tests {
             one_year_metrics: None,
             three_year_metrics: None,
             five_year_metrics: None,
-            market_data_limitations: vec![limitation],
+            nav_market_data_limitations: vec![limitation],
+            current_position_market_data_limitations: Vec::new(),
+            monetary_market_data_limitations: Vec::new(),
         };
+        result.rows[0].current_price = None;
+        result.rows[0].price_date = None;
+        result.rows[0].current_value = None;
+        result.rows[0].open_position_gain_loss = None;
+        result.rows[0].open_position_gain_loss_pct = None;
+        result.total_current_value = None;
+        result.total_value = None;
         prepare_json_result(&mut result);
 
         let mut output = Vec::new();
@@ -233,10 +260,17 @@ mod tests {
         assert_eq!(value["data"]["base_currency"], "EUR");
         assert_eq!(value["data"]["positions"][0]["ticker"], "XFAKE2");
         assert_eq!(value["data"]["positions"][1]["ticker"], "XFAKE1");
+        assert_eq!(value["data"]["monetary_positions"][0]["ticker"], "XFAKEM1");
+        assert_eq!(value["data"]["total_monetary_value"], 200.0);
         assert_eq!(value["data"]["positions"][0]["currency"], "GBP");
         assert!(value["data"]["daily_change"].is_null());
+        assert!(value["data"]["positions"][1]["current_price"].is_null());
+        assert!(value["data"]["positions"][1]["price_date"].is_null());
+        assert!(value["data"]["positions"][1]["current_value"].is_null());
+        assert!(value["data"]["total_current_value"].is_null());
+        assert!(value["data"]["total_value"].is_null());
         assert_eq!(
-            value["data"]["market_data_limitations"][0]["subject"],
+            value["data"]["nav_market_data_limitations"][0]["subject"],
             json!({
                 "type": "asset",
                 "ticker": "XFAKE2",
@@ -245,7 +279,7 @@ mod tests {
             })
         );
         assert_eq!(
-            value["data"]["market_data_limitations"][0]["classification"],
+            value["data"]["nav_market_data_limitations"][0]["classification"],
             "actionable_reporting_lag"
         );
         assert!(value["data"].get("nav_history").is_none());
@@ -257,8 +291,8 @@ mod tests {
         currency: &str,
         current_value: f64,
         market_data_limitations: Vec<MarketDataLimitation>,
-    ) -> AssetPosition {
-        AssetPosition {
+    ) -> CurrentPosition {
+        CurrentPosition {
             ticker: ticker.to_string(),
             name: format!("{ticker} name"),
             asset_type: AssetType::Fund,
@@ -268,15 +302,38 @@ mod tests {
             equity_style: None,
             management: None,
             total_qty: 1.0,
-            avg_cost: 100.0,
-            current_price: current_value,
-            price_date: "2025-01-09".to_string(),
-            total_invested: 100.0,
-            current_value,
-            dividends_received: 0.0,
-            gain_loss: current_value - 100.0,
-            gain_loss_pct: current_value - 100.0,
+            avg_cost: Some(100.0),
+            current_price: Some(current_value),
+            price_date: Some("2025-01-09".to_string()),
+            total_invested: Some(100.0),
+            current_value: Some(current_value),
+            dividends_received: Some(0.0),
+            open_position_gain_loss: Some(current_value - 100.0),
+            open_position_gain_loss_pct: Some(current_value - 100.0),
             market_data_limitations,
+        }
+    }
+
+    fn monetary_position(ticker: &str, current_value: Option<f64>) -> CurrentPosition {
+        CurrentPosition {
+            ticker: ticker.to_string(),
+            name: format!("{ticker} name"),
+            asset_type: AssetType::Fund,
+            currency: "EUR".to_string(),
+            morningstar_code: Some("F00000MONEY".to_string()),
+            asset_class: Some("monetary".to_string()),
+            equity_style: None,
+            management: None,
+            total_qty: 2.0,
+            avg_cost: Some(100.0),
+            current_price: current_value.map(|value| value / 2.0),
+            price_date: Some("2025-01-09".to_string()),
+            total_invested: Some(200.0),
+            current_value,
+            dividends_received: Some(0.0),
+            open_position_gain_loss: current_value.map(|value| value - 200.0),
+            open_position_gain_loss_pct: current_value.map(|value| (value - 200.0) / 2.0),
+            market_data_limitations: Vec::new(),
         }
     }
 }
