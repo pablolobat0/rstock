@@ -7,7 +7,9 @@ use sea_orm::DatabaseConnection;
 use super::{policy, MarketData, SourceObservation};
 use crate::constants::{format_date, BASE_CURRENCY, FUND_API_PADDING_DAYS};
 use crate::db::repos::{daily_price_repo, exchange_rate_repo};
-use crate::models::{Asset, AssetType, MarketDataValuation, ValuationMarketData};
+use crate::models::{
+    Asset, AssetType, MarketDataValuation, ValuationMarketData, ValuationMarketDataAvailability,
+};
 
 struct LatestMarketDataDate {
     date: String,
@@ -164,6 +166,37 @@ async fn prepare_historical_market_data(
     end_date: &str,
     market_data: &MarketData,
 ) -> anyhow::Result<ValuationMarketData> {
+    let availability =
+        prepare_historical_market_data_inner(db, assets, start_date, end_date, market_data, true)
+            .await?;
+    Ok(ValuationMarketData {
+        effective_end: availability.effective_end,
+        limitations: availability.limitations,
+    })
+}
+
+/// Same preparation as `prepare_historical_market_data` but unavailable required
+/// data is reported as `data_available = false` plus limitations instead of a
+/// hard error, so NAV readiness can represent an unavailable valuation scope
+/// without masking genuine DB, parsing, or invariant errors.
+pub(crate) async fn prepare_valuation_market_data_if_available(
+    db: &DatabaseConnection,
+    assets: &[Asset],
+    start_date: &str,
+    end_date: &str,
+    market_data: &MarketData,
+) -> anyhow::Result<ValuationMarketDataAvailability> {
+    prepare_historical_market_data_inner(db, assets, start_date, end_date, market_data, false).await
+}
+
+async fn prepare_historical_market_data_inner(
+    db: &DatabaseConnection,
+    assets: &[Asset],
+    start_date: &str,
+    end_date: &str,
+    market_data: &MarketData,
+    strict: bool,
+) -> anyhow::Result<ValuationMarketDataAvailability> {
     let requested_end =
         policy::parse_market_data_date(end_date, "historical market data end date")?;
     let currencies = infer_required_currencies(assets);
@@ -178,14 +211,20 @@ async fn prepare_historical_market_data(
     let mut latest_required_dates = Vec::with_capacity(assets.len() + currencies.len() + 1);
     latest_required_dates.push(requested_end);
     let mut limitations = Vec::new();
+    let mut data_available = true;
 
     for asset in assets {
         let Some(latest_date) = latest_asset_dates.get(&asset.id) else {
-            bail!(
-                "missing required historical market data for asset {} ({})",
-                asset.ticker,
-                asset.name
-            );
+            if strict {
+                bail!(
+                    "missing required historical market data for asset {} ({})",
+                    asset.ticker,
+                    asset.name
+                );
+            }
+            data_available = false;
+            limitations.push(policy::missing_asset_limitation(asset, requested_end));
+            continue;
         };
         let latest_available_date =
             policy::parse_market_data_date(&latest_date.date, "asset price date")?;
@@ -199,7 +238,14 @@ async fn prepare_historical_market_data(
 
     for currency in currencies {
         let Some(latest_date) = latest_rate_dates.get(&currency) else {
-            bail!("missing required historical market data for FX rate {currency}{BASE_CURRENCY}");
+            if strict {
+                bail!(
+                    "missing required historical market data for FX rate {currency}{BASE_CURRENCY}"
+                );
+            }
+            data_available = false;
+            limitations.push(policy::missing_fx_limitation(&currency, requested_end));
+            continue;
         };
         let latest_available_date =
             policy::parse_market_data_date(&latest_date.date, "FX rate date")?;
@@ -216,9 +262,10 @@ async fn prepare_historical_market_data(
         .min()
         .context("historical market data preparation had no date requirements")?;
 
-    Ok(ValuationMarketData {
+    Ok(ValuationMarketDataAvailability {
         effective_end,
         limitations,
+        data_available,
     })
 }
 

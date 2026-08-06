@@ -11,6 +11,17 @@ pub struct ValuationMarketData {
     pub limitations: Vec<MarketDataLimitation>,
 }
 
+/// Result of preparing valuation market data without treating unavailable
+/// required data as an error: `data_available` is false when any required asset
+/// price or FX rate has no data at all, and the unavailable inputs are reported
+/// as `limitations`. Genuine errors (DB, parsing, invariants) still propagate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValuationMarketDataAvailability {
+    pub effective_end: NaiveDate,
+    pub limitations: Vec<MarketDataLimitation>,
+    pub data_available: bool,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct MarketDataValuation {
     pub native_price: f64,

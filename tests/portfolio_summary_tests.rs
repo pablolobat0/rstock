@@ -332,6 +332,53 @@ async fn test_unpriced_post_snapshot_holding_remains_visible_with_unavailable_fa
 }
 
 #[tokio::test]
+async fn test_unpriced_holding_without_snapshots_keeps_current_positions_and_scoped_nav_limitations(
+) {
+    let db = common::setup_test_db().await;
+    let asset_id = common::insert_asset(&db, "XFAKEUNPR1", "Unpriced Stock", "stock", "EUR").await;
+    common::insert_transaction(&db, asset_id, "2025-06-02", 2.0, 10.0, 1.0).await;
+
+    let market_data = common::market_data_at(&common::MockMarketDataSources::new(), fixed_today());
+    let result = portfolio::get_portfolio(&db, &market_data).await.unwrap();
+
+    assert!(portfolio_history_repo::find_latest(&db)
+        .await
+        .unwrap()
+        .is_none());
+    assert!(result.nav.is_none());
+    assert!(result.snapshot_date.is_none());
+    assert_eq!(result.rows.len(), 1);
+    let position = &result.rows[0];
+    assert_eq!(position.ticker, "XFAKEUNPR1");
+    assert_eq!(position.total_qty, 2.0);
+    assert_eq!(position.total_invested, Some(21.0));
+    assert_eq!(position.avg_cost, Some(10.5));
+    assert!(position.current_value.is_none());
+    assert!(position.open_position_gain_loss.is_none());
+    assert!(result.total_current_value.is_none());
+    // The unpriced holding limits NAV in the NAV scope...
+    assert!(result.nav_market_data_limitations.iter().any(|limitation| {
+        matches!(
+            limitation.subject,
+            rstock::models::MarketDataSubject::Asset { ref ticker, .. }
+                if ticker == "XFAKEUNPR1"
+        )
+    }));
+    // ...and independently in the current-position scope, while Monetary is clear.
+    assert!(result
+        .current_position_market_data_limitations
+        .iter()
+        .any(|limitation| {
+            matches!(
+                limitation.subject,
+                rstock::models::MarketDataSubject::Asset { ref ticker, .. }
+                    if ticker == "XFAKEUNPR1"
+            )
+        }));
+    assert!(result.monetary_market_data_limitations.is_empty());
+}
+
+#[tokio::test]
 async fn test_portfolio_returns_monetary_only_holdings_separately() {
     let db = common::setup_test_db().await;
     let price_date = "2025-06-08";

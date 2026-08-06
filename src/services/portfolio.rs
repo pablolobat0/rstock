@@ -23,6 +23,9 @@ pub async fn get_portfolio(
     market_data: &MarketData,
 ) -> anyhow::Result<PortfolioResult> {
     let today = market_data.today();
+    // NAV readiness is strict: missing historical market data is represented as
+    // a NAV-limited readiness with nullable NAV facts, while genuine failures
+    // (DB, parsing, invariants) propagate.
     let nav_readiness = nav::ensure_portfolio_history(db, market_data).await?;
     let current_positions = get_current_positions(db, market_data).await?;
     let mut nav_market_data_limitations = nav_readiness.market_data_limitations;
@@ -150,25 +153,28 @@ pub async fn get_current_positions(
             .push(transaction);
     }
     let assets = asset_repo::find_by_ids(db, transactions_by_asset.keys().copied()).await?;
+    let end_date = format_date(current_date - Duration::days(1));
+
+    // Prepare historical prices and FX before projecting ledger facts so that
+    // transaction-date FX is cached (fetch/persist, then read) and cost and
+    // dividend facts are identical across repeated requests.
+    let Some(prepare_scope) = ledger_prepare_scope(&assets, &transactions_by_asset, &end_date)
+    else {
+        return Ok(empty_current_positions());
+    };
+    market_data
+        .prepare_individual_price_market_data(
+            db,
+            &prepare_scope.assets,
+            &prepare_scope.start_date,
+            &end_date,
+        )
+        .await?;
+
     let projections = project_open_holdings(db, market_data, assets, transactions_by_asset).await?;
     if projections.is_empty() {
         return Ok(empty_current_positions());
     }
-
-    let end_date = format_date(current_date - Duration::days(1));
-    let earliest_transaction_date = projections
-        .iter()
-        .map(|projection| projection.earliest_transaction_date.as_str())
-        .min()
-        .context("open holdings have no transactions")?;
-    let start_date = earliest_transaction_date.min(end_date.as_str());
-    let assets_to_prepare: Vec<Asset> = projections
-        .iter()
-        .map(|projection| projection.asset.clone())
-        .collect();
-    market_data
-        .prepare_individual_price_market_data(db, &assets_to_prepare, start_date, &end_date)
-        .await?;
 
     let mut positions = Vec::new();
     let mut monetary_positions = Vec::new();
@@ -224,7 +230,6 @@ pub async fn get_current_positions(
 struct HoldingProjection {
     asset: Asset,
     total_qty: f64,
-    earliest_transaction_date: String,
     total_invested: Option<f64>,
     dividends_received: Option<f64>,
     market_data_limitations: Vec<MarketDataLimitation>,
@@ -236,6 +241,66 @@ struct PositionTotals {
     dividends: Option<f64>,
     open_position_gain_loss: Option<f64>,
     open_position_gain_loss_pct: Option<f64>,
+}
+
+/// The subset of current ledger assets and the price/FX range that must be
+/// prepared before any ledger fact that depends on historical FX is projected.
+struct LedgerPrepareScope {
+    assets: Vec<Asset>,
+    start_date: String,
+}
+
+/// Derives the open-holding asset set and earliest transaction date from the
+/// ledger alone (no market data reads) so that historical prices and FX can be
+/// prepared before currency-dependent cost and dividend facts are projected.
+fn ledger_prepare_scope(
+    assets: &[Asset],
+    transactions_by_asset: &HashMap<i32, Vec<Transaction>>,
+    end_date: &str,
+) -> Option<LedgerPrepareScope> {
+    let mut prepare_assets = Vec::new();
+    let mut earliest_transaction_date: Option<NaiveDate> = None;
+    for asset in assets {
+        if is_benchmark_ticker(&asset.ticker) {
+            continue;
+        }
+        let Some(transactions) = transactions_by_asset.get(&asset.id) else {
+            continue;
+        };
+        if open_holding_quantity(transactions) > FLOAT_EPSILON {
+            prepare_assets.push(asset.clone());
+            let earliest =
+                NaiveDate::parse_from_str(&transactions.first()?.date, DATE_FORMAT).ok()?;
+            earliest_transaction_date = Some(match earliest_transaction_date {
+                Some(previous) => previous.min(earliest),
+                None => earliest,
+            });
+        }
+    }
+    if prepare_assets.is_empty() {
+        return None;
+    }
+    let start_date = format_date(earliest_transaction_date?).min(end_date.to_owned());
+    Some(LedgerPrepareScope {
+        assets: prepare_assets,
+        start_date,
+    })
+}
+
+/// Net current quantity for an asset, mirroring the quantity arithmetic used by
+/// `project_holding` (splits scale, buys add, sells remove; no FX involved).
+fn open_holding_quantity(transactions: &[Transaction]) -> f64 {
+    let mut total_qty = 0.0;
+    for transaction in transactions {
+        if transaction.is_split() {
+            total_qty *= transaction.quantity;
+        } else if transaction.is_buy() {
+            total_qty += transaction.quantity;
+        } else if transaction.is_sell() {
+            total_qty -= transaction.quantity;
+        }
+    }
+    total_qty
 }
 
 fn empty_current_positions() -> CurrentPositions {
@@ -326,11 +391,6 @@ async fn project_holding(
     Ok(HoldingProjection {
         asset,
         total_qty,
-        earliest_transaction_date: transactions
-            .first()
-            .context("holding projection has no transactions")?
-            .date
-            .clone(),
         total_invested,
         dividends_received,
         market_data_limitations,

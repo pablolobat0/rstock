@@ -24,7 +24,7 @@ pub use market_data::{
     BaseCurrencyPriceSeries, CorrelationMarketData, CorrelationMarketDataSeries, IndividualPrice,
     IndividualPriceAvailability, IndividualPriceFallback, MarketDataLimitation,
     MarketDataLimitationClassification, MarketDataSubject, MarketDataValuation,
-    ValuationMarketData,
+    ValuationMarketData, ValuationMarketDataAvailability,
 };
 pub use portfolio::{
     AllocationEntry, AssetSnapshot, CompositionResult, CorrelationMatrix, CurrentPositions,

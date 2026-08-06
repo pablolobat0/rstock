@@ -1,7 +1,9 @@
 mod common;
 
 use chrono::NaiveDate;
-use rstock::models::BuyOrder;
+use rstock::models::{
+    BuyOrder, MarketDataLimitation, MarketDataLimitationClassification, MarketDataSubject,
+};
 use rstock::services::{nav, transactions};
 
 fn nav_market_data(
@@ -355,7 +357,8 @@ async fn test_multiple_assets() {
     assert!((snap.asset_value - 1000.0).abs() < 0.01);
 }
 
-/// Asset has no market data -> NAV rebuild fails before writing partial snapshots.
+/// Asset has no market data -> NAV readiness is unavailable (no snapshot, no
+/// partial snapshots written) with an actionable Asset limitation.
 #[tokio::test]
 async fn test_missing_price_for_asset_fails_without_partial_snapshots() {
     let db = common::setup_test_db().await;
@@ -364,12 +367,24 @@ async fn test_missing_price_for_asset_fails_without_partial_snapshots() {
     let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
 
-    let result = nav::ensure_portfolio_history(&db, &nav_market_data(&mock)).await;
+    let readiness = nav::ensure_portfolio_history(&db, &nav_market_data(&mock))
+        .await
+        .expect("unavailable historical market data is a tolerated NAV outcome");
 
-    let error = result.expect_err("missing asset market data should fail NAV rebuild");
-    assert!(error
-        .to_string()
-        .contains("missing required historical market data for asset XFAKE1"));
+    assert!(readiness.latest_snapshot.is_none());
+    assert_eq!(
+        readiness.market_data_limitations,
+        vec![MarketDataLimitation {
+            subject: MarketDataSubject::Asset {
+                ticker: "XFAKE1".to_owned(),
+                name: "Test Stock".to_owned(),
+                asset_type: rstock::models::AssetType::Stock,
+            },
+            latest_available_date: None,
+            requested_end_date: NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
+            classification: MarketDataLimitationClassification::ActionableMissingData,
+        }]
+    );
     assert!(common::get_all_snapshots(&db).await.is_empty());
 }
 
@@ -392,7 +407,9 @@ async fn test_missing_first_day_asset_valuation_fails_without_seed_snapshot() {
     assert!(common::get_all_snapshots(&db).await.is_empty());
 }
 
-/// Non-EUR asset with no FX data -> NAV rebuild fails before writing partial snapshots.
+/// Non-EUR asset with no FX data -> NAV readiness is unavailable without a
+/// snapshot or partial data, with an actionable FX limitation alongside the
+/// stale price limitation for the valued asset.
 #[tokio::test]
 async fn test_missing_fx_rate_fails_without_partial_snapshots() {
     let db = common::setup_test_db().await;
@@ -405,12 +422,34 @@ async fn test_missing_fx_rate_fails_without_partial_snapshots() {
         vec![("2025-01-02".to_owned(), 100.0)],
     );
 
-    let result = nav::ensure_portfolio_history(&db, &nav_market_data(&mock)).await;
+    let readiness = nav::ensure_portfolio_history(&db, &nav_market_data(&mock))
+        .await
+        .expect("unavailable FX data is a readable NAV outcome");
 
-    let error = result.expect_err("missing FX market data should fail NAV rebuild");
-    assert!(error
-        .to_string()
-        .contains("missing required historical market data for FX rate USDEUR"));
+    assert!(readiness.latest_snapshot.is_none());
+    assert_eq!(
+        readiness.market_data_limitations,
+        vec![
+            MarketDataLimitation {
+                subject: MarketDataSubject::Asset {
+                    ticker: "XFAKEUSD".to_owned(),
+                    name: "US Stock".to_owned(),
+                    asset_type: rstock::models::AssetType::Stock.into(),
+                },
+                latest_available_date: Some(NaiveDate::from_ymd_opt(2025, 1, 2).unwrap()),
+                requested_end_date: NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
+                classification: MarketDataLimitationClassification::ActionableStaleData,
+            },
+            MarketDataLimitation {
+                subject: MarketDataSubject::FxRate {
+                    currency: "USD".to_owned(),
+                },
+                latest_available_date: None,
+                requested_end_date: NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
+                classification: MarketDataLimitationClassification::ActionableMissingData,
+            },
+        ]
+    );
     assert!(common::get_all_snapshots(&db).await.is_empty());
 }
 
@@ -687,6 +726,26 @@ async fn test_single_usd_asset_nav() {
         .unwrap();
     assert!((snap2.total_value - 1012.0).abs() < 0.01);
     assert!((snap2.nav - (1012.0 / 9.0)).abs() < 0.01);
+}
+
+/// A genuine readiness/preparation error is not swallowed into a readable NAV:
+/// a fund without its Morningstar code must propagate as an Err rather than be
+/// masked as an unavailable-NAV limitation.
+#[tokio::test]
+async fn ensure_portfolio_history_propagates_genuine_errors() {
+    let db = common::setup_test_db().await;
+    let mock = common::MockMarketDataSources::new();
+
+    let asset_id = common::insert_asset(&db, "XFAKEFUND", "Test Fund", "fund", "EUR").await;
+    common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
+
+    let result = nav::ensure_portfolio_history(&db, &nav_market_data(&mock)).await;
+
+    let error = result.expect_err("missing Morningstar code must not be masked by availability");
+    assert!(error
+        .to_string()
+        .contains("missing Morningstar code for required fund XFAKEFUND (Test Fund)"));
+    assert!(common::get_all_snapshots(&db).await.is_empty());
 }
 
 /// Mixed EUR + USD portfolio. Verify deposits and valuations convert correctly.

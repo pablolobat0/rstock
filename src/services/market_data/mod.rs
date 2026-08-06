@@ -11,7 +11,7 @@ use crate::db::repos::asset_repo;
 use crate::models::{
     Asset, AssetClassification, CorrelationMarketData, CorrelationMarketDataSeries, FundData,
     FundQuoteMetadata, IndividualPrice, IndividualPriceAvailability, IndividualPriceFallback,
-    MarketDataValuation, StockInfo, ValuationMarketData,
+    MarketDataValuation, StockInfo, ValuationMarketData, ValuationMarketDataAvailability,
 };
 use crate::services::clock::{Clock, SystemClock};
 use crate::services::metrics;
@@ -102,6 +102,19 @@ impl MarketData {
         end_date: &str,
     ) -> anyhow::Result<ValuationMarketData> {
         historical::prepare_valuation_market_data(db, assets, start_date, end_date, self).await
+    }
+
+    pub async fn prepare_valuation_market_data_if_available(
+        &self,
+        db: &DatabaseConnection,
+        assets: &[Asset],
+        start_date: &str,
+        end_date: &str,
+    ) -> anyhow::Result<ValuationMarketDataAvailability> {
+        historical::prepare_valuation_market_data_if_available(
+            db, assets, start_date, end_date, self,
+        )
+        .await
     }
 
     pub async fn get_required_asset_exchange_rates(

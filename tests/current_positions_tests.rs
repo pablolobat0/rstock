@@ -367,6 +367,61 @@ async fn focused_current_positions_use_latest_fx_on_or_before_each_transaction_d
 }
 
 #[tokio::test]
+async fn focused_current_positions_are_identical_across_requests_when_fx_is_source_available_but_uncached(
+) {
+    let db = common::setup_test_db().await;
+    let asset_id = common::insert_asset(&db, "XFAKEFX10", "USD Stock", "stock", "USD").await;
+    common::insert_transaction(&db, asset_id, "2025-06-01", 2.0, 10.0, 0.0).await;
+    common::insert_dividend_transaction(&db, asset_id, "2025-06-03", 3.0, 0.0).await;
+
+    let mut sources = common::MockMarketDataSources::new();
+    sources.historical_prices.insert(
+        "XFAKEFX10".to_owned(),
+        vec![("2025-06-05".to_owned(), 12.0)],
+    );
+    sources.exchange_rates.insert(
+        "USDEUR".to_owned(),
+        vec![
+            ("2025-06-01".to_owned(), 0.8),
+            ("2025-06-05".to_owned(), 0.9),
+        ],
+    );
+    let market_data = common::market_data_at(&sources, fixed_today());
+
+    let first = portfolio::get_current_positions(&db, &market_data)
+        .await
+        .unwrap();
+    let second = portfolio::get_current_positions(&db, &market_data)
+        .await
+        .unwrap();
+
+    assert_eq!(first.positions.len(), 1);
+    let first_position = &first.positions[0];
+    let second_position = &second.positions[0];
+    // Cost and dividend facts must be complete on the first request already.
+    assert!((first_position.total_invested.unwrap() - 16.0).abs() < 1e-9);
+    assert!((first_position.avg_cost.unwrap() - 8.0).abs() < 1e-9);
+    assert!((first_position.dividends_received.unwrap() - 2.4).abs() < 1e-9);
+    assert_eq!(first_position.total_qty, second_position.total_qty);
+    assert_eq!(
+        first_position.total_invested,
+        second_position.total_invested
+    );
+    assert_eq!(first_position.avg_cost, second_position.avg_cost);
+    assert_eq!(
+        first_position.dividends_received,
+        second_position.dividends_received
+    );
+    assert_eq!(first_position.current_value, second_position.current_value);
+    assert!(first_position.market_data_limitations.is_empty());
+    assert!((first.total_invested.unwrap() - 16.0).abs() < 1e-9);
+    assert!((first.total_dividends.unwrap() - 2.4).abs() < 1e-9);
+    assert!((second.total_invested.unwrap() - 16.0).abs() < 1e-9);
+    assert!((second.total_dividends.unwrap() - 2.4).abs() < 1e-9);
+    assert_eq!(first.total_value, second.total_value);
+}
+
+#[tokio::test]
 async fn focused_current_positions_keep_independent_facts_when_only_dividend_fx_is_missing() {
     let db = common::setup_test_db().await;
     let asset_id = common::insert_asset(&db, "XFAKEFX3", "USD Stock", "stock", "USD").await;

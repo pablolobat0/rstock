@@ -177,6 +177,27 @@ async fn nav_chart_history_is_ready_without_portfolio_view_call_order() {
 }
 
 #[tokio::test]
+async fn fixed_clock_future_dated_performance_only_portfolio_is_empty_and_never_errors() {
+    let db = common::setup_test_db().await;
+    let asset_id = common::insert_asset(&db, "XFAKEFUT1", "Future Stock", "stock", "EUR").await;
+    common::insert_transaction(&db, asset_id, "2025-06-11", 2.0, 10.0, 0.0).await;
+
+    let market_data = common::market_data_at(&common::MockMarketDataSources::new(), fixed_today());
+    let result = portfolio::get_portfolio(&db, &market_data).await.unwrap();
+
+    assert!(result.rows.is_empty());
+    assert!(result.monetary_positions.is_empty());
+    assert!(result.nav.is_none());
+    assert!(result.snapshot_date.is_none());
+    assert!(portfolio_history_repo::find_latest(&db)
+        .await
+        .unwrap()
+        .is_none());
+    assert!(result.nav_market_data_limitations.is_empty());
+    assert!(result.current_position_market_data_limitations.is_empty());
+}
+
+#[tokio::test]
 async fn composition_does_not_rebuild_nav_history() {
     let db = common::setup_test_db().await;
     let asset_id =
