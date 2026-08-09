@@ -1,7 +1,7 @@
 {
   "procedure": {
     "command": "cargo bench --bench performance -- --sample-size 10 --measurement-time 0.1",
-    "build": "debug benchmark profile",
+    "build": "cargo bench optimized benchmark profile",
     "platform": "Linux x86_64",
     "network": false,
     "database": "temporary file-backed SQLite",

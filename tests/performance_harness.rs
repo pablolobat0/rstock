@@ -39,6 +39,7 @@ async fn representative_transaction_plans_are_available_for_baselining() {
         ));
     }
     assert_eq!(classified.len(), 3);
+    println!("transaction_query_plans={classified:?}");
     // Baseline records whether indexes and temporary sorts are present.  The
     // optimization slice may later turn these observed scans into searches;
     // this foundation must not assume an index before that slice lands.
