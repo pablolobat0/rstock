@@ -12,7 +12,6 @@ use std::time::Instant;
 use anyhow::Result;
 use chrono::{Duration, NaiveDate};
 use criterion::{criterion_group, criterion_main, Criterion};
-use futures::stream::{self, StreamExt};
 use migration::{Migrator, MigratorTrait};
 use rstock::db::entities::{asset, transaction};
 use rstock::db::repos::transaction_repo;
@@ -26,18 +25,6 @@ const START: &str = "2015-01-01";
 const END: &str = "2015-12-31";
 
 const FIXTURE_MATRIX: &[(usize, usize, usize)] = &[(5, 1, 100), (50, 10, 5_000), (100, 20, 20_000)];
-
-async fn delayed_source_batch(limit: usize) -> usize {
-    stream::iter(0..8)
-        .map(|request| async move {
-            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
-            request
-        })
-        .buffer_unordered(limit)
-        .collect::<Vec<_>>()
-        .await
-        .len()
-}
 
 #[derive(Default)]
 struct Counters {
@@ -64,6 +51,7 @@ impl Counters {
 struct OfflineSources {
     counters: Arc<Counters>,
     observations: Arc<Vec<SourceObservation>>,
+    delay_ms: u64,
 }
 
 impl OfflineSources {
@@ -85,6 +73,9 @@ impl MarketDataSources for OfflineSources {
         end: NaiveDate,
     ) -> Result<Vec<SourceObservation>> {
         self.counters.call(start, end);
+        if self.delay_ms > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(self.delay_ms)).await;
+        }
         let result = self.observations(start, end);
         self.counters.finish();
         Ok(result)
@@ -131,6 +122,15 @@ struct Fixture {
 }
 
 async fn build_fixture(asset_count: usize, years: usize, transaction_count: usize) -> Fixture {
+    build_fixture_with_delay(asset_count, years, transaction_count, 0).await
+}
+
+async fn build_fixture_with_delay(
+    asset_count: usize,
+    years: usize,
+    transaction_count: usize,
+    delay_ms: u64,
+) -> Fixture {
     let tempdir = tempfile::tempdir().expect("temporary benchmark directory");
     let path = tempdir.path().join("fixture.db");
     let db = Database::connect(format!("sqlite://{}?mode=rwc", path.display()))
@@ -207,6 +207,7 @@ async fn build_fixture(asset_count: usize, years: usize, transaction_count: usiz
         Box::new(OfflineSources {
             counters: counters.clone(),
             observations: Arc::new(observations),
+            delay_ms,
         }),
         &rstock::services::clock::FixedClock::new(NaiveDate::from_ymd_opt(2016, 1, 1).unwrap()),
     );
@@ -419,8 +420,19 @@ fn benchmark_performance(c: &mut Criterion) {
         });
     });
     for limit in [1_usize, 2, 4, 8] {
+        let delayed = runtime.block_on(build_fixture_with_delay(5, 1, 100, 2));
         group.bench_function(format!("delayed_source_limit_{limit}"), |b| {
-            b.to_async(&runtime).iter(|| delayed_source_batch(limit));
+            b.to_async(&runtime).iter(|| async {
+                // The candidate limit is part of the benchmark identity. The
+                // current baseline source path is intentionally sequential;
+                // later bounded-concurrency work replaces this seam.
+                let _ = limit;
+                delayed
+                    .market_data
+                    .prepare_valuation_market_data(&delayed.db, &delayed.assets, START, END)
+                    .await
+                    .unwrap()
+            });
         });
     }
     group.finish();

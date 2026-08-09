@@ -20,8 +20,9 @@ period cases can be measured deterministically.
 
 ## Measured versus hypotheses
 
-Repeated bounded samples for every required path are recorded in
-`performance-baseline-results.json`. The benchmark covers cold, partial, and
+Repeated bounded samples for every required path are emitted by the generator
+into Criterion's `target/criterion` raw sample directories and stdout. The
+benchmark covers cold, partial, and
 warm preparation, cold and warm portfolio retrieval, full and incremental NAV,
 listing at all three scales, both correlation paths, and startup. Source calls,
 requested intervals, peak activity, and query-plan classification are recorded
