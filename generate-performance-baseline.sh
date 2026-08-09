@@ -9,7 +9,6 @@ cargo test --test performance_harness -- --nocapture | tee target/performance-pl
 
 python3 - <<'PY'
 import json
-import re
 from pathlib import Path
 
 estimates = {}
@@ -19,10 +18,17 @@ for path in Path("target/criterion").glob("**/new/estimates.json"):
         continue
     name = ".".join(parts[-3:-1])
     values = json.loads(path.read_text())
+    samples = values.get("times", [])
+    if samples:
+        ordered = sorted(samples)
+        p95 = ordered[min(len(ordered) - 1, int(len(ordered) * 0.95))]
+    else:
+        p95 = None
     estimates[name] = {
         "mean_ns": values["mean"]["point_estimate"],
         "median_ns": values["median"]["point_estimate"],
         "std_dev_ns": values["std_dev"]["point_estimate"],
+        "p95_ns": p95,
     }
 report = {
     "procedure": {"samples": 10, "measurement_time_seconds": 0.1,

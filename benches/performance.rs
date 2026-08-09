@@ -132,6 +132,16 @@ async fn build_fixture_with_delay(
     transaction_count: usize,
     delay_ms: u64,
 ) -> Fixture {
+    build_fixture_with_counters(asset_count, years, transaction_count, delay_ms, None).await
+}
+
+async fn build_fixture_with_counters(
+    asset_count: usize,
+    years: usize,
+    transaction_count: usize,
+    delay_ms: u64,
+    shared_counters: Option<Arc<Counters>>,
+) -> Fixture {
     let tempdir = tempfile::tempdir().expect("temporary benchmark directory");
     let path = tempdir.path().join("fixture.db");
     let db = Database::connect(format!("sqlite://{}?mode=rwc", path.display()))
@@ -203,7 +213,7 @@ async fn build_fixture_with_delay(
             value: 100.0 + offset as f64 / 10.0,
         })
         .collect();
-    let counters = Arc::new(Counters::default());
+    let counters = shared_counters.unwrap_or_default();
     let market_data = MarketData::new_with_clock(
         Box::new(OfflineSources {
             counters: counters.clone(),
@@ -222,14 +232,11 @@ async fn build_fixture_with_delay(
 }
 
 async fn run_delayed_candidate(limit: usize) -> (std::time::Duration, usize, usize) {
+    let shared_counters = Arc::new(Counters::default());
     let mut fixtures = Vec::new();
     for _ in 0..8 {
-        fixtures.push(build_fixture_with_delay(1, 1, 1, 2).await);
+        fixtures.push(build_fixture_with_counters(2, 1, 2, 2, Some(shared_counters.clone())).await);
     }
-    let counters: Vec<Arc<Counters>> = fixtures
-        .iter()
-        .map(|fixture| fixture.counters.clone())
-        .collect();
     let started = Instant::now();
     stream::iter(fixtures)
         .map(|fixture| async move {
@@ -242,15 +249,8 @@ async fn run_delayed_candidate(limit: usize) -> (std::time::Duration, usize, usi
         .buffer_unordered(limit)
         .collect::<Vec<_>>()
         .await;
-    let calls = counters
-        .iter()
-        .map(|counter| counter.source_calls.load(Ordering::Relaxed))
-        .sum();
-    let peak = counters
-        .iter()
-        .map(|counter| counter.peak.load(Ordering::Relaxed))
-        .max()
-        .unwrap_or(0);
+    let calls = shared_counters.source_calls.load(Ordering::Relaxed);
+    let peak = shared_counters.peak.load(Ordering::Relaxed);
     (started.elapsed(), calls, peak)
 }
 
