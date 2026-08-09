@@ -272,12 +272,30 @@ fn benchmark_performance(c: &mut Criterion) {
         });
     });
     group.bench_function("historical_market_data_preparation_partial", |b| {
-        b.to_async(&runtime).iter(|| async {
-            fixture
-                .market_data
-                .prepare_valuation_market_data(&fixture.db, &fixture.assets[..2], START, END)
-                .await
-                .unwrap()
+        b.iter_custom(|iterations| {
+            let mut elapsed = std::time::Duration::ZERO;
+            for _ in 0..iterations {
+                let partial = runtime.block_on(build_fixture(5, 1, 100));
+                runtime
+                    .block_on(partial.market_data.prepare_valuation_market_data(
+                        &partial.db,
+                        &partial.assets[..1],
+                        START,
+                        END,
+                    ))
+                    .unwrap();
+                let started = Instant::now();
+                runtime
+                    .block_on(partial.market_data.prepare_valuation_market_data(
+                        &partial.db,
+                        &partial.assets,
+                        START,
+                        END,
+                    ))
+                    .unwrap();
+                elapsed += started.elapsed();
+            }
+            elapsed
         });
     });
     group.bench_function("nav_rebuild_full", |b| {
@@ -295,10 +313,17 @@ fn benchmark_performance(c: &mut Criterion) {
         });
     });
     group.bench_function("portfolio_retrieval_cold", |b| {
-        b.to_async(&runtime).iter(|| async {
-            portfolio::get_portfolio(&fixture.db, &fixture.market_data)
-                .await
-                .unwrap()
+        b.iter_custom(|iterations| {
+            let mut elapsed = std::time::Duration::ZERO;
+            for _ in 0..iterations {
+                let fresh = runtime.block_on(build_fixture(5, 1, 100));
+                let started = Instant::now();
+                runtime
+                    .block_on(portfolio::get_portfolio(&fresh.db, &fresh.market_data))
+                    .unwrap();
+                elapsed += started.elapsed();
+            }
+            elapsed
         });
     });
     runtime
@@ -312,10 +337,32 @@ fn benchmark_performance(c: &mut Criterion) {
         });
     });
     group.bench_function("nav_rebuild_incremental", |b| {
-        b.to_async(&runtime).iter(|| async {
-            nav::ensure_portfolio_history(&fixture.db, &fixture.market_data)
-                .await
-                .unwrap()
+        b.iter_custom(|iterations| {
+            let mut elapsed = std::time::Duration::ZERO;
+            for _ in 0..iterations {
+                let incremental = runtime.block_on(build_fixture(5, 1, 100));
+                runtime
+                    .block_on(nav::ensure_portfolio_history(
+                        &incremental.db,
+                        &incremental.market_data,
+                    ))
+                    .unwrap();
+                runtime
+                    .block_on(rstock::db::repos::portfolio_history_repo::delete_from_date(
+                        &incremental.db,
+                        "2015-06-01",
+                    ))
+                    .unwrap();
+                let started = Instant::now();
+                runtime
+                    .block_on(nav::ensure_portfolio_history(
+                        &incremental.db,
+                        &incremental.market_data,
+                    ))
+                    .unwrap();
+                elapsed += started.elapsed();
+            }
+            elapsed
         });
     });
     group.bench_function("correlation_matrix", |b| {
