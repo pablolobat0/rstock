@@ -27,6 +27,7 @@ tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 tracing-appender = "0.2"
 
 [dev-dependencies]
+criterion = { version = "0.5", features = ["async_tokio"] }
 tempfile = "3.27.0"
 tokio = { version = ">=1, <1.49", features = ["full", "test-util"] }
 
@@ -39,3 +40,7 @@ must_use_candidate = "allow"
 cast_possible_truncation = "allow"
 cast_precision_loss = "allow"
 cast_sign_loss = "allow"
+
+[[bench]]
+name = "performance"
+harness = false
