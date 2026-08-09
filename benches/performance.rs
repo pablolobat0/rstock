@@ -207,7 +207,7 @@ async fn build_fixture_with_counters(
 
     let start = NaiveDate::parse_from_str(START, "%Y-%m-%d").unwrap();
     let observations = (0..=i64::try_from(365 * years).unwrap())
-        .filter(|offset| *offset == 0 || offset % 11 != 0)
+        .filter(|offset| delay_ms > 0 || *offset == 0 || offset % 11 != 0)
         .map(|offset| SourceObservation {
             date: start + Duration::days(offset),
             value: 100.0 + offset as f64 / 10.0,
