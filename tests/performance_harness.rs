@@ -21,5 +21,10 @@ async fn representative_transaction_plans_are_available_for_baselining() {
             .await
             .expect("SQLite should produce a query plan");
         assert!(!rows.is_empty(), "query plan must contain at least one step");
+        let details: Vec<String> = rows
+            .iter()
+            .map(|row| row.try_get("", "detail").expect("SQLite plan detail"))
+            .collect();
+        assert!(details.iter().any(|detail| detail.contains("SCAN") || detail.contains("SEARCH")));
     }
 }

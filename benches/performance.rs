@@ -7,6 +7,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::time::Instant;
 
 use anyhow::Result;
 use chrono::{Duration, NaiveDate};
@@ -156,6 +157,10 @@ async fn build_fixture(asset_count: usize, years: usize, transaction_count: usiz
             asset_id: Set(asset_id),
             tx_type: Set(if index % 17 == 0 {
                 "dividend".into()
+            } else if index % 19 == 0 {
+                "sell".into()
+            } else if index % 23 == 0 {
+                "split".into()
             } else {
                 "buy".into()
             }),
@@ -178,6 +183,7 @@ async fn build_fixture(asset_count: usize, years: usize, transaction_count: usiz
 
     let start = NaiveDate::parse_from_str(START, "%Y-%m-%d").unwrap();
     let observations = (0..=i64::try_from(365 * years).unwrap())
+        .filter(|offset| offset % 11 != 0)
         .map(|offset| SourceObservation {
             date: start + Duration::days(offset),
             value: 100.0 + offset as f64 / 10.0,
@@ -230,12 +236,22 @@ fn benchmark_performance(c: &mut Criterion) {
         });
     });
     group.bench_function("historical_market_data_preparation_cold", |b| {
-        b.to_async(&runtime).iter(|| async {
-            fixture
-                .market_data
-                .prepare_valuation_market_data(&fixture.db, &fixture.assets, START, END)
-                .await
-                .unwrap()
+        b.iter_custom(|iterations| {
+            let mut elapsed = std::time::Duration::ZERO;
+            for _ in 0..iterations {
+                let fresh = runtime.block_on(build_fixture(5, 1, 100));
+                let started = Instant::now();
+                runtime
+                    .block_on(fresh.market_data.prepare_valuation_market_data(
+                        &fresh.db,
+                        &fresh.assets,
+                        START,
+                        END,
+                    ))
+                    .unwrap();
+                elapsed += started.elapsed();
+            }
+            elapsed
         });
     });
     group.bench_function("historical_market_data_preparation_warm", |b| {
@@ -253,6 +269,29 @@ fn benchmark_performance(c: &mut Criterion) {
                 .prepare_valuation_market_data(&fixture.db, &fixture.assets, START, END)
                 .await
                 .unwrap()
+        });
+    });
+    group.bench_function("historical_market_data_preparation_partial", |b| {
+        b.to_async(&runtime).iter(|| async {
+            fixture
+                .market_data
+                .prepare_valuation_market_data(&fixture.db, &fixture.assets[..2], START, END)
+                .await
+                .unwrap()
+        });
+    });
+    group.bench_function("nav_rebuild_full", |b| {
+        b.iter_custom(|iterations| {
+            let mut elapsed = std::time::Duration::ZERO;
+            for _ in 0..iterations {
+                let fresh = runtime.block_on(build_fixture(5, 1, 100));
+                let started = Instant::now();
+                runtime
+                    .block_on(nav::ensure_portfolio_history(&fresh.db, &fresh.market_data))
+                    .unwrap();
+                elapsed += started.elapsed();
+            }
+            elapsed
         });
     });
     group.bench_function("portfolio_retrieval_cold", |b| {
@@ -302,13 +341,21 @@ fn benchmark_performance(c: &mut Criterion) {
         });
     });
     group.bench_function("startup_and_migration", |b| {
-        b.to_async(&runtime).iter(|| async {
-            let directory = tempfile::tempdir().unwrap();
-            let path = directory.path().join("startup.db");
-            let db = Database::connect(format!("sqlite://{}?mode=rwc", path.display()))
-                .await
-                .unwrap();
-            Migrator::up(&db, None).await.unwrap();
+        b.iter_custom(|iterations| {
+            let mut elapsed = std::time::Duration::ZERO;
+            for _ in 0..iterations {
+                let directory = tempfile::tempdir().unwrap();
+                let path = directory.path().join("startup.db");
+                let started = Instant::now();
+                runtime.block_on(async {
+                    let db = Database::connect(format!("sqlite://{}?mode=rwc", path.display()))
+                        .await
+                        .unwrap();
+                    Migrator::up(&db, None).await.unwrap();
+                });
+                elapsed += started.elapsed();
+            }
+            elapsed
         });
     });
     group.finish();

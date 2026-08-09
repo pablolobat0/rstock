@@ -16,6 +16,7 @@ make a network request.
 
 The fixture generator intentionally uses multiple currencies and vehicle types;
 the source series include calendar-day observations so forward-fill and stale
+period cases can be measured deterministically.
 
 ## Measured versus hypotheses
 
