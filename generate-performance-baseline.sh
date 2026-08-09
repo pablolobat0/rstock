@@ -18,7 +18,9 @@ for path in Path("target/criterion").glob("**/new/estimates.json"):
         continue
     name = ".".join(parts[-3:-1])
     values = json.loads(path.read_text())
-    samples = values.get("times", [])
+    sample_path = path.with_name("sample.json")
+    sample_values = json.loads(sample_path.read_text()) if sample_path.exists() else {}
+    samples = sample_values.get("times", [])
     if samples:
         ordered = sorted(samples)
         p95 = ordered[min(len(ordered) - 1, int(len(ordered) * 0.95))]

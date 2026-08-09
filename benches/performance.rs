@@ -306,7 +306,9 @@ fn benchmark_performance(c: &mut Criterion) {
     });
     group.bench_function("portfolio_retrieval_representative", |b| {
         b.to_async(&runtime).iter(|| async {
-            let _ = portfolio::get_portfolio(&representative.db, &representative.market_data).await;
+            portfolio::get_portfolio(&representative.db, &representative.market_data)
+                .await
+                .unwrap()
         });
     });
     group.bench_function("correlation_matrix_representative", |b| {
@@ -421,16 +423,20 @@ fn benchmark_performance(c: &mut Criterion) {
                 let started = Instant::now();
                 runtime
                     .block_on(portfolio::get_portfolio(&fresh.db, &fresh.market_data))
-                    .ok();
+                    .expect("cold portfolio retrieval");
                 elapsed += started.elapsed();
             }
             elapsed
         });
     });
-    let _ = runtime.block_on(portfolio::get_portfolio(&fixture.db, &fixture.market_data));
+    runtime
+        .block_on(portfolio::get_portfolio(&fixture.db, &fixture.market_data))
+        .expect("warm setup");
     group.bench_function("portfolio_retrieval_warm", |b| {
         b.to_async(&runtime).iter(|| async {
-            let _ = portfolio::get_portfolio(&fixture.db, &fixture.market_data).await;
+            portfolio::get_portfolio(&fixture.db, &fixture.market_data)
+                .await
+                .unwrap()
         });
     });
     group.bench_function("nav_rebuild_incremental", |b| {
