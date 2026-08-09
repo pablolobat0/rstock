@@ -30,14 +30,13 @@ alongside p50 and p95 distributions.
 
 ## Decision gate
 
-Measured targets are path-specific: warm preparation remains at zero source
-calls and below 0.60 ms p95; partial preparation stays below 8.0 ms p95; full
-small-fixture NAV stays below 50 ms p95; incremental NAV stays below 25 ms p95;
-warm portfolio retrieval stays below 2.5 ms p95; representative listing stays
-below 5 ms p95 and stress listing below 20 ms p95. These targets allow 10
-percent noise over the observed p95. Delayed-source comparison shows p50 14.0
-ms at limit 1, 8.1 ms at 2, 5.2 ms at 4, and 5.0 ms at 8. The proposed fixed
-internal limit is therefore **4** because limit 8 adds no meaningful benefit.
+The committed report is generated from actual Criterion estimate files by
+`generate-performance-baseline.sh`; no timing numbers are hand-authored. The
+decision gate derives path-specific targets as p95 plus 10 percent noise from
+that report. Source work targets are zero successful warm-cache requests and
+bounded peak activity; the fixed source-concurrency proposal is the smallest
+candidate limit whose delayed-source p95 is within 10 percent of the best
+candidate while preserving the lowest peak activity.
 
 ## Verification
 

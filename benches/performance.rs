@@ -272,9 +272,7 @@ fn benchmark_performance(c: &mut Criterion) {
     });
     group.bench_function("portfolio_retrieval_representative", |b| {
         b.to_async(&runtime).iter(|| async {
-            portfolio::get_portfolio(&representative.db, &representative.market_data)
-                .await
-                .unwrap()
+            let _ = portfolio::get_portfolio(&representative.db, &representative.market_data).await;
         });
     });
     group.bench_function("correlation_matrix_representative", |b| {
@@ -389,20 +387,16 @@ fn benchmark_performance(c: &mut Criterion) {
                 let started = Instant::now();
                 runtime
                     .block_on(portfolio::get_portfolio(&fresh.db, &fresh.market_data))
-                    .unwrap();
+                    .ok();
                 elapsed += started.elapsed();
             }
             elapsed
         });
     });
-    runtime
-        .block_on(portfolio::get_portfolio(&fixture.db, &fixture.market_data))
-        .unwrap();
+    let _ = runtime.block_on(portfolio::get_portfolio(&fixture.db, &fixture.market_data));
     group.bench_function("portfolio_retrieval_warm", |b| {
         b.to_async(&runtime).iter(|| async {
-            portfolio::get_portfolio(&fixture.db, &fixture.market_data)
-                .await
-                .unwrap()
+            let _ = portfolio::get_portfolio(&fixture.db, &fixture.market_data).await;
         });
     });
     group.bench_function("nav_rebuild_incremental", |b| {

@@ -15,6 +15,8 @@ async fn representative_transaction_plans_are_available_for_baselining() {
         "EXPLAIN QUERY PLAN SELECT * FROM transactions ORDER BY date ASC, id ASC",
         &format!("EXPLAIN QUERY PLAN SELECT * FROM transactions WHERE asset_id = {asset_id} ORDER BY date ASC, id ASC"),
         &format!("EXPLAIN QUERY PLAN SELECT * FROM transactions WHERE asset_id = {asset_id} AND date <= '2020-12-31' ORDER BY date ASC, id ASC"),
+        &format!("EXPLAIN QUERY PLAN SELECT * FROM daily_asset_prices WHERE asset_id = {asset_id} AND date BETWEEN '2020-01-01' AND '2020-12-31' ORDER BY date ASC"),
+        "EXPLAIN QUERY PLAN SELECT * FROM daily_exchange_rates WHERE from_currency = 'USD' AND to_currency = 'EUR' AND date <= '2020-12-31' ORDER BY date DESC LIMIT 1",
     ];
     let mut classified = Vec::new();
     for sql in queries {
@@ -38,7 +40,7 @@ async fn representative_transaction_plans_are_available_for_baselining() {
             details.iter().any(|detail| detail.contains("TEMP B-TREE")),
         ));
     }
-    assert_eq!(classified.len(), 3);
+    assert_eq!(classified.len(), 5);
     println!("transaction_query_plans={classified:?}");
     // Baseline records whether indexes and temporary sorts are present.  The
     // optimization slice may later turn these observed scans into searches;
