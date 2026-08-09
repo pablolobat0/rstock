@@ -249,6 +249,61 @@ fn benchmark_performance(c: &mut Criterion) {
                 .unwrap()
         });
     });
+    group.bench_function("market_data_preparation_representative", |b| {
+        b.to_async(&runtime).iter(|| async {
+            representative
+                .market_data
+                .prepare_valuation_market_data(
+                    &representative.db,
+                    &representative.assets,
+                    START,
+                    END,
+                )
+                .await
+                .unwrap()
+        });
+    });
+    group.bench_function("nav_rebuild_representative", |b| {
+        b.to_async(&runtime).iter(|| async {
+            nav::ensure_portfolio_history(&representative.db, &representative.market_data)
+                .await
+                .unwrap()
+        });
+    });
+    group.bench_function("portfolio_retrieval_representative", |b| {
+        b.to_async(&runtime).iter(|| async {
+            portfolio::get_portfolio(&representative.db, &representative.market_data)
+                .await
+                .unwrap()
+        });
+    });
+    group.bench_function("correlation_matrix_representative", |b| {
+        b.to_async(&runtime).iter(|| async {
+            analytics::compute_correlation_data(
+                &representative.db,
+                START,
+                END,
+                &representative.market_data,
+            )
+            .await
+            .unwrap()
+        });
+    });
+    group.bench_function("rolling_correlation_representative", |b| {
+        b.to_async(&runtime).iter(|| async {
+            analytics::compute_rolling_correlation_data(
+                &representative.db,
+                START,
+                END,
+                "XPERF001",
+                "XPERF002",
+                "1y",
+                &representative.market_data,
+            )
+            .await
+            .unwrap()
+        });
+    });
     group.bench_function("historical_market_data_preparation_cold", |b| {
         b.iter_custom(|iterations| {
             let mut elapsed = std::time::Duration::ZERO;
