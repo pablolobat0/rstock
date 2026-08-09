@@ -12,6 +12,7 @@ use std::time::Instant;
 use anyhow::Result;
 use chrono::{Duration, NaiveDate};
 use criterion::{criterion_group, criterion_main, Criterion};
+use futures::stream::{self, StreamExt};
 use migration::{Migrator, MigratorTrait};
 use rstock::db::entities::{asset, transaction};
 use rstock::db::repos::transaction_repo;
@@ -196,7 +197,7 @@ async fn build_fixture_with_delay(
 
     let start = NaiveDate::parse_from_str(START, "%Y-%m-%d").unwrap();
     let observations = (0..=i64::try_from(365 * years).unwrap())
-        .filter(|offset| offset % 11 != 0)
+        .filter(|offset| *offset == 0 || offset % 11 != 0)
         .map(|offset| SourceObservation {
             date: start + Duration::days(offset),
             value: 100.0 + offset as f64 / 10.0,
@@ -218,6 +219,39 @@ async fn build_fixture_with_delay(
         assets,
         counters,
     }
+}
+
+async fn run_delayed_candidate(limit: usize) -> (std::time::Duration, usize, usize) {
+    let mut fixtures = Vec::new();
+    for _ in 0..8 {
+        fixtures.push(build_fixture_with_delay(1, 1, 1, 2).await);
+    }
+    let counters: Vec<Arc<Counters>> = fixtures
+        .iter()
+        .map(|fixture| fixture.counters.clone())
+        .collect();
+    let started = Instant::now();
+    stream::iter(fixtures)
+        .map(|fixture| async move {
+            fixture
+                .market_data
+                .prepare_valuation_market_data(&fixture.db, &fixture.assets, START, END)
+                .await
+                .expect("delayed candidate preparation");
+        })
+        .buffer_unordered(limit)
+        .collect::<Vec<_>>()
+        .await;
+    let calls = counters
+        .iter()
+        .map(|counter| counter.source_calls.load(Ordering::Relaxed))
+        .sum();
+    let peak = counters
+        .iter()
+        .map(|counter| counter.peak.load(Ordering::Relaxed))
+        .max()
+        .unwrap_or(0);
+    (started.elapsed(), calls, peak)
 }
 
 #[allow(clippy::too_many_lines)]
@@ -469,18 +503,18 @@ fn benchmark_performance(c: &mut Criterion) {
         });
     });
     for limit in [1_usize, 2, 4, 8] {
-        let delayed = runtime.block_on(build_fixture_with_delay(5, 1, 100, 2));
         group.bench_function(format!("delayed_source_limit_{limit}"), |b| {
-            b.to_async(&runtime).iter(|| async {
-                // The candidate limit is part of the benchmark identity. The
-                // current baseline source path is intentionally sequential;
-                // later bounded-concurrency work replaces this seam.
-                let _ = limit;
-                delayed
-                    .market_data
-                    .prepare_valuation_market_data(&delayed.db, &delayed.assets, START, END)
-                    .await
-                    .unwrap()
+            b.iter_custom(|iterations| {
+                let mut elapsed = std::time::Duration::ZERO;
+                for _ in 0..iterations {
+                    let (sample, calls, peak) = runtime.block_on(run_delayed_candidate(limit));
+                    elapsed += sample;
+                    println!(
+                        "delayed limit={limit} calls={calls} peak={peak} elapsed_ns={}",
+                        sample.as_nanos()
+                    );
+                }
+                elapsed
             });
         });
     }
