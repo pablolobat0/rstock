@@ -8,6 +8,10 @@ rstock tracks a portfolio in EUR using transaction history, daily market data, a
 The time-weighted value per portfolio share used to measure portfolio performance independent of cash-flow timing.
 _Avoid_: Portfolio value, return
 
+**Complete NAV snapshot**:
+The persisted NAV record for one date together with all per-asset snapshot records required to audit that date.
+_Avoid_: Partial snapshot, portfolio history row
+
 **Effective valuation date**:
 The latest date for which NAV can be calculated using available prices and FX rates for every holding required by the portfolio.
 _Avoid_: Latest price date, today
@@ -35,6 +39,10 @@ _Avoid_: Log message
 **Market data source**:
 An external origin of market data used by rstock, such as Yahoo Finance or Morningstar.
 _Avoid_: Provider, API
+
+**Market data preparation**:
+The command-scoped resolution of required Historical market data, Effective valuation date, and Market data limitations for a requested use case.
+_Avoid_: Source fetch, cache refresh
 
 **Base currency**:
 The currency in which portfolio values, NAV, and aggregate returns are expressed.
@@ -103,11 +111,17 @@ _Avoid_: Total return, lifetime gain/loss
 ## Relationships
 
 - **NAV** is calculated at one **Effective valuation date**.
+- NAV history preserves one portfolio snapshot and its per-asset snapshots for every calculable calendar date; performance optimizations must not make that history sparse or lazy.
+- A **Complete NAV snapshot** is the atomic unit of rebuild progress: interruption may preserve complete dates, but a portfolio snapshot without all required per-asset snapshots is not valid history.
 - An **Effective valuation date** is constrained by the oldest latest-available market data needed across all holdings and FX rates.
 - An **Individual price** may be newer than the **Effective valuation date**.
 - **NAV** cannot be calculated when any held asset or required FX rate has no market data for the valuation period.
 - **Stale market data** may move the **Effective valuation date** earlier.
 - **NAV** uses **Historical market data**, not **Live quote** values.
+- **Historical market data** for a completed date is immutable during routine portfolio and analysis commands; replacing it requires an explicit refresh or rebuild operation.
+- A failed **Market data source** request is not **Historical market data** and remains eligible for retry by every subsequent routine command; there is no cross-command retry cooldown.
+- One **Market data preparation** shares an identical asset or FX interval request and its result across callers in the same command; a later command may retry a failed request.
+- Failure of one independent request does not stop **Market data preparation** for other assets or currencies; preparation preserves usable observations and reports all resulting **Market data limitation** values.
 - An **Individual price** for a stock may use a **Live quote** for display.
 - Mutual funds use a single closing price and do not use **Live quote** values for display.
 - An ETF **Individual price** requests a same-day observation through the existing fund-price capability of `MarketDataSources`; when the configured **Market data source** supplies one it is a **Live quote**, otherwise the ETF uses the latest available **Historical market data**.
@@ -149,7 +163,11 @@ _Avoid_: Total return, lifetime gain/loss
 - Portfolio composition uses current **Transaction ledger** inventory rather than holdings at the **Effective valuation date**; value-dependent composition is unavailable when any included holding has no **Individual price**.
 - Rolling correlation analysis compares **Tracked assets**, not arbitrary market symbols.
 - Correlation analysis uses aligned available **Base currency** series for each **Tracked asset** and benchmark; it does not force every series to one **Effective valuation date**.
+- Risk and correlation metric labels preserve their broad portfolio-analysis interpretation, but unspecified statistical details and cross-version numeric comparability are not compatibility contracts; explicit metric relationships in this glossary remain authoritative until deliberately revised.
 - The **Transaction ledger** is the source of truth for holdings and transaction CSV import/export.
+- **Transaction ledger** entries are ordered by date and then ascending transaction ID; insertion order determines the sequence of entries on the same date.
+- A Transaction ledger CSV import is atomic: if any row cannot be accepted, none of that import's assets, entries, or snapshot invalidations are persisted.
+- Recording, editing, or deleting a **Transaction ledger** entry and invalidating every dependent **Complete NAV snapshot** form one atomic mutation.
 - **Transaction ledger** entries use positive quantities, prices, dividend amounts, and split ratios; fees are non-negative.
 - A dividend transaction records the total cash received for the asset, not the per-share dividend rate.
 - A split transaction records the new-units-per-old-unit ratio; the ratio multiplies existing quantity.
