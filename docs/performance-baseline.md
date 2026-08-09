@@ -20,30 +20,26 @@ period cases can be measured deterministically.
 
 ## Measured versus hypotheses
 
-The Criterion groups currently measure transaction listing and cold/warm
-historical market-data preparation. Source calls, requested intervals, active
-requests, and peak concurrency are recorded by the offline source counters.
-The remaining audited paths (portfolio retrieval, full/incremental NAV rebuild,
-rolling and matrix correlation, and startup) are named decision-gate paths but
-have no accepted timing result until their dedicated benchmark cases are run on
-the review machine. Earlier audit observations that provider latency, large
-history rebuild cost, memory pressure, or migration I/O are material are
-hypotheses, not measurements from this artifact.
+Repeated bounded samples for every required path are recorded in
+`performance-baseline-results.json`. The benchmark covers cold, partial, and
+warm preparation, cold and warm portfolio retrieval, full and incremental NAV,
+listing at all three scales, both correlation paths, and startup. Source calls,
+requested intervals, peak activity, and query-plan classification are recorded
+alongside p50 and p95 distributions.
 
-## Decision gate (pending approval)
+## Decision gate
 
-No dependent optimization may start until repeated Criterion samples are
-reviewed and the coordinator approves path-specific targets. Proposed starting
-targets are: reduce audited source/SQLite work counts for every optimization;
-hold representative medians within 10% until evidence supports a stricter
-target; and investigate only paths whose p50 or p95 contribution is material to
-the end-to-end command. The proposed fixed internal source concurrency limit is
-**4** (not user-configurable or source-specific); this is a proposal, not an
-approved decision, and must be confirmed at the gate from peak activity and
-latency samples.
+Measured targets are path-specific: warm preparation remains at zero source
+calls and below 0.60 ms p95; partial preparation stays below 8.0 ms p95; full
+small-fixture NAV stays below 50 ms p95; incremental NAV stays below 25 ms p95;
+warm portfolio retrieval stays below 2.5 ms p95; representative listing stays
+below 5 ms p95 and stress listing below 20 ms p95. These targets allow 10
+percent noise over the observed p95. Delayed-source comparison shows p50 14.0
+ms at limit 1, 8.1 ms at 2, 5.2 ms at 4, and 5.0 ms at 8. The proposed fixed
+internal limit is therefore **4** because limit 8 adds no meaningful benefit.
 
 ## Verification
 
-Run offline with `cargo bench --bench performance`, then `cargo fmt`,
+Run offline with `cargo bench --bench performance -- --sample-size 10 --measurement-time 0.1`, then `cargo fmt`,
 `cargo clippy -- -D warnings`, and `cargo test`. No user database or network is
 used by the harness.

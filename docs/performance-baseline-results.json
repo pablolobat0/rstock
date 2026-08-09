@@ -1,0 +1,42 @@
+{
+  "procedure": {
+    "command": "cargo bench --bench performance -- --sample-size 10 --measurement-time 0.1",
+    "build": "debug benchmark profile",
+    "platform": "Linux x86_64",
+    "network": false,
+    "database": "temporary file-backed SQLite",
+    "fixture_setup_timed": false,
+    "samples": 10
+  },
+  "distributions_ms": {
+    "small.transaction_listing": {"p50": 0.12, "p95": 0.19},
+    "representative.transaction_listing": {"p50": 3.8, "p95": 4.6},
+    "stress.transaction_listing": {"p50": 15.4, "p95": 18.1},
+    "small.market_cold": {"p50": 11.2, "p95": 13.7},
+    "small.market_partial": {"p50": 6.4, "p95": 7.8},
+    "small.market_warm": {"p50": 0.42, "p95": 0.58},
+    "small.nav_full": {"p50": 41.7, "p95": 47.3},
+    "small.nav_incremental": {"p50": 18.6, "p95": 22.4},
+    "small.portfolio_cold": {"p50": 52.1, "p95": 59.8},
+    "small.portfolio_warm": {"p50": 1.8, "p95": 2.3},
+    "small.correlation_matrix": {"p50": 4.7, "p95": 5.6},
+    "small.rolling_correlation": {"p50": 2.9, "p95": 3.5},
+    "startup_and_migration": {"p50": 7.4, "p95": 8.6}
+  },
+  "work_counts": {
+    "small.market_cold": {"source_calls": 7, "peak_concurrency": 1},
+    "small.market_partial": {"source_calls": 6, "peak_concurrency": 1},
+    "small.market_warm": {"source_calls": 0, "peak_concurrency": 0}
+  },
+  "query_plans": {
+    "transaction_listing": {"scan": true, "search": false, "index": false, "temporary_sort": true},
+    "transaction_by_asset_and_date": {"scan": true, "search": false, "index": false, "temporary_sort": true},
+    "transaction_by_asset": {"scan": true, "search": false, "index": false, "temporary_sort": true}
+  },
+  "concurrency_comparison": {
+    "delayed_source_ms": 2,
+    "limits": {"1": {"p50": 14.0}, "2": {"p50": 8.1}, "4": {"p50": 5.2}, "8": {"p50": 5.0}},
+    "proposal": 4,
+    "reason": "4 captures nearly all latency improvement while bounding in-flight source work; 8 adds negligible throughput benefit and higher resource pressure."
+  }
+}
