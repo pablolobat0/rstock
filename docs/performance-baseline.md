@@ -15,31 +15,53 @@ make a network request.
 | stress | 100 | 20 years | ~20,000 | upper-bound scaling |
 
 The fixture generator intentionally uses multiple currencies and vehicle types;
-the source series include calendar-day observations so forward-fill and stale
-period cases can be measured deterministically.
+the source series include deterministic interior gaps so forward-fill and retry
+work can be measured without network access.
 
 ## Measured versus hypotheses
 
-Repeated bounded samples for every required path are emitted by the generator
-into Criterion's `target/criterion` raw sample directories and stdout. The
-benchmark covers cold, partial, and
-warm preparation, cold and warm portfolio retrieval, full and incremental NAV,
-listing at all three scales, both correlation paths, and startup. Source calls,
-requested intervals, peak activity, and query-plan classification are recorded
-alongside p50 and p95 distributions.
+`docs/performance-baseline-results.json` is the numeric source of truth and
+contains the generated Criterion mean, median, standard deviation, and
+normalized raw-sample p95 for every path. The measured dominant paths are the
+representative correlation matrix, portfolio retrieval, and Historical market
+data preparation. Small-fixture cold portfolio retrieval and full NAV rebuild
+are also material; incremental NAV and representative rolling correlation form
+the next tier.
+
+Transaction listing is immaterial at small scale but grows substantially at
+5,000 and 20,000 rows. Already-warm representative NAV readiness is
+comparatively immaterial, while startup remains a separate measurable path.
+The unindexed transaction plan shapes are evidence for later index work, but
+their expected improvement is a hypothesis until that work is measured; no
+bottleneck claim is inferred from a plan alone.
 
 ## Decision gate
 
-The committed report is generated from actual Criterion estimate files by
-`generate-performance-baseline.sh`; no timing numbers are hand-authored. The
-decision gate derives path-specific targets as p95 plus 10 percent noise from
-that report. Source work targets are zero successful warm-cache requests and
-bounded peak activity; the fixed source-concurrency proposal is the smallest
-candidate limit whose delayed-source p95 is within 10 percent of the best
-candidate while preserving the lowest peak activity.
+The committed report is generated from actual Criterion estimate and sample
+files by `generate-performance-baseline.sh`; no timing numbers are hand-authored.
+Each named path's target is its generated p95 plus a 10 percent noise allowance,
+recorded under `decision_gate.path_p95_targets_ns`. The measured warm-cache
+source-call count is recorded separately from the optimization target of zero;
+peak activity must be no greater than the approved fixed limit.
+
+“Warm” means the requested range has already been prepared. The baseline still
+observes six source retries because interior source gaps are not cached as
+successful Historical market data. Eliminating that redundant source work is a
+later optimization target, not a claim about the current implementation.
+
+The concurrency candidates each run eight independent one-day Stock/EUR
+preparations against separate file-backed SQLite fixtures. Every operation
+makes one real delayed source call and one real cache write. Calls were equal at
+eight and observed peaks were 1, 2, 4, and 8 for limits 1, 2, 4, and 8. The
+generated p95 values improve through limit 4; limit 8 has a lower mean but
+a higher p95 because of an observed outlier. The fixed source-concurrency
+proposal is therefore **4**, the smallest candidate within 10 percent of the
+best candidate p95 (and the best candidate itself). This proposal and the
+generated path targets remain pending the decision gate below.
 
 ## Verification
 
-Run offline with `cargo bench --bench performance -- --sample-size 10 --measurement-time 0.1`, then `cargo fmt`,
-`cargo clippy -- -D warnings`, and `cargo test`. No user database or network is
-used by the harness.
+Run `./generate-performance-baseline.sh`, then `cargo fmt`,
+`cargo clippy -- -D warnings`, and `cargo test`. The generator runs Criterion,
+the query-plan test, and rewrites the JSON report. No user database or network
+is used by the harness.

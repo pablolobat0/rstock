@@ -120,6 +120,7 @@ struct Fixture {
     market_data: MarketData,
     assets: Vec<Asset>,
     counters: Arc<Counters>,
+    end: String,
 }
 
 async fn build_fixture(asset_count: usize, years: usize, transaction_count: usize) -> Fixture {
@@ -142,6 +143,8 @@ async fn build_fixture_with_counters(
     delay_ms: u64,
     shared_counters: Option<Arc<Counters>>,
 ) -> Fixture {
+    let start = NaiveDate::parse_from_str(START, "%Y-%m-%d").unwrap();
+    let end = NaiveDate::from_ymd_opt(2015 + i32::try_from(years).unwrap() - 1, 12, 31).unwrap();
     let tempdir = tempfile::tempdir().expect("temporary benchmark directory");
     let path = tempdir.path().join("fixture.db");
     let db = Database::connect(format!("sqlite://{}?mode=rwc", path.display()))
@@ -153,13 +156,13 @@ async fn build_fixture_with_counters(
     for index in 0..asset_count {
         let ticker = format!("XPERF{index:03}");
         let name = format!("Synthetic asset {index}");
-        let asset_type = if index % 3 == 0 {
+        let asset_type = if index % 3 == 2 {
             AssetType::Fund
         } else {
             AssetType::Stock
         };
         let currency = if index % 2 == 0 { "EUR" } else { "USD" };
-        let morningstar_code = (index % 3 == 0).then(|| format!("M{index:03}"));
+        let morningstar_code = (index % 3 == 2).then(|| format!("M{index:03}"));
         let id = asset::ActiveModel {
             ticker: Set(ticker),
             name: Set(name),
@@ -177,9 +180,13 @@ async fn build_fixture_with_counters(
 
     for index in 0..transaction_count {
         let asset_id = assets[index % assets.len()].id;
+        let offset = i64::try_from(index).unwrap() * (end - start).num_days()
+            / i64::try_from(transaction_count).unwrap();
         transaction::ActiveModel {
             asset_id: Set(asset_id),
-            tx_type: Set(if index % 17 == 0 {
+            tx_type: Set(if index < asset_count {
+                "buy".into()
+            } else if index % 17 == 0 {
                 "dividend".into()
             } else if index % 19 == 0 {
                 "sell".into()
@@ -188,13 +195,10 @@ async fn build_fixture_with_counters(
             } else {
                 "buy".into()
             }),
-            date: Set(format!(
-                "{}-{:02}-{:02}",
-                2015 + index % years,
-                (index % 12) + 1,
-                (index % 27) + 1
-            )),
-            quantity: Set(1.0),
+            date: Set((start + Duration::days(offset))
+                .format("%Y-%m-%d")
+                .to_string()),
+            quantity: Set(if index < asset_count { 100.0 } else { 1.0 }),
             price_cents: Set(10_000 + i64::try_from(index % 100).unwrap()),
             fees_cents: Set(0),
             created_at: Set("2015-01-01T00:00:00".into()),
@@ -205,8 +209,7 @@ async fn build_fixture_with_counters(
         .expect("benchmark transaction");
     }
 
-    let start = NaiveDate::parse_from_str(START, "%Y-%m-%d").unwrap();
-    let observations = (0..=i64::try_from(365 * years).unwrap())
+    let observations = (0..=(end - start).num_days())
         .filter(|offset| delay_ms > 0 || *offset == 0 || offset % 11 != 0)
         .map(|offset| SourceObservation {
             date: start + Duration::days(offset),
@@ -220,7 +223,7 @@ async fn build_fixture_with_counters(
             observations: Arc::new(observations),
             delay_ms,
         }),
-        &rstock::services::clock::FixedClock::new(NaiveDate::from_ymd_opt(2016, 1, 1).unwrap()),
+        &rstock::services::clock::FixedClock::new(end + Duration::days(1)),
     );
     Fixture {
         _tempdir: tempdir,
@@ -228,6 +231,7 @@ async fn build_fixture_with_counters(
         market_data,
         assets,
         counters,
+        end: end.format("%Y-%m-%d").to_string(),
     }
 }
 
@@ -235,14 +239,14 @@ async fn run_delayed_candidate(limit: usize) -> (std::time::Duration, usize, usi
     let shared_counters = Arc::new(Counters::default());
     let mut fixtures = Vec::new();
     for _ in 0..8 {
-        fixtures.push(build_fixture_with_counters(2, 1, 2, 2, Some(shared_counters.clone())).await);
+        fixtures.push(build_fixture_with_counters(1, 1, 1, 2, Some(shared_counters.clone())).await);
     }
     let started = Instant::now();
-    stream::iter(fixtures)
+    stream::iter(&fixtures)
         .map(|fixture| async move {
             fixture
                 .market_data
-                .prepare_valuation_market_data(&fixture.db, &fixture.assets, START, END)
+                .prepare_valuation_market_data(&fixture.db, &fixture.assets, START, START)
                 .await
                 .expect("delayed candidate preparation");
         })
@@ -251,6 +255,22 @@ async fn run_delayed_candidate(limit: usize) -> (std::time::Duration, usize, usi
         .await;
     let calls = shared_counters.source_calls.load(Ordering::Relaxed);
     let peak = shared_counters.peak.load(Ordering::Relaxed);
+    let active = shared_counters.active.load(Ordering::Relaxed);
+    let intervals = shared_counters.requested_intervals.lock().unwrap();
+    assert_eq!(
+        calls, 8,
+        "each independent workload must make one source call"
+    );
+    assert!(peak <= limit, "peak source activity must respect the limit");
+    assert_eq!(peak, limit, "all configured source slots must be exercised");
+    assert_eq!(active, 0, "all source calls must finish");
+    assert_eq!(
+        intervals.len(),
+        calls,
+        "every source call records an interval"
+    );
+    let start = NaiveDate::parse_from_str(START, "%Y-%m-%d").unwrap();
+    assert!(intervals.iter().all(|interval| interval == &(start, start)));
     (started.elapsed(), calls, peak)
 }
 
@@ -291,13 +311,13 @@ fn benchmark_performance(c: &mut Criterion) {
                     &representative.db,
                     &representative.assets,
                     START,
-                    END,
+                    &representative.end,
                 )
                 .await
                 .unwrap()
         });
     });
-    group.bench_function("nav_rebuild_representative", |b| {
+    group.bench_function("nav_readiness_warm_representative", |b| {
         b.to_async(&runtime).iter(|| async {
             nav::ensure_portfolio_history(&representative.db, &representative.market_data)
                 .await
@@ -316,7 +336,7 @@ fn benchmark_performance(c: &mut Criterion) {
             analytics::compute_correlation_data(
                 &representative.db,
                 START,
-                END,
+                &representative.end,
                 &representative.market_data,
             )
             .await
@@ -328,7 +348,7 @@ fn benchmark_performance(c: &mut Criterion) {
             analytics::compute_rolling_correlation_data(
                 &representative.db,
                 START,
-                END,
+                &representative.end,
                 "XPERF001",
                 "XPERF002",
                 "1y",
@@ -366,6 +386,19 @@ fn benchmark_performance(c: &mut Criterion) {
                 END,
             ))
             .unwrap();
+        let calls_before_warm = fixture.counters.source_calls.load(Ordering::Relaxed);
+        runtime
+            .block_on(fixture.market_data.prepare_valuation_market_data(
+                &fixture.db,
+                &fixture.assets,
+                START,
+                END,
+            ))
+            .unwrap();
+        println!(
+            "warm preparation source_calls={}",
+            fixture.counters.source_calls.load(Ordering::Relaxed) - calls_before_warm
+        );
         b.to_async(&runtime).iter(|| async {
             fixture
                 .market_data
