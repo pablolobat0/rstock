@@ -17,7 +17,7 @@ Within each file, order functions top-to-bottom like a book: if function A calls
 - `mod.rs` files re-export public types for ergonomic imports (see `src/models/mod.rs`)
 - `lib.rs` declares modules (`pub mod db, models, services`) but does not re-export individual types. Constants and types live in one file; update all import paths directly
 - Services contain business logic and call repos for data access. Services do not call other services' internal/private functions
-- Repos are pure data access with no business logic. They accept `&DatabaseConnection` as the first parameter
+- Repos are pure data access with no business logic. They accept `&impl ConnectionTrait` as the first parameter when an operation must support either `DatabaseConnection` or a caller-owned transaction
 
 ## Naming Conventions
 
@@ -63,7 +63,7 @@ Three categories of model structs:
 ## Database Patterns
 
 - **ORM**: SeaORM with derive macros for entities. Entities are in `src/db/entities/`, auto-generated
-- **Upsert**: Check existence, then insert or update. SeaORM `on_conflict` is not used; the pattern is manual check + insert/update
+- **Upsert**: Legacy `upsert` functions check existence, then insert or update. Explicitly named native-conflict and bulk forms use SeaORM `on_conflict` beside the legacy methods
 - **Date storage**: Strings in `YYYY-MM-DD` format internally (DB, services), `DD-MM-YYYY` for user-facing input/output. See `display_date()` and `parse_date()` in constants/cli.
 - **Monetary amounts**: Transactions use `i64` cents (`price_cents`, `fees_cents`). Daily prices use `f64` directly. Use `f64_to_cents()` before insertion and `cents_to_f64()` after retrieval
 - **Migrations**: SeaORM migration crate in `migration/`. Migrations run automatically on database connect. Files are in `migration/src/` with timestamp-based naming
