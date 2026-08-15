@@ -3,7 +3,7 @@ mod individual_price;
 mod policy;
 pub mod sources;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use anyhow::bail;
@@ -38,6 +38,7 @@ const HISTORICAL_SOURCE_CONCURRENCY_LIMIT: usize = 4;
 pub struct MarketData {
     sources: Arc<dyn MarketDataSources>,
     historical_requests: Mutex<HashMap<HistoricalRequest, HistoricalRequestFuture>>,
+    completed_historical_requests: Mutex<HashSet<HistoricalRequest>>,
     historical_source_slots: Arc<Semaphore>,
     today: NaiveDate,
 }
@@ -51,6 +52,7 @@ impl MarketData {
         Self {
             sources: sources.into(),
             historical_requests: Mutex::new(HashMap::new()),
+            completed_historical_requests: Mutex::new(HashSet::new()),
             historical_source_slots: Arc::new(Semaphore::new(HISTORICAL_SOURCE_CONCURRENCY_LIMIT)),
             // Capture the date once per command's MarketData instance. A command that crosses
             // midnight must not combine different definitions of today across portfolio, NAV,
@@ -259,6 +261,23 @@ impl MarketData {
         Ok((tracked_asset_series, prepared.limitations))
     }
 
+    pub(crate) fn clear_completed_historical_requests(&self) -> anyhow::Result<()> {
+        let completed = {
+            let mut completed = self.completed_historical_requests.lock().map_err(|_| {
+                anyhow::anyhow!("completed historical request cache mutex poisoned")
+            })?;
+            completed.drain().collect::<Vec<_>>()
+        };
+        let mut requests = self
+            .historical_requests
+            .lock()
+            .map_err(|_| anyhow::anyhow!("historical request cache mutex poisoned"))?;
+        for request in completed {
+            requests.remove(&request);
+        }
+        Ok(())
+    }
+
     async fn request_historical_data(
         &self,
         request: HistoricalRequest,
@@ -302,15 +321,11 @@ impl MarketData {
         };
 
         let result = future.await;
-        if matches!(result, Ok(ref observations) if !observations.is_empty()) {
-            // Successful observations are consumed by the preparation caller. Keep only failed
-            // attempts in the command cache so a large source response is not retained after its
-            // caller has received the data needed for persistence.
-            let mut requests = self
-                .historical_requests
+        if result.is_ok() {
+            self.completed_historical_requests
                 .lock()
-                .map_err(|_| anyhow::anyhow!("historical request cache mutex poisoned"))?;
-            requests.remove(&request_key);
+                .map_err(|_| anyhow::anyhow!("completed historical request cache mutex poisoned"))?
+                .insert(request_key);
         }
 
         result
