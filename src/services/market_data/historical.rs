@@ -15,67 +15,28 @@ struct LatestMarketDataDate {
     date: String,
 }
 
-pub(crate) struct PreloadedValuationData {
-    asset_prices: HashMap<i32, BTreeMap<String, f64>>,
-    exchange_rates: HashMap<String, BTreeMap<String, f64>>,
+type FilledValues = (LatestMarketDataDate, BTreeMap<NaiveDate, f64>);
+
+struct PreparedHistoricalMarketData {
+    availability: ValuationMarketDataAvailability,
+    valuation_data: PreloadedValuationData,
 }
 
-pub(crate) async fn preload_valuation_market_data(
-    db: &DatabaseConnection,
-    assets: &[Asset],
-    start_date: NaiveDate,
-    end_date: NaiveDate,
-) -> anyhow::Result<PreloadedValuationData> {
-    let start_date = format_date(start_date);
-    let end_date = format_date(end_date);
-    let mut asset_prices = HashMap::with_capacity(assets.len());
-    let mut exchange_rates = HashMap::new();
-
-    for asset in assets {
-        let prices =
-            daily_price_repo::find_coverage_with_seed(db, asset.id, &start_date, &end_date).await?;
-        asset_prices.insert(asset.id, prices.into_iter().collect());
-
-        if asset.currency != BASE_CURRENCY && !exchange_rates.contains_key(&asset.currency) {
-            let rates = exchange_rate_repo::find_coverage_with_seed(
-                db,
-                &asset.currency,
-                BASE_CURRENCY,
-                &start_date,
-                &end_date,
-            )
-            .await?;
-            exchange_rates.insert(asset.currency.clone(), rates.into_iter().collect());
-        }
-    }
-
-    Ok(PreloadedValuationData {
-        asset_prices,
-        exchange_rates,
-    })
+pub(crate) struct PreloadedValuationData {
+    asset_prices: HashMap<i32, BTreeMap<NaiveDate, f64>>,
+    exchange_rates: HashMap<String, BTreeMap<NaiveDate, f64>>,
 }
 
 impl PreloadedValuationData {
-    pub(crate) fn exchange_rates_for_assets(
-        &self,
-        assets: &[Asset],
-        date: &str,
-    ) -> anyhow::Result<HashMap<i32, f64>> {
-        assets
-            .iter()
-            .map(|asset| Ok((asset.id, self.exchange_rate_for_asset(asset, date)?)))
-            .collect()
-    }
-
     pub(crate) fn valuation(
         &self,
         asset: &Asset,
-        date: &str,
+        date: NaiveDate,
     ) -> anyhow::Result<MarketDataValuation> {
         let native_price = self
             .asset_prices
             .get(&asset.id)
-            .and_then(|prices| prices.range(..=date.to_owned()).next_back())
+            .and_then(|prices| prices.range(..=date).next_back())
             .map(|(_, price)| *price)
             .with_context(|| {
                 format!(
@@ -92,14 +53,18 @@ impl PreloadedValuationData {
         })
     }
 
-    fn exchange_rate_for_asset(&self, asset: &Asset, date: &str) -> anyhow::Result<f64> {
+    pub(crate) fn exchange_rate_for_asset(
+        &self,
+        asset: &Asset,
+        date: NaiveDate,
+    ) -> anyhow::Result<f64> {
         if asset.currency == BASE_CURRENCY {
             return Ok(1.0);
         }
 
         self.exchange_rates
             .get(&asset.currency)
-            .and_then(|rates| rates.range(..=date.to_owned()).next_back())
+            .and_then(|rates| rates.range(..=date).next_back())
             .map(|(_, rate)| *rate)
             .with_context(|| {
                 format!(
@@ -286,12 +251,12 @@ async fn prepare_historical_market_data(
     end_date: &str,
     market_data: &MarketData,
 ) -> anyhow::Result<ValuationMarketData> {
-    let availability =
+    let prepared =
         prepare_historical_market_data_inner(db, assets, start_date, end_date, market_data, true)
             .await?;
     Ok(ValuationMarketData {
-        effective_end: availability.effective_end,
-        limitations: availability.limitations,
+        effective_end: prepared.availability.effective_end,
+        limitations: prepared.availability.limitations,
     })
 }
 
@@ -299,6 +264,7 @@ async fn prepare_historical_market_data(
 /// data is reported as `data_available = false` plus limitations instead of a
 /// hard error, so NAV readiness can represent an unavailable valuation scope
 /// without masking genuine DB, parsing, or invariant errors.
+#[allow(dead_code)]
 pub(crate) async fn prepare_valuation_market_data_if_available(
     db: &DatabaseConnection,
     assets: &[Asset],
@@ -306,7 +272,23 @@ pub(crate) async fn prepare_valuation_market_data_if_available(
     end_date: &str,
     market_data: &MarketData,
 ) -> anyhow::Result<ValuationMarketDataAvailability> {
-    prepare_historical_market_data_inner(db, assets, start_date, end_date, market_data, false).await
+    let prepared =
+        prepare_historical_market_data_inner(db, assets, start_date, end_date, market_data, false)
+            .await?;
+    Ok(prepared.availability)
+}
+
+pub(crate) async fn prepare_valuation_market_data_for_nav(
+    db: &DatabaseConnection,
+    assets: &[Asset],
+    start_date: &str,
+    end_date: &str,
+    market_data: &MarketData,
+) -> anyhow::Result<(ValuationMarketDataAvailability, PreloadedValuationData)> {
+    let prepared =
+        prepare_historical_market_data_inner(db, assets, start_date, end_date, market_data, false)
+            .await?;
+    Ok((prepared.availability, prepared.valuation_data))
 }
 
 async fn prepare_historical_market_data_inner(
@@ -316,7 +298,7 @@ async fn prepare_historical_market_data_inner(
     end_date: &str,
     market_data: &MarketData,
     strict: bool,
-) -> anyhow::Result<ValuationMarketDataAvailability> {
+) -> anyhow::Result<PreparedHistoricalMarketData> {
     let requested_end =
         policy::parse_market_data_date(end_date, "historical market data end date")?;
     let cache_end = format_date(requested_end.min(market_data.today() - chrono::Duration::days(1)));
@@ -348,7 +330,7 @@ async fn prepare_historical_market_data_inner(
             continue;
         };
         let latest_available_date =
-            policy::parse_market_data_date(&latest_date.date, "asset price date")?;
+            policy::parse_market_data_date(&latest_date.0.date, "asset price date")?;
         latest_required_dates.push(latest_available_date);
         if let Some(limitation) =
             policy::classify_asset_limitation(asset, latest_available_date, requested_end)
@@ -369,7 +351,7 @@ async fn prepare_historical_market_data_inner(
             continue;
         };
         let latest_available_date =
-            policy::parse_market_data_date(&latest_date.date, "FX rate date")?;
+            policy::parse_market_data_date(&latest_date.0.date, "FX rate date")?;
         latest_required_dates.push(latest_available_date);
         if let Some(limitation) =
             policy::classify_fx_limitation(&currency, latest_available_date, requested_end)
@@ -383,10 +365,22 @@ async fn prepare_historical_market_data_inner(
         .min()
         .context("historical market data preparation had no date requirements")?;
 
-    Ok(ValuationMarketDataAvailability {
-        effective_end,
-        limitations,
-        data_available,
+    Ok(PreparedHistoricalMarketData {
+        availability: ValuationMarketDataAvailability {
+            effective_end,
+            limitations,
+            data_available,
+        },
+        valuation_data: PreloadedValuationData {
+            asset_prices: latest_asset_dates
+                .into_iter()
+                .map(|(asset_id, (_, values))| (asset_id, values))
+                .collect(),
+            exchange_rates: latest_rate_dates
+                .into_iter()
+                .map(|(currency, (_, values))| (currency, values))
+                .collect(),
+        },
     })
 }
 
@@ -424,7 +418,7 @@ async fn fill_nav_asset_prices(
     start_date: &str,
     end_date: &str,
     market_data: &MarketData,
-) -> anyhow::Result<HashMap<i32, LatestMarketDataDate>> {
+) -> anyhow::Result<HashMap<i32, FilledValues>> {
     tracing::debug!(asset_count = assets.len(), %start_date, %end_date, "filling NAV asset price cache");
 
     let mut requirements = Vec::with_capacity(assets.len());
@@ -450,11 +444,11 @@ async fn fill_nav_asset_prices(
 
     let results = futures::future::join_all(futures).await;
 
-    let mut latest_dates: HashMap<i32, LatestMarketDataDate> = HashMap::new();
+    let mut latest_dates: HashMap<i32, FilledValues> = HashMap::new();
     for (asset, result) in results {
         match result {
-            Ok(Some(date)) => {
-                latest_dates.insert(asset.id, LatestMarketDataDate { date });
+            Ok(Some(values)) => {
+                latest_dates.insert(asset.id, values);
             }
             Ok(None) => {
                 tracing::warn!(ticker = %asset.ticker, "no new price data from API, falling back to latest cached date");
@@ -476,7 +470,7 @@ async fn fill_historical_asset_prices(
     start_date: &str,
     end_date: &str,
     market_data: &MarketData,
-) -> anyhow::Result<Option<String>> {
+) -> anyhow::Result<Option<FilledValues>> {
     let start = policy::parse_market_data_date(start_date, "historical asset price start date")?;
     let requested_end =
         policy::parse_market_data_date(end_date, "historical asset price end date")?;
@@ -525,10 +519,18 @@ async fn fill_historical_asset_prices(
         daily_price_repo::insert_many_immutable(db, &writes).await?;
     }
 
-    Ok(known
+    let latest_date = known
         .range(..=requested_end)
         .next_back()
-        .map(|(date, _)| format_date(*date)))
+        .map(|(date, _)| *date);
+    Ok(latest_date.map(|date| {
+        (
+            LatestMarketDataDate {
+                date: format_date(date),
+            },
+            known,
+        )
+    }))
 }
 
 fn lookup_identifier(asset: &Asset) -> anyhow::Result<&str> {
@@ -558,7 +560,7 @@ async fn fill_nav_exchange_rates(
     start_date: &str,
     end_date: &str,
     market_data: &MarketData,
-) -> anyhow::Result<HashMap<String, LatestMarketDataDate>> {
+) -> anyhow::Result<HashMap<String, FilledValues>> {
     tracing::debug!(currency_count = currencies.len(), %start_date, %end_date, "filling NAV exchange rate cache");
 
     let futures: Vec<_> = currencies
@@ -576,8 +578,8 @@ async fn fill_nav_exchange_rates(
     let mut latest_dates = HashMap::new();
     for (currency, result) in results {
         match result {
-            Ok(Some(date)) => {
-                latest_dates.insert(currency.clone(), LatestMarketDataDate { date });
+            Ok(Some(values)) => {
+                latest_dates.insert(currency.clone(), values);
             }
             Ok(None) => {
                 tracing::warn!(%currency, to_currency = BASE_CURRENCY, "no new exchange rate data from API, falling back to latest cached date");
@@ -598,7 +600,7 @@ async fn fill_historical_exchange_rates(
     start_date: &str,
     end_date: &str,
     market_data: &MarketData,
-) -> anyhow::Result<Option<String>> {
+) -> anyhow::Result<Option<FilledValues>> {
     let start = policy::parse_market_data_date(start_date, "historical FX start date")?;
     let requested_end = policy::parse_market_data_date(end_date, "historical FX end date")?;
     let latest_completed_date = market_data.today() - chrono::Duration::days(1);
@@ -646,10 +648,18 @@ async fn fill_historical_exchange_rates(
         exchange_rate_repo::insert_many_immutable(db, &writes).await?;
     }
 
-    Ok(known
+    let latest_date = known
         .range(..=requested_end)
         .next_back()
-        .map(|(date, _)| format_date(*date)))
+        .map(|(date, _)| *date);
+    Ok(latest_date.map(|date| {
+        (
+            LatestMarketDataDate {
+                date: format_date(date),
+            },
+            known,
+        )
+    }))
 }
 
 #[derive(Clone, Copy)]

@@ -123,6 +123,7 @@ impl MarketData {
         historical::prepare_valuation_market_data(db, assets, start_date, end_date, self).await
     }
 
+    #[allow(dead_code)]
     pub async fn prepare_valuation_market_data_if_available(
         &self,
         db: &DatabaseConnection,
@@ -136,14 +137,18 @@ impl MarketData {
         .await
     }
 
-    pub(crate) async fn preload_valuation_market_data(
+    pub(crate) async fn prepare_valuation_market_data_for_nav(
         &self,
         db: &DatabaseConnection,
         assets: &[Asset],
-        start_date: NaiveDate,
-        end_date: NaiveDate,
-    ) -> anyhow::Result<historical::PreloadedValuationData> {
-        historical::preload_valuation_market_data(db, assets, start_date, end_date).await
+        start_date: &str,
+        end_date: &str,
+    ) -> anyhow::Result<(
+        ValuationMarketDataAvailability,
+        historical::PreloadedValuationData,
+    )> {
+        historical::prepare_valuation_market_data_for_nav(db, assets, start_date, end_date, self)
+            .await
     }
 
     #[allow(dead_code)]
