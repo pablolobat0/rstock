@@ -83,7 +83,8 @@ candidates = {}
 rolling_work_pattern = re.compile(
     r"rolling_work_proxy label=(\w+) input=(\d+) windows=(\d+) "
     r"naive_window_value_visits=(\d+) optimized_value_updates=(\d+) "
-    r"naive_window_allocations=(\d+) optimized_window_allocations=(\d+)"
+    r"naive_window_allocations=(\d+) optimized_window_allocations=(\d+) "
+    r"optimized_total_allocations=(\d+)"
 )
 rolling_work = {}
 for line in benchmark_output:
@@ -96,6 +97,7 @@ for line in benchmark_output:
             optimized_updates,
             naive_allocations,
             optimized_allocations,
+            optimized_total_allocations,
         ) = match.groups()
         rolling_work[label] = {
             "input": int(input_len),
@@ -104,6 +106,7 @@ for line in benchmark_output:
             "optimized_value_updates": int(optimized_updates),
             "naive_window_allocations": int(naive_allocations),
             "optimized_window_allocations": int(optimized_allocations),
+            "optimized_total_allocations": int(optimized_total_allocations),
         }
     if match := candidate_pattern.search(line):
         limit, calls, peak = map(int, match.groups())

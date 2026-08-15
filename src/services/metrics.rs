@@ -273,6 +273,47 @@ pub fn compute_rolling_correlation(aligned_returns: &[(String, f64, f64)]) -> Ve
     result
 }
 
+pub fn summarize_rolling_correlation(
+    points: &[(String, f64)],
+) -> (Option<f64>, Option<f64>, Option<f64>, Option<f64>) {
+    if points.is_empty() {
+        return (None, None, None, None);
+    }
+
+    let values: Vec<f64> = points.iter().map(|(_, value)| *value).collect();
+    let latest = values.last().copied();
+    let min = values.iter().copied().reduce(f64::min);
+    let max = values.iter().copied().reduce(f64::max);
+    let average = Some(values.iter().sum::<f64>() / values.len() as f64);
+
+    (latest, min, max, average)
+}
+
+pub fn benchmark_asset_info() -> AssetInfo {
+    AssetInfo {
+        ticker: BENCHMARK_TICKER.to_owned(),
+        name: BENCHMARK_NAME.to_owned(),
+        asset_type: AssetType::Stock,
+        currency: BENCHMARK_CURRENCY.to_owned(),
+    }
+}
+
+pub fn benchmark_asset(id: i32) -> Asset {
+    Asset {
+        id,
+        ticker: BENCHMARK_TICKER.to_owned(),
+        name: BENCHMARK_NAME.to_owned(),
+        asset_type: AssetType::Stock,
+        currency: BENCHMARK_CURRENCY.to_owned(),
+        morningstar_code: None,
+        asset_class: None,
+        equity_style: None,
+        bond_credit: None,
+        bond_duration: None,
+        management: None,
+    }
+}
+
 #[derive(Default)]
 struct RollingCorrelationAccumulator {
     count: usize,
@@ -330,46 +371,5 @@ impl RollingCorrelationAccumulator {
         } else {
             0.0
         }
-    }
-}
-
-pub fn summarize_rolling_correlation(
-    points: &[(String, f64)],
-) -> (Option<f64>, Option<f64>, Option<f64>, Option<f64>) {
-    if points.is_empty() {
-        return (None, None, None, None);
-    }
-
-    let values: Vec<f64> = points.iter().map(|(_, value)| *value).collect();
-    let latest = values.last().copied();
-    let min = values.iter().copied().reduce(f64::min);
-    let max = values.iter().copied().reduce(f64::max);
-    let average = Some(values.iter().sum::<f64>() / values.len() as f64);
-
-    (latest, min, max, average)
-}
-
-pub fn benchmark_asset_info() -> AssetInfo {
-    AssetInfo {
-        ticker: BENCHMARK_TICKER.to_owned(),
-        name: BENCHMARK_NAME.to_owned(),
-        asset_type: AssetType::Stock,
-        currency: BENCHMARK_CURRENCY.to_owned(),
-    }
-}
-
-pub fn benchmark_asset(id: i32) -> Asset {
-    Asset {
-        id,
-        ticker: BENCHMARK_TICKER.to_owned(),
-        name: BENCHMARK_NAME.to_owned(),
-        asset_type: AssetType::Stock,
-        currency: BENCHMARK_CURRENCY.to_owned(),
-        morningstar_code: None,
-        asset_class: None,
-        equity_style: None,
-        bond_credit: None,
-        bond_duration: None,
-        management: None,
     }
 }

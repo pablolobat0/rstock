@@ -125,6 +125,7 @@ pub struct CorrelationMatrix {
 pub struct RollingCorrelationResult {
     pub left_name: String,
     pub right_name: String,
+    pub base_currency: String,
     pub period_label: String,
     pub window_label: String,
     pub requested_start_date: String,

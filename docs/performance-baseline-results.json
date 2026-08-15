@@ -19,28 +19,28 @@
       "p95_ns": 2095440941.0
     },
     "delayed_source_limit_1": {
-      "mean_ns": 45833694.9,
-      "median_ns": 41876738.5,
-      "std_dev_ns": 8149061.837040445,
-      "p95_ns": 62515775.0
+      "mean_ns": 41722704.4,
+      "median_ns": 41997249.0,
+      "std_dev_ns": 1524773.5547634023,
+      "p95_ns": 43527114.0
     },
     "delayed_source_limit_2": {
-      "mean_ns": 28091631.4,
-      "median_ns": 25080298.0,
-      "std_dev_ns": 7201198.410076327,
-      "p95_ns": 43128342.0
+      "mean_ns": 24288899.1,
+      "median_ns": 23983963.5,
+      "std_dev_ns": 1561999.3421206078,
+      "p95_ns": 27056029.0
     },
     "delayed_source_limit_4": {
-      "mean_ns": 14681552.6,
-      "median_ns": 13926687.5,
-      "std_dev_ns": 2206013.5645768214,
-      "p95_ns": 19166026.0
+      "mean_ns": 13737300.5,
+      "median_ns": 13825673.5,
+      "std_dev_ns": 705129.317835664,
+      "p95_ns": 14614434.0
     },
     "delayed_source_limit_8": {
-      "mean_ns": 11644361.9,
-      "median_ns": 8517664.0,
-      "std_dev_ns": 7161671.124876767,
-      "p95_ns": 25220033.0
+      "mean_ns": 8244338.3,
+      "median_ns": 8037602.5,
+      "std_dev_ns": 1083752.376462144,
+      "p95_ns": 10224488.0
     },
     "historical_market_data_preparation_cold": {
       "mean_ns": 60407342.7,
@@ -55,10 +55,10 @@
       "p95_ns": 64191516.0
     },
     "historical_market_data_preparation_warm": {
-      "mean_ns": 4445340.7,
-      "median_ns": 4314290.0,
-      "std_dev_ns": 976680.0417259425,
-      "p95_ns": 6246826.0
+      "mean_ns": 3218561.3,
+      "median_ns": 3134481.0,
+      "std_dev_ns": 275160.84666449594,
+      "p95_ns": 3769044.0
     },
     "market_data_preparation_representative": {
       "mean_ns": 288121553.3,
@@ -121,16 +121,16 @@
       "p95_ns": 88423505.0
     },
     "rolling_metric_representative": {
-      "mean_ns": 241508.73824404768,
-      "median_ns": 243699.84375,
-      "std_dev_ns": 13715.12882646053,
-      "p95_ns": 261758.70833333334
+      "mean_ns": 222123.59154761903,
+      "median_ns": 208586.5,
+      "std_dev_ns": 26017.0053407443,
+      "p95_ns": 274792.0
     },
     "rolling_metric_stress": {
-      "mean_ns": 412808.38101587305,
-      "median_ns": 403619.23,
-      "std_dev_ns": 31692.10774010778,
-      "p95_ns": 460044.9666666667
+      "mean_ns": 453198.1,
+      "median_ns": 418153.0,
+      "std_dev_ns": 69788.20493819182,
+      "p95_ns": 602386.3333333334
     },
     "startup_and_migration": {
       "mean_ns": 91776697.8,
@@ -163,7 +163,7 @@
       "correlation_matrix_representative": 2304985035,
       "historical_market_data_preparation_cold": 99322358,
       "historical_market_data_preparation_partial": 70610668,
-      "historical_market_data_preparation_warm": 6871509,
+      "historical_market_data_preparation_warm": 4145948,
       "market_data_preparation_representative": 361828669,
       "nav_readiness_warm_representative": 12050371,
       "nav_rebuild_full": 5978862660,
@@ -174,15 +174,15 @@
       "rolling_correlation": 4993594,
       "rolling_correlation_representative": 46792851,
       "rolling_correlation_stress": 97265856,
-      "rolling_metric_representative": 287935,
-      "rolling_metric_stress": 506049,
+      "rolling_metric_representative": 302271,
+      "rolling_metric_stress": 662625,
       "startup_and_migration": 112716860,
       "transaction_listing": 420538,
       "transaction_listing_representative": 20992661,
       "transaction_listing_stress": 99031870
     },
     "target_rule": "generated p95 plus 10 percent noise allowance",
-    "fixed_source_concurrency_limit": 4,
+    "fixed_source_concurrency_limit": 8,
     "candidate_work": {
       "1": {
         "calls": 8,
@@ -221,7 +221,8 @@
         "naive_window_value_visits": 430920,
         "optimized_value_updates": 14480,
         "naive_window_allocations": 7182,
-        "optimized_window_allocations": 0
+        "optimized_window_allocations": 0,
+        "optimized_total_allocations": 3592
       },
       "stress": {
         "input": 7300,
@@ -229,7 +230,8 @@
         "naive_window_value_visits": 868920,
         "optimized_value_updates": 29080,
         "naive_window_allocations": 14482,
-        "optimized_window_allocations": 0
+        "optimized_window_allocations": 0,
+        "optimized_total_allocations": 7242
       }
     }
   },

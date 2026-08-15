@@ -634,6 +634,7 @@ async fn test_rolling_correlation_for_pair() {
 
     assert_eq!(result.left_name, "Fake A");
     assert_eq!(result.right_name, "Fake B");
+    assert_eq!(result.base_currency, "EUR");
     assert_eq!(result.requested_start_date, "2025-01-01");
     assert_eq!(result.requested_end_date, "2025-04-30");
     assert!(!result.points.is_empty());
@@ -704,6 +705,7 @@ async fn test_rolling_correlation_json_preserves_context_summary_points_and_limi
     assert_eq!(envelope["command"], "analyze.correlation.rolling");
     assert_eq!(data["left_name"], "Fake A");
     assert_eq!(data["right_name"], "Fake B");
+    assert_eq!(data["base_currency"], "EUR");
     assert_eq!(data["period_label"], "1Y");
     assert_eq!(data["window_label"], "60D rolling");
     assert_eq!(data["requested_start_date"], "2025-01-01");

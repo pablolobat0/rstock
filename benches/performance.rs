@@ -4,6 +4,7 @@
 //! benchmark is also useful as a smoke test: it never constructs a production
 //! source and therefore cannot make a network request.
 
+use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -27,6 +28,34 @@ const START: &str = "2015-01-01";
 const END: &str = "2015-12-31";
 
 const FIXTURE_MATRIX: &[(usize, usize, usize)] = &[(5, 1, 100), (50, 10, 5_000), (100, 20, 20_000)];
+
+struct CountingAllocator;
+
+static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
+
+#[global_allocator]
+static GLOBAL_ALLOCATOR: CountingAllocator = CountingAllocator;
+
+unsafe impl GlobalAlloc for CountingAllocator {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        System.alloc(layout)
+    }
+
+    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        System.alloc_zeroed(layout)
+    }
+
+    unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
+        System.dealloc(pointer, layout);
+    }
+
+    unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        System.realloc(pointer, layout, new_size)
+    }
+}
 
 #[derive(Default)]
 struct Counters {
@@ -285,16 +314,22 @@ fn rolling_return_fixture(days: usize) -> Vec<(String, f64, f64)> {
         .collect()
 }
 
-fn print_rolling_work_proxy(label: &str, input_len: usize) {
+fn print_rolling_work_proxy(label: &str, returns: &[(String, f64, f64)]) {
+    let input_len = returns.len();
     let window_count = input_len.saturating_sub(ROLLING_CORRELATION_WINDOW_DAYS) + 1;
     let naive_window_value_visits = window_count * ROLLING_CORRELATION_WINDOW_DAYS * 2;
     let optimized_value_updates = (input_len + window_count.saturating_sub(1)) * 2;
+    ALLOCATIONS.store(0, Ordering::Relaxed);
+    let output = metrics::compute_rolling_correlation(returns);
+    std::hint::black_box(output);
+    let optimized_total_allocations = ALLOCATIONS.load(Ordering::Relaxed);
     println!(
         "rolling_work_proxy label={label} input={input_len} windows={window_count} \
          naive_window_value_visits={naive_window_value_visits} \
          optimized_value_updates={optimized_value_updates} \
-         naive_window_allocations={} optimized_window_allocations=0",
-        window_count * 2
+         naive_window_allocations={} optimized_window_allocations=0 \
+         optimized_total_allocations={optimized_total_allocations}",
+        window_count * 2,
     );
 }
 
@@ -307,8 +342,8 @@ fn benchmark_performance(c: &mut Criterion) {
     let rolling_representative = rolling_return_fixture(3_650);
     let rolling_stress = rolling_return_fixture(7_300);
     assert_eq!(FIXTURE_MATRIX.len(), 3);
-    print_rolling_work_proxy("representative", rolling_representative.len());
-    print_rolling_work_proxy("stress", rolling_stress.len());
+    print_rolling_work_proxy("representative", &rolling_representative);
+    print_rolling_work_proxy("stress", &rolling_stress);
     let mut group = c.benchmark_group("performance-baseline");
     group.bench_function("transaction_listing", |b| {
         b.to_async(&runtime).iter(|| async {
