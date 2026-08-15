@@ -85,7 +85,7 @@ async fn representative_transaction_plans_are_available_for_baselining() {
         "EXPLAIN QUERY PLAN SELECT * FROM daily_exchange_rates WHERE from_currency = 'USD' AND to_currency = 'EUR' AND date <= '2020-12-31' ORDER BY date DESC LIMIT 1",
     ];
     let mut classified = Vec::new();
-    for sql in queries {
+    for (index, sql) in queries.into_iter().enumerate() {
         let rows = db
             .query_all(Statement::from_string(DbBackend::Sqlite, sql))
             .await
@@ -108,18 +108,30 @@ async fn representative_transaction_plans_are_available_for_baselining() {
         };
         let uses_index = details.iter().any(|detail| detail.contains("USING INDEX"));
         let uses_temp_sort = details.iter().any(|detail| detail.contains("TEMP B-TREE"));
+        if index < 3 {
+            let expected_index = if index == 0 {
+                "idx_transactions_date_id"
+            } else {
+                "idx_transactions_asset_date_id"
+            };
+            assert!(
+                details.iter().any(|detail| detail.contains(expected_index)),
+                "transaction plan should use {expected_index}: {details:?}"
+            );
+            assert!(
+                !uses_temp_sort,
+                "transaction plan should not require a temporary sort: {details:?}"
+            );
+        }
         classified.push((access, uses_index, uses_temp_sort));
     }
     assert_eq!(classified.len(), 5);
     println!("transaction_query_plans={classified:?}");
-    // Baseline records whether indexes and temporary sorts are present.  The
-    // optimization slice may later turn these observed scans into searches;
-    // this foundation must not assume an index before that slice lands.
     assert_eq!(
         classified
             .iter()
             .filter(|(_, _, uses_temp_sort)| *uses_temp_sort)
             .count(),
-        3
+        0
     );
 }

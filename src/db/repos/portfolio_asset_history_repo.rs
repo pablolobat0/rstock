@@ -86,6 +86,14 @@ pub async fn delete_from_date_for_asset(
     Ok(())
 }
 
+pub async fn delete_from_date(db: &impl ConnectionTrait, date: &str) -> anyhow::Result<()> {
+    portfolio_asset_history::Entity::delete_many()
+        .filter(portfolio_asset_history::Column::Date.gte(date))
+        .exec(db)
+        .await?;
+    Ok(())
+}
+
 fn active_model(snapshot: &AssetSnapshot) -> portfolio_asset_history::ActiveModel {
     portfolio_asset_history::ActiveModel {
         date: Set(snapshot.date.clone()),
