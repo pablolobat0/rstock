@@ -1,11 +1,14 @@
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Set,
+    sea_query::OnConflict, ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait,
+    QueryFilter, QueryOrder, Set,
 };
 
 use crate::db::entities::portfolio_history;
 use crate::models::PortfolioSnapshot;
 
-pub async fn find_latest(db: &DatabaseConnection) -> anyhow::Result<Option<PortfolioSnapshot>> {
+const BULK_WRITE_SIZE: usize = 100;
+
+pub async fn find_latest(db: &impl ConnectionTrait) -> anyhow::Result<Option<PortfolioSnapshot>> {
     let result = portfolio_history::Entity::find()
         .order_by_desc(portfolio_history::Column::Date)
         .one(db)
@@ -13,7 +16,7 @@ pub async fn find_latest(db: &DatabaseConnection) -> anyhow::Result<Option<Portf
     Ok(result.map(PortfolioSnapshot::from))
 }
 
-pub async fn find_earliest(db: &DatabaseConnection) -> anyhow::Result<Option<PortfolioSnapshot>> {
+pub async fn find_earliest(db: &impl ConnectionTrait) -> anyhow::Result<Option<PortfolioSnapshot>> {
     let result = portfolio_history::Entity::find()
         .order_by_asc(portfolio_history::Column::Date)
         .one(db)
@@ -22,7 +25,7 @@ pub async fn find_earliest(db: &DatabaseConnection) -> anyhow::Result<Option<Por
 }
 
 pub async fn find_at_or_before(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     date: &str,
 ) -> anyhow::Result<Option<PortfolioSnapshot>> {
     let result = portfolio_history::Entity::find()
@@ -33,7 +36,7 @@ pub async fn find_at_or_before(
     Ok(result.map(PortfolioSnapshot::from))
 }
 
-pub async fn upsert(db: &DatabaseConnection, snapshot: &PortfolioSnapshot) -> anyhow::Result<()> {
+pub async fn upsert(db: &impl ConnectionTrait, snapshot: &PortfolioSnapshot) -> anyhow::Result<()> {
     let existing = portfolio_history::Entity::find_by_id(&snapshot.date)
         .one(db)
         .await?;
@@ -59,8 +62,32 @@ pub async fn upsert(db: &DatabaseConnection, snapshot: &PortfolioSnapshot) -> an
     Ok(())
 }
 
+pub async fn upsert_native(
+    db: &impl ConnectionTrait,
+    snapshot: &PortfolioSnapshot,
+) -> anyhow::Result<()> {
+    portfolio_history::Entity::insert(active_model(snapshot))
+        .on_conflict(native_conflict())
+        .exec_without_returning(db)
+        .await?;
+    Ok(())
+}
+
+pub async fn upsert_many_native(
+    db: &impl ConnectionTrait,
+    snapshots: &[PortfolioSnapshot],
+) -> anyhow::Result<()> {
+    for chunk in snapshots.chunks(BULK_WRITE_SIZE) {
+        portfolio_history::Entity::insert_many(chunk.iter().map(active_model))
+            .on_conflict(native_conflict())
+            .exec_without_returning(db)
+            .await?;
+    }
+    Ok(())
+}
+
 pub async fn find_between(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     start_date: &str,
     end_date: &str,
 ) -> anyhow::Result<Vec<PortfolioSnapshot>> {
@@ -73,10 +100,31 @@ pub async fn find_between(
     Ok(results.into_iter().map(PortfolioSnapshot::from).collect())
 }
 
-pub async fn delete_from_date(db: &DatabaseConnection, date: &str) -> anyhow::Result<()> {
+pub async fn delete_from_date(db: &impl ConnectionTrait, date: &str) -> anyhow::Result<()> {
     portfolio_history::Entity::delete_many()
         .filter(portfolio_history::Column::Date.gte(date))
         .exec(db)
         .await?;
     Ok(())
+}
+
+fn active_model(snapshot: &PortfolioSnapshot) -> portfolio_history::ActiveModel {
+    portfolio_history::ActiveModel {
+        date: Set(snapshot.date.clone()),
+        asset_value: Set(snapshot.asset_value),
+        total_value: Set(snapshot.total_value),
+        outstanding_shares: Set(snapshot.outstanding_shares),
+        nav: Set(snapshot.nav),
+    }
+}
+
+fn native_conflict() -> OnConflict {
+    OnConflict::column(portfolio_history::Column::Date)
+        .update_columns([
+            portfolio_history::Column::AssetValue,
+            portfolio_history::Column::TotalValue,
+            portfolio_history::Column::OutstandingShares,
+            portfolio_history::Column::Nav,
+        ])
+        .to_owned()
 }

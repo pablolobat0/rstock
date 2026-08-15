@@ -1,11 +1,21 @@
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Set,
+    sea_query::OnConflict, ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait,
+    QueryFilter, QueryOrder, Set,
 };
 
 use crate::db::entities::daily_exchange_rate;
 
+const BULK_WRITE_SIZE: usize = 100;
+
+pub struct ExchangeRateWrite {
+    pub from_currency: String,
+    pub to_currency: String,
+    pub date: String,
+    pub rate: f64,
+}
+
 pub async fn find_rate(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     from_currency: &str,
     to_currency: &str,
     date: &str,
@@ -20,7 +30,7 @@ pub async fn find_rate(
 }
 
 pub async fn find_rate_at_or_before(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     from_currency: &str,
     to_currency: &str,
     date: &str,
@@ -36,7 +46,7 @@ pub async fn find_rate_at_or_before(
 }
 
 pub async fn find_rate_and_date_at_or_before(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     from_currency: &str,
     to_currency: &str,
     date: &str,
@@ -52,7 +62,7 @@ pub async fn find_rate_and_date_at_or_before(
 }
 
 pub async fn find_rates_between(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     from_currency: &str,
     to_currency: &str,
     start_date: &str,
@@ -70,7 +80,7 @@ pub async fn find_rates_between(
 }
 
 pub async fn find_latest_date(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     from_currency: &str,
     to_currency: &str,
 ) -> anyhow::Result<Option<String>> {
@@ -84,7 +94,7 @@ pub async fn find_latest_date(
 }
 
 pub async fn find_rate_before(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     from_currency: &str,
     to_currency: &str,
     date: &str,
@@ -100,7 +110,7 @@ pub async fn find_rate_before(
 }
 
 pub async fn exists(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     from_currency: &str,
     to_currency: &str,
     date: &str,
@@ -115,7 +125,7 @@ pub async fn exists(
 }
 
 pub async fn upsert(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     from_currency: &str,
     to_currency: &str,
     date: &str,
@@ -144,4 +154,63 @@ pub async fn upsert(
     }
 
     Ok(())
+}
+
+pub async fn upsert_native(
+    db: &impl ConnectionTrait,
+    from_currency: &str,
+    to_currency: &str,
+    date: &str,
+    rate: f64,
+) -> anyhow::Result<()> {
+    daily_exchange_rate::Entity::insert(active_model(from_currency, to_currency, date, rate))
+        .on_conflict(native_conflict())
+        .exec_without_returning(db)
+        .await?;
+    Ok(())
+}
+
+pub async fn upsert_many_native(
+    db: &impl ConnectionTrait,
+    rates: &[ExchangeRateWrite],
+) -> anyhow::Result<()> {
+    for chunk in rates.chunks(BULK_WRITE_SIZE) {
+        daily_exchange_rate::Entity::insert_many(chunk.iter().map(|rate| {
+            active_model(
+                &rate.from_currency,
+                &rate.to_currency,
+                &rate.date,
+                rate.rate,
+            )
+        }))
+        .on_conflict(native_conflict())
+        .exec_without_returning(db)
+        .await?;
+    }
+    Ok(())
+}
+
+fn active_model(
+    from_currency: &str,
+    to_currency: &str,
+    date: &str,
+    rate: f64,
+) -> daily_exchange_rate::ActiveModel {
+    daily_exchange_rate::ActiveModel {
+        from_currency: Set(from_currency.to_owned()),
+        to_currency: Set(to_currency.to_owned()),
+        date: Set(date.to_owned()),
+        rate: Set(rate),
+        ..Default::default()
+    }
+}
+
+fn native_conflict() -> OnConflict {
+    OnConflict::columns([
+        daily_exchange_rate::Column::FromCurrency,
+        daily_exchange_rate::Column::ToCurrency,
+        daily_exchange_rate::Column::Date,
+    ])
+    .update_column(daily_exchange_rate::Column::Rate)
+    .to_owned()
 }
