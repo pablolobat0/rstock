@@ -52,6 +52,8 @@ pub async fn find_by_asset_id(
 ) -> anyhow::Result<Vec<Transaction>> {
     let results = transaction::Entity::find()
         .filter(transaction::Column::AssetId.eq(asset_id))
+        .order_by_asc(transaction::Column::Date)
+        .order_by_asc(transaction::Column::Id)
         .all(db)
         .await?;
     Ok(results.into_iter().map(Transaction::from).collect())

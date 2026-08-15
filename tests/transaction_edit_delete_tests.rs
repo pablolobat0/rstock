@@ -1,8 +1,9 @@
 mod common;
 
 use rstock::db::repos::transaction_repo;
-use rstock::models::f64_to_cents;
+use rstock::models::{f64_to_cents, BuyOrder, DividendOrder, SellOrder, SplitOrder};
 use rstock::services;
+use sea_orm::ConnectionTrait;
 
 use common::*;
 
@@ -156,4 +157,242 @@ async fn test_service_edit_invalidates_snapshots() {
     // Snapshot should be invalidated
     let snapshots = get_all_snapshots(&db).await;
     assert!(snapshots.is_empty());
+}
+
+#[derive(Clone, Copy, Debug)]
+enum MutationCase {
+    Buy,
+    Sell,
+    Dividend,
+    Split,
+    Edit,
+    Delete,
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn ledger_mutations_roll_back_when_snapshot_invalidation_fails() {
+    for case in [
+        MutationCase::Buy,
+        MutationCase::Sell,
+        MutationCase::Dividend,
+        MutationCase::Split,
+        MutationCase::Edit,
+        MutationCase::Delete,
+    ] {
+        let db = setup_test_db().await;
+        let asset_id = insert_asset(&db, "XFAKE1", "Fake Stock", "stock", "EUR").await;
+        if !matches!(case, MutationCase::Buy) {
+            insert_transaction(&db, asset_id, "2025-01-01", 10.0, 100.0, 0.0).await;
+        }
+        insert_portfolio_snapshot(&db, "2025-01-03", 100.0, 10.0).await;
+        insert_portfolio_asset_snapshot(&db, "2025-01-03", asset_id, 10.0, 100.0, 1000.0, 1.0)
+            .await;
+        if matches!(case, MutationCase::Split) {
+            insert_daily_price(&db, asset_id, "2025-01-01", 100.0, false).await;
+        }
+
+        let before = ledger_fields(
+            transaction_repo::find_by_asset_id(&db, asset_id)
+                .await
+                .unwrap(),
+        );
+        db.execute_unprepared(
+            "CREATE TRIGGER fail_snapshot_invalidation BEFORE DELETE ON portfolio_history \
+             BEGIN SELECT RAISE(ABORT, 'injected invalidation failure'); END",
+        )
+        .await
+        .unwrap();
+
+        let result = match case {
+            MutationCase::Buy => {
+                services::transactions::buy(
+                    &db,
+                    "XFAKE1".to_owned(),
+                    BuyOrder {
+                        date: "2025-01-02".to_owned(),
+                        quantity: 1.0,
+                        price: 110.0,
+                        fees: 1.0,
+                    },
+                )
+                .await
+            }
+            MutationCase::Sell => {
+                services::transactions::sell(
+                    &db,
+                    "XFAKE1".to_owned(),
+                    SellOrder {
+                        date: "2025-01-02".to_owned(),
+                        quantity: 1.0,
+                        price: 110.0,
+                        fees: 1.0,
+                    },
+                )
+                .await
+            }
+            MutationCase::Dividend => {
+                services::transactions::dividend(
+                    &db,
+                    "XFAKE1".to_owned(),
+                    DividendOrder {
+                        date: "2025-01-02".to_owned(),
+                        amount: 5.0,
+                        fees: 1.0,
+                    },
+                )
+                .await
+            }
+            MutationCase::Split => {
+                services::transactions::split(
+                    &db,
+                    "XFAKE1".to_owned(),
+                    SplitOrder {
+                        date: "2025-01-02".to_owned(),
+                        ratio: 2.0,
+                    },
+                )
+                .await
+            }
+            MutationCase::Edit => {
+                services::transactions::edit(&db, 1, None, Some(20.0), None, None).await
+            }
+            MutationCase::Delete => services::transactions::delete(&db, 1).await,
+        };
+
+        assert!(
+            result.is_err(),
+            "{case:?} should surface invalidation failure"
+        );
+        assert_eq!(
+            ledger_fields(
+                transaction_repo::find_by_asset_id(&db, asset_id)
+                    .await
+                    .unwrap()
+            ),
+            before,
+            "{case:?} ledger change should roll back"
+        );
+        assert_eq!(get_all_snapshots(&db).await.len(), 1);
+        assert_eq!(get_asset_snapshots(&db, "2025-01-03").await.len(), 1);
+        if matches!(case, MutationCase::Split) {
+            assert_eq!(
+                rstock::db::repos::daily_price_repo::find_price(&db, asset_id, "2025-01-01")
+                    .await
+                    .unwrap(),
+                Some(100.0_f64),
+                "split price-cache invalidation should roll back"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn split_edit_and_delete_roll_back_when_price_cache_invalidation_fails() {
+    for delete_split in [false, true] {
+        let db = setup_test_db().await;
+        let asset_id = insert_asset(&db, "XFAKE1", "Fake Stock", "stock", "EUR").await;
+        insert_transaction(&db, asset_id, "2025-01-01", 10.0, 100.0, 0.0).await;
+        insert_split_transaction(&db, asset_id, "2025-01-02", 2.0).await;
+        insert_daily_price(&db, asset_id, "2025-01-01", 100.0, false).await;
+        insert_portfolio_snapshot(&db, "2025-01-03", 100.0, 10.0).await;
+        let before = ledger_fields(
+            transaction_repo::find_by_asset_id(&db, asset_id)
+                .await
+                .unwrap(),
+        );
+        db.execute_unprepared(
+            "CREATE TRIGGER fail_price_invalidation BEFORE DELETE ON daily_asset_prices \
+             BEGIN SELECT RAISE(ABORT, 'injected price invalidation failure'); END",
+        )
+        .await
+        .unwrap();
+
+        let result = if delete_split {
+            services::transactions::delete(&db, 2).await
+        } else {
+            services::transactions::edit(&db, 2, None, Some(3.0), None, None).await
+        };
+
+        assert!(result.is_err());
+        assert_eq!(
+            ledger_fields(
+                transaction_repo::find_by_asset_id(&db, asset_id)
+                    .await
+                    .unwrap()
+            ),
+            before
+        );
+        assert_eq!(get_all_snapshots(&db).await.len(), 1);
+        let cached_price =
+            rstock::db::repos::daily_price_repo::find_price(&db, asset_id, "2025-01-01")
+                .await
+                .unwrap()
+                .expect("split price should remain after rollback");
+        assert!((cached_price - 100.0).abs() < f64::EPSILON);
+    }
+}
+
+#[tokio::test]
+async fn mutation_invalidates_complete_snapshots_for_every_asset() {
+    let db = setup_test_db().await;
+    let changed_asset = insert_asset(&db, "XFAKE1", "Fake Stock One", "stock", "EUR").await;
+    let other_asset = insert_asset(&db, "XFAKE2", "Fake Stock Two", "stock", "EUR").await;
+    insert_transaction(&db, changed_asset, "2025-01-01", 10.0, 100.0, 0.0).await;
+    insert_portfolio_snapshot(&db, "2025-01-03", 100.0, 10.0).await;
+    for asset_id in [changed_asset, other_asset] {
+        insert_portfolio_asset_snapshot(&db, "2025-01-03", asset_id, 10.0, 100.0, 1000.0, 1.0)
+            .await;
+    }
+
+    services::transactions::edit(&db, 1, None, Some(20.0), None, None)
+        .await
+        .unwrap();
+
+    assert!(get_all_snapshots(&db).await.is_empty());
+    assert!(get_asset_snapshots(&db, "2025-01-03").await.is_empty());
+}
+
+#[tokio::test]
+async fn same_day_ledger_reads_use_ascending_transaction_id() {
+    let db = setup_test_db().await;
+    let asset_id = insert_asset(&db, "XFAKE1", "Fake Stock", "stock", "EUR").await;
+    insert_transaction(&db, asset_id, "2025-01-02", 1.0, 100.0, 0.0).await;
+    insert_split_transaction(&db, asset_id, "2025-01-02", 2.0).await;
+    insert_transaction(&db, asset_id, "2025-01-02", 3.0, 100.0, 0.0).await;
+
+    let per_asset = transaction_repo::find_by_asset_id(&db, asset_id)
+        .await
+        .unwrap();
+    let all = transaction_repo::find_all_ordered_by_date(&db, None, None)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        per_asset.iter().map(|tx| tx.id).collect::<Vec<_>>(),
+        vec![1, 2, 3]
+    );
+    assert_eq!(
+        all.iter().map(|tx| tx.id).collect::<Vec<_>>(),
+        vec![1, 2, 3]
+    );
+    assert!((rstock::models::Transaction::compute_holdings(&per_asset) - 5.0).abs() < f64::EPSILON);
+}
+
+fn ledger_fields(
+    transactions: Vec<rstock::models::Transaction>,
+) -> Vec<(i32, String, String, f64, i64, i64)> {
+    transactions
+        .into_iter()
+        .map(|tx| {
+            (
+                tx.id,
+                tx.tx_type.to_string(),
+                tx.date,
+                tx.quantity,
+                tx.price_cents,
+                tx.fees_cents,
+            )
+        })
+        .collect()
 }

@@ -79,7 +79,7 @@ All business logic lives here. Key modules:
 
 **`composition.rs`** — Builds portfolio composition analytics with look-through aggregation and top holdings.
 
-**`transactions.rs`** — `buy()` records a purchase and invalidates snapshots from the buy date forward. `sell()` validates holdings (cannot sell more than owned), records the sale, and invalidates snapshots. `dividend()` records a dividend payment. `split()` records a stock split, adjusting quantity via the split ratio.
+**`transactions.rs`** — `buy()`, `sell()`, `dividend()`, `split()`, `edit()`, and `delete()` commit each Transaction ledger change and all dependent snapshot or split-price-cache invalidation in one database transaction. Ledger reads use explicit `(date, id)` chronology.
 
 **`market_data/`** — Stateful market data Module. It exposes use-case-shaped Interfaces for valuation market data, correlation market data, Individual price, stock info, and fund data. Yahoo Finance and Morningstar source Adapters are private implementation details behind `MarketDataSources`.
 
@@ -186,6 +186,8 @@ Current schema includes the original portfolio tables plus watchlist and fund ho
 | price_cents | i64 | Price per unit in cents |
 | fees_cents | i64 | Commission in cents |
 | created_at | String | ISO timestamp |
+
+Chronological ledger access is indexed by `(date, id)`, while per-asset access is indexed by `(asset_id, date, id)`.
 
 ### Price Cache (Migration 2)
 
@@ -342,9 +344,10 @@ main.rs
 ```
 main.rs
   └─> transactions::buy()
-        ├─> asset_repo::find_by_ticker() (asset must already exist)
-        ├─> transaction_repo::insert_buy() (store with cents conversion)
-        └─> portfolio_history_repo::delete_from_date() (invalidate snapshots)
+        └─> Database transaction
+              ├─> asset_repo::find_by_ticker() (asset must already exist)
+              ├─> transaction_repo::insert_buy() (store with cents conversion)
+              └─> Delete all dependent portfolio and per-asset snapshots
 ```
 
 ### `transaction sell`
@@ -352,11 +355,11 @@ main.rs
 ```
 main.rs
   └─> transactions::sell()
-        ├─> asset_repo::find_by_ticker() (must exist)
-        ├─> transaction_repo::find_by_asset_id() (load all txs)
-        ├─> Validate: net holdings >= sell quantity at sell date
-        ├─> transaction_repo::insert_sell() (store with cents conversion)
-        └─> portfolio_history_repo::delete_from_date() (invalidate snapshots)
+        └─> Database transaction
+              ├─> Load the asset and its `(date, id)` ordered ledger
+              ├─> Validate: net holdings >= sell quantity at sell date
+              ├─> transaction_repo::insert_sell() (store with cents conversion)
+              └─> Delete all dependent portfolio and per-asset snapshots
 ```
 
 ### `transaction dividend`
@@ -364,9 +367,10 @@ main.rs
 ```
 main.rs
   └─> transactions::dividend()
-        ├─> asset_repo::find_by_ticker() (must exist)
-        ├─> transaction_repo::insert_dividend()
-        └─> portfolio_history_repo::delete_from_date() (invalidate snapshots)
+        └─> Database transaction
+              ├─> Load the asset and its `(date, id)` ordered ledger
+              ├─> transaction_repo::insert_dividend()
+              └─> Delete all dependent portfolio and per-asset snapshots
 ```
 
 ### `transaction split`
@@ -374,9 +378,11 @@ main.rs
 ```
 main.rs
   └─> transactions::split()
-        ├─> asset_repo::find_by_ticker() (must exist)
-        ├─> transaction_repo::insert_split()
-        └─> portfolio_history_repo::delete_from_date() (invalidate snapshots)
+        └─> Database transaction
+              ├─> Load the asset and its `(date, id)` ordered ledger
+              ├─> transaction_repo::insert_split()
+              ├─> Delete the asset's split-adjusted price cache
+              └─> Delete all dependent portfolio and per-asset snapshots
 ```
 
 ### `transaction export`
