@@ -637,6 +637,14 @@ async fn test_rolling_correlation_for_pair() {
     assert_eq!(result.requested_start_date, "2025-01-01");
     assert_eq!(result.requested_end_date, "2025-04-30");
     assert!(!result.points.is_empty());
+    assert!(result
+        .points
+        .first()
+        .is_some_and(|(date, _)| date.as_str() >= result.requested_start_date.as_str()));
+    assert!(result
+        .points
+        .last()
+        .is_some_and(|(date, _)| date.as_str() <= result.requested_end_date.as_str()));
     assert!(result.latest.is_some());
 }
 
