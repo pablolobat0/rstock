@@ -10,8 +10,8 @@ use crate::db::repos::{
 };
 use crate::models::{
     AllocationEntry, Asset, CandidateCorrelationPeriod, CandidateCorrelationResult,
-    CandidateCorrelationRow, FundAnalysisResult, FundData, FundHolding, FundQuoteMetadata,
-    HoldingChange, HoldingChangeType,
+    CandidateCorrelationRow, CorrelationMarketDataSeries, FundAnalysisResult, FundData,
+    FundHolding, FundQuoteMetadata, HoldingChange, HoldingChangeType,
 };
 use crate::services::fund_metrics::{compute_standard_fund_metrics, format_source_observations};
 use crate::services::market_data::MarketData;
@@ -252,51 +252,42 @@ async fn compute_asset_correlation_rows(
             .collect();
     }
 
-    let mut rows = Vec::with_capacity(assets.len());
-    for asset in assets {
-        rows.push(
-            compute_one_asset_correlation_row(
-                db,
-                market_data,
-                asset,
-                candidate_returns,
-                start_str,
-                end_str,
-                start,
-                end,
-            )
-            .await,
-        );
-    }
-    rows
+    let (series, _) = match market_data
+        .tracked_correlation_market_data(db, assets.clone(), start_str, end_str)
+        .await
+    {
+        Ok(result) => result,
+        Err(error) => {
+            tracing::warn!(error = %error, "failed to load held-asset series for fund candidate correlation");
+            return assets
+                .into_iter()
+                .map(|asset| unavailable_asset_row(asset.name, "asset price history unavailable"))
+                .collect();
+        }
+    };
+
+    assets
+        .into_iter()
+        .map(|asset| {
+            compute_one_asset_correlation_row(&asset, &series, candidate_returns, start, end)
+        })
+        .collect()
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn compute_one_asset_correlation_row(
-    db: &DatabaseConnection,
-    market_data: &MarketData,
-    asset: Asset,
+fn compute_one_asset_correlation_row(
+    asset: &Asset,
+    series: &[CorrelationMarketDataSeries],
     candidate_returns: &HashMap<String, f64>,
-    start_str: &str,
-    end_str: &str,
     start: NaiveDate,
     end: NaiveDate,
 ) -> CandidateCorrelationRow {
     let asset_name = asset.name.clone();
-    let series = match market_data
-        .tracked_correlation_market_data(db, vec![asset], start_str, end_str)
-        .await
-    {
-        Ok((mut series, _limitations)) => series.pop(),
-        Err(error) => {
-            tracing::warn!(asset = asset_name, error = %error, "failed to load held-asset series for fund candidate correlation");
-            return unavailable_asset_row(asset_name, "asset price history unavailable");
-        }
-    };
-
-    let Some(series) = series else {
+    let Some(series) = series.iter().find(|series| series.asset_id == asset.id) else {
         return unavailable_asset_row(asset_name, "asset price history unavailable");
     };
+    if series.prices.is_empty() {
+        return unavailable_asset_row(asset_name, "asset price history unavailable");
+    }
 
     if let Some(reason) = coverage_reason(&series.prices, start, end, &asset_name) {
         return unavailable_asset_row(asset_name, &reason);

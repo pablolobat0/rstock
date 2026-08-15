@@ -121,38 +121,56 @@ pub(crate) async fn get_required_asset_exchange_rates(
     Ok(rates)
 }
 
-pub(crate) async fn get_base_currency_price_series(
+pub(crate) async fn get_base_currency_price_series_for_assets(
     db: &DatabaseConnection,
-    asset: &Asset,
+    assets: &[Asset],
     start_date: &str,
     end_date: &str,
-) -> anyhow::Result<Vec<(String, f64)>> {
-    let prices = daily_price_repo::find_prices_between(db, asset.id, start_date, end_date).await?;
-    if asset.currency == BASE_CURRENCY {
-        return Ok(prices);
-    }
-
-    let rates = exchange_rate_repo::find_rates_between(
+) -> anyhow::Result<HashMap<i32, crate::models::BaseCurrencyPriceSeries>> {
+    let asset_ids: Vec<i32> = assets.iter().map(|asset| asset.id).collect();
+    let mut prices =
+        daily_price_repo::find_prices_between_assets(db, &asset_ids, start_date, end_date).await?;
+    let currencies: Vec<String> = assets
+        .iter()
+        .filter(|asset| asset.currency != BASE_CURRENCY)
+        .map(|asset| asset.currency.clone())
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    let rates = exchange_rate_repo::find_rates_between_currencies(
         db,
-        &asset.currency,
+        &currencies,
         BASE_CURRENCY,
         start_date,
         end_date,
     )
     .await?;
-    let rate_map: HashMap<&str, f64> = rates
-        .iter()
-        .map(|(date, rate)| (date.as_str(), *rate))
-        .collect();
 
-    Ok(prices
-        .iter()
-        .filter_map(|(date, price)| {
-            rate_map
-                .get(date.as_str())
-                .map(|rate| (date.clone(), price * rate))
-        })
-        .collect())
+    let mut series = HashMap::with_capacity(assets.len());
+    for asset in assets {
+        let asset_prices = prices.remove(&asset.id).unwrap_or_default();
+        if asset.currency == BASE_CURRENCY {
+            series.insert(asset.id, asset_prices);
+            continue;
+        }
+
+        let rate_map: HashMap<&str, f64> = rates
+            .get(&asset.currency)
+            .into_iter()
+            .flatten()
+            .map(|(date, rate)| (date.as_str(), *rate))
+            .collect();
+        series.insert(
+            asset.id,
+            asset_prices
+                .into_iter()
+                .filter_map(|(date, price)| {
+                    rate_map.get(date.as_str()).map(|rate| (date, price * rate))
+                })
+                .collect(),
+        );
+    }
+    Ok(series)
 }
 
 async fn get_exchange_rate(

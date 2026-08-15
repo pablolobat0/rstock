@@ -216,12 +216,23 @@ impl MarketData {
             .prepare_valuation_market_data(db, &all_assets, start_date, end_date)
             .await?;
 
-        let mut tracked_asset_series = Vec::with_capacity(tracked_assets.len());
-        for asset in tracked_assets {
-            tracked_asset_series.push(correlation_series(db, &asset, start_date, end_date).await?);
-        }
-
-        let benchmark_series = correlation_series(db, &benchmark, start_date, end_date).await?;
+        let mut all_series = historical::get_base_currency_price_series_for_assets(
+            db,
+            &all_assets,
+            start_date,
+            end_date,
+        )
+        .await?;
+        let tracked_asset_series = tracked_assets
+            .iter()
+            .map(|asset| {
+                correlation_series(asset, all_series.remove(&asset.id).unwrap_or_default())
+            })
+            .collect();
+        let benchmark_series = correlation_series(
+            &benchmark,
+            all_series.remove(&benchmark.id).unwrap_or_default(),
+        );
 
         Ok(CorrelationMarketData {
             requested_start_date: start_date.to_owned(),
@@ -243,13 +254,22 @@ impl MarketData {
         Vec<crate::models::MarketDataLimitation>,
     )> {
         let prepared = self
-            .prepare_valuation_market_data(db, &tracked_assets, start_date, end_date)
+            .prepare_valuation_market_data_if_available(db, &tracked_assets, start_date, end_date)
             .await?;
 
-        let mut tracked_asset_series = Vec::with_capacity(tracked_assets.len());
-        for asset in tracked_assets {
-            tracked_asset_series.push(correlation_series(db, &asset, start_date, end_date).await?);
-        }
+        let mut series_by_asset = historical::get_base_currency_price_series_for_assets(
+            db,
+            &tracked_assets,
+            start_date,
+            end_date,
+        )
+        .await?;
+        let tracked_asset_series = tracked_assets
+            .iter()
+            .map(|asset| {
+                correlation_series(asset, series_by_asset.remove(&asset.id).unwrap_or_default())
+            })
+            .collect();
 
         Ok((tracked_asset_series, prepared.limitations))
     }
@@ -306,20 +326,15 @@ async fn get_or_create_benchmark_asset(db: &DatabaseConnection) -> anyhow::Resul
     Ok(metrics::benchmark_asset(id))
 }
 
-async fn correlation_series(
-    db: &DatabaseConnection,
+fn correlation_series(
     asset: &Asset,
-    start_date: &str,
-    end_date: &str,
-) -> anyhow::Result<CorrelationMarketDataSeries> {
-    let prices: crate::models::BaseCurrencyPriceSeries =
-        historical::get_base_currency_price_series(db, asset, start_date, end_date).await?;
-
-    Ok(CorrelationMarketDataSeries {
+    prices: crate::models::BaseCurrencyPriceSeries,
+) -> CorrelationMarketDataSeries {
+    CorrelationMarketDataSeries {
         asset_id: asset.id,
         name: asset.name.clone(),
         prices,
-    })
+    }
 }
 
 fn normalize_currency(currency: &str) -> anyhow::Result<String> {
