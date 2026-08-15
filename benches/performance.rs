@@ -5,6 +5,8 @@
 //! startup paths use low-work commands with unreachable source settings and
 //! fail if those commands unexpectedly try to fetch market data.
 
+use std::fmt::Write as _;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -20,9 +22,10 @@ use migration::{Migrator, MigratorTrait};
 use rstock::db::entities::{asset, transaction};
 use rstock::db::repos::transaction_repo;
 use rstock::models::{Asset, AssetType};
+use rstock::services::import::import_transactions_csv;
 use rstock::services::market_data::{MarketData, MarketDataSources, SourceObservation};
 use rstock::services::{analytics, nav, portfolio};
-use sea_orm::{ActiveModelTrait, Database, DatabaseConnection, Set};
+use sea_orm::{ActiveModelTrait, Database, DatabaseConnection, EntityTrait, Set};
 use tempfile::TempDir;
 
 const START: &str = "2015-01-01";
@@ -176,6 +179,12 @@ struct Fixture {
     end: String,
 }
 
+struct ImportFixture {
+    db: DatabaseConnection,
+    csv_path: PathBuf,
+    _tempdir: TempDir,
+}
+
 async fn build_fixture(asset_count: usize, years: usize, transaction_count: usize) -> Fixture {
     build_fixture_with_delay(asset_count, years, transaction_count, 0).await
 }
@@ -288,6 +297,58 @@ async fn build_fixture_with_counters(
     }
 }
 
+async fn build_import_fixture() -> ImportFixture {
+    const HEADER: &str = "Date,Ticker,Name,AssetType,Currency,MorningstarCode,AssetClass,EquityStyle,BondCredit,BondDuration,Management,Type,Quantity,Price,Fees\n";
+    let tempdir = tempfile::tempdir().expect("temporary import benchmark directory");
+    let csv_path = tempdir.path().join("transactions.csv");
+    let mut csv = String::from(HEADER);
+    for index in 0..5_000 {
+        let asset_index = index % 50;
+        let date = NaiveDate::from_ymd_opt(2015, 1, 1)
+            .unwrap()
+            .checked_add_signed(Duration::days(i64::from(index) % 3_650))
+            .unwrap();
+        let metadata = if index < 50 {
+            format!("Synthetic asset {asset_index},stock,EUR,,equity,blend,,,passive")
+        } else {
+            ",,,,,,,,".to_owned()
+        };
+        let ticker = format!("XIMPORT{asset_index:03}");
+        writeln!(
+            &mut csv,
+            "{date},{ticker},{metadata},buy,1,100.00,0.00",
+            date = date.format("%d-%m-%Y"),
+            ticker = ticker,
+            metadata = metadata,
+        )
+        .expect("import benchmark CSV is writable");
+    }
+    fs::write(&csv_path, csv).expect("import benchmark CSV");
+
+    let db = Database::connect("sqlite::memory:")
+        .await
+        .expect("import benchmark database");
+    Migrator::up(&db, None)
+        .await
+        .expect("import benchmark migrations");
+    ImportFixture {
+        db,
+        csv_path,
+        _tempdir: tempdir,
+    }
+}
+
+async fn clear_import_fixture(db: &DatabaseConnection) {
+    transaction::Entity::delete_many()
+        .exec(db)
+        .await
+        .expect("clear import transactions");
+    asset::Entity::delete_many()
+        .exec(db)
+        .await
+        .expect("clear import assets");
+}
+
 async fn run_delayed_candidate(limit: usize) -> (std::time::Duration, usize, usize) {
     let shared_counters = Arc::new(Counters::default());
     let mut fixtures = Vec::new();
@@ -333,6 +394,7 @@ fn benchmark_performance(c: &mut Criterion) {
     let fixture = runtime.block_on(build_fixture(5, 1, 100));
     let representative = runtime.block_on(build_fixture(50, 10, 5_000));
     let stress = runtime.block_on(build_fixture(100, 20, 20_000));
+    let import_fixture = runtime.block_on(build_import_fixture());
     assert_eq!(FIXTURE_MATRIX.len(), 3);
     let mut group = c.benchmark_group("performance-baseline");
     group.bench_function("transaction_listing", |b| {
@@ -354,6 +416,23 @@ fn benchmark_performance(c: &mut Criterion) {
             transaction_repo::find_all_ordered_by_date(&stress.db, None, None)
                 .await
                 .unwrap()
+        });
+    });
+    group.bench_function("transaction_import_representative", |b| {
+        b.iter_custom(|iterations| {
+            let mut elapsed = std::time::Duration::ZERO;
+            for _ in 0..iterations {
+                runtime.block_on(clear_import_fixture(&import_fixture.db));
+                let started = Instant::now();
+                runtime
+                    .block_on(import_transactions_csv(
+                        &import_fixture.db,
+                        import_fixture.csv_path.to_str().unwrap(),
+                    ))
+                    .expect("representative import");
+                elapsed += started.elapsed();
+            }
+            elapsed
         });
     });
     group.bench_function("market_data_preparation_representative", |b| {
