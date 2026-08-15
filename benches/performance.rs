@@ -395,10 +395,13 @@ fn benchmark_performance(c: &mut Criterion) {
                 END,
             ))
             .unwrap();
-        println!(
-            "warm preparation source_calls={}",
-            fixture.counters.source_calls.load(Ordering::Relaxed) - calls_before_warm
+        let warm_source_calls =
+            fixture.counters.source_calls.load(Ordering::Relaxed) - calls_before_warm;
+        assert_eq!(
+            warm_source_calls, 0,
+            "fully warm preparation must not call a historical source"
         );
+        println!("warm preparation source_calls={warm_source_calls}");
         b.to_async(&runtime).iter(|| async {
             fixture
                 .market_data
