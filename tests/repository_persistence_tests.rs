@@ -151,6 +151,33 @@ async fn complete_nav_snapshot_writes_share_one_transaction_boundary() {
 }
 
 #[tokio::test]
+async fn caller_transaction_rolls_back_completed_bulk_chunks_after_a_late_failure() {
+    let db = setup_test_db().await;
+    let asset_id = insert_asset(&db, "XFAKE1", "Fake Stock", "stock", "EUR").await;
+    let transaction = db.begin().await.unwrap();
+    let mut writes = (0..100)
+        .map(|_| transaction_repo::TransactionWrite::Buy {
+            asset_id,
+            order: buy_order("2025-01-02", 1.0, 10.015, 0.005),
+        })
+        .collect::<Vec<_>>();
+    writes.push(transaction_repo::TransactionWrite::Buy {
+        asset_id: i32::MAX,
+        order: buy_order("2025-02-01", 1.0, 10.015, 0.005),
+    });
+
+    assert!(transaction_repo::insert_many(&transaction, &writes)
+        .await
+        .is_err());
+    transaction.rollback().await.unwrap();
+
+    assert!(transaction_repo::find_all_ordered_by_date(&db, None, None)
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
 async fn native_conflicts_preserve_identifiers_and_update_existing_values() {
     let db = setup_test_db().await;
     let info = AssetInfo {
