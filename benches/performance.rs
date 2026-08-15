@@ -358,6 +358,21 @@ fn benchmark_performance(c: &mut Criterion) {
             .unwrap()
         });
     });
+    group.bench_function("rolling_correlation_stress", |b| {
+        b.to_async(&runtime).iter(|| async {
+            analytics::compute_rolling_correlation_data(
+                &stress.db,
+                START,
+                &stress.end,
+                "XPERF001",
+                "XPERF002",
+                "1y",
+                &stress.market_data,
+            )
+            .await
+            .unwrap()
+        });
+    });
     group.bench_function("historical_market_data_preparation_cold", |b| {
         b.iter_custom(|iterations| {
             let mut elapsed = std::time::Duration::ZERO;

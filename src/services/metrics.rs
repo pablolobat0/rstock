@@ -249,25 +249,88 @@ pub fn align_return_series_with_dates_unfiltered(
 }
 
 pub fn compute_rolling_correlation(aligned_returns: &[(String, f64, f64)]) -> Vec<(String, f64)> {
-    if aligned_returns.len() < ROLLING_CORRELATION_WINDOW_DAYS.max(MIN_DATA_POINTS) {
+    let window_size = ROLLING_CORRELATION_WINDOW_DAYS.max(MIN_DATA_POINTS);
+    if aligned_returns.len() < window_size {
         return Vec::new();
     }
 
-    let mut result = Vec::new();
+    let mut result = Vec::with_capacity(aligned_returns.len() - window_size + 1);
+    let mut accumulator = RollingCorrelationAccumulator::default();
 
-    for window in aligned_returns.windows(ROLLING_CORRELATION_WINDOW_DAYS) {
-        let left: Vec<f64> = window.iter().map(|(_, ret_a, _)| *ret_a).collect();
-        let right: Vec<f64> = window.iter().map(|(_, _, ret_b)| *ret_b).collect();
-        let correlation = pearson_correlation(&left, &right);
-        let end_date = window
-            .last()
-            .expect("rolling window always has at least one item")
-            .0
-            .clone();
-        result.push((end_date, correlation));
+    for (index, (date, left, right)) in aligned_returns.iter().enumerate() {
+        accumulator.add(*left, *right);
+
+        if index >= window_size {
+            let (_, oldest_left, oldest_right) = aligned_returns[index - window_size];
+            accumulator.remove(oldest_left, oldest_right);
+        }
+
+        if index + 1 >= window_size {
+            result.push((date.clone(), accumulator.correlation()));
+        }
     }
 
     result
+}
+
+#[derive(Default)]
+struct RollingCorrelationAccumulator {
+    count: usize,
+    mean_left: f64,
+    mean_right: f64,
+    sum_squared_deviations_left: f64,
+    sum_squared_deviations_right: f64,
+    sum_product_deviations: f64,
+}
+
+impl RollingCorrelationAccumulator {
+    fn add(&mut self, left: f64, right: f64) {
+        let new_count = self.count + 1;
+        let new_count_f64 = new_count as f64;
+        let left_delta = left - self.mean_left;
+        let right_delta = right - self.mean_right;
+
+        self.mean_left += left_delta / new_count_f64;
+        self.mean_right += right_delta / new_count_f64;
+        self.sum_squared_deviations_left += left_delta * (left - self.mean_left);
+        self.sum_squared_deviations_right += right_delta * (right - self.mean_right);
+        self.sum_product_deviations += left_delta * (right - self.mean_right);
+        self.count = new_count;
+    }
+
+    fn remove(&mut self, left: f64, right: f64) {
+        if self.count == 1 {
+            *self = Self::default();
+            return;
+        }
+
+        let count = self.count as f64;
+        let new_count = self.count - 1;
+        let new_count_f64 = new_count as f64;
+        let old_mean_left = self.mean_left;
+        let old_mean_right = self.mean_right;
+        let new_mean_left = (count * old_mean_left - left) / new_count_f64;
+        let new_mean_right = (count * old_mean_right - right) / new_count_f64;
+
+        self.sum_squared_deviations_left -= (left - old_mean_left) * (left - new_mean_left);
+        self.sum_squared_deviations_right -= (right - old_mean_right) * (right - new_mean_right);
+        self.sum_product_deviations -= (left - old_mean_left) * (right - new_mean_right);
+        self.mean_left = new_mean_left;
+        self.mean_right = new_mean_right;
+        self.count = new_count;
+    }
+
+    fn correlation(&self) -> f64 {
+        let left_variance = self.sum_squared_deviations_left.max(0.0);
+        let right_variance = self.sum_squared_deviations_right.max(0.0);
+        let denominator = (left_variance * right_variance).sqrt();
+
+        if denominator > 0.0 {
+            (self.sum_product_deviations / denominator).clamp(-1.0, 1.0)
+        } else {
+            0.0
+        }
+    }
 }
 
 pub fn summarize_rolling_correlation(
