@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use anyhow::{bail, Context};
 use chrono::NaiveDate;
@@ -221,13 +221,14 @@ async fn prepare_historical_market_data_inner(
 ) -> anyhow::Result<ValuationMarketDataAvailability> {
     let requested_end =
         policy::parse_market_data_date(end_date, "historical market data end date")?;
+    let cache_end = format_date(requested_end.min(market_data.today() - chrono::Duration::days(1)));
     let currencies = infer_required_currencies(assets);
     let latest_asset_dates =
-        fill_nav_asset_prices(db, assets, start_date, end_date, market_data).await?;
+        fill_nav_asset_prices(db, assets, start_date, &cache_end, market_data).await?;
     let latest_rate_dates = if currencies.is_empty() {
         HashMap::new()
     } else {
-        fill_nav_exchange_rates(db, &currencies, start_date, end_date, market_data).await?
+        fill_nav_exchange_rates(db, &currencies, start_date, &cache_end, market_data).await?
     };
 
     let mut latest_required_dates = Vec::with_capacity(assets.len() + currencies.len() + 1);
@@ -358,17 +359,10 @@ async fn fill_nav_asset_prices(
             }
             Ok(None) => {
                 tracing::warn!(ticker = %asset.ticker, "no new price data from API, falling back to latest cached date");
-                if let Some(cached) = daily_price_repo::find_latest_date(db, asset.id).await? {
-                    latest_dates.insert(asset.id, LatestMarketDataDate { date: cached });
-                } else {
-                    tracing::warn!(ticker = %asset.ticker, "no cached price data available at all");
-                }
+                tracing::warn!(ticker = %asset.ticker, "no cached price data available at all");
             }
             Err(e) => {
                 tracing::warn!(ticker = %asset.ticker, error = %e, "failed to fill prices, falling back to latest cached date");
-                if let Some(cached) = daily_price_repo::find_latest_date(db, asset.id).await? {
-                    latest_dates.insert(asset.id, LatestMarketDataDate { date: cached });
-                }
             }
         }
     }
@@ -384,65 +378,58 @@ async fn fill_historical_asset_prices(
     end_date: &str,
     market_data: &MarketData,
 ) -> anyhow::Result<Option<String>> {
-    let source_start_date = historical_source_start_date(asset, start_date)?;
-    let source_start =
-        policy::parse_market_data_date(&source_start_date, "historical asset source start date")?;
-    let source_end = policy::parse_market_data_date(end_date, "historical asset source end date")?;
-    let prices = fetch_asset_price_history(
-        market_data,
-        asset,
-        lookup_identifier,
-        source_start,
-        source_end,
-    )
-    .await;
-
+    let start = policy::parse_market_data_date(start_date, "historical asset price start date")?;
     let requested_end =
         policy::parse_market_data_date(end_date, "historical asset price end date")?;
     let latest_completed_date = market_data.today() - chrono::Duration::days(1);
-
-    let price_map: HashMap<String, f64> = match prices {
-        Ok(prices) => prices
-            .into_iter()
-            .filter(|observation| {
-                observation.date <= requested_end && observation.date <= latest_completed_date
-            })
-            .map(|observation| (format_date(observation.date), observation.value))
-            .collect(),
-        Err(e) => {
-            tracing::warn!(ticker = %asset.ticker, error = %format!("{e:#}"), "failed to fetch historical prices");
-            return Ok(None);
-        }
-    };
-
-    let last_api_date = match price_map.keys().max() {
-        Some(date) => date.clone(),
-        None => return Ok(None),
-    };
-
-    let start = policy::parse_market_data_date(start_date, "historical asset price start date")?;
-    let fill_end =
-        policy::parse_market_data_date(&last_api_date, "last historical asset price API date")?;
-    let mut last_known_price =
-        daily_price_repo::find_price_before(db, asset.id, start_date).await?;
-
-    let mut current = start;
-    while current <= fill_end {
-        let date_str = format_date(current);
-
-        if let Some(&api_price) = price_map.get(&date_str) {
-            daily_price_repo::upsert(db, asset.id, &date_str, api_price, false).await?;
-            last_known_price = Some(api_price);
-        } else if let Some(fill_price) = last_known_price {
-            if !daily_price_repo::exists(db, asset.id, &date_str).await? {
-                daily_price_repo::upsert(db, asset.id, &date_str, fill_price, false).await?;
+    let cached =
+        daily_price_repo::find_coverage_with_seed(db, asset.id, start_date, end_date).await?;
+    let mut known: BTreeMap<NaiveDate, f64> = cached
+        .iter()
+        .map(|(date, value)| {
+            Ok((
+                policy::parse_market_data_date(date, "cached historical asset price date")?,
+                *value,
+            ))
+        })
+        .collect::<anyhow::Result<_>>()?;
+    let cached_dates = known.keys().copied().collect::<HashSet<_>>();
+    let intervals = missing_intervals(start, requested_end, &cached_dates);
+    let mut writes = Vec::new();
+    for interval in intervals {
+        let source_start = historical_source_start_date(asset, interval.start)?;
+        let observations = match fetch_asset_price_history(
+            market_data,
+            asset,
+            lookup_identifier,
+            source_start,
+            interval.end,
+        )
+        .await
+        {
+            Ok(observations) => observations,
+            Err(error) => {
+                tracing::warn!(ticker = %asset.ticker, error = %format!("{error:#}"), "failed to fetch historical prices");
+                continue;
             }
-        }
-
-        current += chrono::Duration::days(1);
+        };
+        append_asset_interval_writes(
+            asset.id,
+            interval,
+            observations,
+            latest_completed_date,
+            &mut known,
+            &mut writes,
+        );
+    }
+    if !writes.is_empty() {
+        daily_price_repo::insert_many_immutable(db, &writes).await?;
     }
 
-    Ok(Some(last_api_date))
+    Ok(known
+        .range(..=requested_end)
+        .next_back()
+        .map(|(date, _)| format_date(*date)))
 }
 
 fn lookup_identifier(asset: &Asset) -> anyhow::Result<&str> {
@@ -457,15 +444,13 @@ fn lookup_identifier(asset: &Asset) -> anyhow::Result<&str> {
     }
 }
 
-fn historical_source_start_date(asset: &Asset, start_date: &str) -> anyhow::Result<String> {
+fn historical_source_start_date(asset: &Asset, start_date: NaiveDate) -> anyhow::Result<NaiveDate> {
     if matches!(asset.asset_type, AssetType::Fund | AssetType::Etf) {
-        let start =
-            policy::parse_market_data_date(start_date, "historical asset source start date")?;
-        return Ok(format_date(
-            start - chrono::Duration::days(FUND_API_PADDING_DAYS),
-        ));
+        return start_date
+            .checked_sub_signed(chrono::Duration::days(FUND_API_PADDING_DAYS))
+            .context("historical asset source start date underflow");
     }
-    Ok(start_date.to_owned())
+    Ok(start_date)
 }
 
 async fn fill_nav_exchange_rates(
@@ -497,21 +482,10 @@ async fn fill_nav_exchange_rates(
             }
             Ok(None) => {
                 tracing::warn!(%currency, to_currency = BASE_CURRENCY, "no new exchange rate data from API, falling back to latest cached date");
-                if let Some(cached) =
-                    exchange_rate_repo::find_latest_date(db, currency, BASE_CURRENCY).await?
-                {
-                    latest_dates.insert(currency.clone(), LatestMarketDataDate { date: cached });
-                } else {
-                    tracing::warn!(%currency, to_currency = BASE_CURRENCY, "no cached exchange rate data available at all");
-                }
+                tracing::warn!(%currency, to_currency = BASE_CURRENCY, "no cached exchange rate data available at all");
             }
             Err(e) => {
                 tracing::warn!(%currency, to_currency = BASE_CURRENCY, error = %e, "failed to fill exchange rates, falling back to latest cached date");
-                if let Some(cached) =
-                    exchange_rate_repo::find_latest_date(db, currency, BASE_CURRENCY).await?
-                {
-                    latest_dates.insert(currency.clone(), LatestMarketDataDate { date: cached });
-                }
             }
         }
     }
@@ -526,59 +500,184 @@ async fn fill_historical_exchange_rates(
     end_date: &str,
     market_data: &MarketData,
 ) -> anyhow::Result<Option<String>> {
-    let source_start =
-        policy::parse_market_data_date(start_date, "historical FX source start date")?;
-    let source_end = policy::parse_market_data_date(end_date, "historical FX source end date")?;
-    let rates = market_data
-        .exchange_rate_history(from_currency, BASE_CURRENCY, source_start, source_end)
-        .await;
-
+    let start = policy::parse_market_data_date(start_date, "historical FX start date")?;
     let requested_end = policy::parse_market_data_date(end_date, "historical FX end date")?;
     let latest_completed_date = market_data.today() - chrono::Duration::days(1);
-
-    let rate_map: HashMap<String, f64> = match rates {
-        Ok(rates) => rates
-            .into_iter()
-            .filter(|observation| {
-                observation.date <= requested_end && observation.date <= latest_completed_date
-            })
-            .map(|observation| (format_date(observation.date), observation.value))
-            .collect(),
-        Err(e) => {
-            tracing::warn!(%from_currency, to_currency = BASE_CURRENCY, error = %e, "failed to fetch exchange rates");
-            return Ok(None);
-        }
-    };
-
-    let last_api_date = match rate_map.keys().max() {
-        Some(date) => date.clone(),
-        None => return Ok(None),
-    };
-
-    let start = policy::parse_market_data_date(start_date, "historical FX start date")?;
-    let fill_end = policy::parse_market_data_date(&last_api_date, "last historical FX API date")?;
-    let mut last_known_rate =
-        exchange_rate_repo::find_rate_before(db, from_currency, BASE_CURRENCY, start_date).await?;
-
-    let mut current = start;
-    while current <= fill_end {
-        let date_str = format_date(current);
-
-        if let Some(&api_rate) = rate_map.get(&date_str) {
-            exchange_rate_repo::upsert(db, from_currency, BASE_CURRENCY, &date_str, api_rate)
-                .await?;
-            last_known_rate = Some(api_rate);
-        } else if let Some(fill_rate) = last_known_rate {
-            if !exchange_rate_repo::exists(db, from_currency, BASE_CURRENCY, &date_str).await? {
-                exchange_rate_repo::upsert(db, from_currency, BASE_CURRENCY, &date_str, fill_rate)
-                    .await?;
+    let cached = exchange_rate_repo::find_coverage_with_seed(
+        db,
+        from_currency,
+        BASE_CURRENCY,
+        start_date,
+        end_date,
+    )
+    .await?;
+    let mut known: BTreeMap<NaiveDate, f64> = cached
+        .iter()
+        .map(|(date, value)| {
+            Ok((
+                policy::parse_market_data_date(date, "cached historical FX date")?,
+                *value,
+            ))
+        })
+        .collect::<anyhow::Result<_>>()?;
+    let cached_dates = known.keys().copied().collect::<HashSet<_>>();
+    let intervals = missing_intervals(start, requested_end, &cached_dates);
+    let mut writes = Vec::new();
+    for interval in intervals {
+        let observations = match market_data
+            .exchange_rate_history(from_currency, BASE_CURRENCY, interval.start, interval.end)
+            .await
+        {
+            Ok(observations) => observations,
+            Err(error) => {
+                tracing::warn!(%from_currency, to_currency = BASE_CURRENCY, error = %error, "failed to fetch exchange rates");
+                continue;
             }
-        }
-
-        current += chrono::Duration::days(1);
+        };
+        append_fx_interval_writes(
+            from_currency,
+            interval,
+            observations,
+            latest_completed_date,
+            &mut known,
+            &mut writes,
+        );
+    }
+    if !writes.is_empty() {
+        exchange_rate_repo::insert_many_immutable(db, &writes).await?;
     }
 
-    Ok(Some(last_api_date))
+    Ok(known
+        .range(..=requested_end)
+        .next_back()
+        .map(|(date, _)| format_date(*date)))
+}
+
+#[derive(Clone, Copy)]
+struct DateInterval {
+    start: NaiveDate,
+    end: NaiveDate,
+}
+
+fn missing_intervals(
+    start: NaiveDate,
+    end: NaiveDate,
+    cached_dates: &HashSet<NaiveDate>,
+) -> Vec<DateInterval> {
+    let mut intervals = Vec::new();
+    let mut missing_start = None;
+    let mut current = start;
+    while current <= end {
+        if cached_dates.contains(&current) {
+            if let Some(interval_start) = missing_start.take() {
+                intervals.push(DateInterval {
+                    start: interval_start,
+                    end: current - chrono::Duration::days(1),
+                });
+            }
+        } else if missing_start.is_none() {
+            missing_start = Some(current);
+        }
+        current += chrono::Duration::days(1);
+    }
+    if let Some(interval_start) = missing_start {
+        intervals.push(DateInterval {
+            start: interval_start,
+            end,
+        });
+    }
+    intervals
+}
+
+fn append_asset_interval_writes(
+    asset_id: i32,
+    interval: DateInterval,
+    observations: Vec<SourceObservation>,
+    latest_completed_date: NaiveDate,
+    known: &mut BTreeMap<NaiveDate, f64>,
+    writes: &mut Vec<daily_price_repo::DailyPriceWrite>,
+) {
+    writes.extend(
+        forward_filled_interval(interval, observations, latest_completed_date, known)
+            .into_iter()
+            .map(|(date, value)| daily_price_repo::DailyPriceWrite {
+                asset_id,
+                date: format_date(date),
+                price: value,
+                is_api_failure: false,
+            }),
+    );
+}
+
+fn append_fx_interval_writes(
+    from_currency: &str,
+    interval: DateInterval,
+    observations: Vec<SourceObservation>,
+    latest_completed_date: NaiveDate,
+    known: &mut BTreeMap<NaiveDate, f64>,
+    writes: &mut Vec<exchange_rate_repo::ExchangeRateWrite>,
+) {
+    writes.extend(
+        forward_filled_interval(interval, observations, latest_completed_date, known)
+            .into_iter()
+            .map(|(date, value)| exchange_rate_repo::ExchangeRateWrite {
+                from_currency: from_currency.to_owned(),
+                to_currency: BASE_CURRENCY.to_owned(),
+                date: format_date(date),
+                rate: value,
+            }),
+    );
+}
+
+fn forward_filled_interval(
+    interval: DateInterval,
+    observations: Vec<SourceObservation>,
+    latest_completed_date: NaiveDate,
+    known: &mut BTreeMap<NaiveDate, f64>,
+) -> Vec<(NaiveDate, f64)> {
+    let source_values = interval_source_values(interval, observations, latest_completed_date);
+    let has_later_cached_value = known
+        .range((interval.end + chrono::Duration::days(1))..)
+        .next()
+        .is_some();
+    let fill_end = if has_later_cached_value {
+        interval.end
+    } else if let Some(source_end) = source_values.keys().next_back().copied() {
+        source_end
+    } else {
+        return Vec::new();
+    };
+    let mut last_known = known
+        .range(..interval.start)
+        .next_back()
+        .map(|(_, value)| *value);
+    let mut filled = Vec::new();
+    let mut current = interval.start;
+    while current <= fill_end {
+        if let Some(value) = source_values.get(&current).copied().or(last_known) {
+            filled.push((current, value));
+            known.insert(current, value);
+            last_known = Some(value);
+        }
+        current += chrono::Duration::days(1);
+    }
+    filled
+}
+
+fn interval_source_values(
+    interval: DateInterval,
+    observations: Vec<SourceObservation>,
+    latest_completed_date: NaiveDate,
+) -> BTreeMap<NaiveDate, f64> {
+    observations
+        .into_iter()
+        .filter(|observation| {
+            observation.date >= interval.start
+                && observation.date <= interval.end
+                && observation.date <= latest_completed_date
+        })
+        .map(|observation| (observation.date, observation.value))
+        .collect()
 }
 
 async fn fetch_asset_price_history(

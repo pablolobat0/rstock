@@ -1,6 +1,7 @@
 use sea_orm::{
-    sea_query::OnConflict, ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait,
-    QueryFilter, QueryOrder, Set,
+    sea_query::{Expr, OnConflict},
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, FromQueryResult, QueryFilter,
+    QueryOrder, Set, Statement,
 };
 
 use crate::db::entities::daily_asset_price;
@@ -12,6 +13,12 @@ pub struct DailyPriceWrite {
     pub date: String,
     pub price: f64,
     pub is_api_failure: bool,
+}
+
+#[derive(FromQueryResult)]
+struct DatedPrice {
+    date: String,
+    value: f64,
 }
 
 pub async fn find_price(
@@ -106,6 +113,42 @@ pub async fn find_prices_between(
         .collect())
 }
 
+pub async fn find_coverage_with_seed(
+    db: &impl ConnectionTrait,
+    asset_id: i32,
+    start_date: &str,
+    end_date: &str,
+) -> anyhow::Result<Vec<(String, f64)>> {
+    let rows = DatedPrice::find_by_statement(Statement::from_sql_and_values(
+        db.get_database_backend(),
+        r"
+            SELECT date, closing_price AS value
+            FROM daily_asset_prices
+            WHERE asset_id = ? AND is_api_failure = FALSE AND date >= ? AND date <= ?
+            UNION ALL
+            SELECT date, closing_price AS value
+            FROM daily_asset_prices
+            WHERE asset_id = ? AND is_api_failure = FALSE AND date = (
+                SELECT MAX(date)
+                FROM daily_asset_prices
+                WHERE asset_id = ? AND is_api_failure = FALSE AND date < ?
+            )
+            ORDER BY date
+        ",
+        [
+            asset_id.into(),
+            start_date.into(),
+            end_date.into(),
+            asset_id.into(),
+            asset_id.into(),
+            start_date.into(),
+        ],
+    ))
+    .all(db)
+    .await?;
+    Ok(rows.into_iter().map(|row| (row.date, row.value)).collect())
+}
+
 pub async fn exists(db: &impl ConnectionTrait, asset_id: i32, date: &str) -> anyhow::Result<bool> {
     let result = daily_asset_price::Entity::find()
         .filter(daily_asset_price::Column::AssetId.eq(asset_id))
@@ -181,6 +224,26 @@ pub async fn upsert_many_native(
     Ok(())
 }
 
+pub async fn insert_many_immutable(
+    db: &impl ConnectionTrait,
+    prices: &[DailyPriceWrite],
+) -> anyhow::Result<()> {
+    for chunk in prices.chunks(BULK_WRITE_SIZE) {
+        daily_asset_price::Entity::insert_many(chunk.iter().map(|price| {
+            active_model(
+                price.asset_id,
+                &price.date,
+                price.price,
+                price.is_api_failure,
+            )
+        }))
+        .on_conflict(immutable_conflict())
+        .exec_without_returning(db)
+        .await?;
+    }
+    Ok(())
+}
+
 pub async fn delete_all_for_asset(db: &impl ConnectionTrait, asset_id: i32) -> anyhow::Result<()> {
     daily_asset_price::Entity::delete_many()
         .filter(daily_asset_price::Column::AssetId.eq(asset_id))
@@ -213,5 +276,18 @@ fn native_conflict() -> OnConflict {
         daily_asset_price::Column::ClosingPrice,
         daily_asset_price::Column::IsApiFailure,
     ])
+    .to_owned()
+}
+
+fn immutable_conflict() -> OnConflict {
+    OnConflict::columns([
+        daily_asset_price::Column::AssetId,
+        daily_asset_price::Column::Date,
+    ])
+    .update_columns([
+        daily_asset_price::Column::ClosingPrice,
+        daily_asset_price::Column::IsApiFailure,
+    ])
+    .action_and_where(Expr::col(daily_asset_price::Column::IsApiFailure).eq(true))
     .to_owned()
 }

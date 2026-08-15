@@ -3,8 +3,12 @@ mod individual_price;
 mod policy;
 pub mod sources;
 
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
 use anyhow::bail;
 use chrono::NaiveDate;
+use futures::future::{BoxFuture, FutureExt, Shared};
 use sea_orm::DatabaseConnection;
 
 use crate::db::repos::asset_repo;
@@ -18,8 +22,19 @@ use crate::services::metrics;
 
 pub use sources::{DefaultMarketDataSources, MarketDataSources, SourceObservation};
 
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+enum HistoricalRequest {
+    Stock(String, NaiveDate, NaiveDate),
+    Fund(String, NaiveDate, NaiveDate),
+    Fx(String, String, NaiveDate, NaiveDate),
+}
+
+type HistoricalRequestResult = Result<Arc<Vec<SourceObservation>>, Arc<String>>;
+type HistoricalRequestFuture = Shared<BoxFuture<'static, HistoricalRequestResult>>;
+
 pub struct MarketData {
-    sources: Box<dyn MarketDataSources>,
+    sources: Arc<dyn MarketDataSources>,
+    historical_requests: Mutex<HashMap<HistoricalRequest, HistoricalRequestFuture>>,
     today: NaiveDate,
 }
 
@@ -30,7 +45,8 @@ impl MarketData {
 
     pub fn new_with_clock(sources: Box<dyn MarketDataSources>, clock: &dyn Clock) -> Self {
         Self {
-            sources,
+            sources: sources.into(),
+            historical_requests: Mutex::new(HashMap::new()),
             // Capture the date once per command's MarketData instance. A command that crosses
             // midnight must not combine different definitions of today across portfolio, NAV,
             // and individual-price work.
@@ -48,7 +64,8 @@ impl MarketData {
         start: NaiveDate,
         end: NaiveDate,
     ) -> anyhow::Result<Vec<SourceObservation>> {
-        self.sources.stock_price_history(ticker, start, end).await
+        self.request_historical_data(HistoricalRequest::Stock(ticker.to_owned(), start, end))
+            .await
     }
 
     pub(crate) async fn fund_price_history(
@@ -57,7 +74,8 @@ impl MarketData {
         start: NaiveDate,
         end: NaiveDate,
     ) -> anyhow::Result<Vec<SourceObservation>> {
-        self.sources.fund_price_history(code, start, end).await
+        self.request_historical_data(HistoricalRequest::Fund(code.to_owned(), start, end))
+            .await
     }
 
     pub async fn exchange_rate_history(
@@ -77,8 +95,7 @@ impl MarketData {
             }]);
         }
 
-        self.sources
-            .exchange_rate_history(&from, &to, start, end)
+        self.request_historical_data(HistoricalRequest::Fx(from, to, start, end))
             .await
     }
 
@@ -235,6 +252,47 @@ impl MarketData {
         }
 
         Ok((tracked_asset_series, prepared.limitations))
+    }
+
+    async fn request_historical_data(
+        &self,
+        request: HistoricalRequest,
+    ) -> anyhow::Result<Vec<SourceObservation>> {
+        let future = {
+            let mut requests = self
+                .historical_requests
+                .lock()
+                .map_err(|_| anyhow::anyhow!("historical request cache mutex poisoned"))?;
+            requests
+                .entry(request.clone())
+                .or_insert_with(|| {
+                    let sources = Arc::clone(&self.sources);
+                    async move {
+                        let result = match request {
+                            HistoricalRequest::Stock(ticker, start, end) => {
+                                sources.stock_price_history(&ticker, start, end).await
+                            }
+                            HistoricalRequest::Fund(code, start, end) => {
+                                sources.fund_price_history(&code, start, end).await
+                            }
+                            HistoricalRequest::Fx(from, to, start, end) => {
+                                sources.exchange_rate_history(&from, &to, start, end).await
+                            }
+                        };
+                        result
+                            .map(Arc::new)
+                            .map_err(|error| Arc::new(format!("{error:#}")))
+                    }
+                    .boxed()
+                    .shared()
+                })
+                .clone()
+        };
+
+        future
+            .await
+            .map(|observations| observations.as_ref().clone())
+            .map_err(|error| anyhow::anyhow!(error.as_str().to_owned()))
     }
 }
 

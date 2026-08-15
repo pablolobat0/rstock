@@ -1,6 +1,6 @@
 use sea_orm::{
     sea_query::OnConflict, ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait,
-    QueryFilter, QueryOrder, Set,
+    FromQueryResult, QueryFilter, QueryOrder, Set, Statement,
 };
 
 use crate::db::entities::daily_exchange_rate;
@@ -12,6 +12,12 @@ pub struct ExchangeRateWrite {
     pub to_currency: String,
     pub date: String,
     pub rate: f64,
+}
+
+#[derive(FromQueryResult)]
+struct DatedRate {
+    date: String,
+    value: f64,
 }
 
 pub async fn find_rate(
@@ -77,6 +83,46 @@ pub async fn find_rates_between(
         .all(db)
         .await?;
     Ok(results.into_iter().map(|r| (r.date, r.rate)).collect())
+}
+
+pub async fn find_coverage_with_seed(
+    db: &impl ConnectionTrait,
+    from_currency: &str,
+    to_currency: &str,
+    start_date: &str,
+    end_date: &str,
+) -> anyhow::Result<Vec<(String, f64)>> {
+    let rows = DatedRate::find_by_statement(Statement::from_sql_and_values(
+        db.get_database_backend(),
+        r"
+            SELECT date, rate AS value
+            FROM daily_exchange_rates
+            WHERE from_currency = ? AND to_currency = ? AND date >= ? AND date <= ?
+            UNION ALL
+            SELECT date, rate AS value
+            FROM daily_exchange_rates
+            WHERE from_currency = ? AND to_currency = ? AND date = (
+                SELECT MAX(date)
+                FROM daily_exchange_rates
+                WHERE from_currency = ? AND to_currency = ? AND date < ?
+            )
+            ORDER BY date
+        ",
+        [
+            from_currency.into(),
+            to_currency.into(),
+            start_date.into(),
+            end_date.into(),
+            from_currency.into(),
+            to_currency.into(),
+            from_currency.into(),
+            to_currency.into(),
+            start_date.into(),
+        ],
+    ))
+    .all(db)
+    .await?;
+    Ok(rows.into_iter().map(|row| (row.date, row.value)).collect())
 }
 
 pub async fn find_latest_date(
@@ -190,6 +236,19 @@ pub async fn upsert_many_native(
     Ok(())
 }
 
+pub async fn insert_many_immutable(
+    db: &impl ConnectionTrait,
+    rates: &[ExchangeRateWrite],
+) -> anyhow::Result<()> {
+    for chunk in rates.chunks(BULK_WRITE_SIZE) {
+        daily_exchange_rate::Entity::insert_many(rate_models(chunk))
+            .on_conflict(immutable_conflict())
+            .exec_without_returning(db)
+            .await?;
+    }
+    Ok(())
+}
+
 fn active_model(
     from_currency: &str,
     to_currency: &str,
@@ -205,6 +264,19 @@ fn active_model(
     }
 }
 
+fn rate_models(
+    rates: &[ExchangeRateWrite],
+) -> impl Iterator<Item = daily_exchange_rate::ActiveModel> + '_ {
+    rates.iter().map(|rate| {
+        active_model(
+            &rate.from_currency,
+            &rate.to_currency,
+            &rate.date,
+            rate.rate,
+        )
+    })
+}
+
 fn native_conflict() -> OnConflict {
     OnConflict::columns([
         daily_exchange_rate::Column::FromCurrency,
@@ -212,5 +284,15 @@ fn native_conflict() -> OnConflict {
         daily_exchange_rate::Column::Date,
     ])
     .update_column(daily_exchange_rate::Column::Rate)
+    .to_owned()
+}
+
+fn immutable_conflict() -> OnConflict {
+    OnConflict::columns([
+        daily_exchange_rate::Column::FromCurrency,
+        daily_exchange_rate::Column::ToCurrency,
+        daily_exchange_rate::Column::Date,
+    ])
+    .do_nothing()
     .to_owned()
 }
