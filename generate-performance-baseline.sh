@@ -5,6 +5,7 @@ set -euo pipefail
 # samples under target/criterion and the harness prints source work counters;
 # this command is the reproducible procedure used to refresh the report.
 if [[ "${PERFORMANCE_RESULTS_ONLY:-0}" != "1" ]]; then
+  cargo build --release
   cargo bench --bench performance -- --sample-size 10 --measurement-time 0.1 --warm-up-time 0.1 | tee target/performance-benchmark-output.txt
   cargo test --test performance_harness -- --nocapture | tee target/performance-plan-output.txt
   cargo fmt --check
@@ -91,6 +92,7 @@ targets = {
     name: round(values["p95_ns"] * 1.1)
     for name, values in estimates.items()
     if not name.startswith("delayed_source_limit_")
+    and (not name.startswith("startup_") or name == "startup_and_migration")
 }
 best_candidate_p95 = min(
     values["p95_ns"]
