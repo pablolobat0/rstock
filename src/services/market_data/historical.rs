@@ -366,8 +366,6 @@ async fn fill_nav_asset_prices(
             }
         }
     }
-    market_data.clear_completed_historical_requests()?;
-
     Ok(latest_dates)
 }
 
@@ -491,8 +489,6 @@ async fn fill_nav_exchange_rates(
             }
         }
     }
-    market_data.clear_completed_historical_requests()?;
-
     Ok(latest_dates)
 }
 
