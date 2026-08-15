@@ -10,6 +10,7 @@ use anyhow::bail;
 use chrono::NaiveDate;
 use futures::future::{BoxFuture, FutureExt, Shared};
 use sea_orm::DatabaseConnection;
+use tokio::sync::Semaphore;
 
 use crate::db::repos::asset_repo;
 use crate::models::{
@@ -32,9 +33,12 @@ enum HistoricalRequest {
 type HistoricalRequestResult = Result<Arc<Vec<SourceObservation>>, Arc<String>>;
 type HistoricalRequestFuture = Shared<BoxFuture<'static, HistoricalRequestResult>>;
 
+const HISTORICAL_SOURCE_CONCURRENCY_LIMIT: usize = 4;
+
 pub struct MarketData {
     sources: Arc<dyn MarketDataSources>,
     historical_requests: Mutex<HashMap<HistoricalRequest, HistoricalRequestFuture>>,
+    historical_source_slots: Arc<Semaphore>,
     today: NaiveDate,
 }
 
@@ -47,6 +51,7 @@ impl MarketData {
         Self {
             sources: sources.into(),
             historical_requests: Mutex::new(HashMap::new()),
+            historical_source_slots: Arc::new(Semaphore::new(HISTORICAL_SOURCE_CONCURRENCY_LIMIT)),
             // Capture the date once per command's MarketData instance. A command that crosses
             // midnight must not combine different definitions of today across portfolio, NAV,
             // and individual-price work.
@@ -258,16 +263,23 @@ impl MarketData {
         &self,
         request: HistoricalRequest,
     ) -> anyhow::Result<Vec<SourceObservation>> {
+        let request_key = request.clone();
         let future = {
             let mut requests = self
                 .historical_requests
                 .lock()
                 .map_err(|_| anyhow::anyhow!("historical request cache mutex poisoned"))?;
             requests
-                .entry(request.clone())
+                .entry(request_key.clone())
                 .or_insert_with(|| {
                     let sources = Arc::clone(&self.sources);
+                    let source_slots = Arc::clone(&self.historical_source_slots);
+                    let request = request.clone();
                     async move {
+                        let _permit = source_slots
+                            .acquire_owned()
+                            .await
+                            .map_err(|error| Arc::new(error.to_string()))?;
                         let result = match request {
                             HistoricalRequest::Stock(ticker, start, end) => {
                                 sources.stock_price_history(&ticker, start, end).await
@@ -289,8 +301,19 @@ impl MarketData {
                 .clone()
         };
 
-        future
-            .await
+        let result = future.await;
+        if matches!(result, Ok(ref observations) if !observations.is_empty()) {
+            // Successful observations are consumed by the preparation caller. Keep only failed
+            // attempts in the command cache so a large source response is not retained after its
+            // caller has received the data needed for persistence.
+            let mut requests = self
+                .historical_requests
+                .lock()
+                .map_err(|_| anyhow::anyhow!("historical request cache mutex poisoned"))?;
+            requests.remove(&request_key);
+        }
+
+        result
             .map(|observations| observations.as_ref().clone())
             .map_err(|error| anyhow::anyhow!(error.as_str().to_owned()))
     }
