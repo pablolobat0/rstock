@@ -15,6 +15,101 @@ struct LatestMarketDataDate {
     date: String,
 }
 
+pub(crate) struct PreloadedValuationData {
+    asset_prices: HashMap<i32, BTreeMap<String, f64>>,
+    exchange_rates: HashMap<String, BTreeMap<String, f64>>,
+}
+
+pub(crate) async fn preload_valuation_market_data(
+    db: &DatabaseConnection,
+    assets: &[Asset],
+    start_date: NaiveDate,
+    end_date: NaiveDate,
+) -> anyhow::Result<PreloadedValuationData> {
+    let start_date = format_date(start_date);
+    let end_date = format_date(end_date);
+    let mut asset_prices = HashMap::with_capacity(assets.len());
+    let mut exchange_rates = HashMap::new();
+
+    for asset in assets {
+        let prices =
+            daily_price_repo::find_coverage_with_seed(db, asset.id, &start_date, &end_date).await?;
+        asset_prices.insert(asset.id, prices.into_iter().collect());
+
+        if asset.currency != BASE_CURRENCY && !exchange_rates.contains_key(&asset.currency) {
+            let rates = exchange_rate_repo::find_coverage_with_seed(
+                db,
+                &asset.currency,
+                BASE_CURRENCY,
+                &start_date,
+                &end_date,
+            )
+            .await?;
+            exchange_rates.insert(asset.currency.clone(), rates.into_iter().collect());
+        }
+    }
+
+    Ok(PreloadedValuationData {
+        asset_prices,
+        exchange_rates,
+    })
+}
+
+impl PreloadedValuationData {
+    pub(crate) fn exchange_rates_for_assets(
+        &self,
+        assets: &[Asset],
+        date: &str,
+    ) -> anyhow::Result<HashMap<i32, f64>> {
+        assets
+            .iter()
+            .map(|asset| Ok((asset.id, self.exchange_rate_for_asset(asset, date)?)))
+            .collect()
+    }
+
+    pub(crate) fn valuation(
+        &self,
+        asset: &Asset,
+        date: &str,
+    ) -> anyhow::Result<MarketDataValuation> {
+        let native_price = self
+            .asset_prices
+            .get(&asset.id)
+            .and_then(|prices| prices.range(..=date.to_owned()).next_back())
+            .map(|(_, price)| *price)
+            .with_context(|| {
+                format!(
+                    "missing required historical market data for asset {} ({})",
+                    asset.ticker, asset.name
+                )
+            })?;
+        let fx_rate = self.exchange_rate_for_asset(asset, date)?;
+
+        Ok(MarketDataValuation {
+            native_price,
+            fx_rate,
+            base_currency_price: native_price * fx_rate,
+        })
+    }
+
+    fn exchange_rate_for_asset(&self, asset: &Asset, date: &str) -> anyhow::Result<f64> {
+        if asset.currency == BASE_CURRENCY {
+            return Ok(1.0);
+        }
+
+        self.exchange_rates
+            .get(&asset.currency)
+            .and_then(|rates| rates.range(..=date.to_owned()).next_back())
+            .map(|(_, rate)| *rate)
+            .with_context(|| {
+                format!(
+                    "missing required historical market data for FX rate for asset {} ({})",
+                    asset.ticker, asset.name
+                )
+            })
+    }
+}
+
 pub(crate) async fn prepare_valuation_market_data(
     db: &DatabaseConnection,
     assets: &[Asset],
@@ -40,6 +135,7 @@ pub(crate) async fn fill_historical_market_data_cache(
     Ok(())
 }
 
+#[allow(dead_code)]
 pub(crate) async fn get_required_asset_valuation_data(
     db: &DatabaseConnection,
     asset: &Asset,
@@ -77,6 +173,7 @@ pub(crate) async fn get_required_asset_valuation_limitations(
     Ok(limitations)
 }
 
+#[allow(dead_code)]
 async fn get_asset_valuation_data(
     db: &DatabaseConnection,
     asset: &Asset,
@@ -106,6 +203,7 @@ pub(crate) async fn get_exchange_rate_for_asset(
     get_exchange_rate(db, &asset.currency, date).await
 }
 
+#[allow(dead_code)]
 pub(crate) async fn get_required_asset_exchange_rates(
     db: &DatabaseConnection,
     assets: &[Asset],
@@ -304,6 +402,7 @@ fn infer_required_currencies(assets: &[Asset]) -> Vec<String> {
     currencies
 }
 
+#[allow(dead_code)]
 async fn get_required_exchange_rate_for_asset(
     db: &DatabaseConnection,
     asset: &Asset,

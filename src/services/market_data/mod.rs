@@ -3,6 +3,8 @@ mod individual_price;
 mod policy;
 pub mod sources;
 
+pub(crate) use historical::PreloadedValuationData;
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -134,6 +136,17 @@ impl MarketData {
         .await
     }
 
+    pub(crate) async fn preload_valuation_market_data(
+        &self,
+        db: &DatabaseConnection,
+        assets: &[Asset],
+        start_date: NaiveDate,
+        end_date: NaiveDate,
+    ) -> anyhow::Result<historical::PreloadedValuationData> {
+        historical::preload_valuation_market_data(db, assets, start_date, end_date).await
+    }
+
+    #[allow(dead_code)]
     pub async fn get_required_asset_exchange_rates(
         &self,
         db: &DatabaseConnection,
@@ -143,6 +156,7 @@ impl MarketData {
         historical::get_required_asset_exchange_rates(db, assets, date).await
     }
 
+    #[allow(dead_code)]
     pub async fn get_required_asset_valuation_data(
         &self,
         db: &DatabaseConnection,

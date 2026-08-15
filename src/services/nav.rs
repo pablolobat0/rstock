@@ -12,7 +12,7 @@ use crate::models::{
     cents_to_f64, Asset, AssetSnapshot, MarketDataLimitation, PortfolioSnapshot, Transaction,
     ValuationMarketDataAvailability,
 };
-use crate::services::market_data::MarketData;
+use crate::services::market_data::{MarketData, PreloadedValuationData};
 
 /// NAV history made ready for consumers, together with the limitations that
 /// bound the resulting historical valuation scope.
@@ -234,6 +234,10 @@ async fn rebuild_portfolio_history(
         .cloned()
         .collect();
 
+    let valuation_data = market_data
+        .preload_valuation_market_data(db, &nav_assets, start_date, effective_end)
+        .await?;
+
     let mut tx_by_date: HashMap<String, Vec<&Transaction>> = HashMap::new();
     for tx in &transactions {
         tx_by_date.entry(tx.date.clone()).or_default().push(tx);
@@ -246,9 +250,8 @@ async fn rebuild_portfolio_history(
     while current <= effective_end {
         let date_str = format_date(current);
 
-        let day_asset_exchange_rates = market_data
-            .get_required_asset_exchange_rates(db, &nav_assets, &date_str)
-            .await?;
+        let day_asset_exchange_rates =
+            valuation_data.exchange_rates_for_assets(&nav_assets, &date_str)?;
 
         // Process transactions for this day
         if let Some(day_txs) = tx_by_date.get(&date_str) {
@@ -272,7 +275,7 @@ async fn rebuild_portfolio_history(
 
         // Compute EOD values (aggregate + per-asset) with currency conversion
         let (asset_value, asset_values) =
-            compute_day_asset_values(db, market_data, &holdings, &asset_map, &date_str).await?;
+            compute_day_asset_values(&valuation_data, &holdings, &asset_map, &date_str)?;
 
         let total_value = asset_value + accumulated_cash;
         if outstanding_shares > 0.0 {
@@ -384,17 +387,12 @@ fn process_day_transactions(
     Ok((os, current_nav, dividend_income))
 }
 
-async fn compute_day_asset_values(
-    db: &DatabaseConnection,
-    market_data: &MarketData,
+fn compute_day_asset_values(
+    valuation_data: &PreloadedValuationData,
     holdings: &HashMap<i32, f64>,
     asset_map: &HashMap<i32, &Asset>,
     date: &str,
 ) -> anyhow::Result<(f64, Vec<AssetSnapshot>)> {
-    let existing_rows = portfolio_asset_history_repo::find_by_date(db, date).await?;
-    let existing_map: HashMap<i32, AssetSnapshot> =
-        existing_rows.into_iter().map(|r| (r.asset_id, r)).collect();
-
     let mut total_asset_value = 0.0;
     let mut asset_values = Vec::new();
 
@@ -409,27 +407,7 @@ async fn compute_day_asset_values(
         if asset_model.is_monetary() {
             continue;
         }
-        let valuation = market_data
-            .get_required_asset_valuation_data(db, asset_model, date)
-            .await?;
-
-        // Reuse existing row if quantity and exchange rate match
-        if let Some(existing) = existing_map.get(&asset_id) {
-            if (existing.quantity - qty).abs() < FLOAT_EPSILON
-                && (existing.exchange_rate - valuation.fx_rate).abs() < FLOAT_EPSILON
-            {
-                total_asset_value += existing.market_value;
-                asset_values.push(AssetSnapshot {
-                    date: existing.date.clone(),
-                    asset_id,
-                    quantity: existing.quantity,
-                    closing_price: existing.closing_price,
-                    market_value: existing.market_value,
-                    exchange_rate: existing.exchange_rate,
-                });
-                continue;
-            }
-        }
+        let valuation = valuation_data.valuation(asset_model, date)?;
 
         let market_value = qty * valuation.base_currency_price;
         total_asset_value += market_value;
