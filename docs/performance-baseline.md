@@ -50,20 +50,18 @@ recorded under `decision_gate.path_p95_targets_ns`. The measured warm-cache
 source-call count is recorded separately from the optimization target of zero;
 peak activity must be no greater than the approved fixed limit.
 
-“Warm” means the requested range has already been prepared. The baseline still
-observes six source retries because interior source gaps are not cached as
-successful Historical market data. Eliminating that redundant source work is a
-later optimization target, not a claim about the current implementation.
+“Warm” means the requested range has already been prepared. This generated run
+observed zero warm-cache source calls, matching the current optimization
+target; the separate source-gap retry behavior remains covered by the cache
+tests rather than inferred from this warm path.
 
 The concurrency candidates each run eight independent one-day Stock/EUR
 preparations against separate file-backed SQLite fixtures. Every operation
 makes one real delayed source call and one real cache write. Calls were equal at
 eight and observed peaks were 1, 2, 4, and 8 for limits 1, 2, 4, and 8. The
-generated p95 values improve through limit 4; limit 8 has a lower mean but
-a higher p95 because of an observed outlier. The fixed source-concurrency
-proposal is therefore **4**, the smallest candidate within 10 percent of the
-best candidate p95 (and the best candidate itself). This proposal and the
-generated path targets remain pending the decision gate below.
+generated p95 values selected limit **8** under the report's fixed candidate
+rule for this run. This proposal and the generated path targets remain pending
+the decision gate below.
 
 ## Verification
 

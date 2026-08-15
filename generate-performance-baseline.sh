@@ -111,6 +111,8 @@ for line in benchmark_output:
     if match := candidate_pattern.search(line):
         limit, calls, peak = map(int, match.groups())
         candidates[str(limit)] = {"calls": calls, "peak": peak}
+if set(rolling_work) != {"representative", "stress"}:
+    raise SystemExit(f"Rolling work proxies do not match harness: {sorted(rolling_work)}")
 warm_source_calls = next(
     int(match.group(1))
     for line in benchmark_output
