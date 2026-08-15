@@ -8,7 +8,8 @@ use super::{policy, MarketData, SourceObservation};
 use crate::constants::{format_date, BASE_CURRENCY, FUND_API_PADDING_DAYS};
 use crate::db::repos::{daily_price_repo, exchange_rate_repo};
 use crate::models::{
-    Asset, AssetType, MarketDataValuation, ValuationMarketData, ValuationMarketDataAvailability,
+    Asset, AssetType, MarketDataLimitation, MarketDataValuation, ValuationMarketData,
+    ValuationMarketDataAvailability,
 };
 
 struct LatestMarketDataDate {
@@ -73,6 +74,30 @@ impl PreloadedValuationData {
                 )
             })
     }
+
+    pub(crate) fn valuation_limitations(
+        &self,
+        asset: &Asset,
+        date: NaiveDate,
+    ) -> Vec<MarketDataLimitation> {
+        let mut limitations = Vec::new();
+        if self
+            .asset_prices
+            .get(&asset.id)
+            .is_none_or(|prices| prices.range(..=date).next_back().is_none())
+        {
+            limitations.push(policy::missing_asset_limitation(asset, date));
+        }
+        if asset.currency != BASE_CURRENCY
+            && self
+                .exchange_rates
+                .get(&asset.currency)
+                .is_none_or(|rates| rates.range(..=date).next_back().is_none())
+        {
+            limitations.push(policy::missing_fx_limitation(&asset.currency, date));
+        }
+        limitations
+    }
 }
 
 pub(crate) async fn prepare_valuation_market_data(
@@ -114,28 +139,6 @@ pub(crate) async fn get_required_asset_valuation_data(
                 asset.ticker, asset.name
             )
         })
-}
-
-/// Reports whether the cache has every historical input needed to value an
-/// asset on one specific date. Callers use this after preparation to avoid a
-/// strict valuation read turning an expected market-data gap into an error.
-pub(crate) async fn get_required_asset_valuation_limitations(
-    db: &DatabaseConnection,
-    asset: &Asset,
-    date: NaiveDate,
-) -> anyhow::Result<Vec<crate::models::MarketDataLimitation>> {
-    let date_string = format_date(date);
-    let mut limitations = Vec::new();
-    if get_closing_price(db, asset, &date_string).await?.is_none() {
-        limitations.push(policy::missing_asset_limitation(asset, date));
-    }
-    if get_exchange_rate_for_asset(db, asset, &date_string)
-        .await?
-        .is_none()
-    {
-        limitations.push(policy::missing_fx_limitation(&asset.currency, date));
-    }
-    Ok(limitations)
 }
 
 #[allow(dead_code)]

@@ -188,9 +188,7 @@ async fn nav_market_data_availability(
             let Some(first_valuation_date) = first_valuation_dates.get(&asset.id) else {
                 continue;
             };
-            let limitations = market_data
-                .get_required_asset_valuation_limitations(db, asset, *first_valuation_date)
-                .await?;
+            let limitations = valuation_data.valuation_limitations(asset, *first_valuation_date);
             if !limitations.is_empty() {
                 availability.data_available = false;
                 for limitation in limitations {
