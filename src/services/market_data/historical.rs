@@ -16,7 +16,10 @@ struct LatestMarketDataDate {
     date: String,
 }
 
-type FilledValues = (LatestMarketDataDate, BTreeMap<NaiveDate, f64>);
+struct FilledValues {
+    latest: LatestMarketDataDate,
+    values: BTreeMap<NaiveDate, f64>,
+}
 
 struct PreparedHistoricalMarketData {
     availability: ValuationMarketDataAvailability,
@@ -254,9 +257,16 @@ async fn prepare_historical_market_data(
     end_date: &str,
     market_data: &MarketData,
 ) -> anyhow::Result<ValuationMarketData> {
-    let prepared =
-        prepare_historical_market_data_inner(db, assets, start_date, end_date, market_data, true)
-            .await?;
+    let prepared = prepare_historical_market_data_inner(
+        db,
+        assets,
+        start_date,
+        end_date,
+        market_data,
+        true,
+        false,
+    )
+    .await?;
     Ok(ValuationMarketData {
         effective_end: prepared.availability.effective_end,
         limitations: prepared.availability.limitations,
@@ -275,9 +285,16 @@ pub(crate) async fn prepare_valuation_market_data_if_available(
     end_date: &str,
     market_data: &MarketData,
 ) -> anyhow::Result<ValuationMarketDataAvailability> {
-    let prepared =
-        prepare_historical_market_data_inner(db, assets, start_date, end_date, market_data, false)
-            .await?;
+    let prepared = prepare_historical_market_data_inner(
+        db,
+        assets,
+        start_date,
+        end_date,
+        market_data,
+        false,
+        false,
+    )
+    .await?;
     Ok(prepared.availability)
 }
 
@@ -288,9 +305,16 @@ pub(crate) async fn prepare_valuation_market_data_for_nav(
     end_date: &str,
     market_data: &MarketData,
 ) -> anyhow::Result<(ValuationMarketDataAvailability, PreloadedValuationData)> {
-    let prepared =
-        prepare_historical_market_data_inner(db, assets, start_date, end_date, market_data, false)
-            .await?;
+    let prepared = prepare_historical_market_data_inner(
+        db,
+        assets,
+        start_date,
+        end_date,
+        market_data,
+        false,
+        true,
+    )
+    .await?;
     Ok((prepared.availability, prepared.valuation_data))
 }
 
@@ -301,6 +325,7 @@ async fn prepare_historical_market_data_inner(
     end_date: &str,
     market_data: &MarketData,
     strict: bool,
+    preload: bool,
 ) -> anyhow::Result<PreparedHistoricalMarketData> {
     let requested_end =
         policy::parse_market_data_date(end_date, "historical market data end date")?;
@@ -333,7 +358,7 @@ async fn prepare_historical_market_data_inner(
             continue;
         };
         let latest_available_date =
-            policy::parse_market_data_date(&latest_date.0.date, "asset price date")?;
+            policy::parse_market_data_date(&latest_date.latest.date, "asset price date")?;
         latest_required_dates.push(latest_available_date);
         if let Some(limitation) =
             policy::classify_asset_limitation(asset, latest_available_date, requested_end)
@@ -354,7 +379,7 @@ async fn prepare_historical_market_data_inner(
             continue;
         };
         let latest_available_date =
-            policy::parse_market_data_date(&latest_date.0.date, "FX rate date")?;
+            policy::parse_market_data_date(&latest_date.latest.date, "FX rate date")?;
         latest_required_dates.push(latest_available_date);
         if let Some(limitation) =
             policy::classify_fx_limitation(&currency, latest_available_date, requested_end)
@@ -374,15 +399,22 @@ async fn prepare_historical_market_data_inner(
             limitations,
             data_available,
         },
-        valuation_data: PreloadedValuationData {
-            asset_prices: latest_asset_dates
-                .into_iter()
-                .map(|(asset_id, (_, values))| (asset_id, values))
-                .collect(),
-            exchange_rates: latest_rate_dates
-                .into_iter()
-                .map(|(currency, (_, values))| (currency, values))
-                .collect(),
+        valuation_data: if preload {
+            PreloadedValuationData {
+                asset_prices: latest_asset_dates
+                    .into_iter()
+                    .map(|(asset_id, values)| (asset_id, values.values))
+                    .collect(),
+                exchange_rates: latest_rate_dates
+                    .into_iter()
+                    .map(|(currency, values)| (currency, values.values))
+                    .collect(),
+            }
+        } else {
+            PreloadedValuationData {
+                asset_prices: HashMap::new(),
+                exchange_rates: HashMap::new(),
+            }
         },
     })
 }
@@ -526,13 +558,11 @@ async fn fill_historical_asset_prices(
         .range(..=requested_end)
         .next_back()
         .map(|(date, _)| *date);
-    Ok(latest_date.map(|date| {
-        (
-            LatestMarketDataDate {
-                date: format_date(date),
-            },
-            known,
-        )
+    Ok(latest_date.map(|date| FilledValues {
+        latest: LatestMarketDataDate {
+            date: format_date(date),
+        },
+        values: known,
     }))
 }
 
@@ -655,13 +685,11 @@ async fn fill_historical_exchange_rates(
         .range(..=requested_end)
         .next_back()
         .map(|(date, _)| *date);
-    Ok(latest_date.map(|date| {
-        (
-            LatestMarketDataDate {
-                date: format_date(date),
-            },
-            known,
-        )
+    Ok(latest_date.map(|date| FilledValues {
+        latest: LatestMarketDataDate {
+            date: format_date(date),
+        },
+        values: known,
     }))
 }
 
