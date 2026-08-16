@@ -6,6 +6,14 @@ use sea_orm::{
 use crate::db::entities::asset;
 use crate::models::{enum_to_db, Asset, AssetClassification, AssetInfo};
 
+const BULK_WRITE_SIZE: usize = 50;
+
+pub struct AssetWrite {
+    pub info: AssetInfo,
+    pub classification: AssetClassification,
+    pub morningstar_code: Option<String>,
+}
+
 pub async fn find_by_ticker(
     db: &impl ConnectionTrait,
     ticker: &str,
@@ -64,6 +72,21 @@ pub async fn create(
     let new_asset = active_model(info, classification, morningstar_code);
     let result = new_asset.insert(db).await?;
     Ok(result.id)
+}
+
+pub async fn create_many(db: &impl ConnectionTrait, assets: &[AssetWrite]) -> anyhow::Result<()> {
+    for chunk in assets.chunks(BULK_WRITE_SIZE) {
+        asset::Entity::insert_many(chunk.iter().map(|asset| {
+            active_model(
+                &asset.info,
+                &asset.classification,
+                asset.morningstar_code.as_deref(),
+            )
+        }))
+        .exec(db)
+        .await?;
+    }
+    Ok(())
 }
 
 pub async fn create_on_conflict_do_nothing(

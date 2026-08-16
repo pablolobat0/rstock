@@ -1,0 +1,90 @@
+{
+  "procedure": {
+    "samples": 20,
+    "measurement_time_seconds": 2,
+    "warm_up_time_seconds": 0.2,
+    "command": "./generate-startup-performance-results.sh"
+  },
+  "criterion_estimates": {
+    "startup_and_migration_transactional": {
+      "mean_ns": 5032073.55317036,
+      "median_ns": 4856950.833333334,
+      "std_dev_ns": 403556.3616695603,
+      "p95_ns": 6121284.357142857
+    },
+    "startup_executable_only": {
+      "mean_ns": 1942870.2034479175,
+      "median_ns": 1921846.6354895104,
+      "std_dev_ns": 68301.47043272875,
+      "p95_ns": 2092603.375
+    },
+    "startup_logging_cold": {
+      "mean_ns": 806517.3409704097,
+      "median_ns": 788457.9185897436,
+      "std_dev_ns": 36827.32076167551,
+      "p95_ns": 921405.3333333334
+    },
+    "startup_logging_warm": {
+      "mean_ns": 764576.6774917116,
+      "median_ns": 756097.4507575757,
+      "std_dev_ns": 28063.942996249683,
+      "p95_ns": 821894.7272727273
+    },
+    "startup_database_connection_cold": {
+      "mean_ns": 94271.85932533494,
+      "median_ns": 93135.80947231833,
+      "std_dev_ns": 5781.141675642947,
+      "p95_ns": 115086.98602941177
+    },
+    "startup_database_connection_warm": {
+      "mean_ns": 81787.51343155837,
+      "median_ns": 80570.6592879257,
+      "std_dev_ns": 3213.276644387737,
+      "p95_ns": 89899.27192982456
+    },
+    "startup_automatic_migration_cold": {
+      "mean_ns": 5069064.55467453,
+      "median_ns": 4938389.819444444,
+      "std_dev_ns": 578700.0563729885,
+      "p95_ns": 6786945.5
+    },
+    "startup_automatic_migration_warm": {
+      "mean_ns": 118237.91091109792,
+      "median_ns": 118897.98214285713,
+      "std_dev_ns": 3290.281443661832,
+      "p95_ns": 126317.525
+    },
+    "startup_automatic_migration_warm_unbatched": {
+      "mean_ns": 187657.54333553373,
+      "median_ns": 187757.1557397959,
+      "std_dev_ns": 4746.679721694681,
+      "p95_ns": 197852.52721088435
+    },
+    "startup_transaction_list_cold": {
+      "mean_ns": 9083982.370782264,
+      "median_ns": 8790319.28125,
+      "std_dev_ns": 772720.786015789,
+      "p95_ns": 11189620.416666666
+    },
+    "startup_transaction_list_warm": {
+      "mean_ns": 3652872.3132223273,
+      "median_ns": 3472765.8,
+      "std_dev_ns": 366596.0456875747,
+      "p95_ns": 4618146.205128205
+    }
+  },
+  "acceptance": {
+    "approved_cold_startup_p95_target_ns": 115259889,
+    "migration_path_passed": true,
+    "cold_migration_passed": true,
+    "cold_transaction_list_passed": true,
+    "audited_warm_startup_ns": 10000000,
+    "approved_regression_tolerance_percent": 10,
+    "warm_median_limit_ns": 11000000,
+    "warm_transaction_list_passed": true,
+    "warm_unbatched_migration_median_ns": 187757.1557397959,
+    "warm_migration_regression_limit_ns": 206532.8713137755,
+    "warm_migration_regression_passed": true
+  },
+  "conclusion": "Automatic migrations now run as one SQLite transaction. This preserves pending-migration checks and every migration while removing repeated durable commits; cold migration and full executable startup meet the approved target, and warm median startup remains below the audited value plus tolerance."
+}
