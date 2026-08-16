@@ -92,12 +92,16 @@ pub async fn insert_split(
 pub async fn insert_many(
     db: &impl ConnectionTrait,
     transactions: &[TransactionWrite],
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Vec<i32>> {
+    let mut ids = Vec::with_capacity(transactions.len());
     for chunk in transactions.chunks(BULK_WRITE_SIZE) {
         let models = chunk.iter().map(active_model_for_write);
-        transaction::Entity::insert_many(models).exec(db).await?;
+        let result = transaction::Entity::insert_many(models).exec(db).await?;
+        let chunk_len = i32::try_from(chunk.len()).expect("transaction bulk chunk fits in i32");
+        let first_id = result.last_insert_id - chunk_len + 1;
+        ids.extend(first_id..=result.last_insert_id);
     }
-    Ok(())
+    Ok(ids)
 }
 
 pub async fn find_by_id(db: &impl ConnectionTrait, id: i32) -> anyhow::Result<Option<Transaction>> {
