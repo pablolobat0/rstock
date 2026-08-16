@@ -3,10 +3,10 @@ mod individual_price;
 mod policy;
 pub mod sources;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
-use anyhow::bail;
+use anyhow::{bail, Context};
 use chrono::NaiveDate;
 use futures::future::{BoxFuture, FutureExt, Shared};
 use sea_orm::DatabaseConnection;
@@ -22,6 +22,93 @@ use crate::services::clock::{Clock, SystemClock};
 use crate::services::metrics;
 
 pub use sources::{DefaultMarketDataSources, MarketDataSources, SourceObservation};
+
+pub(crate) struct NavValuationData {
+    asset_prices: HashMap<i32, BTreeMap<NaiveDate, f64>>,
+    exchange_rates: HashMap<String, BTreeMap<NaiveDate, f64>>,
+}
+
+impl NavValuationData {
+    pub(crate) fn from_maps(
+        asset_prices: HashMap<i32, BTreeMap<NaiveDate, f64>>,
+        exchange_rates: HashMap<String, BTreeMap<NaiveDate, f64>>,
+    ) -> Self {
+        Self {
+            asset_prices,
+            exchange_rates,
+        }
+    }
+
+    pub(crate) fn valuation(
+        &self,
+        asset: &Asset,
+        date: NaiveDate,
+    ) -> anyhow::Result<MarketDataValuation> {
+        let native_price = self
+            .asset_prices
+            .get(&asset.id)
+            .and_then(|prices| prices.range(..=date).next_back())
+            .map(|(_, price)| *price)
+            .with_context(|| {
+                format!(
+                    "missing required historical market data for asset {} ({})",
+                    asset.ticker, asset.name
+                )
+            })?;
+        let fx_rate = self.exchange_rate_for_asset(asset, date)?;
+
+        Ok(MarketDataValuation {
+            native_price,
+            fx_rate,
+            base_currency_price: native_price * fx_rate,
+        })
+    }
+
+    pub(crate) fn exchange_rate_for_asset(
+        &self,
+        asset: &Asset,
+        date: NaiveDate,
+    ) -> anyhow::Result<f64> {
+        if asset.currency == crate::constants::BASE_CURRENCY {
+            return Ok(1.0);
+        }
+
+        self.exchange_rates
+            .get(&asset.currency)
+            .and_then(|rates| rates.range(..=date).next_back())
+            .map(|(_, rate)| *rate)
+            .with_context(|| {
+                format!(
+                    "missing required historical market data for FX rate for asset {} ({})",
+                    asset.ticker, asset.name
+                )
+            })
+    }
+
+    pub(crate) fn valuation_limitations(
+        &self,
+        asset: &Asset,
+        date: NaiveDate,
+    ) -> Vec<crate::models::MarketDataLimitation> {
+        let mut limitations = Vec::new();
+        if self
+            .asset_prices
+            .get(&asset.id)
+            .is_none_or(|prices| prices.range(..=date).next_back().is_none())
+        {
+            limitations.push(policy::missing_asset_limitation(asset, date));
+        }
+        if asset.currency != crate::constants::BASE_CURRENCY
+            && self
+                .exchange_rates
+                .get(&asset.currency)
+                .is_none_or(|rates| rates.range(..=date).next_back().is_none())
+        {
+            limitations.push(policy::missing_fx_limitation(&asset.currency, date));
+        }
+        limitations
+    }
+}
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 enum HistoricalRequest {
@@ -128,6 +215,7 @@ impl MarketData {
         historical::prepare_valuation_market_data(db, assets, start_date, end_date, self).await
     }
 
+    #[allow(dead_code)]
     pub async fn prepare_valuation_market_data_if_available(
         &self,
         db: &DatabaseConnection,
@@ -141,6 +229,18 @@ impl MarketData {
         .await
     }
 
+    pub(crate) async fn prepare_valuation_market_data_for_nav(
+        &self,
+        db: &DatabaseConnection,
+        assets: &[Asset],
+        start_date: &str,
+        end_date: &str,
+    ) -> anyhow::Result<(ValuationMarketDataAvailability, NavValuationData)> {
+        historical::prepare_valuation_market_data_for_nav(db, assets, start_date, end_date, self)
+            .await
+    }
+
+    #[allow(dead_code)]
     pub async fn get_required_asset_exchange_rates(
         &self,
         db: &DatabaseConnection,
@@ -150,6 +250,7 @@ impl MarketData {
         historical::get_required_asset_exchange_rates(db, assets, date).await
     }
 
+    #[allow(dead_code)]
     pub async fn get_required_asset_valuation_data(
         &self,
         db: &DatabaseConnection,
@@ -157,15 +258,6 @@ impl MarketData {
         date: &str,
     ) -> anyhow::Result<MarketDataValuation> {
         historical::get_required_asset_valuation_data(db, asset, date).await
-    }
-
-    pub(crate) async fn get_required_asset_valuation_limitations(
-        &self,
-        db: &DatabaseConnection,
-        asset: &Asset,
-        date: NaiveDate,
-    ) -> anyhow::Result<Vec<crate::models::MarketDataLimitation>> {
-        historical::get_required_asset_valuation_limitations(db, asset, date).await
     }
 
     pub async fn get_asset_exchange_rate(
