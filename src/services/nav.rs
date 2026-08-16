@@ -11,7 +11,7 @@ use crate::db::repos::{
 use crate::models::{
     cents_to_f64, Asset, AssetSnapshot, MarketDataLimitation, PortfolioSnapshot, Transaction,
 };
-use crate::services::market_data::{MarketData, PreloadedValuationData};
+use crate::services::market_data::{MarketData, NavValuationData};
 
 /// NAV history made ready for consumers, together with the limitations that
 /// bound the resulting historical valuation scope.
@@ -28,7 +28,7 @@ struct NavMarketDataPreparation {
     holdings: HashMap<i32, f64>,
     transactions: Vec<Transaction>,
     assets: Vec<Asset>,
-    valuation_data: Option<PreloadedValuationData>,
+    valuation_data: Option<NavValuationData>,
 }
 
 /// Returns ensured NAV history for a caller-selected display range.
@@ -319,7 +319,7 @@ fn process_day_transactions(
     outstanding_shares: f64,
     nav: f64,
     asset_map: &HashMap<i32, &Asset>,
-    valuation_data: &PreloadedValuationData,
+    valuation_data: &NavValuationData,
     date: NaiveDate,
 ) -> anyhow::Result<(f64, f64, f64)> {
     let mut os = outstanding_shares;
@@ -384,7 +384,7 @@ fn process_day_transactions(
 }
 
 fn compute_day_asset_values(
-    valuation_data: &PreloadedValuationData,
+    valuation_data: &NavValuationData,
     holdings: &HashMap<i32, f64>,
     asset_map: &HashMap<i32, &Asset>,
     date: &str,

@@ -4,12 +4,11 @@ use anyhow::{bail, Context};
 use chrono::NaiveDate;
 use sea_orm::DatabaseConnection;
 
-use super::{policy, MarketData, SourceObservation};
+use super::{policy, MarketData, NavValuationData, SourceObservation};
 use crate::constants::{format_date, BASE_CURRENCY, FUND_API_PADDING_DAYS};
 use crate::db::repos::{daily_price_repo, exchange_rate_repo};
 use crate::models::{
-    Asset, AssetType, MarketDataLimitation, MarketDataValuation, ValuationMarketData,
-    ValuationMarketDataAvailability,
+    Asset, AssetType, MarketDataValuation, ValuationMarketData, ValuationMarketDataAvailability,
 };
 
 struct LatestMarketDataDate {
@@ -23,84 +22,7 @@ struct FilledValues {
 
 struct PreparedHistoricalMarketData {
     availability: ValuationMarketDataAvailability,
-    valuation_data: PreloadedValuationData,
-}
-
-pub(crate) struct PreloadedValuationData {
-    asset_prices: HashMap<i32, BTreeMap<NaiveDate, f64>>,
-    exchange_rates: HashMap<String, BTreeMap<NaiveDate, f64>>,
-}
-
-impl PreloadedValuationData {
-    pub(crate) fn valuation(
-        &self,
-        asset: &Asset,
-        date: NaiveDate,
-    ) -> anyhow::Result<MarketDataValuation> {
-        let native_price = self
-            .asset_prices
-            .get(&asset.id)
-            .and_then(|prices| prices.range(..=date).next_back())
-            .map(|(_, price)| *price)
-            .with_context(|| {
-                format!(
-                    "missing required historical market data for asset {} ({})",
-                    asset.ticker, asset.name
-                )
-            })?;
-        let fx_rate = self.exchange_rate_for_asset(asset, date)?;
-
-        Ok(MarketDataValuation {
-            native_price,
-            fx_rate,
-            base_currency_price: native_price * fx_rate,
-        })
-    }
-
-    pub(crate) fn exchange_rate_for_asset(
-        &self,
-        asset: &Asset,
-        date: NaiveDate,
-    ) -> anyhow::Result<f64> {
-        if asset.currency == BASE_CURRENCY {
-            return Ok(1.0);
-        }
-
-        self.exchange_rates
-            .get(&asset.currency)
-            .and_then(|rates| rates.range(..=date).next_back())
-            .map(|(_, rate)| *rate)
-            .with_context(|| {
-                format!(
-                    "missing required historical market data for FX rate for asset {} ({})",
-                    asset.ticker, asset.name
-                )
-            })
-    }
-
-    pub(crate) fn valuation_limitations(
-        &self,
-        asset: &Asset,
-        date: NaiveDate,
-    ) -> Vec<MarketDataLimitation> {
-        let mut limitations = Vec::new();
-        if self
-            .asset_prices
-            .get(&asset.id)
-            .is_none_or(|prices| prices.range(..=date).next_back().is_none())
-        {
-            limitations.push(policy::missing_asset_limitation(asset, date));
-        }
-        if asset.currency != BASE_CURRENCY
-            && self
-                .exchange_rates
-                .get(&asset.currency)
-                .is_none_or(|rates| rates.range(..=date).next_back().is_none())
-        {
-            limitations.push(policy::missing_fx_limitation(&asset.currency, date));
-        }
-        limitations
-    }
+    valuation_data: NavValuationData,
 }
 
 pub(crate) async fn prepare_valuation_market_data(
@@ -304,7 +226,7 @@ pub(crate) async fn prepare_valuation_market_data_for_nav(
     start_date: &str,
     end_date: &str,
     market_data: &MarketData,
-) -> anyhow::Result<(ValuationMarketDataAvailability, PreloadedValuationData)> {
+) -> anyhow::Result<(ValuationMarketDataAvailability, NavValuationData)> {
     let prepared = prepare_historical_market_data_inner(
         db,
         assets,
@@ -400,21 +322,18 @@ async fn prepare_historical_market_data_inner(
             data_available,
         },
         valuation_data: if preload {
-            PreloadedValuationData {
-                asset_prices: latest_asset_dates
+            NavValuationData::from_maps(
+                latest_asset_dates
                     .into_iter()
                     .map(|(asset_id, values)| (asset_id, values.values))
                     .collect(),
-                exchange_rates: latest_rate_dates
+                latest_rate_dates
                     .into_iter()
                     .map(|(currency, values)| (currency, values.values))
                     .collect(),
-            }
+            )
         } else {
-            PreloadedValuationData {
-                asset_prices: HashMap::new(),
-                exchange_rates: HashMap::new(),
-            }
+            NavValuationData::from_maps(HashMap::new(), HashMap::new())
         },
     })
 }
@@ -478,6 +397,7 @@ async fn fill_nav_asset_prices(
         .collect();
 
     let results = futures::future::join_all(futures).await;
+    market_data.clear_completed_historical_requests()?;
 
     let mut latest_dates: HashMap<i32, FilledValues> = HashMap::new();
     for (asset, result) in results {
@@ -552,8 +472,6 @@ async fn fill_historical_asset_prices(
     if !writes.is_empty() {
         daily_price_repo::insert_many_immutable(db, &writes).await?;
     }
-    market_data.clear_completed_historical_requests()?;
-
     let latest_date = known
         .range(..=requested_end)
         .next_back()
@@ -607,6 +525,7 @@ async fn fill_nav_exchange_rates(
         .collect();
 
     let results = futures::future::join_all(futures).await;
+    market_data.clear_completed_historical_requests()?;
 
     let mut latest_dates = HashMap::new();
     for (currency, result) in results {
@@ -679,8 +598,6 @@ async fn fill_historical_exchange_rates(
     if !writes.is_empty() {
         exchange_rate_repo::insert_many_immutable(db, &writes).await?;
     }
-    market_data.clear_completed_historical_requests()?;
-
     let latest_date = known
         .range(..=requested_end)
         .next_back()
