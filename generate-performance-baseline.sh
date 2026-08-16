@@ -28,6 +28,9 @@ expected = {
     "portfolio_retrieval_representative",
     "correlation_matrix_representative",
     "rolling_correlation_representative",
+    "rolling_correlation_stress",
+    "rolling_metric_representative",
+    "rolling_metric_stress",
     "historical_market_data_preparation_cold",
     "historical_market_data_preparation_warm",
     "historical_market_data_preparation_partial",
@@ -78,10 +81,39 @@ if estimates.keys() != expected:
 benchmark_output = Path("target/performance-benchmark-output.txt").read_text().splitlines()
 candidate_pattern = re.compile(r"delayed limit=(\d+) calls=(\d+) peak=(\d+)")
 candidates = {}
+rolling_work_pattern = re.compile(
+    r"rolling_work_proxy label=(\w+) input=(\d+) windows=(\d+) "
+    r"naive_window_value_visits=(\d+) optimized_value_updates=(\d+) "
+    r"naive_window_allocations=(\d+) optimized_window_allocations=(\d+) "
+    r"optimized_total_allocations=(\d+)"
+)
+rolling_work = {}
 for line in benchmark_output:
+    if match := rolling_work_pattern.search(line):
+        (
+            label,
+            input_len,
+            windows,
+            naive_visits,
+            optimized_updates,
+            naive_allocations,
+            optimized_allocations,
+            optimized_total_allocations,
+        ) = match.groups()
+        rolling_work[label] = {
+            "input": int(input_len),
+            "windows": int(windows),
+            "naive_window_value_visits": int(naive_visits),
+            "optimized_value_updates": int(optimized_updates),
+            "naive_window_allocations": int(naive_allocations),
+            "optimized_window_allocations": int(optimized_allocations),
+            "optimized_total_allocations": int(optimized_total_allocations),
+        }
     if match := candidate_pattern.search(line):
         limit, calls, peak = map(int, match.groups())
         candidates[str(limit)] = {"calls": calls, "peak": peak}
+if set(rolling_work) != {"representative", "stress"}:
+    raise SystemExit(f"Rolling work proxies do not match harness: {sorted(rolling_work)}")
 warm_source_calls = next(
     int(match.group(1))
     for line in benchmark_output
@@ -130,6 +162,7 @@ report = {
             ),
             None,
         ),
+        "rolling_work_proxy": rolling_work,
     },
     "verification": {
         "commands": ["cargo fmt --check", "cargo clippy -- -D warnings", "cargo test"],

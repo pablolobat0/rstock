@@ -5,6 +5,7 @@
 //! startup paths use low-work commands with unreachable source settings and
 //! fail if those commands unexpectedly try to fetch market data.
 
+use std::alloc::{GlobalAlloc, Layout, System};
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -19,12 +20,13 @@ use chrono::{Duration, NaiveDate};
 use criterion::{criterion_group, criterion_main, Criterion};
 use futures::stream::{self, StreamExt};
 use migration::{Migrator, MigratorTrait};
+use rstock::constants::ROLLING_CORRELATION_WINDOW_DAYS;
 use rstock::db::entities::{asset, transaction};
 use rstock::db::repos::transaction_repo;
 use rstock::models::{Asset, AssetType};
 use rstock::services::import::import_transactions_csv;
 use rstock::services::market_data::{MarketData, MarketDataSources, SourceObservation};
-use rstock::services::{analytics, nav, portfolio};
+use rstock::services::{analytics, metrics, nav, portfolio};
 use sea_orm::{ActiveModelTrait, Database, DatabaseConnection, EntityTrait, Set};
 use tempfile::TempDir;
 
@@ -32,6 +34,34 @@ const START: &str = "2015-01-01";
 const END: &str = "2015-12-31";
 
 const FIXTURE_MATRIX: &[(usize, usize, usize)] = &[(5, 1, 100), (50, 10, 5_000), (100, 20, 20_000)];
+
+struct CountingAllocator;
+
+static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
+
+#[global_allocator]
+static GLOBAL_ALLOCATOR: CountingAllocator = CountingAllocator;
+
+unsafe impl GlobalAlloc for CountingAllocator {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        System.alloc(layout)
+    }
+
+    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        System.alloc_zeroed(layout)
+    }
+
+    unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
+        System.dealloc(pointer, layout);
+    }
+
+    unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        System.realloc(pointer, layout, new_size)
+    }
+}
 
 fn release_binary() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -388,14 +418,54 @@ async fn run_delayed_candidate(limit: usize) -> (std::time::Duration, usize, usi
     (started.elapsed(), calls, peak)
 }
 
+fn rolling_return_fixture(days: usize) -> Vec<(String, f64, f64)> {
+    let start = NaiveDate::from_ymd_opt(2015, 1, 1).expect("valid benchmark start date");
+    (0..days)
+        .map(|index| {
+            let left = ((index * 17) % 23) as f64 / 100.0 - 0.1;
+            let right = ((index * 11 + 3) % 19) as f64 / 100.0 - 0.08;
+            (
+                (start + Duration::days(index as i64))
+                    .format("%Y-%m-%d")
+                    .to_string(),
+                left,
+                right,
+            )
+        })
+        .collect()
+}
+
+fn print_rolling_work_proxy(label: &str, returns: &[(String, f64, f64)]) {
+    let input_len = returns.len();
+    let window_count = input_len.saturating_sub(ROLLING_CORRELATION_WINDOW_DAYS) + 1;
+    let naive_window_value_visits = window_count * ROLLING_CORRELATION_WINDOW_DAYS * 2;
+    let optimized_value_updates = (input_len + window_count.saturating_sub(1)) * 2;
+    ALLOCATIONS.store(0, Ordering::Relaxed);
+    let output = metrics::compute_rolling_correlation(returns);
+    std::hint::black_box(output);
+    let optimized_total_allocations = ALLOCATIONS.load(Ordering::Relaxed);
+    println!(
+        "rolling_work_proxy label={label} input={input_len} windows={window_count} \
+         naive_window_value_visits={naive_window_value_visits} \
+         optimized_value_updates={optimized_value_updates} \
+         naive_window_allocations={} optimized_window_allocations=0 \
+         optimized_total_allocations={optimized_total_allocations}",
+        window_count * 2,
+    );
+}
+
 #[allow(clippy::too_many_lines)]
 fn benchmark_performance(c: &mut Criterion) {
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let fixture = runtime.block_on(build_fixture(5, 1, 100));
     let representative = runtime.block_on(build_fixture(50, 10, 5_000));
     let stress = runtime.block_on(build_fixture(100, 20, 20_000));
+    let rolling_representative = rolling_return_fixture(3_650);
+    let rolling_stress = rolling_return_fixture(7_300);
     let import_fixture = runtime.block_on(build_import_fixture());
     assert_eq!(FIXTURE_MATRIX.len(), 3);
+    print_rolling_work_proxy("representative", &rolling_representative);
+    print_rolling_work_proxy("stress", &rolling_stress);
     let mut group = c.benchmark_group("performance-baseline");
     group.bench_function("transaction_listing", |b| {
         b.to_async(&runtime).iter(|| async {
@@ -488,6 +558,35 @@ fn benchmark_performance(c: &mut Criterion) {
             )
             .await
             .unwrap()
+        });
+    });
+    group.bench_function("rolling_correlation_stress", |b| {
+        b.to_async(&runtime).iter(|| async {
+            analytics::compute_rolling_correlation_data(
+                &stress.db,
+                START,
+                &stress.end,
+                "XPERF001",
+                "XPERF002",
+                "1y",
+                &stress.market_data,
+            )
+            .await
+            .unwrap()
+        });
+    });
+    group.bench_function("rolling_metric_representative", |b| {
+        b.iter(|| {
+            std::hint::black_box(metrics::compute_rolling_correlation(std::hint::black_box(
+                &rolling_representative,
+            )))
+        });
+    });
+    group.bench_function("rolling_metric_stress", |b| {
+        b.iter(|| {
+            std::hint::black_box(metrics::compute_rolling_correlation(std::hint::black_box(
+                &rolling_stress,
+            )))
         });
     });
     group.bench_function("historical_market_data_preparation_cold", |b| {

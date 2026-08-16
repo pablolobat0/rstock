@@ -27,6 +27,12 @@ representative correlation matrix, portfolio retrieval, and Historical market
 data preparation. Small-fixture cold portfolio retrieval and full NAV rebuild
 are also material; incremental NAV and representative rolling correlation form
 the next tier.
+Rolling correlation now maintains bounded rolling statistics instead of
+allocating and rescanning both 60-return windows for every output point. The
+offline benchmark includes representative and stress end-to-end and direct
+metric paths, and records a work/allocation proxy alongside timings without
+network data. The allocation count is collected through the benchmark's
+counting global allocator around the direct metric call.
 
 Transaction listing is immaterial at small scale but grows substantially at
 5,000 and 20,000 rows. Already-warm representative NAV readiness is
