@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::Context;
 use chrono::{Duration, NaiveDate};
-use sea_orm::DatabaseConnection;
+use sea_orm::{DatabaseConnection, TransactionTrait};
 
 use crate::constants::{format_date, FLOAT_EPSILON, INITIAL_NAV};
 use crate::db::repos::{
@@ -31,6 +31,13 @@ struct NavMarketDataPreparation {
     valuation_data: Option<NavValuationData>,
 }
 
+struct SnapshotBatch {
+    portfolio_snapshots: Vec<PortfolioSnapshot>,
+    asset_snapshots: Vec<AssetSnapshot>,
+}
+
+const SNAPSHOT_BATCH_SIZE: usize = 100;
+
 /// Returns ensured NAV history for a caller-selected display range.
 pub async fn get_portfolio_history(
     db: &DatabaseConnection,
@@ -57,7 +64,20 @@ pub async fn ensure_portfolio_history(
     let yesterday = market_data.today() - Duration::days(1);
     let yesterday_str = format_date(yesterday);
 
-    let latest_snapshot = portfolio_history_repo::find_latest(db).await?;
+    let mut latest_snapshot = portfolio_history_repo::find_latest(db).await?;
+    loop {
+        let Some(snapshot) = latest_snapshot.as_ref() else {
+            break;
+        };
+        if is_complete_snapshot(db, snapshot).await? {
+            break;
+        }
+
+        tracing::warn!(date = %snapshot.date, "discarding incomplete NAV snapshot");
+        discard_incomplete_snapshots_from(db, &snapshot.date).await?;
+        latest_snapshot = portfolio_history_repo::find_latest(db).await?;
+    }
+
     let mut market_data_limitations = Vec::new();
     match &latest_snapshot {
         Some(snapshot) if snapshot.date >= yesterday_str => {}
@@ -111,6 +131,60 @@ pub async fn ensure_portfolio_history(
         latest_snapshot: portfolio_history_repo::find_latest(db).await?,
         market_data_limitations,
     })
+}
+
+async fn is_complete_snapshot(
+    db: &DatabaseConnection,
+    snapshot: &PortfolioSnapshot,
+) -> anyhow::Result<bool> {
+    let transactions =
+        transaction_repo::find_all_ordered_by_date(db, None, Some(&snapshot.date)).await?;
+    let asset_ids: HashSet<i32> = transactions
+        .iter()
+        .map(|transaction| transaction.asset_id)
+        .collect();
+    let assets = asset_repo::find_by_ids(db, asset_ids.iter().copied()).await?;
+    let transactions_by_asset = transactions.into_iter().fold(
+        HashMap::<i32, Vec<Transaction>>::new(),
+        |mut transactions_by_asset, transaction| {
+            transactions_by_asset
+                .entry(transaction.asset_id)
+                .or_default()
+                .push(transaction);
+            transactions_by_asset
+        },
+    );
+    let expected_asset_ids: HashSet<i32> = assets
+        .iter()
+        .filter(|asset| !asset.is_monetary())
+        .filter(|asset| {
+            transactions_by_asset
+                .get(&asset.id)
+                .is_some_and(|transactions| {
+                    Transaction::compute_holdings(transactions) > FLOAT_EPSILON
+                })
+        })
+        .map(|asset| asset.id)
+        .collect();
+    let actual_asset_ids: HashSet<i32> =
+        portfolio_asset_history_repo::find_by_date(db, &snapshot.date)
+            .await?
+            .into_iter()
+            .map(|asset_snapshot| asset_snapshot.asset_id)
+            .collect();
+
+    Ok(expected_asset_ids.is_subset(&actual_asset_ids))
+}
+
+async fn discard_incomplete_snapshots_from(
+    db: &DatabaseConnection,
+    date: &str,
+) -> anyhow::Result<()> {
+    let transaction = db.begin().await?;
+    portfolio_history_repo::delete_from_date(&transaction, date).await?;
+    portfolio_asset_history_repo::delete_from_date(&transaction, date).await?;
+    transaction.commit().await?;
+    Ok(())
 }
 
 /// Prepares valuation market data once for the holdings that must be valued
@@ -251,6 +325,10 @@ async fn rebuild_portfolio_history(
     }
 
     let asset_map: HashMap<i32, &Asset> = assets.iter().map(|a| (a.id, a)).collect();
+    let mut snapshot_batch = SnapshotBatch {
+        portfolio_snapshots: Vec::with_capacity(SNAPSHOT_BATCH_SIZE),
+        asset_snapshots: Vec::new(),
+    };
 
     // Iterate each calendar day
     let mut current = start_date;
@@ -290,23 +368,33 @@ async fn rebuild_portfolio_history(
         // First-ever transaction day: store a seed snapshot only after required valuations succeed.
         if is_fresh_portfolio && outstanding_shares > 0.0 {
             let seed_date = format_date(current - chrono::Duration::days(1));
-            store_daily_snapshot(db, &seed_date, 0.0, 0.0, 0.0, INITIAL_NAV, &[]).await?;
+            snapshot_batch.portfolio_snapshots.push(PortfolioSnapshot {
+                date: seed_date,
+                asset_value: 0.0,
+                total_value: 0.0,
+                outstanding_shares: 0.0,
+                nav: INITIAL_NAV,
+            });
             is_fresh_portfolio = false;
         }
 
-        store_daily_snapshot(
-            db,
-            &date_str,
+        snapshot_batch.portfolio_snapshots.push(PortfolioSnapshot {
+            date: date_str,
             asset_value,
             total_value,
             outstanding_shares,
             nav,
-            &asset_values,
-        )
-        .await?;
+        });
+        snapshot_batch.asset_snapshots.extend(asset_values);
+
+        if snapshot_batch.portfolio_snapshots.len() >= SNAPSHOT_BATCH_SIZE {
+            persist_snapshot_batch(db, &mut snapshot_batch).await?;
+        }
 
         current += chrono::Duration::days(1);
     }
+
+    persist_snapshot_batch(db, &mut snapshot_batch).await?;
 
     Ok(())
 }
@@ -421,30 +509,20 @@ fn compute_day_asset_values(
     Ok((total_asset_value, asset_values))
 }
 
-async fn store_daily_snapshot(
+async fn persist_snapshot_batch(
     db: &DatabaseConnection,
-    date: &str,
-    asset_value: f64,
-    total_value: f64,
-    outstanding_shares: f64,
-    nav: f64,
-    asset_values: &[AssetSnapshot],
+    batch: &mut SnapshotBatch,
 ) -> anyhow::Result<()> {
-    portfolio_history_repo::upsert(
-        db,
-        &PortfolioSnapshot {
-            date: date.to_owned(),
-            asset_value,
-            total_value,
-            outstanding_shares,
-            nav,
-        },
-    )
-    .await?;
-
-    for av in asset_values {
-        portfolio_asset_history_repo::upsert(db, av).await?;
+    if batch.portfolio_snapshots.is_empty() {
+        return Ok(());
     }
 
+    let transaction = db.begin().await?;
+    portfolio_history_repo::upsert_many_native(&transaction, &batch.portfolio_snapshots).await?;
+    portfolio_asset_history_repo::upsert_many_native(&transaction, &batch.asset_snapshots).await?;
+    transaction.commit().await?;
+
+    batch.portfolio_snapshots.clear();
+    batch.asset_snapshots.clear();
     Ok(())
 }
