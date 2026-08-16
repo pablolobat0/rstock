@@ -4,7 +4,7 @@ use std::process::Command;
 use sea_orm::{ActiveModelTrait, ColumnTrait, Database, EntityTrait, QueryFilter, Set};
 use serde_json::{json, Value};
 
-use rstock::db::entities::{asset, daily_asset_price, portfolio_history};
+use rstock::db::entities::{asset, daily_asset_price, portfolio_asset_history, portfolio_history};
 
 #[test]
 fn both_dashboard_paths_emit_the_same_empty_json_contract() {
@@ -150,6 +150,18 @@ async fn insert_offline_nav_fixture(home: &Path) {
     .insert(&db)
     .await
     .expect("NAV readiness snapshot should be inserted");
+    portfolio_asset_history::ActiveModel {
+        date: Set("9999-12-31".to_owned()),
+        asset_id: Set(asset.id),
+        quantity: Set(1.0),
+        closing_price: Set(10.0),
+        market_value: Set(10.0),
+        exchange_rate: Set(1.0),
+        ..Default::default()
+    }
+    .insert(&db)
+    .await
+    .expect("complete NAV asset snapshot should be inserted");
 }
 
 fn run_success(home: &Path, args: &[&str]) {

@@ -1,6 +1,6 @@
 use sea_orm::{
     sea_query::OnConflict, ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait,
-    QueryFilter, Set,
+    QueryFilter, QueryOrder, Set,
 };
 
 use crate::db::entities::portfolio_asset_history;
@@ -14,6 +14,15 @@ pub async fn find_by_date(
 ) -> anyhow::Result<Vec<AssetSnapshot>> {
     let results = portfolio_asset_history::Entity::find()
         .filter(portfolio_asset_history::Column::Date.eq(date))
+        .all(db)
+        .await?;
+    Ok(results.into_iter().map(AssetSnapshot::from).collect())
+}
+
+pub async fn find_all(db: &impl ConnectionTrait) -> anyhow::Result<Vec<AssetSnapshot>> {
+    let results = portfolio_asset_history::Entity::find()
+        .order_by_asc(portfolio_asset_history::Column::Date)
+        .order_by_asc(portfolio_asset_history::Column::AssetId)
         .all(db)
         .await?;
     Ok(results.into_iter().map(AssetSnapshot::from).collect())

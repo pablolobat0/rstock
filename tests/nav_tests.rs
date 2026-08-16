@@ -5,6 +5,7 @@ use rstock::models::{
     BuyOrder, MarketDataLimitation, MarketDataLimitationClassification, MarketDataSubject,
 };
 use rstock::services::{nav, transactions};
+use sea_orm::ConnectionTrait;
 
 fn nav_market_data(
     sources: &common::MockMarketDataSources,
@@ -266,6 +267,120 @@ async fn test_incremental_readiness_preserves_existing_history() {
 
     // Day 3 should still be there
     assert!((snap_d3_after.nav - 110.0).abs() < 0.01);
+}
+
+/// A failed asset write rolls back the active batch, while a later readiness
+/// call resumes after the last complete NAV snapshot.
+#[tokio::test]
+async fn interrupted_nav_batch_preserves_complete_history_and_resumes() {
+    let db = common::setup_test_db().await;
+    let mock = common::MockMarketDataSources::new();
+    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
+    common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
+
+    let mut date = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
+    let end = NaiveDate::from_ymd_opt(2025, 5, 31).unwrap();
+    while date <= end {
+        common::insert_daily_price(&db, asset_id, &date.to_string(), 50.0, false).await;
+        date += chrono::Duration::days(1);
+    }
+
+    db.execute_unprepared(
+        "CREATE TRIGGER fail_nav_asset_batch BEFORE INSERT ON portfolio_asset_history \
+         WHEN NEW.date = '2025-04-11' \
+         BEGIN SELECT RAISE(ABORT, 'injected NAV batch failure'); END",
+    )
+    .await
+    .unwrap();
+
+    let market_data = common::market_data_at(&mock, NaiveDate::from_ymd_opt(2025, 6, 1).unwrap());
+    assert!(nav::ensure_portfolio_history(&db, &market_data)
+        .await
+        .is_err());
+
+    let snapshots = common::get_all_snapshots(&db).await;
+    assert_eq!(
+        snapshots.last().map(|snapshot| snapshot.date.as_str()),
+        Some("2025-04-10")
+    );
+    assert!(snapshots.iter().all(|snapshot| {
+        snapshot.date == "2025-01-01"
+            || ((snapshot.nav - 100.0).abs() < 0.01
+                && (snapshot.asset_value - 500.0).abs() < 0.01
+                && (snapshot.total_value - 500.0).abs() < 0.01)
+    }));
+    for snapshot in &snapshots {
+        if snapshot.date != "2025-01-01" {
+            assert_eq!(
+                common::get_asset_snapshots(&db, &snapshot.date).await.len(),
+                1
+            );
+        }
+    }
+    assert!(common::get_portfolio_snapshot(&db, "2025-04-11")
+        .await
+        .is_none());
+
+    db.execute_unprepared("DROP TRIGGER fail_nav_asset_batch")
+        .await
+        .unwrap();
+    nav::ensure_portfolio_history(&db, &market_data)
+        .await
+        .unwrap();
+
+    let snapshots = common::get_all_snapshots(&db).await;
+    assert_eq!(snapshots.len(), 151);
+    assert_eq!(
+        snapshots.last().map(|snapshot| snapshot.date.as_str()),
+        Some("2025-05-31")
+    );
+    assert!(snapshots.iter().all(|snapshot| {
+        snapshot.date == "2025-01-01"
+            || ((snapshot.nav - 100.0).abs() < 0.01
+                && (snapshot.asset_value - 500.0).abs() < 0.01
+                && (snapshot.total_value - 500.0).abs() < 0.01)
+    }));
+    for snapshot in snapshots {
+        if snapshot.date != "2025-01-01" {
+            assert_eq!(
+                common::get_asset_snapshots(&db, &snapshot.date).await.len(),
+                1
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn incomplete_latest_snapshot_is_discarded_before_resuming() {
+    let db = common::setup_test_db().await;
+    let mock = common::MockMarketDataSources::new();
+    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
+    common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
+    for date in ["2025-01-02", "2025-01-03"] {
+        common::insert_daily_price(&db, asset_id, date, 50.0, false).await;
+    }
+    common::insert_portfolio_snapshot(&db, "2025-01-01", 100.0, 0.0).await;
+    common::insert_portfolio_snapshot(&db, "2025-01-02", 100.0, 5.0).await;
+    common::insert_portfolio_snapshot(&db, "2025-01-03", 100.0, 5.0).await;
+    common::insert_portfolio_asset_snapshot(&db, "2025-01-03", asset_id, 10.0, 50.0, 500.0, 1.0)
+        .await;
+
+    let market_data = common::market_data_at(&mock, NaiveDate::from_ymd_opt(2025, 2, 1).unwrap());
+    nav::ensure_portfolio_history(&db, &market_data)
+        .await
+        .unwrap();
+
+    assert!(common::get_portfolio_snapshot(&db, "2025-01-03")
+        .await
+        .is_some());
+    assert_eq!(
+        common::get_asset_snapshots(&db, "2025-01-02").await.len(),
+        1
+    );
+    assert_eq!(
+        common::get_asset_snapshots(&db, "2025-01-03").await.len(),
+        1
+    );
 }
 
 /// A backdated buy invalidates and correctly recomputes history from its date.

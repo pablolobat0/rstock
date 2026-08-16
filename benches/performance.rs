@@ -682,6 +682,26 @@ fn benchmark_performance(c: &mut Criterion) {
             elapsed
         });
     });
+    for (name, asset_count, years, transaction_count) in [
+        ("nav_rebuild_full_representative", 50, 10, 5_000),
+        ("nav_rebuild_full_stress", 100, 20, 20_000),
+    ] {
+        group.bench_function(name, |b| {
+            b.iter_custom(|iterations| {
+                let mut elapsed = std::time::Duration::ZERO;
+                for _ in 0..iterations {
+                    let fresh =
+                        runtime.block_on(build_fixture(asset_count, years, transaction_count));
+                    let started = Instant::now();
+                    runtime
+                        .block_on(nav::ensure_portfolio_history(&fresh.db, &fresh.market_data))
+                        .expect("large NAV rebuild");
+                    elapsed += started.elapsed();
+                }
+                elapsed
+            });
+        });
+    }
     group.bench_function("portfolio_retrieval_cold", |b| {
         b.iter_custom(|iterations| {
             let mut elapsed = std::time::Duration::ZERO;

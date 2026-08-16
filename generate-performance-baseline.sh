@@ -35,6 +35,8 @@ expected = {
     "historical_market_data_preparation_warm",
     "historical_market_data_preparation_partial",
     "nav_rebuild_full",
+    "nav_rebuild_full_representative",
+    "nav_rebuild_full_stress",
     "portfolio_retrieval_cold",
     "portfolio_retrieval_warm",
     "nav_rebuild_incremental",
