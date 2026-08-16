@@ -218,13 +218,13 @@ async fn automatic_migration_rolls_back_a_failed_destructive_migration() {
         .expect("historical migration prefix should apply");
     db.execute(Statement::from_string(
         DbBackend::Sqlite,
-        "INSERT INTO daily_exchange_rates (pair, date, rate) VALUES ('USD/EUR', '2025-01-01', 0.9)",
+        "INSERT INTO daily_exchange_rates (from_currency, to_currency, date, rate) VALUES ('USD', 'EUR', '2025-01-01', 0.9)",
     ))
     .await
     .expect("historical exchange rate should be stored");
     db.execute(Statement::from_string(
         DbBackend::Sqlite,
-        "CREATE INDEX idx_daily_exchange_rates_currencies_date ON assets (ticker)",
+        "CREATE INDEX idx_transactions_date_id ON transactions (date, id)",
     ))
     .await
     .expect("conflicting index should be created");
@@ -240,7 +240,7 @@ async fn automatic_migration_rolls_back_a_failed_destructive_migration() {
     let rate: f64 = db
         .query_one(Statement::from_string(
             DbBackend::Sqlite,
-            "SELECT rate FROM daily_exchange_rates WHERE pair = 'USD/EUR'",
+            "SELECT rate FROM daily_exchange_rates WHERE from_currency = 'USD' AND to_currency = 'EUR'",
         ))
         .await
         .expect("rolled-back exchange rate query")
