@@ -360,10 +360,10 @@ async fn incomplete_latest_snapshot_is_discarded_before_resuming() {
         common::insert_daily_price(&db, asset_id, date, 50.0, false).await;
     }
     common::insert_portfolio_snapshot(&db, "2025-01-01", 100.0, 0.0).await;
-    common::insert_portfolio_asset_snapshot(&db, "2025-01-02", asset_id, 10.0, 50.0, 500.0, 1.0)
-        .await;
     common::insert_portfolio_snapshot(&db, "2025-01-02", 100.0, 5.0).await;
     common::insert_portfolio_snapshot(&db, "2025-01-03", 100.0, 5.0).await;
+    common::insert_portfolio_asset_snapshot(&db, "2025-01-03", asset_id, 10.0, 50.0, 500.0, 1.0)
+        .await;
 
     let market_data = common::market_data_at(&mock, NaiveDate::from_ymd_opt(2025, 2, 1).unwrap());
     nav::ensure_portfolio_history(&db, &market_data)
@@ -373,6 +373,10 @@ async fn incomplete_latest_snapshot_is_discarded_before_resuming() {
     assert!(common::get_portfolio_snapshot(&db, "2025-01-03")
         .await
         .is_some());
+    assert_eq!(
+        common::get_asset_snapshots(&db, "2025-01-02").await.len(),
+        1
+    );
     assert_eq!(
         common::get_asset_snapshots(&db, "2025-01-03").await.len(),
         1

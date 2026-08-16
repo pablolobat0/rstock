@@ -65,17 +65,12 @@ pub async fn ensure_portfolio_history(
     let yesterday_str = format_date(yesterday);
 
     let mut latest_snapshot = portfolio_history_repo::find_latest(db).await?;
-    loop {
-        let Some(snapshot) = latest_snapshot.as_ref() else {
-            break;
-        };
-        if is_complete_snapshot(db, snapshot).await? {
-            break;
+    if let Some(latest) = latest_snapshot.as_ref() {
+        if let Some(incomplete_date) = find_first_incomplete_snapshot(db, &latest.date).await? {
+            tracing::warn!(date = %incomplete_date, "discarding incomplete NAV snapshots");
+            discard_incomplete_snapshots_from(db, &incomplete_date).await?;
+            latest_snapshot = portfolio_history_repo::find_latest(db).await?;
         }
-
-        tracing::warn!(date = %snapshot.date, "discarding incomplete NAV snapshot");
-        discard_incomplete_snapshots_from(db, &snapshot.date).await?;
-        latest_snapshot = portfolio_history_repo::find_latest(db).await?;
     }
 
     let mut market_data_limitations = Vec::new();
@@ -133,47 +128,74 @@ pub async fn ensure_portfolio_history(
     })
 }
 
-async fn is_complete_snapshot(
+async fn find_first_incomplete_snapshot(
     db: &DatabaseConnection,
-    snapshot: &PortfolioSnapshot,
-) -> anyhow::Result<bool> {
+    latest_date: &str,
+) -> anyhow::Result<Option<String>> {
+    let snapshots = portfolio_history_repo::find_between(db, "", latest_date).await?;
     let transactions =
-        transaction_repo::find_all_ordered_by_date(db, None, Some(&snapshot.date)).await?;
+        transaction_repo::find_all_ordered_by_date(db, None, Some(latest_date)).await?;
     let asset_ids: HashSet<i32> = transactions
         .iter()
         .map(|transaction| transaction.asset_id)
         .collect();
     let assets = asset_repo::find_by_ids(db, asset_ids.iter().copied()).await?;
-    let transactions_by_asset = transactions.into_iter().fold(
-        HashMap::<i32, Vec<Transaction>>::new(),
-        |mut transactions_by_asset, transaction| {
-            transactions_by_asset
-                .entry(transaction.asset_id)
+    let asset_map: HashMap<i32, &Asset> = assets.iter().map(|asset| (asset.id, asset)).collect();
+    let asset_snapshots = portfolio_asset_history_repo::find_all(db).await?;
+    let actual_asset_ids_by_date = asset_snapshots.into_iter().fold(
+        HashMap::<String, HashSet<i32>>::new(),
+        |mut asset_ids_by_date, asset_snapshot| {
+            asset_ids_by_date
+                .entry(asset_snapshot.date)
                 .or_default()
-                .push(transaction);
-            transactions_by_asset
+                .insert(asset_snapshot.asset_id);
+            asset_ids_by_date
         },
     );
-    let expected_asset_ids: HashSet<i32> = assets
-        .iter()
-        .filter(|asset| !asset.is_monetary())
-        .filter(|asset| {
-            transactions_by_asset
-                .get(&asset.id)
-                .is_some_and(|transactions| {
-                    Transaction::compute_holdings(transactions) > FLOAT_EPSILON
-                })
-        })
-        .map(|asset| asset.id)
-        .collect();
-    let actual_asset_ids: HashSet<i32> =
-        portfolio_asset_history_repo::find_by_date(db, &snapshot.date)
-            .await?
-            .into_iter()
-            .map(|asset_snapshot| asset_snapshot.asset_id)
-            .collect();
 
-    Ok(expected_asset_ids.is_subset(&actual_asset_ids))
+    let mut holdings = HashMap::<i32, f64>::new();
+    let mut transaction_index = 0;
+    for snapshot in snapshots {
+        while transaction_index < transactions.len()
+            && transactions[transaction_index].date <= snapshot.date
+        {
+            let transaction = &transactions[transaction_index];
+            if asset_map
+                .get(&transaction.asset_id)
+                .is_some_and(|asset| !asset.is_monetary())
+            {
+                let holding = holdings.entry(transaction.asset_id).or_default();
+                if transaction.is_split() {
+                    *holding *= transaction.quantity;
+                } else if transaction.is_buy() {
+                    *holding += transaction.quantity;
+                } else if transaction.is_sell() {
+                    *holding -= transaction.quantity;
+                }
+            }
+            transaction_index += 1;
+        }
+
+        let expected_asset_ids: HashSet<i32> = holdings
+            .iter()
+            .filter(|(asset_id, quantity)| {
+                **quantity > FLOAT_EPSILON
+                    && asset_map
+                        .get(asset_id)
+                        .is_some_and(|asset| !asset.is_monetary())
+            })
+            .map(|(asset_id, _)| *asset_id)
+            .collect();
+        let actual_asset_ids = actual_asset_ids_by_date
+            .get(&snapshot.date)
+            .cloned()
+            .unwrap_or_default();
+        if !expected_asset_ids.is_subset(&actual_asset_ids) {
+            return Ok(Some(snapshot.date));
+        }
+    }
+
+    Ok(None)
 }
 
 async fn discard_incomplete_snapshots_from(
