@@ -128,6 +128,7 @@ async fn test_perfectly_correlated_assets() {
         (corr - 1.0).abs() < 0.01,
         "expected ~1.0 for perfectly correlated assets, got {corr}"
     );
+    assert_eq!(matrix.matrix[idx_b][idx_a], matrix.matrix[idx_a][idx_b]);
 }
 
 /// Two inversely correlated EUR assets should have correlation close to -1.0

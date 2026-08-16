@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use sea_orm::{
     sea_query::OnConflict, ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait,
     FromQueryResult, QueryFilter, QueryOrder, Set, Statement,
@@ -83,6 +85,37 @@ pub async fn find_rates_between(
         .all(db)
         .await?;
     Ok(results.into_iter().map(|r| (r.date, r.rate)).collect())
+}
+
+pub async fn find_rates_between_currencies(
+    db: &impl ConnectionTrait,
+    from_currencies: &[String],
+    to_currency: &str,
+    start_date: &str,
+    end_date: &str,
+) -> anyhow::Result<HashMap<String, Vec<(String, f64)>>> {
+    if from_currencies.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let results = daily_exchange_rate::Entity::find()
+        .filter(daily_exchange_rate::Column::FromCurrency.is_in(from_currencies.to_vec()))
+        .filter(daily_exchange_rate::Column::ToCurrency.eq(to_currency))
+        .filter(daily_exchange_rate::Column::Date.gte(start_date))
+        .filter(daily_exchange_rate::Column::Date.lte(end_date))
+        .order_by_asc(daily_exchange_rate::Column::FromCurrency)
+        .order_by_asc(daily_exchange_rate::Column::Date)
+        .all(db)
+        .await?;
+
+    let mut rates = HashMap::new();
+    for rate in results {
+        rates
+            .entry(rate.from_currency)
+            .or_insert_with(Vec::new)
+            .push((rate.date, rate.rate));
+    }
+    Ok(rates)
 }
 
 pub async fn find_coverage_with_seed(

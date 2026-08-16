@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use sea_orm::{
     sea_query::{Expr, OnConflict},
     ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, FromQueryResult, QueryFilter,
@@ -111,6 +113,36 @@ pub async fn find_prices_between(
         .into_iter()
         .map(|r| (r.date, r.closing_price))
         .collect())
+}
+
+pub async fn find_prices_between_assets(
+    db: &impl ConnectionTrait,
+    asset_ids: &[i32],
+    start_date: &str,
+    end_date: &str,
+) -> anyhow::Result<HashMap<i32, Vec<(String, f64)>>> {
+    if asset_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let results = daily_asset_price::Entity::find()
+        .filter(daily_asset_price::Column::AssetId.is_in(asset_ids.to_vec()))
+        .filter(daily_asset_price::Column::Date.gte(start_date))
+        .filter(daily_asset_price::Column::Date.lte(end_date))
+        .filter(daily_asset_price::Column::IsApiFailure.eq(false))
+        .order_by_asc(daily_asset_price::Column::AssetId)
+        .order_by_asc(daily_asset_price::Column::Date)
+        .all(db)
+        .await?;
+
+    let mut prices = HashMap::new();
+    for price in results {
+        prices
+            .entry(price.asset_id)
+            .or_insert_with(Vec::new)
+            .push((price.date, price.closing_price));
+    }
+    Ok(prices)
 }
 
 pub async fn find_coverage_with_seed(
