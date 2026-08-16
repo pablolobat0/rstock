@@ -422,7 +422,10 @@ fn test_compute_rolling_correlation_perfect_positive() {
     let aligned: Vec<(String, f64, f64)> = (0..65)
         .map(|i| {
             (
-                format!("2025-01-{:02}", i + 1),
+                (chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap()
+                    + chrono::Duration::days(i as i64))
+                .format("%Y-%m-%d")
+                .to_string(),
                 0.01 + (i as f64) * 0.0001,
                 0.01 + (i as f64) * 0.0001,
             )
@@ -437,13 +440,22 @@ fn test_compute_rolling_correlation_perfect_positive() {
 #[test]
 fn test_compute_rolling_correlation_constant_returns_are_zero() {
     let aligned: Vec<(String, f64, f64)> = (0..60)
-        .map(|i| (format!("2025-01-{i:02}"), 0.01, 0.02))
+        .map(|i| {
+            (
+                (chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap()
+                    + chrono::Duration::days(i as i64))
+                .format("%Y-%m-%d")
+                .to_string(),
+                0.01,
+                0.02,
+            )
+        })
         .collect();
 
     let points = compute_rolling_correlation(&aligned);
 
     assert_eq!(points.len(), 1);
-    assert_eq!(points[0].0, "2025-01-59");
+    assert_eq!(points[0].0, "2025-03-01");
     assert_eq!(points[0].1, 0.0);
 }
 
@@ -484,7 +496,14 @@ fn test_compute_rolling_correlation_matches_windowed_pearson() {
         .map(|i| {
             let left = ((i * 17) % 23) as f64 / 100.0 - 0.1;
             let right = ((i * 11 + 3) % 19) as f64 / 100.0 - 0.08;
-            (format!("2025-{i:03}"), left, right)
+            (
+                (chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap()
+                    + chrono::Duration::days(i as i64))
+                .format("%Y-%m-%d")
+                .to_string(),
+                left,
+                right,
+            )
         })
         .collect();
     let expected: Vec<(String, f64)> = aligned
@@ -634,18 +653,17 @@ async fn test_rolling_correlation_for_pair() {
 
     assert_eq!(result.left_name, "Fake A");
     assert_eq!(result.right_name, "Fake B");
-    assert_eq!(result.base_currency, "EUR");
     assert_eq!(result.requested_start_date, "2025-01-01");
     assert_eq!(result.requested_end_date, "2025-04-30");
     assert!(!result.points.is_empty());
-    assert!(result
-        .points
-        .first()
-        .is_some_and(|(date, _)| date.as_str() >= result.requested_start_date.as_str()));
-    assert!(result
-        .points
-        .last()
-        .is_some_and(|(date, _)| date.as_str() <= result.requested_end_date.as_str()));
+    assert_eq!(
+        result.points.first().map(|(date, _)| date.as_str()),
+        Some("2025-03-02")
+    );
+    assert_eq!(
+        result.points.last().map(|(date, _)| date.as_str()),
+        Some("2025-04-30")
+    );
     assert!(result.latest.is_some());
 }
 
@@ -705,7 +723,6 @@ async fn test_rolling_correlation_json_preserves_context_summary_points_and_limi
     assert_eq!(envelope["command"], "analyze.correlation.rolling");
     assert_eq!(data["left_name"], "Fake A");
     assert_eq!(data["right_name"], "Fake B");
-    assert_eq!(data["base_currency"], "EUR");
     assert_eq!(data["period_label"], "1Y");
     assert_eq!(data["window_label"], "60D rolling");
     assert_eq!(data["requested_start_date"], "2025-01-01");

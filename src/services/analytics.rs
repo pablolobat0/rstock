@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use sea_orm::DatabaseConnection;
 
 use crate::constants::{
-    is_benchmark_ticker, BASE_CURRENCY, FLOAT_EPSILON, MIN_DATA_POINTS, ZERO_RETURN_THRESHOLD,
+    is_benchmark_ticker, FLOAT_EPSILON, MIN_DATA_POINTS, ZERO_RETURN_THRESHOLD,
 };
 use crate::db::repos::{asset_repo, portfolio_history_repo, transaction_repo};
 use crate::models::{
@@ -147,7 +147,6 @@ pub async fn compute_rolling_correlation_data(
     Ok(RollingCorrelationResult {
         left_name: left_asset.name,
         right_name: right_asset.name,
-        base_currency: BASE_CURRENCY.to_owned(),
         period_label: period_label.to_owned(),
         window_label: format!(
             "{}D rolling",

@@ -419,11 +419,18 @@ async fn run_delayed_candidate(limit: usize) -> (std::time::Duration, usize, usi
 }
 
 fn rolling_return_fixture(days: usize) -> Vec<(String, f64, f64)> {
+    let start = NaiveDate::from_ymd_opt(2015, 1, 1).expect("valid benchmark start date");
     (0..days)
         .map(|index| {
             let left = ((index * 17) % 23) as f64 / 100.0 - 0.1;
             let right = ((index * 11 + 3) % 19) as f64 / 100.0 - 0.08;
-            (format!("D{index:05}"), left, right)
+            (
+                (start + Duration::days(index as i64))
+                    .format("%Y-%m-%d")
+                    .to_string(),
+                left,
+                right,
+            )
         })
         .collect()
 }
