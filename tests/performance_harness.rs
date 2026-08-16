@@ -3,8 +3,9 @@
 mod common;
 
 use common::{insert_asset, insert_transaction, setup_test_db};
+use migration::{Migrator, MigratorTrait};
 use rstock::db::repos::transaction_repo;
-use sea_orm::{ConnectionTrait, DbBackend, Statement};
+use sea_orm::{ConnectionTrait, Database, DbBackend, Statement};
 
 #[tokio::test]
 async fn small_behavior_fixture_has_expected_assets_and_ordered_ledger() {
@@ -134,4 +135,117 @@ async fn representative_transaction_plans_are_available_for_baselining() {
             .count(),
         0
     );
+}
+
+#[tokio::test]
+async fn automatic_migration_covers_fresh_partial_and_current_schemas() {
+    let migration_count = Migrator::migrations().len();
+    for applied_count in 0..=migration_count {
+        let directory = tempfile::tempdir().expect("temporary migration database directory");
+        let path = directory.path().join("startup.db");
+        let db = Database::connect(format!("sqlite://{}?mode=rwc", path.display()))
+            .await
+            .expect("temporary file-backed database");
+
+        if applied_count > 0 {
+            Migrator::up(&db, Some(applied_count as u32))
+                .await
+                .expect("historical migration prefix should apply");
+            db.execute(Statement::from_string(
+                DbBackend::Sqlite,
+                "INSERT INTO assets (ticker, name, asset_type, currency, created_at) VALUES ('XSTARTUP', 'Startup fixture', 'stock', 'EUR', '2025-01-01T00:00:00')",
+            ))
+            .await
+            .expect("historical schema should accept persisted asset data");
+            db.execute(Statement::from_string(
+                DbBackend::Sqlite,
+                "INSERT INTO transactions (asset_id, tx_type, date, quantity, price_cents, fees_cents, created_at) VALUES (1, 'buy', '2025-01-01', 1.0, 10000, 0, '2025-01-01T00:00:00')",
+            ))
+            .await
+            .expect("historical schema should accept persisted ledger data");
+        }
+
+        assert_eq!(
+            Migrator::get_pending_migrations(&db)
+                .await
+                .expect("historical migration state")
+                .len(),
+            migration_count - applied_count
+        );
+        rstock::db::migrate(&db)
+            .await
+            .expect("historical schema should migrate to current");
+        assert!(Migrator::get_pending_migrations(&db)
+            .await
+            .expect("current migration state")
+            .is_empty());
+
+        if applied_count > 0 {
+            let asset_count: i64 = db
+                .query_one(Statement::from_string(
+                    DbBackend::Sqlite,
+                    "SELECT COUNT(*) AS count FROM assets WHERE ticker = 'XSTARTUP'",
+                ))
+                .await
+                .expect("persisted asset query")
+                .expect("persisted asset count row")
+                .try_get("", "count")
+                .expect("persisted asset count");
+            let transaction_count: i64 = db
+                .query_one(Statement::from_string(
+                    DbBackend::Sqlite,
+                    "SELECT COUNT(*) AS count FROM transactions WHERE asset_id = 1",
+                ))
+                .await
+                .expect("persisted transaction query")
+                .expect("persisted transaction count row")
+                .try_get("", "count")
+                .expect("persisted transaction count");
+            assert_eq!((asset_count, transaction_count), (1, 1));
+        }
+    }
+}
+
+#[tokio::test]
+async fn automatic_migration_rolls_back_a_failed_destructive_migration() {
+    let directory = tempfile::tempdir().expect("temporary migration database directory");
+    let path = directory.path().join("rollback.db");
+    let db = Database::connect(format!("sqlite://{}?mode=rwc", path.display()))
+        .await
+        .expect("temporary file-backed database");
+    Migrator::up(&db, Some((Migrator::migrations().len() - 1) as u32))
+        .await
+        .expect("historical migration prefix should apply");
+    db.execute(Statement::from_string(
+        DbBackend::Sqlite,
+        "INSERT INTO daily_exchange_rates (from_currency, to_currency, date, rate) VALUES ('USD', 'EUR', '2025-01-01', 0.9)",
+    ))
+    .await
+    .expect("historical exchange rate should be stored");
+    db.execute(Statement::from_string(
+        DbBackend::Sqlite,
+        "CREATE INDEX idx_transactions_date_id ON transactions (date, id)",
+    ))
+    .await
+    .expect("conflicting index should be created");
+
+    assert!(rstock::db::migrate(&db).await.is_err());
+    assert_eq!(
+        Migrator::get_pending_migrations(&db)
+            .await
+            .expect("migration state after rollback")
+            .len(),
+        1
+    );
+    let rate: f64 = db
+        .query_one(Statement::from_string(
+            DbBackend::Sqlite,
+            "SELECT rate FROM daily_exchange_rates WHERE from_currency = 'USD' AND to_currency = 'EUR'",
+        ))
+        .await
+        .expect("rolled-back exchange rate query")
+        .expect("rolled-back exchange rate row")
+        .try_get("", "rate")
+        .expect("rolled-back exchange rate");
+    assert!((rate - 0.9).abs() < f64::EPSILON);
 }

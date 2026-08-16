@@ -1,9 +1,14 @@
 //! Offline performance baseline.
 //!
 //! Fixture construction is deliberately outside every timed closure.  The
-//! benchmark is also useful as a smoke test: it never constructs a production
-//! source and therefore cannot make a network request.
+//! benchmark uses an injected offline source for service paths. Executable
+//! startup paths use low-work commands with unreachable source settings and
+//! fail if those commands unexpectedly try to fetch market data.
 
+use std::fmt::Write as _;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -17,15 +22,66 @@ use migration::{Migrator, MigratorTrait};
 use rstock::db::entities::{asset, transaction};
 use rstock::db::repos::transaction_repo;
 use rstock::models::{Asset, AssetType};
+use rstock::services::import::import_transactions_csv;
 use rstock::services::market_data::{MarketData, MarketDataSources, SourceObservation};
 use rstock::services::{analytics, nav, portfolio};
-use sea_orm::{ActiveModelTrait, Database, DatabaseConnection, Set};
+use sea_orm::{ActiveModelTrait, Database, DatabaseConnection, EntityTrait, Set};
 use tempfile::TempDir;
 
 const START: &str = "2015-01-01";
 const END: &str = "2015-12-31";
 
 const FIXTURE_MATRIX: &[(usize, usize, usize)] = &[(5, 1, 100), (50, 10, 5_000), (100, 20, 20_000)];
+
+fn release_binary() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("target")
+        .join("release")
+        .join("rstock")
+}
+
+fn release_logging_binary() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("target")
+        .join("release")
+        .join("startup_logging")
+}
+
+fn run_rstock(binary: &Path, home: &Path, args: &[&str]) {
+    let status = Command::new(binary)
+        .args(args)
+        .env("HOME", home)
+        .env_remove("RUST_LOG")
+        .env(
+            "RSTOCK_SOURCE_TOKEN_CACHE_PATH",
+            home.join("offline-token.json"),
+        )
+        .envs([
+            ("RSTOCK_SOURCE_TOKEN_PAGE_URL", "file:///offline/token"),
+            ("RSTOCK_SOURCE_CHARTSERVICE_URL", "file:///offline/chart"),
+            ("RSTOCK_SOURCE_HOLDINGS_URL", "file:///offline/holdings"),
+            ("RSTOCK_SOURCE_QUOTE_URL", "file:///offline/quote"),
+            ("RSTOCK_SOURCE_SAL_API_KEY", "offline"),
+            ("RSTOCK_SOURCE_USER_AGENT", "rstock-offline-benchmark"),
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .expect("release rstock executable should run");
+    assert!(status.success(), "rstock command should succeed");
+}
+
+fn run_logging_init(binary: &Path, home: &Path) {
+    let status = Command::new(binary)
+        .env("HOME", home)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .expect("release logging executable should run");
+    assert!(status.success(), "logging initialization should succeed");
+}
 
 #[derive(Default)]
 struct Counters {
@@ -121,6 +177,12 @@ struct Fixture {
     assets: Vec<Asset>,
     counters: Arc<Counters>,
     end: String,
+}
+
+struct ImportFixture {
+    db: DatabaseConnection,
+    csv_path: PathBuf,
+    _tempdir: TempDir,
 }
 
 async fn build_fixture(asset_count: usize, years: usize, transaction_count: usize) -> Fixture {
@@ -235,6 +297,58 @@ async fn build_fixture_with_counters(
     }
 }
 
+async fn build_import_fixture() -> ImportFixture {
+    const HEADER: &str = "Date,Ticker,Name,AssetType,Currency,MorningstarCode,AssetClass,EquityStyle,BondCredit,BondDuration,Management,Type,Quantity,Price,Fees\n";
+    let tempdir = tempfile::tempdir().expect("temporary import benchmark directory");
+    let csv_path = tempdir.path().join("transactions.csv");
+    let mut csv = String::from(HEADER);
+    for index in 0..5_000 {
+        let asset_index = index % 50;
+        let date = NaiveDate::from_ymd_opt(2015, 1, 1)
+            .unwrap()
+            .checked_add_signed(Duration::days(i64::from(index) % 3_650))
+            .unwrap();
+        let metadata = if index < 50 {
+            format!("Synthetic asset {asset_index},stock,EUR,,equity,blend,,,passive")
+        } else {
+            ",,,,,,,,".to_owned()
+        };
+        let ticker = format!("XIMPORT{asset_index:03}");
+        writeln!(
+            &mut csv,
+            "{date},{ticker},{metadata},buy,1,100.00,0.00",
+            date = date.format("%d-%m-%Y"),
+            ticker = ticker,
+            metadata = metadata,
+        )
+        .expect("import benchmark CSV is writable");
+    }
+    fs::write(&csv_path, csv).expect("import benchmark CSV");
+
+    let db = Database::connect("sqlite::memory:")
+        .await
+        .expect("import benchmark database");
+    Migrator::up(&db, None)
+        .await
+        .expect("import benchmark migrations");
+    ImportFixture {
+        db,
+        csv_path,
+        _tempdir: tempdir,
+    }
+}
+
+async fn clear_import_fixture(db: &DatabaseConnection) {
+    transaction::Entity::delete_many()
+        .exec(db)
+        .await
+        .expect("clear import transactions");
+    asset::Entity::delete_many()
+        .exec(db)
+        .await
+        .expect("clear import assets");
+}
+
 async fn run_delayed_candidate(limit: usize) -> (std::time::Duration, usize, usize) {
     let shared_counters = Arc::new(Counters::default());
     let mut fixtures = Vec::new();
@@ -280,6 +394,7 @@ fn benchmark_performance(c: &mut Criterion) {
     let fixture = runtime.block_on(build_fixture(5, 1, 100));
     let representative = runtime.block_on(build_fixture(50, 10, 5_000));
     let stress = runtime.block_on(build_fixture(100, 20, 20_000));
+    let import_fixture = runtime.block_on(build_import_fixture());
     assert_eq!(FIXTURE_MATRIX.len(), 3);
     let mut group = c.benchmark_group("performance-baseline");
     group.bench_function("transaction_listing", |b| {
@@ -301,6 +416,23 @@ fn benchmark_performance(c: &mut Criterion) {
             transaction_repo::find_all_ordered_by_date(&stress.db, None, None)
                 .await
                 .unwrap()
+        });
+    });
+    group.bench_function("transaction_import_representative", |b| {
+        b.iter_custom(|iterations| {
+            let mut elapsed = std::time::Duration::ZERO;
+            for _ in 0..iterations {
+                runtime.block_on(clear_import_fixture(&import_fixture.db));
+                let started = Instant::now();
+                runtime
+                    .block_on(import_transactions_csv(
+                        &import_fixture.db,
+                        import_fixture.csv_path.to_str().unwrap(),
+                    ))
+                    .expect("representative import");
+                elapsed += started.elapsed();
+            }
+            elapsed
         });
     });
     group.bench_function("market_data_preparation_representative", |b| {
@@ -542,6 +674,171 @@ fn benchmark_performance(c: &mut Criterion) {
                 elapsed += started.elapsed();
             }
             elapsed
+        });
+    });
+    group.bench_function("startup_and_migration_transactional", |b| {
+        b.iter_custom(|iterations| {
+            let mut elapsed = std::time::Duration::ZERO;
+            for _ in 0..iterations {
+                let directory = tempfile::tempdir().unwrap();
+                let path = directory.path().join("startup.db");
+                let started = Instant::now();
+                runtime.block_on(async {
+                    let db = Database::connect(format!("sqlite://{}?mode=rwc", path.display()))
+                        .await
+                        .unwrap();
+                    rstock::db::migrate(&db).await.unwrap();
+                });
+                elapsed += started.elapsed();
+            }
+            elapsed
+        });
+    });
+    let binary = release_binary();
+    assert!(
+        binary.is_file(),
+        "build the release executable before running startup benchmarks"
+    );
+    let logging_binary = release_logging_binary();
+    assert!(
+        logging_binary.is_file(),
+        "build the release logging executable before running startup benchmarks"
+    );
+    group.bench_function("startup_executable_only", |b| {
+        let home = tempfile::tempdir().unwrap();
+        b.iter_custom(|iterations| {
+            let started = Instant::now();
+            for _ in 0..iterations {
+                run_rstock(&binary, home.path(), &["--help"]);
+            }
+            started.elapsed()
+        });
+    });
+    group.bench_function("startup_logging_cold", |b| {
+        b.iter_custom(|iterations| {
+            let directories: Vec<_> = (0..iterations)
+                .map(|_| tempfile::tempdir().unwrap())
+                .collect();
+            let started = Instant::now();
+            for directory in &directories {
+                run_logging_init(&logging_binary, directory.path());
+            }
+            started.elapsed()
+        });
+    });
+    group.bench_function("startup_logging_warm", |b| {
+        let directory = tempfile::tempdir().unwrap();
+        run_logging_init(&logging_binary, directory.path());
+        b.iter_custom(|iterations| {
+            let started = Instant::now();
+            for _ in 0..iterations {
+                run_logging_init(&logging_binary, directory.path());
+            }
+            started.elapsed()
+        });
+    });
+    group.bench_function("startup_database_connection_cold", |b| {
+        b.iter_custom(|iterations| {
+            let directories: Vec<_> = (0..iterations)
+                .map(|_| tempfile::tempdir().unwrap())
+                .collect();
+            let started = Instant::now();
+            for directory in &directories {
+                runtime.block_on(async {
+                    let path = directory.path().join("connection.db");
+                    let db = Database::connect(format!("sqlite://{}?mode=rwc", path.display()))
+                        .await
+                        .unwrap();
+                    std::hint::black_box(db);
+                });
+            }
+            started.elapsed()
+        });
+    });
+    group.bench_function("startup_database_connection_warm", |b| {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("connection.db");
+        runtime.block_on(async {
+            let db = Database::connect(format!("sqlite://{}?mode=rwc", path.display()))
+                .await
+                .unwrap();
+            std::hint::black_box(db);
+        });
+        b.to_async(&runtime).iter(|| async {
+            let db = Database::connect(format!("sqlite://{}?mode=rwc", path.display()))
+                .await
+                .unwrap();
+            std::hint::black_box(db);
+        });
+    });
+    group.bench_function("startup_automatic_migration_cold", |b| {
+        b.iter_custom(|iterations| {
+            let databases = runtime.block_on(async {
+                let mut databases = Vec::new();
+                for _ in 0..iterations {
+                    let directory = tempfile::tempdir().unwrap();
+                    let path = directory.path().join("migration.db");
+                    let db = Database::connect(format!("sqlite://{}?mode=rwc", path.display()))
+                        .await
+                        .unwrap();
+                    databases.push((directory, db));
+                }
+                databases
+            });
+            let started = Instant::now();
+            for (_, db) in &databases {
+                runtime.block_on(rstock::db::migrate(db)).unwrap();
+            }
+            started.elapsed()
+        });
+    });
+    group.bench_function("startup_automatic_migration_warm", |b| {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("migration.db");
+        let db = runtime.block_on(async {
+            let db = Database::connect(format!("sqlite://{}?mode=rwc", path.display()))
+                .await
+                .unwrap();
+            rstock::db::migrate(&db).await.unwrap();
+            db
+        });
+        b.to_async(&runtime)
+            .iter(|| async { rstock::db::migrate(&db).await.unwrap() });
+    });
+    group.bench_function("startup_automatic_migration_warm_unbatched", |b| {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("migration.db");
+        let db = runtime.block_on(async {
+            let db = Database::connect(format!("sqlite://{}?mode=rwc", path.display()))
+                .await
+                .unwrap();
+            Migrator::up(&db, None).await.unwrap();
+            db
+        });
+        b.to_async(&runtime)
+            .iter(|| async { Migrator::up(&db, None).await.unwrap() });
+    });
+    group.bench_function("startup_transaction_list_cold", |b| {
+        b.iter_custom(|iterations| {
+            let homes: Vec<_> = (0..iterations)
+                .map(|_| tempfile::tempdir().unwrap())
+                .collect();
+            let started = Instant::now();
+            for home in &homes {
+                run_rstock(&binary, home.path(), &["transaction", "list"]);
+            }
+            started.elapsed()
+        });
+    });
+    group.bench_function("startup_transaction_list_warm", |b| {
+        let home = tempfile::tempdir().unwrap();
+        run_rstock(&binary, home.path(), &["transaction", "list"]);
+        b.iter_custom(|iterations| {
+            let started = Instant::now();
+            for _ in 0..iterations {
+                run_rstock(&binary, home.path(), &["transaction", "list"]);
+            }
+            started.elapsed()
         });
     });
     for limit in [1_usize, 2, 4, 8] {

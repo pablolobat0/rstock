@@ -315,3 +315,68 @@ async fn test_import_export_roundtrip() {
     let csv2 = std::fs::read_to_string(export_path2).expect("failed to read second export");
     assert_eq!(csv1, csv2, "roundtrip CSVs should be identical");
 }
+
+#[tokio::test]
+async fn test_import_rejects_late_row_without_persisting_anything() {
+    let db = common::setup_test_db().await;
+    common::insert_portfolio_snapshot(&db, "2024-12-31", 100.0, 1.0).await;
+    common::insert_portfolio_snapshot(&db, "2025-01-01", 101.0, 1.0).await;
+    let csv = write_csv(&format!(
+        "{CSV_HEADER}\
+         01-01-2025,XFAKE1,Fake Stock,stock,EUR,,equity,blend,,,passive,buy,10,100.00,5.00\n\
+         02-01-2025,XFAKE2,,,EUR,,,,,,,sell,1,100.00,0.00\n"
+    ));
+
+    let result = import_transactions_csv(&db, csv.path().to_str().unwrap()).await;
+
+    assert!(result.is_err());
+    assert!(asset_repo::find_all(&db).await.unwrap().is_empty());
+    assert!(transaction_repo::find_all_ordered_by_date(&db, None, None)
+        .await
+        .unwrap()
+        .is_empty());
+    assert!(common::get_portfolio_snapshot(&db, "2025-01-01")
+        .await
+        .is_some());
+}
+
+#[tokio::test]
+async fn test_import_preserves_same_day_source_order_and_invalidates_once() {
+    let db = common::setup_test_db().await;
+    let asset_id = common::insert_asset(&db, "XFAKE1", "Fake Stock", "stock", "EUR").await;
+    common::insert_portfolio_snapshot(&db, "2024-12-31", 100.0, 1.0).await;
+    common::insert_portfolio_snapshot(&db, "2025-01-01", 101.0, 1.0).await;
+    common::insert_portfolio_asset_snapshot(&db, "2025-01-01", asset_id, 10.0, 100.0, 1000.0, 1.0)
+        .await;
+    let csv = write_csv(&format!(
+        "{CSV_HEADER}\
+         01-01-2025,XFAKE1,Fake Stock,stock,EUR,,equity,blend,,,passive,buy,10,100.00,5.00\n\
+         01-01-2025,XFAKE1,,,EUR,,,,,,,split,2,0.00,0.00\n\
+         01-01-2025,XFAKE1,,,EUR,,,,,,,sell,5,110.00,3.00\n"
+    ));
+
+    let result = import_transactions_csv(&db, csv.path().to_str().unwrap())
+        .await
+        .expect("import should succeed");
+    let transactions = transaction_repo::find_all_ordered_by_date(&db, None, None)
+        .await
+        .unwrap();
+
+    assert_eq!(result.transaction_receipts.len(), 3);
+    assert_eq!(transactions.len(), 3);
+    assert!(transactions[0].id < transactions[1].id);
+    assert!(transactions[1].id < transactions[2].id);
+    assert_eq!(transactions[0].tx_type, TxType::Buy);
+    assert_eq!(transactions[1].tx_type, TxType::Split);
+    assert_eq!(transactions[2].tx_type, TxType::Sell);
+    assert_eq!(asset_repo::find_all(&db).await.unwrap().len(), 1);
+    assert!(common::get_portfolio_snapshot(&db, "2024-12-31")
+        .await
+        .is_some());
+    assert!(common::get_portfolio_snapshot(&db, "2025-01-01")
+        .await
+        .is_none());
+    assert!(common::get_asset_snapshots(&db, "2025-01-01")
+        .await
+        .is_empty());
+}
