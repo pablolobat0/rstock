@@ -206,7 +206,40 @@ struct Fixture {
     market_data: MarketData,
     assets: Vec<Asset>,
     counters: Arc<Counters>,
+    observations: Arc<Vec<SourceObservation>>,
+    delay_ms: u64,
+    today: NaiveDate,
     end: String,
+}
+
+impl Fixture {
+    fn new_market_data(&self) -> MarketData {
+        let clock = rstock::services::clock::FixedClock::new(self.today);
+        MarketData::new_with_clock(
+            Box::new(OfflineSources {
+                counters: self.counters.clone(),
+                observations: self.observations.clone(),
+                delay_ms: self.delay_ms,
+            }),
+            &clock,
+        )
+    }
+}
+
+struct PortfolioWorkEvidence {
+    calls: usize,
+    elapsed: std::time::Duration,
+}
+
+impl PortfolioWorkEvidence {
+    fn print(&self, label: &str, commands: u64) {
+        println!(
+            "portfolio_work_evidence label={label} commands={commands} source_calls={} source_calls_per_command={:.1} elapsed_ms={}",
+            self.calls,
+            self.calls as f64 / commands as f64,
+            self.elapsed.as_millis(),
+        );
+    }
 }
 
 struct ImportFixture {
@@ -301,18 +334,20 @@ async fn build_fixture_with_counters(
         .expect("benchmark transaction");
     }
 
-    let observations = (0..=(end - start).num_days())
-        .filter(|offset| delay_ms > 0 || *offset == 0 || offset % 11 != 0)
-        .map(|offset| SourceObservation {
-            date: start + Duration::days(offset),
-            value: 100.0 + offset as f64 / 10.0,
-        })
-        .collect();
+    let observations: Arc<Vec<SourceObservation>> = Arc::new(
+        (0..=(end - start).num_days())
+            .filter(|offset| delay_ms > 0 || *offset == 0 || offset % 11 != 0)
+            .map(|offset| SourceObservation {
+                date: start + Duration::days(offset),
+                value: 100.0 + offset as f64 / 10.0,
+            })
+            .collect(),
+    );
     let counters = shared_counters.unwrap_or_default();
     let market_data = MarketData::new_with_clock(
         Box::new(OfflineSources {
             counters: counters.clone(),
-            observations: Arc::new(observations),
+            observations: observations.clone(),
             delay_ms,
         }),
         &rstock::services::clock::FixedClock::new(end + Duration::days(1)),
@@ -323,6 +358,9 @@ async fn build_fixture_with_counters(
         market_data,
         assets,
         counters,
+        observations,
+        delay_ms,
+        today: end + Duration::days(1),
         end: end.format("%Y-%m-%d").to_string(),
     }
 }
@@ -705,6 +743,7 @@ fn benchmark_performance(c: &mut Criterion) {
     group.bench_function("portfolio_retrieval_cold", |b| {
         b.iter_custom(|iterations| {
             let mut elapsed = std::time::Duration::ZERO;
+            let mut calls = 0;
             for _ in 0..iterations {
                 let fresh = runtime.block_on(build_fixture(5, 1, 100));
                 let started = Instant::now();
@@ -712,18 +751,41 @@ fn benchmark_performance(c: &mut Criterion) {
                     .block_on(portfolio::get_portfolio(&fresh.db, &fresh.market_data))
                     .expect("cold portfolio retrieval");
                 elapsed += started.elapsed();
+                calls += fresh.counters.source_calls.load(Ordering::Relaxed);
             }
+            PortfolioWorkEvidence { calls, elapsed }.print("cold", iterations);
             elapsed
         });
     });
+    let warm_setup_market_data = fixture.new_market_data();
     runtime
-        .block_on(portfolio::get_portfolio(&fixture.db, &fixture.market_data))
+        .block_on(portfolio::get_portfolio(
+            &fixture.db,
+            &warm_setup_market_data,
+        ))
         .expect("warm setup");
     group.bench_function("portfolio_retrieval_warm", |b| {
         b.to_async(&runtime).iter(|| async {
-            portfolio::get_portfolio(&fixture.db, &fixture.market_data)
+            let market_data = fixture.new_market_data();
+            portfolio::get_portfolio(&fixture.db, &market_data)
                 .await
                 .unwrap()
+        });
+    });
+    group.bench_function("portfolio_retrieval_warm_work_evidence", |b| {
+        b.iter_custom(|iterations| {
+            let calls_before = fixture.counters.source_calls.load(Ordering::Relaxed);
+            let started = Instant::now();
+            for _ in 0..iterations {
+                let market_data = fixture.new_market_data();
+                runtime
+                    .block_on(portfolio::get_portfolio(&fixture.db, &market_data))
+                    .expect("warm portfolio work evidence");
+            }
+            let elapsed = started.elapsed();
+            let calls = fixture.counters.source_calls.load(Ordering::Relaxed) - calls_before;
+            PortfolioWorkEvidence { calls, elapsed }.print("warm", iterations);
+            elapsed
         });
     });
     group.bench_function("nav_rebuild_incremental", |b| {

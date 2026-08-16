@@ -19,6 +19,7 @@ use crate::services::market_data::{MarketData, NavValuationData};
 pub struct PortfolioHistoryReadiness {
     pub latest_snapshot: Option<PortfolioSnapshot>,
     pub market_data_limitations: Vec<MarketDataLimitation>,
+    pub(crate) performance_market_data_prepared: bool,
 }
 
 struct NavMarketDataPreparation {
@@ -39,6 +40,7 @@ struct SnapshotBatch {
 const SNAPSHOT_BATCH_SIZE: usize = 100;
 
 /// Returns ensured NAV history for a caller-selected display range.
+#[allow(dead_code)]
 pub async fn get_portfolio_history(
     db: &DatabaseConnection,
     start_date: &str,
@@ -46,6 +48,15 @@ pub async fn get_portfolio_history(
     market_data: &MarketData,
 ) -> anyhow::Result<Vec<PortfolioSnapshot>> {
     ensure_portfolio_history(db, market_data).await?;
+    portfolio_history_repo::find_between(db, start_date, end_date).await
+}
+
+/// Reads an already-ready history range without performing readiness work.
+pub async fn get_ready_portfolio_history(
+    db: &DatabaseConnection,
+    start_date: &str,
+    end_date: &str,
+) -> anyhow::Result<Vec<PortfolioSnapshot>> {
     portfolio_history_repo::find_between(db, start_date, end_date).await
 }
 
@@ -74,6 +85,7 @@ pub async fn ensure_portfolio_history(
     }
 
     let mut market_data_limitations = Vec::new();
+    let mut performance_market_data_prepared = false;
     match &latest_snapshot {
         Some(snapshot) if snapshot.date >= yesterday_str => {}
         Some(snapshot) => {
@@ -90,6 +102,7 @@ pub async fn ensure_portfolio_history(
                 None,
             )
             .await?;
+            performance_market_data_prepared = true;
             let limitations = preparation.limitations.clone();
             if preparation.data_available {
                 rebuild_portfolio_history(db, start, yesterday, preparation, Some(snapshot))
@@ -113,6 +126,7 @@ pub async fn ensure_portfolio_history(
                     Some(transactions),
                 )
                 .await?;
+                performance_market_data_prepared = true;
                 let limitations = preparation.limitations.clone();
                 if preparation.data_available {
                     rebuild_portfolio_history(db, start, yesterday, preparation, None).await?;
@@ -125,6 +139,7 @@ pub async fn ensure_portfolio_history(
     Ok(PortfolioHistoryReadiness {
         latest_snapshot: portfolio_history_repo::find_latest(db).await?,
         market_data_limitations,
+        performance_market_data_prepared,
     })
 }
 

@@ -62,8 +62,7 @@ pub async fn get(
     };
 
     let start_str = format_date(start_date);
-    let snapshots =
-        services::nav::get_portfolio_history(db, &start_str, &today_str, market_data).await?;
+    let snapshots = services::nav::get_ready_portfolio_history(db, &start_str, &today_str).await?;
     display::print_nav_chart(&snapshots, period_label);
 
     Ok(())
