@@ -85,6 +85,7 @@ pub struct CsvRow {
     pub fees: f64,
 }
 
+#[derive(Clone)]
 pub struct Transaction {
     pub id: i32,
     pub asset_id: i32,

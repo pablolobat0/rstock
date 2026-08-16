@@ -284,6 +284,22 @@ pub async fn delete_all_for_asset(db: &impl ConnectionTrait, asset_id: i32) -> a
     Ok(())
 }
 
+pub async fn delete_all_for_assets(
+    db: &impl ConnectionTrait,
+    asset_ids: impl IntoIterator<Item = i32>,
+) -> anyhow::Result<()> {
+    let asset_ids: Vec<i32> = asset_ids.into_iter().collect();
+    if asset_ids.is_empty() {
+        return Ok(());
+    }
+
+    daily_asset_price::Entity::delete_many()
+        .filter(daily_asset_price::Column::AssetId.is_in(asset_ids))
+        .exec(db)
+        .await?;
+    Ok(())
+}
+
 fn active_model(
     asset_id: i32,
     date: &str,

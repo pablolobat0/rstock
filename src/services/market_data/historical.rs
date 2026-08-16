@@ -384,7 +384,6 @@ async fn fill_nav_asset_prices(
             }
         }
     }
-
     Ok(latest_dates)
 }
 
@@ -443,6 +442,7 @@ async fn fill_historical_asset_prices(
     if !writes.is_empty() {
         daily_price_repo::insert_many_immutable(db, &writes).await?;
     }
+    market_data.clear_completed_historical_requests()?;
 
     Ok(known
         .range(..=requested_end)
@@ -507,7 +507,6 @@ async fn fill_nav_exchange_rates(
             }
         }
     }
-
     Ok(latest_dates)
 }
 
@@ -564,6 +563,7 @@ async fn fill_historical_exchange_rates(
     if !writes.is_empty() {
         exchange_rate_repo::insert_many_immutable(db, &writes).await?;
     }
+    market_data.clear_completed_historical_requests()?;
 
     Ok(known
         .range(..=requested_end)
