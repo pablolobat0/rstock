@@ -149,7 +149,7 @@ Domain structs organized by concept:
 
 **`entities/`** — SeaORM-generated model structs for each table, including `fund_holdings_snapshot`. Each entity defines `Model`, `ActiveModel`, `Column`, and `Relation` types.
 
-**`repos/`** — Repository pattern with one module per entity (including `watchlist_repo`). Functions are `async` and accept a SeaORM connection interface as their first parameter so callers can use either the application connection or a caller-owned transaction. Standard function naming: `find_*`, `find_by_*`, `find_*_between`, `find_at_or_before`, `upsert`, `insert_*`, `delete_*`.
+**`repos/`** — Repository pattern with one module per entity (including `watchlist_repo`). Functions are `async` and accept a SeaORM connection interface as their first parameter so callers can use either the application connection or a caller-owned transaction. Standard function naming: `find_*`, `find_by_*`, `find_*_between`, `find_at_or_before`, native-conflict `upsert`, bulk `upsert_many`, `insert_*`, and `delete_*`. Repository writes do not check existence before writing; callers own transaction boundaries when a mutation spans repositories.
 
 ### Constants (`constants.rs`)
 

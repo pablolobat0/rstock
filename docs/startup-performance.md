@@ -38,15 +38,15 @@ immaterial, while cold migration dominated the executable path.
 
 Automatic migrations now run in one SQLite transaction. The migration sequence
 and pending-migration check are unchanged, but fresh and partially migrated
-databases no longer durably commit each migration separately. The final run
-measures 6,121,284 ns p95 for the transactional connection-and-migration path
-and 11,189,620 ns p95 for cold empty-list startup. Warm empty-list median is
-3,472,766 ns, below the approximately 10 ms audit observation and its approved
-10 percent regression tolerance. The generated same-run control measures the
-transactional warm migration median at 118,898 ns versus 187,757 ns unbatched,
-so the changed seam also passes the direct warm-regression check. Process-level
-logging initialization is approximately 0.8 ms, while SQLite connection and
-current-schema migration checks remain individually small.
+databases no longer durably commit each migration separately. The issue #32
+rerun measures 6,721,269 ns p95 for the transactional connection-and-migration
+path and 12,628,074 ns p95 for cold empty-list startup. Warm empty-list median
+is 3,083,339 ns, below the approximately 10 ms audit observation and its
+approved 10 percent regression tolerance. The generated same-run control
+measures the transactional warm migration median at 113,415 ns versus 178,282
+ns unbatched, so the changed seam also passes the direct warm-regression check.
+Process-level logging initialization is approximately 0.77 ms, while SQLite
+connection and current-schema migration checks remain individually small.
 
 The performance harness additionally verifies that automatic migration handles
 every historical migration prefix through the current schema while preserving

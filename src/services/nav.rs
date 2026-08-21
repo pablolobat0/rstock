@@ -555,8 +555,8 @@ async fn persist_snapshot_batch(
     }
 
     let transaction = db.begin().await?;
-    portfolio_history_repo::upsert_many_native(&transaction, &batch.portfolio_snapshots).await?;
-    portfolio_asset_history_repo::upsert_many_native(&transaction, &batch.asset_snapshots).await?;
+    portfolio_history_repo::upsert_many(&transaction, &batch.portfolio_snapshots).await?;
+    portfolio_asset_history_repo::upsert_many(&transaction, &batch.asset_snapshots).await?;
     transaction.commit().await?;
 
     batch.portfolio_snapshots.clear();

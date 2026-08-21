@@ -448,11 +448,8 @@ impl MarketData {
 
 async fn get_or_create_benchmark_asset(db: &DatabaseConnection) -> anyhow::Result<Asset> {
     let info = metrics::benchmark_asset_info();
-    if let Some(asset) = asset_repo::find_by_ticker(db, &info.ticker).await? {
-        return Ok(asset);
-    }
-
-    let id = asset_repo::create(db, &info, &AssetClassification::default(), None).await?;
+    let id = asset_repo::create_or_find_by_ticker(db, &info, &AssetClassification::default(), None)
+        .await?;
     Ok(metrics::benchmark_asset(id))
 }
 

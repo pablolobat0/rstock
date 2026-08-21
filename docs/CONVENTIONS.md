@@ -63,7 +63,7 @@ Three categories of model structs:
 ## Database Patterns
 
 - **ORM**: SeaORM with derive macros for entities. Entities are in `src/db/entities/`, auto-generated
-- **Upsert**: Legacy `upsert` functions check existence, then insert or update. Explicitly named native-conflict and bulk forms use SeaORM `on_conflict` beside the legacy methods
+- **Upsert**: `upsert()` uses SeaORM `on_conflict` directly; repositories must not perform a manual existence check before writing. `upsert_many()` is the bulk form for behaviorally equivalent writes and may execute bounded chunks inside the caller's connection or transaction. `insert_many_immutable()` is reserved for Historical market data, where successful completed-date observations are preserved and only failure markers may be replaced
 - **Date storage**: Strings in `YYYY-MM-DD` format internally (DB, services), `DD-MM-YYYY` for user-facing input/output. See `display_date()` and `parse_date()` in constants/cli.
 - **Monetary amounts**: Transactions use `i64` cents (`price_cents`, `fees_cents`). Daily prices use `f64` directly. Use `f64_to_cents()` before insertion and `cents_to_f64()` after retrieval
 - **Migrations**: SeaORM migration crate in `migration/`. Migrations run automatically on database connect. Files are in `migration/src/` with timestamp-based naming

@@ -89,7 +89,7 @@ pub async fn create_many(db: &impl ConnectionTrait, assets: &[AssetWrite]) -> an
     Ok(())
 }
 
-pub async fn create_on_conflict_do_nothing(
+pub async fn create_or_find_by_ticker(
     db: &impl ConnectionTrait,
     info: &AssetInfo,
     classification: &AssetClassification,

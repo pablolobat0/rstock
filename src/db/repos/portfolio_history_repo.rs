@@ -1,6 +1,5 @@
 use sea_orm::{
-    sea_query::OnConflict, ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait,
-    QueryFilter, QueryOrder, Set,
+    sea_query::OnConflict, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder, Set,
 };
 
 use crate::db::entities::portfolio_history;
@@ -37,35 +36,6 @@ pub async fn find_at_or_before(
 }
 
 pub async fn upsert(db: &impl ConnectionTrait, snapshot: &PortfolioSnapshot) -> anyhow::Result<()> {
-    let existing = portfolio_history::Entity::find_by_id(&snapshot.date)
-        .one(db)
-        .await?;
-
-    if let Some(record) = existing {
-        let mut active: portfolio_history::ActiveModel = record.into();
-        active.asset_value = Set(snapshot.asset_value);
-        active.total_value = Set(snapshot.total_value);
-        active.outstanding_shares = Set(snapshot.outstanding_shares);
-        active.nav = Set(snapshot.nav);
-        active.update(db).await?;
-    } else {
-        let record = portfolio_history::ActiveModel {
-            date: Set(snapshot.date.clone()),
-            asset_value: Set(snapshot.asset_value),
-            total_value: Set(snapshot.total_value),
-            outstanding_shares: Set(snapshot.outstanding_shares),
-            nav: Set(snapshot.nav),
-        };
-        record.insert(db).await?;
-    }
-
-    Ok(())
-}
-
-pub async fn upsert_native(
-    db: &impl ConnectionTrait,
-    snapshot: &PortfolioSnapshot,
-) -> anyhow::Result<()> {
     portfolio_history::Entity::insert(active_model(snapshot))
         .on_conflict(native_conflict())
         .exec_without_returning(db)
@@ -73,7 +43,7 @@ pub async fn upsert_native(
     Ok(())
 }
 
-pub async fn upsert_many_native(
+pub async fn upsert_many(
     db: &impl ConnectionTrait,
     snapshots: &[PortfolioSnapshot],
 ) -> anyhow::Result<()> {
