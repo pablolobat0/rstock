@@ -12,7 +12,6 @@ use crate::models::{
 };
 use crate::services::market_data::MarketData;
 use crate::services::metrics;
-use crate::services::nav;
 
 pub struct PeriodMetricsResult {
     pub ytd: Option<PeriodMetrics>,
@@ -173,8 +172,6 @@ pub async fn compute_all_period_metrics(
     five_year_date: &str,
     market_data: &MarketData,
 ) -> anyhow::Result<PeriodMetricsResult> {
-    nav::ensure_portfolio_history(db, market_data).await?;
-
     let widest_start = five_year_date
         .min(three_year_date)
         .min(one_year_date)

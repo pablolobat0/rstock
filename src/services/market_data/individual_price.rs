@@ -63,7 +63,12 @@ pub(crate) async fn get_individual_price_if_available(
     let yesterday_str = format_date(yesterday);
     let mut limitations = Vec::new();
 
-    let price = match fetch_same_day_asset_price(asset, today, market_data).await {
+    let (price_result, fx_result) = tokio::join!(
+        fetch_same_day_asset_price(asset, today, market_data),
+        fetch_live_exchange_rate_if_needed(asset, &today_str, market_data),
+    );
+
+    let price = match price_result {
         Ok(price) => price.map(|price| (price, today_str.clone())),
         Err(error) => {
             tracing::warn!(ticker = %asset.ticker, error = %error, "failed to fetch live asset price");
@@ -87,15 +92,7 @@ pub(crate) async fn get_individual_price_if_available(
         limitations.push(policy::missing_asset_limitation(asset, yesterday));
     }
 
-    let fx_rate = if asset.currency == BASE_CURRENCY {
-        Some(1.0)
-    } else if let Some(rate) = match fetch_live_exchange_rate(
-        &asset.currency,
-        &today_str,
-        market_data,
-    )
-    .await
-    {
+    let fx_rate = if let Some(rate) = match fx_result {
         Ok(rate) => rate,
         Err(error) => {
             tracing::warn!(currency = %asset.currency, error = %error, "failed to fetch live exchange rate");
@@ -131,6 +128,17 @@ pub(crate) async fn get_individual_price_if_available(
         fx_rate,
         limitations,
     })
+}
+
+async fn fetch_live_exchange_rate_if_needed(
+    asset: &Asset,
+    date: &str,
+    market_data: &MarketData,
+) -> anyhow::Result<Option<f64>> {
+    if asset.currency == BASE_CURRENCY {
+        return Ok(Some(1.0));
+    }
+    fetch_live_exchange_rate(&asset.currency, date, market_data).await
 }
 
 pub(crate) async fn prepare_individual_price_market_data(
