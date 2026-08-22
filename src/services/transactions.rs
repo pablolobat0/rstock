@@ -256,9 +256,17 @@ pub async fn delete(db: &DatabaseConnection, id: i32) -> anyhow::Result<Transact
     let tx = transaction_repo::find_by_id(&mutation, id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("Transaction {id} not found"))?;
+    let invalidation_date = if tx.is_split() {
+        earliest_transaction_date(
+            &transaction_repo::find_by_asset_id(&mutation, tx.asset_id).await?,
+            None,
+        )
+    } else {
+        tx.date.clone()
+    };
 
     transaction_repo::delete_by_id(&mutation, id).await?;
-    invalidate_snapshots(&mutation, &tx.date).await?;
+    invalidate_snapshots(&mutation, &invalidation_date).await?;
 
     if tx.is_split() {
         daily_price_repo::delete_all_for_asset(&mutation, tx.asset_id).await?;
@@ -298,9 +306,14 @@ pub async fn edit(
     )
     .await?;
 
-    let invalidation_date = match &new_date {
-        Some(d) if d < &tx.date => d.clone(),
-        _ => tx.date.clone(),
+    let invalidation_date = if tx.is_split() {
+        let transactions = transaction_repo::find_by_asset_id(&mutation, tx.asset_id).await?;
+        earliest_transaction_date(&transactions, new_date.as_deref())
+    } else {
+        match &new_date {
+            Some(d) if d < &tx.date => d.clone(),
+            _ => tx.date.clone(),
+        }
     };
 
     invalidate_snapshots(&mutation, &invalidation_date).await?;
@@ -321,4 +334,17 @@ async fn invalidate_snapshots(db: &impl ConnectionTrait, date: &str) -> anyhow::
     portfolio_history_repo::delete_from_date(db, date).await?;
     portfolio_asset_history_repo::delete_from_date(db, date).await?;
     Ok(())
+}
+
+fn earliest_transaction_date(
+    transactions: &[Transaction],
+    additional_date: Option<&str>,
+) -> String {
+    transactions
+        .iter()
+        .map(|transaction| transaction.date.as_str())
+        .chain(additional_date)
+        .min()
+        .unwrap_or_default()
+        .to_owned()
 }

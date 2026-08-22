@@ -122,12 +122,46 @@ warm_source_calls = next(
     if (match := re.search(r"warm preparation source_calls=(\d+)", line))
 )
 
-targets = {
-    name: round(values["p95_ns"] * 1.1)
-    for name, values in estimates.items()
-    if not name.startswith("delayed_source_limit_")
-    and (not name.startswith("startup_") or name == "startup_and_migration")
+approved_targets = {
+    "correlation_matrix": 17_257_659,
+    "correlation_matrix_representative": 2_076_696_250,
+    "historical_market_data_preparation_cold": 63_798_535,
+    "historical_market_data_preparation_partial": 55_835_318,
+    "historical_market_data_preparation_warm": 6_460_685,
+    "market_data_preparation_representative": 374_831_718,
+    "nav_readiness_warm_representative": 12_847_958,
+    "nav_rebuild_full": 80_977_557,
+    "nav_rebuild_full_representative": 6_429_392_418,
+    "nav_rebuild_full_stress": 34_716_733_645,
+    "nav_rebuild_incremental": 22_570_986,
+    "portfolio_retrieval_cold": 219_338_581,
+    "portfolio_retrieval_representative": 969_141_313,
+    "portfolio_retrieval_warm": 35_458_309,
+    "rolling_correlation": 5_159_584,
+    "rolling_correlation_representative": 55_995_368,
+    "rolling_correlation_stress": 113_596_276,
+    "rolling_metric_representative": 260_907,
+    "rolling_metric_stress": 722_292,
+    "startup_and_migration": 116_658_388,
+    "transaction_listing": 389_609,
+    "transaction_listing_representative": 25_592_819,
+    "transaction_listing_stress": 80_495_291,
 }
+if set(approved_targets) != expected - {
+    "delayed_source_limit_1",
+    "delayed_source_limit_2",
+    "delayed_source_limit_4",
+    "delayed_source_limit_8",
+}:
+    raise SystemExit("approved performance target set does not match benchmark paths")
+failed_targets = {
+    name: (estimates[name]["p95_ns"], target)
+    for name, target in approved_targets.items()
+    if estimates[name]["p95_ns"] > target
+}
+if failed_targets:
+    raise SystemExit(f"approved performance targets failed: {failed_targets}")
+targets = approved_targets
 # The concurrency limit was approved as 4 by the PRD #19 decision gate. Keep
 # rerun candidate measurements separate from that approved production contract.
 approved_fixed_limit = 4

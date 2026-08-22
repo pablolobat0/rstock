@@ -3,14 +3,14 @@
 use std::collections::HashMap;
 
 use migration::{Migrator, MigratorTrait};
-use sea_orm::{Database, DatabaseConnection, EntityTrait, Set};
+use sea_orm::{ColumnTrait, Database, DatabaseConnection, EntityTrait, QueryFilter, Set};
 
 use rstock::db::entities::{
     asset, daily_asset_price, daily_exchange_rate, portfolio_asset_history, portfolio_history,
     transaction,
 };
 use rstock::models::{f64_to_cents, FundData, FundQuoteMetadata, StockInfo};
-use rstock::services::clock::FixedClock;
+use rstock::services::clock::Clock;
 use rstock::services::market_data::{MarketData, MarketDataSources, SourceObservation};
 
 pub async fn setup_test_db() -> DatabaseConnection {
@@ -232,6 +232,37 @@ pub async fn insert_daily_price(
         .expect("failed to insert daily price");
 }
 
+pub async fn find_daily_price(
+    db: &DatabaseConnection,
+    asset_id: i32,
+    date: &str,
+) -> anyhow::Result<Option<f64>> {
+    Ok(daily_asset_price::Entity::find()
+        .filter(daily_asset_price::Column::AssetId.eq(asset_id))
+        .filter(daily_asset_price::Column::Date.eq(date))
+        .filter(daily_asset_price::Column::IsApiFailure.eq(false))
+        .one(db)
+        .await
+        .expect("failed to query daily price")
+        .map(|price| price.closing_price))
+}
+
+pub async fn find_exchange_rate(
+    db: &DatabaseConnection,
+    from_currency: &str,
+    to_currency: &str,
+    date: &str,
+) -> anyhow::Result<Option<f64>> {
+    Ok(daily_exchange_rate::Entity::find()
+        .filter(daily_exchange_rate::Column::FromCurrency.eq(from_currency))
+        .filter(daily_exchange_rate::Column::ToCurrency.eq(to_currency))
+        .filter(daily_exchange_rate::Column::Date.eq(date))
+        .one(db)
+        .await
+        .expect("failed to query exchange rate")
+        .map(|rate| rate.rate))
+}
+
 pub async fn insert_portfolio_snapshot(
     db: &DatabaseConnection,
     date: &str,
@@ -358,7 +389,23 @@ pub fn market_data(sources: &MockMarketDataSources) -> MarketData {
 }
 
 pub fn market_data_at(sources: &MockMarketDataSources, today: chrono::NaiveDate) -> MarketData {
-    MarketData::new_with_clock(Box::new(sources.clone()), &FixedClock::new(today))
+    MarketData::new_with_clock(Box::new(sources.clone()), &TestClock::new(today))
+}
+
+pub struct TestClock {
+    today: chrono::NaiveDate,
+}
+
+impl TestClock {
+    pub fn new(today: chrono::NaiveDate) -> Self {
+        Self { today }
+    }
+}
+
+impl Clock for TestClock {
+    fn today(&self) -> chrono::NaiveDate {
+        self.today
+    }
 }
 
 #[async_trait::async_trait]

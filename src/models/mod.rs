@@ -21,10 +21,9 @@ pub use fund_comparison::{
     FundComparisonPeriod, FundComparisonResult, FundComparisonSide, FundInfoComparison,
 };
 pub use market_data::{
-    BaseCurrencyPriceSeries, CorrelationMarketData, CorrelationMarketDataSeries, IndividualPrice,
-    IndividualPriceAvailability, IndividualPriceFallback, MarketDataLimitation,
-    MarketDataLimitationClassification, MarketDataSubject, MarketDataValuation,
-    ValuationMarketData, ValuationMarketDataAvailability,
+    BaseCurrencyPriceSeries, CorrelationMarketData, CorrelationMarketDataSeries,
+    IndividualPriceAvailability, MarketDataLimitation, MarketDataLimitationClassification,
+    MarketDataSubject, MarketDataValuation, ValuationMarketData, ValuationMarketDataAvailability,
 };
 pub use portfolio::{
     AllocationEntry, AssetSnapshot, CompositionResult, CorrelationMatrix, CurrentPositions,

@@ -11,21 +11,3 @@ impl Clock for SystemClock {
         chrono::Local::now().date_naive()
     }
 }
-
-#[allow(dead_code)] // Constructed by external callers and integration tests through the library crate.
-pub struct FixedClock {
-    today: NaiveDate,
-}
-
-#[allow(dead_code)]
-impl FixedClock {
-    pub fn new(today: NaiveDate) -> Self {
-        Self { today }
-    }
-}
-
-impl Clock for FixedClock {
-    fn today(&self) -> NaiveDate {
-        self.today
-    }
-}

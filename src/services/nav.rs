@@ -39,18 +39,6 @@ struct SnapshotBatch {
 
 const SNAPSHOT_BATCH_SIZE: usize = 100;
 
-/// Returns ensured NAV history for a caller-selected display range.
-#[allow(dead_code)]
-pub async fn get_portfolio_history(
-    db: &DatabaseConnection,
-    start_date: &str,
-    end_date: &str,
-    market_data: &MarketData,
-) -> anyhow::Result<Vec<PortfolioSnapshot>> {
-    ensure_portfolio_history(db, market_data).await?;
-    portfolio_history_repo::find_between(db, start_date, end_date).await
-}
-
 /// Reads an already-ready history range without performing readiness work.
 pub async fn get_ready_portfolio_history(
     db: &DatabaseConnection,

@@ -29,24 +29,6 @@ pub struct MarketDataValuation {
     pub base_currency_price: f64,
 }
 
-#[allow(dead_code)]
-#[derive(Debug, Clone, PartialEq)]
-pub struct IndividualPriceFallback {
-    pub native_price: f64,
-    pub price_date: String,
-    pub fx_rate: f64,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Clone, PartialEq)]
-pub struct IndividualPrice {
-    pub native_price: f64,
-    pub price_date: String,
-    pub fx_rate: f64,
-    pub base_currency_price: f64,
-    pub limitations: Vec<MarketDataLimitation>,
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct IndividualPriceAvailability {
     pub native_price: Option<f64>,

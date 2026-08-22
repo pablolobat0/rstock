@@ -558,6 +558,14 @@ fn benchmark_performance(c: &mut Criterion) {
         });
     });
     group.bench_function("nav_readiness_warm_representative", |b| {
+        // Complete the rebuild before timing readiness. The benchmark name is
+        // warm readiness, not the first full representative rebuild.
+        runtime
+            .block_on(nav::ensure_portfolio_history(
+                &representative.db,
+                &representative.market_data,
+            ))
+            .expect("representative NAV warm-up");
         b.to_async(&runtime).iter(|| async {
             nav::ensure_portfolio_history(&representative.db, &representative.market_data)
                 .await

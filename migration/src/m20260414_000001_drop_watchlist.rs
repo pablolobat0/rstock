@@ -7,12 +7,7 @@ pub struct Migration;
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         manager
-            .drop_table(
-                Table::drop()
-                    .table(Watchlist::Table)
-                    .if_exists()
-                    .to_owned(),
-            )
+            .drop_table(Table::drop().table(Watchlist::Table).if_exists().to_owned())
             .await
     }
 
@@ -29,8 +24,17 @@ impl MigrationTrait for Migration {
                             .auto_increment()
                             .primary_key(),
                     )
-                    .col(ColumnDef::new(Watchlist::Ticker).string().not_null().unique_key())
-                    .col(ColumnDef::new(Watchlist::SectorEtfTicker).string().not_null())
+                    .col(
+                        ColumnDef::new(Watchlist::Ticker)
+                            .string()
+                            .not_null()
+                            .unique_key(),
+                    )
+                    .col(
+                        ColumnDef::new(Watchlist::SectorEtfTicker)
+                            .string()
+                            .not_null(),
+                    )
                     .col(ColumnDef::new(Watchlist::CreatedAt).string().not_null())
                     .to_owned(),
             )

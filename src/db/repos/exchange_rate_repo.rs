@@ -69,24 +69,6 @@ pub async fn find_rate_and_date_at_or_before(
     Ok(result.map(|r| (r.rate, r.date)))
 }
 
-pub async fn find_rates_between(
-    db: &impl ConnectionTrait,
-    from_currency: &str,
-    to_currency: &str,
-    start_date: &str,
-    end_date: &str,
-) -> anyhow::Result<Vec<(String, f64)>> {
-    let results = daily_exchange_rate::Entity::find()
-        .filter(daily_exchange_rate::Column::FromCurrency.eq(from_currency))
-        .filter(daily_exchange_rate::Column::ToCurrency.eq(to_currency))
-        .filter(daily_exchange_rate::Column::Date.gte(start_date))
-        .filter(daily_exchange_rate::Column::Date.lte(end_date))
-        .order_by_asc(daily_exchange_rate::Column::Date)
-        .all(db)
-        .await?;
-    Ok(results.into_iter().map(|r| (r.date, r.rate)).collect())
-}
-
 pub async fn find_rates_between_currencies(
     db: &impl ConnectionTrait,
     from_currencies: &[String],
@@ -158,85 +140,6 @@ pub async fn find_coverage_with_seed(
     Ok(rows.into_iter().map(|row| (row.date, row.value)).collect())
 }
 
-pub async fn find_latest_date(
-    db: &impl ConnectionTrait,
-    from_currency: &str,
-    to_currency: &str,
-) -> anyhow::Result<Option<String>> {
-    let result = daily_exchange_rate::Entity::find()
-        .filter(daily_exchange_rate::Column::FromCurrency.eq(from_currency))
-        .filter(daily_exchange_rate::Column::ToCurrency.eq(to_currency))
-        .order_by_desc(daily_exchange_rate::Column::Date)
-        .one(db)
-        .await?;
-    Ok(result.map(|r| r.date))
-}
-
-pub async fn find_rate_before(
-    db: &impl ConnectionTrait,
-    from_currency: &str,
-    to_currency: &str,
-    date: &str,
-) -> anyhow::Result<Option<f64>> {
-    let result = daily_exchange_rate::Entity::find()
-        .filter(daily_exchange_rate::Column::FromCurrency.eq(from_currency))
-        .filter(daily_exchange_rate::Column::ToCurrency.eq(to_currency))
-        .filter(daily_exchange_rate::Column::Date.lt(date))
-        .order_by_desc(daily_exchange_rate::Column::Date)
-        .one(db)
-        .await?;
-    Ok(result.map(|r| r.rate))
-}
-
-pub async fn exists(
-    db: &impl ConnectionTrait,
-    from_currency: &str,
-    to_currency: &str,
-    date: &str,
-) -> anyhow::Result<bool> {
-    let result = daily_exchange_rate::Entity::find()
-        .filter(daily_exchange_rate::Column::FromCurrency.eq(from_currency))
-        .filter(daily_exchange_rate::Column::ToCurrency.eq(to_currency))
-        .filter(daily_exchange_rate::Column::Date.eq(date))
-        .one(db)
-        .await?;
-    Ok(result.is_some())
-}
-
-pub async fn upsert(
-    db: &impl ConnectionTrait,
-    from_currency: &str,
-    to_currency: &str,
-    date: &str,
-    rate: f64,
-) -> anyhow::Result<()> {
-    daily_exchange_rate::Entity::insert(active_model(from_currency, to_currency, date, rate))
-        .on_conflict(native_conflict())
-        .exec_without_returning(db)
-        .await?;
-    Ok(())
-}
-
-pub async fn upsert_many(
-    db: &impl ConnectionTrait,
-    rates: &[ExchangeRateWrite],
-) -> anyhow::Result<()> {
-    for chunk in rates.chunks(BULK_WRITE_SIZE) {
-        daily_exchange_rate::Entity::insert_many(chunk.iter().map(|rate| {
-            active_model(
-                &rate.from_currency,
-                &rate.to_currency,
-                &rate.date,
-                rate.rate,
-            )
-        }))
-        .on_conflict(native_conflict())
-        .exec_without_returning(db)
-        .await?;
-    }
-    Ok(())
-}
-
 pub async fn insert_many_immutable(
     db: &impl ConnectionTrait,
     rates: &[ExchangeRateWrite],
@@ -276,16 +179,6 @@ fn rate_models(
             rate.rate,
         )
     })
-}
-
-fn native_conflict() -> OnConflict {
-    OnConflict::columns([
-        daily_exchange_rate::Column::FromCurrency,
-        daily_exchange_rate::Column::ToCurrency,
-        daily_exchange_rate::Column::Date,
-    ])
-    .update_column(daily_exchange_rate::Column::Rate)
-    .to_owned()
 }
 
 fn immutable_conflict() -> OnConflict {

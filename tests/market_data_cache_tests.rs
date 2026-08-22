@@ -7,7 +7,6 @@ use chrono::NaiveDate;
 use rstock::db::entities::asset;
 use rstock::db::repos::{daily_price_repo, exchange_rate_repo};
 use rstock::models::Asset;
-use rstock::services::clock::FixedClock;
 use rstock::services::market_data::{MarketData, MarketDataSources, SourceObservation};
 use sea_orm::EntityTrait;
 
@@ -151,7 +150,7 @@ async fn make_asset(db: &sea_orm::DatabaseConnection, ticker: &str, currency: &s
 }
 
 fn market_data(sources: RecordingSources) -> MarketData {
-    MarketData::new_with_clock(Box::new(sources), &FixedClock::new(date(6)))
+    MarketData::new_with_clock(Box::new(sources), &common::TestClock::new(date(6)))
 }
 
 #[tokio::test]
@@ -205,25 +204,25 @@ async fn partial_asset_and_fx_coverage_requests_only_missing_intervals() {
         ]
     );
     assert_eq!(
-        daily_price_repo::find_price(&db, asset.id, "2025-01-03")
+        common::find_daily_price(&db, asset.id, "2025-01-03")
             .await
             .unwrap(),
         Some(30.0)
     );
     assert_eq!(
-        daily_price_repo::find_price(&db, asset.id, "2025-01-05")
+        common::find_daily_price(&db, asset.id, "2025-01-05")
             .await
             .unwrap(),
         Some(50.0)
     );
     assert_eq!(
-        exchange_rate_repo::find_rate(&db, "USD", "EUR", "2025-01-04")
+        common::find_exchange_rate(&db, "USD", "EUR", "2025-01-04")
             .await
             .unwrap(),
         Some(0.83)
     );
     assert_eq!(
-        exchange_rate_repo::find_rate(&db, "USD", "EUR", "2025-01-05")
+        common::find_exchange_rate(&db, "USD", "EUR", "2025-01-05")
             .await
             .unwrap(),
         Some(0.85)
@@ -263,7 +262,7 @@ async fn bounded_cache_gap_is_forward_filled_and_becomes_warm() {
         vec![HistoricalCall::Stock("XFAKE1".to_owned(), date(2), date(3))]
     );
     assert_eq!(
-        daily_price_repo::find_price(&db, asset.id, "2025-01-03")
+        common::find_daily_price(&db, asset.id, "2025-01-03")
             .await
             .unwrap(),
         Some(10.0)
@@ -293,7 +292,7 @@ async fn completed_date_preparation_ignores_cached_same_day_rows() {
     assert_eq!(prepared.effective_end, date(5));
     assert_eq!(sources.calls().len(), 1);
     assert_eq!(
-        daily_price_repo::find_price(&db, asset.id, "2025-01-06")
+        common::find_daily_price(&db, asset.id, "2025-01-06")
             .await
             .unwrap(),
         Some(99.0)
@@ -340,19 +339,19 @@ async fn immutable_bulk_writes_preserve_successes_and_replace_failure_markers() 
     .unwrap();
 
     assert_eq!(
-        daily_price_repo::find_price(&db, asset.id, "2025-01-01")
+        common::find_daily_price(&db, asset.id, "2025-01-01")
             .await
             .unwrap(),
         Some(10.0)
     );
     assert_eq!(
-        daily_price_repo::find_price(&db, asset.id, "2025-01-02")
+        common::find_daily_price(&db, asset.id, "2025-01-02")
             .await
             .unwrap(),
         Some(20.0)
     );
     assert_eq!(
-        exchange_rate_repo::find_rate(&db, "USD", "EUR", "2025-01-01")
+        common::find_exchange_rate(&db, "USD", "EUR", "2025-01-01")
             .await
             .unwrap(),
         Some(0.8)
@@ -382,6 +381,80 @@ async fn identical_fx_requests_share_success_and_failure_within_one_command() {
 }
 
 #[tokio::test]
+async fn preparation_reuses_empty_success_for_the_command_and_retries_next_command() {
+    let db = common::setup_test_db().await;
+    let asset = make_asset(&db, "XFAKE1", "EUR").await;
+    let sources = RecordingSources::default();
+    let first_command = market_data(sources.clone());
+
+    first_command
+        .prepare_valuation_market_data_if_available(
+            &db,
+            std::slice::from_ref(&asset),
+            "2025-01-01",
+            "2025-01-02",
+        )
+        .await
+        .unwrap();
+    first_command
+        .prepare_valuation_market_data_if_available(
+            &db,
+            std::slice::from_ref(&asset),
+            "2025-01-01",
+            "2025-01-02",
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(sources.calls().len(), 1);
+
+    market_data(sources.clone())
+        .prepare_valuation_market_data_if_available(
+            &db,
+            std::slice::from_ref(&asset),
+            "2025-01-01",
+            "2025-01-02",
+        )
+        .await
+        .unwrap();
+    assert_eq!(sources.calls().len(), 2);
+}
+
+#[tokio::test]
+async fn preparation_reuses_failed_result_for_the_command_and_retries_next_command() {
+    let db = common::setup_test_db().await;
+    let asset = make_asset(&db, "XFAKE1", "EUR").await;
+    let sources = RecordingSources::with_failures(["stock:XFAKE1".to_owned()]);
+    let first_command = market_data(sources.clone());
+
+    for _ in 0..2 {
+        let prepared = first_command
+            .prepare_valuation_market_data_if_available(
+                &db,
+                std::slice::from_ref(&asset),
+                "2025-01-01",
+                "2025-01-02",
+            )
+            .await
+            .unwrap();
+        assert!(!prepared.data_available);
+    }
+    assert_eq!(sources.calls().len(), 1);
+
+    let prepared = market_data(sources.clone())
+        .prepare_valuation_market_data_if_available(
+            &db,
+            std::slice::from_ref(&asset),
+            "2025-01-01",
+            "2025-01-02",
+        )
+        .await
+        .unwrap();
+    assert!(!prepared.data_available);
+    assert_eq!(sources.calls().len(), 2);
+}
+
+#[tokio::test]
 async fn preparation_preserves_independent_success_when_an_asset_request_fails() {
     let db = common::setup_test_db().await;
     let successful = make_asset(&db, "XFAKE1", "EUR").await;
@@ -406,7 +479,7 @@ async fn preparation_preserves_independent_success_when_an_asset_request_fails()
     assert_eq!(prepared.limitations.len(), 1);
     assert_eq!(sources.calls().len(), 2);
     assert_eq!(
-        daily_price_repo::find_price(&db, successful.id, "2025-01-02")
+        common::find_daily_price(&db, successful.id, "2025-01-02")
             .await
             .unwrap(),
         Some(11.0)

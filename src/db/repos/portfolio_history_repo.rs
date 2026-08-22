@@ -35,14 +35,6 @@ pub async fn find_at_or_before(
     Ok(result.map(PortfolioSnapshot::from))
 }
 
-pub async fn upsert(db: &impl ConnectionTrait, snapshot: &PortfolioSnapshot) -> anyhow::Result<()> {
-    portfolio_history::Entity::insert(active_model(snapshot))
-        .on_conflict(native_conflict())
-        .exec_without_returning(db)
-        .await?;
-    Ok(())
-}
-
 pub async fn upsert_many(
     db: &impl ConnectionTrait,
     snapshots: &[PortfolioSnapshot],

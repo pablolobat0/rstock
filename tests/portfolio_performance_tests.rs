@@ -106,7 +106,7 @@ async fn portfolio_quotes_are_bounded_and_use_historical_fallback_without_duplic
             counters: counters.clone(),
             yesterday,
         }),
-        &rstock::services::clock::FixedClock::new(today),
+        &common::TestClock::new(today),
     );
 
     let started = Instant::now();

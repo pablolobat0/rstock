@@ -39,11 +39,7 @@ impl MigrationTrait for Migration {
             )
             .await?;
         manager
-            .drop_index(
-                Index::drop()
-                    .name("idx_transactions_date_id")
-                    .to_owned(),
-            )
+            .drop_index(Index::drop().name("idx_transactions_date_id").to_owned())
             .await?;
         Ok(())
     }

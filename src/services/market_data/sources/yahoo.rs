@@ -63,42 +63,20 @@ impl YahooFinanceAdapter {
             .context(format!("failed to fetch info for {ticker}"))?;
 
         let profile_result = profile::load_profile(&client, ticker).await.ok();
-        let (sector, industry, country, name_from_profile) = match &profile_result {
+        let (sector, country, name_from_profile) = match &profile_result {
             Some(Profile::Company(c)) => (
                 c.sector.clone(),
-                c.industry.clone(),
                 c.address.as_ref().and_then(|a| a.country.clone()),
                 Some(c.name.clone()),
             ),
-            Some(Profile::Fund(f)) => (None, None, None, Some(f.name.clone())),
-            None => (None, None, None, None),
-        };
-
-        let day_range = match (&info.day_range_low, &info.day_range_high) {
-            (Some(lo), Some(hi)) => Some((money_to_f64(lo), money_to_f64(hi))),
-            _ => None,
-        };
-        let fifty_two_week_range = match (&info.fifty_two_week_low, &info.fifty_two_week_high) {
-            (Some(lo), Some(hi)) => Some((money_to_f64(lo), money_to_f64(hi))),
-            _ => None,
+            Some(Profile::Fund(f)) => (None, None, Some(f.name.clone())),
+            None => (None, None, None),
         };
 
         Ok(StockInfo {
-            ticker: ticker.to_owned(),
             name: info.name.clone().or(name_from_profile),
-            currency: info.currency.as_ref().map(std::string::ToString::to_string),
-            current_price: info.last.as_ref().map(money_to_f64),
-            previous_close: info.previous_close.as_ref().map(money_to_f64),
-            day_range,
-            fifty_two_week_range,
-            volume: info.volume,
-            avg_volume: info.average_volume,
             market_cap: info.market_cap.as_ref().map(money_to_f64),
-            pe_ttm: info.pe_ttm,
-            eps_ttm: info.eps_ttm.as_ref().map(money_to_f64),
-            dividend_yield: info.dividend_yield,
             sector,
-            industry,
             country,
         })
     }

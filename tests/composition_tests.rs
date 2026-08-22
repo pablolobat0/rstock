@@ -68,26 +68,14 @@ async fn insert_asset_snapshot(
 fn mock_stock_info(
     ticker: &str,
     sector: Option<&str>,
-    industry: Option<&str>,
+    _industry: Option<&str>,
     country: Option<&str>,
     market_cap: Option<f64>,
 ) -> StockInfo {
     StockInfo {
-        ticker: ticker.to_owned(),
         name: Some(format!("{ticker} Inc")),
-        currency: Some("USD".to_owned()),
-        current_price: Some(100.0),
-        previous_close: Some(99.0),
-        day_range: None,
-        fifty_two_week_range: None,
-        volume: None,
-        avg_volume: None,
         market_cap,
-        pe_ttm: None,
-        eps_ttm: None,
-        dividend_yield: None,
         sector: sector.map(str::to_owned),
-        industry: industry.map(str::to_owned),
         country: country.map(str::to_owned),
     }
 }

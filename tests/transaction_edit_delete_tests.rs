@@ -277,7 +277,7 @@ async fn ledger_mutations_roll_back_when_snapshot_invalidation_fails() {
         assert_eq!(get_asset_snapshots(&db, "2025-01-03").await.len(), 1);
         if matches!(case, MutationCase::Split) {
             assert_eq!(
-                rstock::db::repos::daily_price_repo::find_price(&db, asset_id, "2025-01-01")
+                common::find_daily_price(&db, asset_id, "2025-01-01")
                     .await
                     .unwrap(),
                 Some(100.0_f64),
@@ -324,13 +324,52 @@ async fn split_edit_and_delete_roll_back_when_price_cache_invalidation_fails() {
             before
         );
         assert_eq!(get_all_snapshots(&db).await.len(), 1);
-        let cached_price =
-            rstock::db::repos::daily_price_repo::find_price(&db, asset_id, "2025-01-01")
-                .await
-                .unwrap()
-                .expect("split price should remain after rollback");
+        let cached_price = common::find_daily_price(&db, asset_id, "2025-01-01")
+            .await
+            .unwrap()
+            .expect("split price should remain after rollback");
         assert!((cached_price - 100.0).abs() < f64::EPSILON);
     }
+}
+
+#[tokio::test]
+async fn split_edit_invalidates_from_asset_earliest_transaction_after_date_move() {
+    let db = setup_test_db().await;
+    let asset_id = insert_asset(&db, "XFAKE1", "Fake Stock", "stock", "EUR").await;
+    insert_transaction(&db, asset_id, "2025-01-01", 10.0, 100.0, 0.0).await;
+    insert_split_transaction(&db, asset_id, "2025-01-02", 2.0).await;
+    insert_daily_price(&db, asset_id, "2025-01-01", 100.0, false).await;
+    insert_portfolio_snapshot(&db, "2025-01-01", 100.0, 10.0).await;
+    insert_portfolio_snapshot(&db, "2025-01-03", 100.0, 10.0).await;
+
+    services::transactions::edit(&db, 2, Some("2025-01-04".to_owned()), Some(3.0), None, None)
+        .await
+        .unwrap();
+
+    assert!(get_all_snapshots(&db).await.is_empty());
+    assert!(common::find_daily_price(&db, asset_id, "2025-01-01")
+        .await
+        .unwrap()
+        .is_none());
+}
+
+#[tokio::test]
+async fn deleting_split_invalidates_from_asset_earliest_transaction() {
+    let db = setup_test_db().await;
+    let asset_id = insert_asset(&db, "XFAKE1", "Fake Stock", "stock", "EUR").await;
+    insert_transaction(&db, asset_id, "2025-01-01", 10.0, 100.0, 0.0).await;
+    insert_split_transaction(&db, asset_id, "2025-01-02", 2.0).await;
+    insert_daily_price(&db, asset_id, "2025-01-01", 100.0, false).await;
+    insert_portfolio_snapshot(&db, "2025-01-01", 100.0, 10.0).await;
+    insert_portfolio_snapshot(&db, "2025-01-03", 100.0, 10.0).await;
+
+    services::transactions::delete(&db, 2).await.unwrap();
+
+    assert!(get_all_snapshots(&db).await.is_empty());
+    assert!(common::find_daily_price(&db, asset_id, "2025-01-01")
+        .await
+        .unwrap()
+        .is_none());
 }
 
 #[tokio::test]

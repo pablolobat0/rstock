@@ -7,9 +7,7 @@ use sea_orm::DatabaseConnection;
 use super::{policy, MarketData, NavValuationData, SourceObservation};
 use crate::constants::{format_date, BASE_CURRENCY, FUND_API_PADDING_DAYS};
 use crate::db::repos::{daily_price_repo, exchange_rate_repo};
-use crate::models::{
-    Asset, AssetType, MarketDataValuation, ValuationMarketData, ValuationMarketDataAvailability,
-};
+use crate::models::{Asset, AssetType, ValuationMarketData, ValuationMarketDataAvailability};
 
 struct LatestMarketDataDate {
     date: String,
@@ -50,40 +48,6 @@ pub(crate) async fn fill_historical_market_data_cache(
     Ok(())
 }
 
-#[allow(dead_code)]
-pub(crate) async fn get_required_asset_valuation_data(
-    db: &DatabaseConnection,
-    asset: &Asset,
-    date: &str,
-) -> anyhow::Result<MarketDataValuation> {
-    get_asset_valuation_data(db, asset, date)
-        .await?
-        .with_context(|| {
-            format!(
-                "missing required historical market data for asset {} ({})",
-                asset.ticker, asset.name
-            )
-        })
-}
-
-#[allow(dead_code)]
-async fn get_asset_valuation_data(
-    db: &DatabaseConnection,
-    asset: &Asset,
-    date: &str,
-) -> anyhow::Result<Option<MarketDataValuation>> {
-    let Some(native_price) = get_closing_price(db, asset, date).await? else {
-        return Ok(None);
-    };
-    let fx_rate = get_required_exchange_rate_for_asset(db, asset, date).await?;
-
-    Ok(Some(MarketDataValuation {
-        native_price,
-        fx_rate,
-        base_currency_price: native_price * fx_rate,
-    }))
-}
-
 pub(crate) async fn get_exchange_rate_for_asset(
     db: &DatabaseConnection,
     asset: &Asset,
@@ -94,22 +58,6 @@ pub(crate) async fn get_exchange_rate_for_asset(
     }
 
     get_exchange_rate(db, &asset.currency, date).await
-}
-
-#[allow(dead_code)]
-pub(crate) async fn get_required_asset_exchange_rates(
-    db: &DatabaseConnection,
-    assets: &[Asset],
-    date: &str,
-) -> anyhow::Result<HashMap<i32, f64>> {
-    let mut rates = HashMap::new();
-    for asset in assets {
-        rates.insert(
-            asset.id,
-            get_required_exchange_rate_for_asset(db, asset, date).await?,
-        );
-    }
-    Ok(rates)
 }
 
 pub(crate) async fn get_base_currency_price_series_for_assets(
@@ -178,18 +126,6 @@ async fn get_exchange_rate(
     exchange_rate_repo::find_rate_at_or_before(db, from_currency, BASE_CURRENCY, date).await
 }
 
-async fn get_closing_price(
-    db: &DatabaseConnection,
-    asset: &Asset,
-    date: &str,
-) -> anyhow::Result<Option<f64>> {
-    if let Some(price) = daily_price_repo::find_price(db, asset.id, date).await? {
-        return Ok(Some(price));
-    }
-
-    daily_price_repo::find_price_at_or_before(db, asset.id, date).await
-}
-
 async fn prepare_historical_market_data(
     db: &DatabaseConnection,
     assets: &[Asset],
@@ -217,7 +153,6 @@ async fn prepare_historical_market_data(
 /// data is reported as `data_available = false` plus limitations instead of a
 /// hard error, so NAV readiness can represent an unavailable valuation scope
 /// without masking genuine DB, parsing, or invariant errors.
-#[allow(dead_code)]
 pub(crate) async fn prepare_valuation_market_data_if_available(
     db: &DatabaseConnection,
     assets: &[Asset],
@@ -368,22 +303,6 @@ fn infer_required_currencies(assets: &[Asset]) -> Vec<String> {
     currencies
 }
 
-#[allow(dead_code)]
-async fn get_required_exchange_rate_for_asset(
-    db: &DatabaseConnection,
-    asset: &Asset,
-    date: &str,
-) -> anyhow::Result<f64> {
-    get_exchange_rate_for_asset(db, asset, date)
-        .await?
-        .with_context(|| {
-            format!(
-                "missing required historical market data for FX rate for asset {} ({})",
-                asset.ticker, asset.name
-            )
-        })
-}
-
 async fn fill_nav_asset_prices(
     db: &DatabaseConnection,
     assets: &[Asset],
@@ -415,8 +334,6 @@ async fn fill_nav_asset_prices(
         .collect();
 
     let results = futures::future::join_all(futures).await;
-    market_data.clear_completed_historical_requests()?;
-
     let mut latest_dates: HashMap<i32, FilledValues> = HashMap::new();
     for (asset, result) in results {
         match result {
@@ -543,8 +460,6 @@ async fn fill_nav_exchange_rates(
         .collect();
 
     let results = futures::future::join_all(futures).await;
-    market_data.clear_completed_historical_requests()?;
-
     let mut latest_dates = HashMap::new();
     for (currency, result) in results {
         match result {

@@ -27,14 +27,6 @@ pub async fn find_all(db: &impl ConnectionTrait) -> anyhow::Result<Vec<AssetSnap
     Ok(results.into_iter().map(AssetSnapshot::from).collect())
 }
 
-pub async fn upsert(db: &impl ConnectionTrait, snapshot: &AssetSnapshot) -> anyhow::Result<()> {
-    portfolio_asset_history::Entity::insert(active_model(snapshot))
-        .on_conflict(native_conflict())
-        .exec_without_returning(db)
-        .await?;
-    Ok(())
-}
-
 pub async fn upsert_many(
     db: &impl ConnectionTrait,
     snapshots: &[AssetSnapshot],

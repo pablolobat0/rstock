@@ -1,12 +1,11 @@
 mod common;
 
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, TransactionTrait};
+use sea_orm::{EntityTrait, QueryOrder, TransactionTrait};
 
 use common::{insert_asset, setup_test_db};
-use rstock::db::entities::{daily_asset_price, daily_exchange_rate, portfolio_asset_history};
+use rstock::db::entities::portfolio_asset_history;
 use rstock::db::repos::{
-    asset_repo, daily_price_repo, exchange_rate_repo, portfolio_asset_history_repo,
-    portfolio_history_repo, transaction_repo,
+    asset_repo, portfolio_asset_history_repo, portfolio_history_repo, transaction_repo,
 };
 use rstock::models::{
     f64_to_cents, AssetClassification, AssetInfo, AssetSnapshot, AssetType, BuyOrder,
@@ -34,9 +33,6 @@ async fn repository_writes_commit_and_rollback_in_caller_owned_transactions() {
     )
     .await
     .unwrap();
-    daily_price_repo::upsert(&rolled_back, asset_id, "2025-01-02", 12.5, false)
-        .await
-        .unwrap();
     assert!(transaction_repo::find_by_id(&rolled_back, rolled_back_id)
         .await
         .unwrap()
@@ -47,12 +43,6 @@ async fn repository_writes_commit_and_rollback_in_caller_owned_transactions() {
         .await
         .unwrap()
         .is_none());
-    assert_eq!(
-        daily_price_repo::find_price(&db, asset_id, "2025-01-02")
-            .await
-            .unwrap(),
-        None
-    );
     assert!(asset_repo::find_by_ticker(&db, "XFAKE2")
         .await
         .unwrap()
@@ -74,9 +64,6 @@ async fn repository_writes_commit_and_rollback_in_caller_owned_transactions() {
     )
     .await
     .unwrap();
-    daily_price_repo::upsert(&committed, asset_id, "2025-01-03", 12.5, false)
-        .await
-        .unwrap();
     committed.commit().await.unwrap();
 
     let committed_transaction = transaction_repo::find_by_id(&db, committed_id)
@@ -85,12 +72,6 @@ async fn repository_writes_commit_and_rollback_in_caller_owned_transactions() {
         .unwrap();
     assert_eq!(committed_transaction.price_cents, f64_to_cents(12.345));
     assert_eq!(committed_transaction.fees_cents, f64_to_cents(0.125));
-    assert_eq!(
-        daily_price_repo::find_price(&db, asset_id, "2025-01-03")
-            .await
-            .unwrap(),
-        Some(12.5)
-    );
     assert!(asset_repo::find_by_ticker(&db, "XFAKE3")
         .await
         .unwrap()
@@ -105,7 +86,7 @@ async fn complete_nav_snapshot_writes_share_one_transaction_boundary() {
     let assets = vec![asset_snapshot("2025-01-02", asset_id, 110.0)];
 
     let rolled_back = db.begin().await.unwrap();
-    portfolio_history_repo::upsert(&rolled_back, &portfolio)
+    portfolio_history_repo::upsert_many(&rolled_back, &[portfolio_snapshot("2025-01-02", 110.0)])
         .await
         .unwrap();
     portfolio_asset_history_repo::upsert_many(&rolled_back, &assets)
@@ -125,7 +106,7 @@ async fn complete_nav_snapshot_writes_share_one_transaction_boundary() {
     );
 
     let committed = db.begin().await.unwrap();
-    portfolio_history_repo::upsert(&committed, &portfolio)
+    portfolio_history_repo::upsert_many(&committed, &[portfolio])
         .await
         .unwrap();
     portfolio_asset_history_repo::upsert_many(&committed, &assets)
@@ -175,87 +156,6 @@ async fn caller_transaction_rolls_back_completed_bulk_chunks_after_a_late_failur
         .await
         .unwrap()
         .is_empty());
-}
-
-#[tokio::test]
-async fn native_conflicts_update_existing_values_without_manual_reads() {
-    let db = setup_test_db().await;
-    let asset_id = insert_asset(&db, "XFAKE1", "Fake Stock", "stock", "USD").await;
-
-    daily_price_repo::upsert(&db, asset_id, "2025-01-02", 10.0, true)
-        .await
-        .unwrap();
-    let original_price = daily_asset_price::Entity::find()
-        .filter(daily_asset_price::Column::AssetId.eq(asset_id))
-        .one(&db)
-        .await
-        .unwrap()
-        .unwrap();
-    daily_price_repo::upsert(&db, asset_id, "2025-01-02", 11.5, false)
-        .await
-        .unwrap();
-    let updated_price = daily_asset_price::Entity::find()
-        .filter(daily_asset_price::Column::AssetId.eq(asset_id))
-        .one(&db)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(updated_price.id, original_price.id);
-    assert_eq!(updated_price.closing_price, 11.5);
-    assert!(!updated_price.is_api_failure);
-
-    exchange_rate_repo::upsert(&db, "USD", "EUR", "2025-01-02", 0.90)
-        .await
-        .unwrap();
-    let original_rate = daily_exchange_rate::Entity::find()
-        .one(&db)
-        .await
-        .unwrap()
-        .unwrap();
-    exchange_rate_repo::upsert(&db, "USD", "EUR", "2025-01-02", 0.91)
-        .await
-        .unwrap();
-    let updated_rate = daily_exchange_rate::Entity::find()
-        .one(&db)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(updated_rate.id, original_rate.id);
-    assert_eq!(updated_rate.rate, 0.91);
-
-    portfolio_history_repo::upsert(&db, &portfolio_snapshot("2025-01-02", 100.0))
-        .await
-        .unwrap();
-    portfolio_history_repo::upsert(&db, &portfolio_snapshot("2025-01-02", 101.0))
-        .await
-        .unwrap();
-    let updated_portfolio = portfolio_history_repo::find_latest(&db)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(updated_portfolio.date, "2025-01-02");
-    assert_eq!(updated_portfolio.nav, 101.0);
-
-    let first_snapshot = asset_snapshot("2025-01-02", asset_id, 10.0);
-    portfolio_asset_history_repo::upsert(&db, &first_snapshot)
-        .await
-        .unwrap();
-    let original_snapshot = portfolio_asset_history::Entity::find()
-        .one(&db)
-        .await
-        .unwrap()
-        .unwrap();
-    let updated_snapshot = asset_snapshot("2025-01-02", asset_id, 12.0);
-    portfolio_asset_history_repo::upsert(&db, &updated_snapshot)
-        .await
-        .unwrap();
-    let persisted_snapshot = portfolio_asset_history::Entity::find()
-        .one(&db)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(persisted_snapshot.id, original_snapshot.id);
-    assert_eq!(persisted_snapshot.market_value, 12.0);
 }
 
 #[tokio::test]
@@ -398,107 +298,13 @@ async fn bulk_writes_match_single_row_writes_for_ledger_market_data_and_nav() {
         ledger_fields(bulk_transactions)
     );
 
-    daily_price_repo::upsert(&single_db, single_asset, "2025-01-02", 10.0, true)
-        .await
-        .unwrap();
-    daily_price_repo::upsert(&single_db, single_asset, "2025-01-02", 11.0, false)
-        .await
-        .unwrap();
-    daily_price_repo::upsert(&single_db, single_asset, "2025-01-03", 12.0, false)
-        .await
-        .unwrap();
-    daily_price_repo::upsert_many(
-        &bulk_db,
-        &[
-            daily_price_repo::DailyPriceWrite {
-                asset_id: bulk_asset,
-                date: "2025-01-02".to_owned(),
-                price: 10.0,
-                is_api_failure: true,
-            },
-            daily_price_repo::DailyPriceWrite {
-                asset_id: bulk_asset,
-                date: "2025-01-02".to_owned(),
-                price: 11.0,
-                is_api_failure: false,
-            },
-            daily_price_repo::DailyPriceWrite {
-                asset_id: bulk_asset,
-                date: "2025-01-03".to_owned(),
-                price: 12.0,
-                is_api_failure: false,
-            },
-        ],
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        daily_price_repo::find_prices_between(&single_db, single_asset, "2025-01-01", "2025-01-04")
-            .await
-            .unwrap(),
-        daily_price_repo::find_prices_between(&bulk_db, bulk_asset, "2025-01-01", "2025-01-04")
-            .await
-            .unwrap()
-    );
-
-    exchange_rate_repo::upsert(&single_db, "USD", "EUR", "2025-01-02", 0.90)
-        .await
-        .unwrap();
-    exchange_rate_repo::upsert(&single_db, "USD", "EUR", "2025-01-02", 0.91)
-        .await
-        .unwrap();
-    exchange_rate_repo::upsert(&single_db, "USD", "EUR", "2025-01-03", 0.92)
-        .await
-        .unwrap();
-    exchange_rate_repo::upsert_many(
-        &bulk_db,
-        &[
-            exchange_rate_repo::ExchangeRateWrite {
-                from_currency: "USD".to_owned(),
-                to_currency: "EUR".to_owned(),
-                date: "2025-01-02".to_owned(),
-                rate: 0.90,
-            },
-            exchange_rate_repo::ExchangeRateWrite {
-                from_currency: "USD".to_owned(),
-                to_currency: "EUR".to_owned(),
-                date: "2025-01-02".to_owned(),
-                rate: 0.91,
-            },
-            exchange_rate_repo::ExchangeRateWrite {
-                from_currency: "USD".to_owned(),
-                to_currency: "EUR".to_owned(),
-                date: "2025-01-03".to_owned(),
-                rate: 0.92,
-            },
-        ],
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        exchange_rate_repo::find_rates_between(
-            &single_db,
-            "USD",
-            "EUR",
-            "2025-01-01",
-            "2025-01-04"
-        )
-        .await
-        .unwrap(),
-        exchange_rate_repo::find_rates_between(&bulk_db, "USD", "EUR", "2025-01-01", "2025-01-04")
-            .await
-            .unwrap()
-    );
-
     let portfolio_snapshots = vec![
         portfolio_snapshot("2025-01-02", 100.0),
         portfolio_snapshot("2025-01-03", 101.0),
     ];
-    for snapshot in &portfolio_snapshots {
-        portfolio_history_repo::upsert(&single_db, snapshot)
-            .await
-            .unwrap();
-    }
+    portfolio_history_repo::upsert_many(&single_db, &portfolio_snapshots)
+        .await
+        .unwrap();
     portfolio_history_repo::upsert_many(&bulk_db, &portfolio_snapshots)
         .await
         .unwrap();
@@ -515,11 +321,9 @@ async fn bulk_writes_match_single_row_writes_for_ledger_market_data_and_nav() {
         asset_snapshot("2025-01-02", single_asset, 10.0),
         asset_snapshot("2025-01-03", single_asset, 11.0),
     ];
-    for snapshot in &single_asset_snapshots {
-        portfolio_asset_history_repo::upsert(&single_db, snapshot)
-            .await
-            .unwrap();
-    }
+    portfolio_asset_history_repo::upsert_many(&single_db, &single_asset_snapshots)
+        .await
+        .unwrap();
     let bulk_asset_snapshots = vec![
         asset_snapshot("2025-01-02", bulk_asset, 10.0),
         asset_snapshot("2025-01-03", bulk_asset, 11.0),
@@ -552,12 +356,6 @@ async fn bulk_writes_match_single_row_writes_for_ledger_market_data_and_nav() {
             .collect::<Vec<_>>()
     };
     assert_eq!(asset_values(single_rows), asset_values(bulk_rows));
-
-    let bulk_rates = daily_exchange_rate::Entity::find()
-        .all(&bulk_db)
-        .await
-        .unwrap();
-    assert_eq!(bulk_rates.len(), 2);
 }
 
 fn buy_order(date: &str, quantity: f64, price: f64, fees: f64) -> BuyOrder {

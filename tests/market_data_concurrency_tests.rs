@@ -6,9 +6,8 @@ use std::sync::Arc;
 use anyhow::Result;
 use chrono::NaiveDate;
 use common::{insert_asset, setup_test_db};
-use rstock::db::repos::{asset_repo, daily_price_repo};
+use rstock::db::repos::asset_repo;
 use rstock::models::{FundData, FundQuoteMetadata, MarketDataSubject, StockInfo};
-use rstock::services::clock::FixedClock;
 use rstock::services::market_data::{MarketData, MarketDataSources, SourceObservation};
 use tokio::time::{sleep, Duration};
 
@@ -115,7 +114,7 @@ async fn historical_source_requests_are_bounded_and_failures_are_isolated() {
     let sources = DelayedSources::new(Some("XFAIL01"));
     let market_data = MarketData::new_with_clock(
         Box::new(sources.clone()),
-        &FixedClock::new(NaiveDate::from_ymd_opt(2025, 1, 3).unwrap()),
+        &common::TestClock::new(NaiveDate::from_ymd_opt(2025, 1, 3).unwrap()),
     );
     let mut requested_assets = assets.clone();
     requested_assets.push(
@@ -148,7 +147,7 @@ async fn historical_source_requests_are_bounded_and_failures_are_isolated() {
     }));
     for asset in assets.iter().filter(|asset| asset.ticker != "XFAIL01") {
         assert_eq!(
-            daily_price_repo::find_price(&db, asset.id, "2025-01-01")
+            common::find_daily_price(&db, asset.id, "2025-01-01")
                 .await
                 .unwrap(),
             Some(100.0)
@@ -163,7 +162,7 @@ async fn identical_source_requests_share_one_attempt() {
     let sources = DelayedSources::new(None);
     let market_data = MarketData::new_with_clock(
         Box::new(sources.clone()),
-        &FixedClock::new(NaiveDate::from_ymd_opt(2025, 1, 3).unwrap()),
+        &common::TestClock::new(NaiveDate::from_ymd_opt(2025, 1, 3).unwrap()),
     );
 
     market_data
