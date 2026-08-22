@@ -49,10 +49,13 @@ The committed report is generated from actual Criterion estimate and sample
 files by `generate-performance-baseline.sh`; no timing numbers are hand-authored.
 Issue #32 reran every listed target on the small, representative, and stress
 fixture scales without changing the production behavior of those paths.
-Each named path's target is its generated p95 plus a 10 percent noise allowance,
-recorded under `decision_gate.path_p95_targets_ns`. The measured warm-cache
-source-call count is recorded separately from the optimization target of zero;
-peak activity must be no greater than the approved fixed limit.
+The issue #20 decision gate approved immutable p95 targets for the named paths;
+the generator compares each observed value to its fixed target and records an
+explicit pass result under `decision_gate.fixed_target_results`. Paths added by
+later issues remain measured evidence only and have no fabricated acceptance
+target. The measured warm-cache source-call count is recorded separately from
+the optimization target of zero; peak activity must be no greater than the
+approved fixed limit.
 
 “Warm” means the requested range has already been prepared. The final rerun
 observed zero source calls for warm Historical market data preparation. Failed
@@ -71,6 +74,6 @@ not as an authorization to change that separate performance slice.
 ## Verification
 
 Run `./generate-performance-baseline.sh`, then `cargo fmt`,
-`cargo clippy -- -D warnings`, and `cargo test`. The generator runs Criterion,
+`cargo clippy --offline -- -D warnings`, and `cargo test --offline`. The generator runs Criterion,
 the query-plan test, and rewrites the JSON report. No user database or network
 is used by the harness.

@@ -367,6 +367,7 @@ pub async fn insert_exchange_rate(
 pub struct MockMarketDataSources {
     pub historical_prices: HashMap<String, Vec<(String, f64)>>,
     pub exchange_rates: HashMap<String, Vec<(String, f64)>>,
+    pub panic_on_fund_price_history: bool,
     pub stock_info: HashMap<String, StockInfo>,
     pub fund_data: HashMap<String, FundData>,
     pub fund_quote_metadata: HashMap<String, FundQuoteMetadata>,
@@ -377,6 +378,7 @@ impl MockMarketDataSources {
         Self {
             historical_prices: HashMap::new(),
             exchange_rates: HashMap::new(),
+            panic_on_fund_price_history: false,
             stock_info: HashMap::new(),
             fund_data: HashMap::new(),
             fund_quote_metadata: HashMap::new(),
@@ -430,6 +432,7 @@ impl MarketDataSources for MockMarketDataSources {
         _start: chrono::NaiveDate,
         _end: chrono::NaiveDate,
     ) -> anyhow::Result<Vec<SourceObservation>> {
+        assert!(!self.panic_on_fund_price_history);
         Ok(to_source_observations(
             self.historical_prices
                 .get(code)

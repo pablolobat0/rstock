@@ -64,12 +64,22 @@ pub async fn ensure_portfolio_history(
     let yesterday_str = format_date(yesterday);
 
     let mut latest_snapshot = portfolio_history_repo::find_latest(db).await?;
-    if let Some(latest) = latest_snapshot.as_ref() {
-        if let Some(incomplete_date) = find_first_incomplete_snapshot(db, &latest.date).await? {
-            tracing::warn!(date = %incomplete_date, "discarding incomplete NAV snapshots");
-            discard_incomplete_snapshots_from(db, &incomplete_date).await?;
-            latest_snapshot = portfolio_history_repo::find_latest(db).await?;
+    let incomplete_date = match latest_snapshot.as_ref() {
+        Some(snapshot) if snapshot.date < yesterday_str => {
+            find_first_incomplete_snapshot(db, &snapshot.date).await?
         }
+        Some(snapshot)
+            if snapshot.date == yesterday_str
+                && is_snapshot_incomplete_at(db, &snapshot.date).await? =>
+        {
+            Some(snapshot.date.clone())
+        }
+        _ => None,
+    };
+    if let Some(incomplete_date) = incomplete_date {
+        tracing::warn!(date = %incomplete_date, "discarding incomplete NAV snapshots");
+        discard_incomplete_snapshots_from(db, &incomplete_date).await?;
+        latest_snapshot = portfolio_history_repo::find_latest(db).await?;
     }
 
     let mut market_data_limitations = Vec::new();
@@ -129,6 +139,52 @@ pub async fn ensure_portfolio_history(
         market_data_limitations,
         performance_market_data_prepared,
     })
+}
+
+async fn is_snapshot_incomplete_at(db: &DatabaseConnection, date: &str) -> anyhow::Result<bool> {
+    let transactions = transaction_repo::find_all_ordered_by_date(db, None, Some(date)).await?;
+    let asset_ids: HashSet<i32> = transactions
+        .iter()
+        .map(|transaction| transaction.asset_id)
+        .collect();
+    let assets = asset_repo::find_by_ids(db, asset_ids.iter().copied()).await?;
+    let asset_map: HashMap<i32, &Asset> = assets.iter().map(|asset| (asset.id, asset)).collect();
+
+    let mut holdings = HashMap::<i32, f64>::new();
+    for transaction in transactions {
+        if asset_map
+            .get(&transaction.asset_id)
+            .is_some_and(|asset| asset.is_monetary())
+        {
+            continue;
+        }
+        let holding = holdings.entry(transaction.asset_id).or_default();
+        if transaction.is_split() {
+            *holding *= transaction.quantity;
+        } else if transaction.is_buy() {
+            *holding += transaction.quantity;
+        } else if transaction.is_sell() {
+            *holding -= transaction.quantity;
+        }
+    }
+
+    let expected_asset_ids: HashSet<i32> = holdings
+        .iter()
+        .filter(|(asset_id, quantity)| {
+            **quantity > FLOAT_EPSILON
+                && asset_map
+                    .get(asset_id)
+                    .is_some_and(|asset| !asset.is_monetary())
+        })
+        .map(|(asset_id, _)| *asset_id)
+        .collect();
+    let actual_asset_ids: HashSet<i32> = portfolio_asset_history_repo::find_by_date(db, date)
+        .await?
+        .into_iter()
+        .map(|snapshot| snapshot.asset_id)
+        .collect();
+
+    Ok(!expected_asset_ids.is_subset(&actual_asset_ids))
 }
 
 async fn find_first_incomplete_snapshot(

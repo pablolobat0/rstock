@@ -7,195 +7,312 @@
   },
   "criterion_estimates": {
     "correlation_matrix": {
-      "mean_ns": 12956062.8,
-      "median_ns": 12842952.5,
-      "std_dev_ns": 1239009.8212730465,
-      "p95_ns": 15688781.0
+      "mean_ns": 12842329.6,
+      "median_ns": 12696658.5,
+      "std_dev_ns": 544615.2179685519,
+      "p95_ns": 13660178.0
     },
     "correlation_matrix_representative": {
-      "mean_ns": 1810429438.5,
-      "median_ns": 1791729474.0,
-      "std_dev_ns": 45759040.70387358,
-      "p95_ns": 1887905682.0
+      "mean_ns": 1708891603.2,
+      "median_ns": 1701781150.0,
+      "std_dev_ns": 37210007.74189176,
+      "p95_ns": 1767630600.0
     },
     "delayed_source_limit_1": {
-      "mean_ns": 46695537.1,
-      "median_ns": 43054397.0,
-      "std_dev_ns": 8164878.120429428,
-      "p95_ns": 62158806.0
+      "mean_ns": 41928757.6,
+      "median_ns": 41830544.0,
+      "std_dev_ns": 1406985.9587263674,
+      "p95_ns": 44082471.0
     },
     "delayed_source_limit_2": {
-      "mean_ns": 28612851.3,
-      "median_ns": 23958083.0,
-      "std_dev_ns": 8632029.230130216,
-      "p95_ns": 41977754.0
+      "mean_ns": 23900195.4,
+      "median_ns": 23909871.5,
+      "std_dev_ns": 1115216.5405167034,
+      "p95_ns": 25734657.0
     },
     "delayed_source_limit_4": {
-      "mean_ns": 13966703.1,
-      "median_ns": 13651538.5,
-      "std_dev_ns": 1219735.2431231814,
-      "p95_ns": 16298797.0
+      "mean_ns": 14494511.5,
+      "median_ns": 14396414.0,
+      "std_dev_ns": 1332372.1030419767,
+      "p95_ns": 16805916.0
     },
     "delayed_source_limit_8": {
-      "mean_ns": 10099626.0,
-      "median_ns": 8128663.5,
-      "std_dev_ns": 6506987.581165974,
-      "p95_ns": 28534920.0
+      "mean_ns": 8189605.2,
+      "median_ns": 8040051.5,
+      "std_dev_ns": 795612.7576004687,
+      "p95_ns": 9317616.0
     },
     "historical_market_data_preparation_cold": {
-      "mean_ns": 54254249.1,
-      "median_ns": 53791952.5,
-      "std_dev_ns": 1915332.5228450804,
-      "p95_ns": 57998668.0
+      "mean_ns": 59388441.3,
+      "median_ns": 55022457.0,
+      "std_dev_ns": 8439183.245742828,
+      "p95_ns": 72124979.0
     },
     "historical_market_data_preparation_partial": {
-      "mean_ns": 46105907.6,
-      "median_ns": 45164386.0,
-      "std_dev_ns": 2430013.4856892005,
-      "p95_ns": 50759380.0
+      "mean_ns": 51018957.2,
+      "median_ns": 44589274.5,
+      "std_dev_ns": 13050554.443422547,
+      "p95_ns": 81942852.0
     },
     "historical_market_data_preparation_warm": {
-      "mean_ns": 4104642.4666666673,
-      "median_ns": 4035088.166666667,
-      "std_dev_ns": 712814.8082109891,
-      "p95_ns": 5873349.666666667
+      "mean_ns": 3997250.470674603,
+      "median_ns": 3943451.7,
+      "std_dev_ns": 279647.38718901196,
+      "p95_ns": 4363368.9
     },
     "market_data_preparation_representative": {
-      "mean_ns": 290251672.2,
-      "median_ns": 285105212.5,
-      "std_dev_ns": 19901854.149377655,
-      "p95_ns": 340756107.0
+      "mean_ns": 268245053.9,
+      "median_ns": 263542425.5,
+      "std_dev_ns": 13040247.17085952,
+      "p95_ns": 294131061.0
     },
     "nav_readiness_warm_representative": {
-      "mean_ns": 634699045.8,
-      "median_ns": 623904191.5,
-      "std_dev_ns": 41159984.42981877,
-      "p95_ns": 725023933.0
+      "mean_ns": 17315450.5,
+      "median_ns": 17168975.0,
+      "std_dev_ns": 1209732.231829034,
+      "p95_ns": 20338526.0
     },
     "nav_rebuild_full": {
-      "mean_ns": 70562756.1,
-      "median_ns": 70309218.0,
-      "std_dev_ns": 2046983.0281720816,
-      "p95_ns": 73615961.0
+      "mean_ns": 75582459.4,
+      "median_ns": 72290466.0,
+      "std_dev_ns": 8230567.2372816475,
+      "p95_ns": 87174602.0
     },
     "nav_rebuild_full_representative": {
-      "mean_ns": 5578274004.2,
-      "median_ns": 5626161157.5,
-      "std_dev_ns": 252473441.89806873,
-      "p95_ns": 5844902198.0
+      "mean_ns": 5224962525.7,
+      "median_ns": 5369380222.5,
+      "std_dev_ns": 276763269.5886284,
+      "p95_ns": 5475985911.0
     },
     "nav_rebuild_full_stress": {
-      "mean_ns": 22905364127.5,
-      "median_ns": 22085729825.5,
-      "std_dev_ns": 3194852817.9982924,
-      "p95_ns": 31560666950.0
+      "mean_ns": 21431867234.4,
+      "median_ns": 21338083213.0,
+      "std_dev_ns": 1874541684.960509,
+      "p95_ns": 25994725372.0
     },
     "nav_rebuild_incremental": {
-      "mean_ns": 18216741.4,
-      "median_ns": 18285951.5,
-      "std_dev_ns": 1254720.3817937728,
-      "p95_ns": 20519078.0
+      "mean_ns": 17559468.3,
+      "median_ns": 17000107.0,
+      "std_dev_ns": 1343584.6066042096,
+      "p95_ns": 19653714.0
     },
     "portfolio_retrieval_cold": {
-      "mean_ns": 135695838.3,
-      "median_ns": 113806095.0,
-      "std_dev_ns": 43422292.8569337,
-      "p95_ns": 199398710.0
+      "mean_ns": 98786092.0,
+      "median_ns": 99065395.5,
+      "std_dev_ns": 12008452.53483981,
+      "p95_ns": 117450564.0
     },
     "portfolio_retrieval_representative": {
-      "mean_ns": 763842581.0,
-      "median_ns": 748335182.5,
-      "std_dev_ns": 52778806.92165473,
-      "p95_ns": 881037557.0
+      "mean_ns": 817702740.6,
+      "median_ns": 808204951.0,
+      "std_dev_ns": 23764037.401336048,
+      "p95_ns": 856984520.0
     },
     "portfolio_retrieval_warm": {
-      "mean_ns": 20117545.0,
-      "median_ns": 18982491.5,
-      "std_dev_ns": 4570640.783163584,
-      "p95_ns": 32234826.0
+      "mean_ns": 13697243.3,
+      "median_ns": 13234514.0,
+      "std_dev_ns": 2615453.9718114818,
+      "p95_ns": 18314886.0
     },
     "rolling_correlation": {
-      "mean_ns": 4298419.566666666,
-      "median_ns": 4266803.333333334,
-      "std_dev_ns": 307018.89790192863,
-      "p95_ns": 4690531.0
+      "mean_ns": 4009699.9,
+      "median_ns": 3988549.6666666665,
+      "std_dev_ns": 112557.3296840599,
+      "p95_ns": 4251189.333333333
     },
     "rolling_correlation_representative": {
-      "mean_ns": 43979993.3,
-      "median_ns": 43315939.0,
-      "std_dev_ns": 2897339.568270406,
-      "p95_ns": 50904880.0
+      "mean_ns": 41109062.5,
+      "median_ns": 39909271.5,
+      "std_dev_ns": 3552659.570930058,
+      "p95_ns": 47949152.0
     },
     "rolling_correlation_stress": {
-      "mean_ns": 91021904.3,
-      "median_ns": 90529426.0,
-      "std_dev_ns": 8230254.31421927,
-      "p95_ns": 103269342.0
+      "mean_ns": 80727910.1,
+      "median_ns": 80884522.0,
+      "std_dev_ns": 1449396.2760099233,
+      "p95_ns": 83585347.0
     },
     "rolling_metric_representative": {
-      "mean_ns": 231108.24447420635,
-      "median_ns": 231461.73333333334,
-      "std_dev_ns": 3541.3098702407156,
-      "p95_ns": 237188.52777777778
+      "mean_ns": 211629.84590828925,
+      "median_ns": 210474.55555555556,
+      "std_dev_ns": 4351.672596911914,
+      "p95_ns": 221598.83333333334
     },
     "rolling_metric_stress": {
-      "mean_ns": 579869.1558035715,
-      "median_ns": 584833.0166666666,
-      "std_dev_ns": 51800.465182392414,
-      "p95_ns": 656629.0
+      "mean_ns": 520837.89825396816,
+      "median_ns": 491972.0520833334,
+      "std_dev_ns": 81431.95024879942,
+      "p95_ns": 668066.0
     },
     "startup_and_migration": {
-      "mean_ns": 94113796.2,
-      "median_ns": 95543975.5,
-      "std_dev_ns": 11207044.910869472,
-      "p95_ns": 106053080.0
+      "mean_ns": 80288580.075,
+      "median_ns": 79292687.5,
+      "std_dev_ns": 2998065.661008007,
+      "p95_ns": 88790698.0
     },
     "transaction_listing": {
-      "mean_ns": 308036.4798696145,
-      "median_ns": 300564.04761904763,
-      "std_dev_ns": 19879.182041721946,
-      "p95_ns": 354189.5714285714
+      "mean_ns": 321799.1767261905,
+      "median_ns": 318069.15277777775,
+      "std_dev_ns": 18975.281299566046,
+      "p95_ns": 353863.6666666667
     },
     "transaction_listing_representative": {
-      "mean_ns": 20659393.1,
-      "median_ns": 20490262.0,
-      "std_dev_ns": 1405944.4644783132,
-      "p95_ns": 23266199.0
+      "mean_ns": 15005864.8,
+      "median_ns": 14924348.0,
+      "std_dev_ns": 1019755.6072697898,
+      "p95_ns": 16891140.0
     },
     "transaction_listing_stress": {
-      "mean_ns": 70420626.1,
-      "median_ns": 70701765.5,
-      "std_dev_ns": 1847575.2373226583,
-      "p95_ns": 73177537.0
+      "mean_ns": 73606938.0,
+      "median_ns": 74184358.0,
+      "std_dev_ns": 2870581.272924392,
+      "p95_ns": 76693916.0
     }
   },
   "decision_gate": {
     "path_p95_targets_ns": {
-      "correlation_matrix": 17257659,
-      "correlation_matrix_representative": 2076696250,
-      "historical_market_data_preparation_cold": 63798535,
-      "historical_market_data_preparation_partial": 55835318,
-      "historical_market_data_preparation_warm": 6460685,
-      "market_data_preparation_representative": 374831718,
-      "nav_readiness_warm_representative": 797526326,
-      "nav_rebuild_full": 80977557,
+      "correlation_matrix": 445531056,
+      "correlation_matrix_representative": 29509919239,
+      "historical_market_data_preparation_cold": 6877801668,
+      "historical_market_data_preparation_partial": 4283927161,
+      "historical_market_data_preparation_warm": 373421051,
+      "market_data_preparation_representative": 25443133881,
+      "nav_readiness_warm_representative": 12847958,
+      "nav_rebuild_full": 11640612859,
       "nav_rebuild_full_representative": 6429392418,
       "nav_rebuild_full_stress": 34716733645,
-      "nav_rebuild_incremental": 22570986,
-      "portfolio_retrieval_cold": 219338581,
-      "portfolio_retrieval_representative": 969141313,
-      "portfolio_retrieval_warm": 35458309,
-      "rolling_correlation": 5159584,
-      "rolling_correlation_representative": 55995368,
-      "rolling_correlation_stress": 113596276,
+      "nav_rebuild_incremental": 973815198,
+      "portfolio_retrieval_cold": 13402702363,
+      "portfolio_retrieval_representative": 25542912866,
+      "portfolio_retrieval_warm": 374044380,
+      "rolling_correlation": 141698194,
+      "rolling_correlation_representative": 1722112598,
       "rolling_metric_representative": 260907,
       "rolling_metric_stress": 722292,
-      "startup_and_migration": 116658388,
-      "transaction_listing": 389609,
-      "transaction_listing_representative": 25592819,
-      "transaction_listing_stress": 80495291
+      "startup_and_migration": 115259889,
+      "transaction_listing": 486397,
+      "transaction_listing_representative": 21554013,
+      "transaction_listing_stress": 98552625
     },
-    "target_rule": "generated p95 plus 10 percent noise allowance",
+    "target_rule": "immutable user-approved issue #20 p95 targets",
+    "fixed_target_results": {
+      "correlation_matrix": {
+        "observed_p95_ns": 13660178.0,
+        "target_p95_ns": 445531056,
+        "passed": true
+      },
+      "correlation_matrix_representative": {
+        "observed_p95_ns": 1767630600.0,
+        "target_p95_ns": 29509919239,
+        "passed": true
+      },
+      "historical_market_data_preparation_cold": {
+        "observed_p95_ns": 72124979.0,
+        "target_p95_ns": 6877801668,
+        "passed": true
+      },
+      "historical_market_data_preparation_partial": {
+        "observed_p95_ns": 81942852.0,
+        "target_p95_ns": 4283927161,
+        "passed": true
+      },
+      "historical_market_data_preparation_warm": {
+        "observed_p95_ns": 4363368.9,
+        "target_p95_ns": 373421051,
+        "passed": true
+      },
+      "market_data_preparation_representative": {
+        "observed_p95_ns": 294131061.0,
+        "target_p95_ns": 25443133881,
+        "passed": true
+      },
+      "nav_readiness_warm_representative": {
+        "observed_p95_ns": 20338526.0,
+        "target_p95_ns": 12847958,
+        "passed": false
+      },
+      "nav_rebuild_full": {
+        "observed_p95_ns": 87174602.0,
+        "target_p95_ns": 11640612859,
+        "passed": true
+      },
+      "nav_rebuild_full_representative": {
+        "observed_p95_ns": 5475985911.0,
+        "target_p95_ns": 6429392418,
+        "passed": true
+      },
+      "nav_rebuild_full_stress": {
+        "observed_p95_ns": 25994725372.0,
+        "target_p95_ns": 34716733645,
+        "passed": true
+      },
+      "nav_rebuild_incremental": {
+        "observed_p95_ns": 19653714.0,
+        "target_p95_ns": 973815198,
+        "passed": true
+      },
+      "portfolio_retrieval_cold": {
+        "observed_p95_ns": 117450564.0,
+        "target_p95_ns": 13402702363,
+        "passed": true
+      },
+      "portfolio_retrieval_representative": {
+        "observed_p95_ns": 856984520.0,
+        "target_p95_ns": 25542912866,
+        "passed": true
+      },
+      "portfolio_retrieval_warm": {
+        "observed_p95_ns": 18314886.0,
+        "target_p95_ns": 374044380,
+        "passed": true
+      },
+      "rolling_correlation": {
+        "observed_p95_ns": 4251189.333333333,
+        "target_p95_ns": 141698194,
+        "passed": true
+      },
+      "rolling_correlation_representative": {
+        "observed_p95_ns": 47949152.0,
+        "target_p95_ns": 1722112598,
+        "passed": true
+      },
+      "rolling_metric_representative": {
+        "observed_p95_ns": 221598.83333333334,
+        "target_p95_ns": 260907,
+        "passed": true
+      },
+      "rolling_metric_stress": {
+        "observed_p95_ns": 668066.0,
+        "target_p95_ns": 722292,
+        "passed": true
+      },
+      "startup_and_migration": {
+        "observed_p95_ns": 88790698.0,
+        "target_p95_ns": 115259889,
+        "passed": true
+      },
+      "transaction_listing": {
+        "observed_p95_ns": 353863.6666666667,
+        "target_p95_ns": 486397,
+        "passed": true
+      },
+      "transaction_listing_representative": {
+        "observed_p95_ns": 16891140.0,
+        "target_p95_ns": 21554013,
+        "passed": true
+      },
+      "transaction_listing_stress": {
+        "observed_p95_ns": 76693916.0,
+        "target_p95_ns": 98552625,
+        "passed": true
+      }
+    },
+    "fixed_target_failures": {
+      "nav_readiness_warm_representative": [
+        20338526.0,
+        12847958
+      ]
+    },
     "fixed_source_concurrency_limit": 4,
     "approved_startup_and_migration_p95_target_ns": 115259889,
     "startup_and_migration_p95_target_passed": true,
@@ -227,7 +344,7 @@
       "transaction_query_plans=[(\"scan\", true, false), (\"search\", true, false), (\"search\", true, false), (\"search\", true, false), (\"search\", true, false)]"
     ],
     "baseline_work": {
-      "source_calls": 251,
+      "source_calls": 13,
       "peak": 1
     },
     "rolling_work_proxy": {
@@ -259,9 +376,9 @@
   "verification": {
     "commands": [
       "cargo fmt --check",
-      "cargo clippy -- -D warnings",
-      "cargo test"
+      "cargo clippy --offline -- -D warnings",
+      "cargo test --offline"
     ],
-    "status": "passed"
+    "status": "failed"
   }
 }

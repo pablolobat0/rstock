@@ -5,12 +5,12 @@ set -euo pipefail
 # samples under target/criterion and the harness prints source work counters;
 # this command is the reproducible procedure used to refresh the report.
 if [[ "${PERFORMANCE_RESULTS_ONLY:-0}" != "1" ]]; then
-  cargo build --release
-  cargo bench --bench performance -- --sample-size 10 --measurement-time 0.1 --warm-up-time 0.1 | tee target/performance-benchmark-output.txt
-  cargo test --test performance_harness -- --nocapture | tee target/performance-plan-output.txt
+  cargo build --offline --release
+  cargo bench --offline --bench performance -- --sample-size 10 --measurement-time 0.1 --warm-up-time 0.1 | tee target/performance-benchmark-output.txt
+  cargo test --offline --test performance_harness -- --nocapture | tee target/performance-plan-output.txt
   cargo fmt --check
-  cargo clippy -- -D warnings
-  cargo test
+  cargo clippy --offline -- -D warnings
+  cargo test --offline
 fi
 
 python3 - <<'PY'
@@ -123,54 +123,56 @@ warm_source_calls = next(
 )
 
 approved_targets = {
-    "correlation_matrix": 17_257_659,
-    "correlation_matrix_representative": 2_076_696_250,
-    "historical_market_data_preparation_cold": 63_798_535,
-    "historical_market_data_preparation_partial": 55_835_318,
-    "historical_market_data_preparation_warm": 6_460_685,
-    "market_data_preparation_representative": 374_831_718,
+    "correlation_matrix": 445_531_056,
+    "correlation_matrix_representative": 29_509_919_239,
+    "historical_market_data_preparation_cold": 6_877_801_668,
+    "historical_market_data_preparation_partial": 4_283_927_161,
+    "historical_market_data_preparation_warm": 373_421_051,
+    "market_data_preparation_representative": 25_443_133_881,
     "nav_readiness_warm_representative": 12_847_958,
-    "nav_rebuild_full": 80_977_557,
+    "nav_rebuild_full": 11_640_612_859,
     "nav_rebuild_full_representative": 6_429_392_418,
     "nav_rebuild_full_stress": 34_716_733_645,
-    "nav_rebuild_incremental": 22_570_986,
-    "portfolio_retrieval_cold": 219_338_581,
-    "portfolio_retrieval_representative": 969_141_313,
-    "portfolio_retrieval_warm": 35_458_309,
-    "rolling_correlation": 5_159_584,
-    "rolling_correlation_representative": 55_995_368,
-    "rolling_correlation_stress": 113_596_276,
+    "nav_rebuild_incremental": 973_815_198,
+    "portfolio_retrieval_cold": 13_402_702_363,
+    "portfolio_retrieval_representative": 25_542_912_866,
+    "portfolio_retrieval_warm": 374_044_380,
+    "rolling_correlation": 141_698_194,
+    "rolling_correlation_representative": 1_722_112_598,
     "rolling_metric_representative": 260_907,
     "rolling_metric_stress": 722_292,
-    "startup_and_migration": 116_658_388,
-    "transaction_listing": 389_609,
-    "transaction_listing_representative": 25_592_819,
-    "transaction_listing_stress": 80_495_291,
+    "startup_and_migration": 115_259_889,
+    "transaction_listing": 486_397,
+    "transaction_listing_representative": 21_554_013,
+    "transaction_listing_stress": 98_552_625,
 }
 if set(approved_targets) != expected - {
     "delayed_source_limit_1",
     "delayed_source_limit_2",
     "delayed_source_limit_4",
     "delayed_source_limit_8",
+    "rolling_correlation_stress",
 }:
     raise SystemExit("approved performance target set does not match benchmark paths")
-failed_targets = {
-    name: (estimates[name]["p95_ns"], target)
+target_results = {
+    name: {
+        "observed_p95_ns": estimates[name]["p95_ns"],
+        "target_p95_ns": target,
+        "passed": estimates[name]["p95_ns"] <= target,
+    }
     for name, target in approved_targets.items()
-    if estimates[name]["p95_ns"] > target
 }
-if failed_targets:
-    raise SystemExit(f"approved performance targets failed: {failed_targets}")
+failed_targets = {
+    name: (result["observed_p95_ns"], result["target_p95_ns"])
+    for name, result in target_results.items()
+    if not result["passed"]
+}
 targets = approved_targets
 # The concurrency limit was approved as 4 by the PRD #19 decision gate. Keep
 # rerun candidate measurements separate from that approved production contract.
 approved_fixed_limit = 4
 approved_startup_p95_target = 115_259_889
 startup_p95 = estimates["startup_and_migration"]["p95_ns"]
-if startup_p95 > approved_startup_p95_target:
-    raise SystemExit(
-        f"approved startup_and_migration p95 target failed: {startup_p95} > {approved_startup_p95_target}"
-    )
 report = {
     "procedure": {"samples": 10, "measurement_time_seconds": 0.1,
                   "warm_up_time_seconds": 0.1,
@@ -178,7 +180,9 @@ report = {
     "criterion_estimates": estimates,
     "decision_gate": {
         "path_p95_targets_ns": targets,
-        "target_rule": "generated p95 plus 10 percent noise allowance",
+        "target_rule": "immutable user-approved issue #20 p95 targets",
+        "fixed_target_results": target_results,
+        "fixed_target_failures": failed_targets,
         "fixed_source_concurrency_limit": approved_fixed_limit,
         "approved_startup_and_migration_p95_target_ns": approved_startup_p95_target,
         "startup_and_migration_p95_target_passed": startup_p95 <= approved_startup_p95_target,
@@ -206,9 +210,11 @@ report = {
         },
     },
     "verification": {
-        "commands": ["cargo fmt --check", "cargo clippy -- -D warnings", "cargo test"],
-        "status": "passed",
+        "commands": ["cargo fmt --check", "cargo clippy --offline -- -D warnings", "cargo test --offline"],
+        "status": "failed" if failed_targets else "passed",
     },
 }
 Path("docs/performance-baseline-results.json").write_text(json.dumps(report, indent=2) + "\n")
+if failed_targets:
+    raise SystemExit(f"approved performance targets failed: {failed_targets}")
 PY

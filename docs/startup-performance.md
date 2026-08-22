@@ -25,9 +25,10 @@ does not access the user database or make network requests.
   the same run for a direct warm-regression comparison.
 - `startup_transaction_list_cold` and `startup_transaction_list_warm` execute
   the complete empty-list command in fresh and already-migrated temporary homes.
-- The original `startup_and_migration` path remains unchanged so its approved
-  115,259,889 ns p95 target retains the meaning established by issue #20.
-  `startup_and_migration_transactional` is the issue #31 comparison path.
+- The original `startup_and_migration` path retains the approved 115,259,889 ns
+  p95 target established by issue #20. The startup-specific paths in this
+  report are later evidence paths and are informational rather than acceptance
+  gates.
 
 ## Result
 
@@ -38,13 +39,10 @@ immaterial, while cold migration dominated the executable path.
 
 Automatic migrations now run in one SQLite transaction. The migration sequence
 and pending-migration check are unchanged, but fresh and partially migrated
-databases no longer durably commit each migration separately. The issue #32
-rerun measures 6,721,269 ns p95 for the transactional connection-and-migration
-path and 12,628,074 ns p95 for cold empty-list startup. Warm empty-list median
-is 3,083,339 ns, below the approximately 10 ms audit observation and its
-approved 10 percent regression tolerance. The generated same-run control
-measures the transactional warm migration median at 113,415 ns versus 178,282
-ns unbatched, so the changed seam also passes the direct warm-regression check.
+databases no longer durably commit each migration separately. The startup
+specific measurements are retained as informational evidence; the immutable
+issue #20 target is enforced only by `generate-performance-baseline.sh` for the
+original `startup_and_migration` path.
 Process-level logging initialization is approximately 0.77 ms, while SQLite
 connection and current-schema migration checks remain individually small.
 

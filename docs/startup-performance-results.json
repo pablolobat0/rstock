@@ -7,84 +7,76 @@
   },
   "criterion_estimates": {
     "startup_and_migration_transactional": {
-      "mean_ns": 5282831.078736839,
-      "median_ns": 5002493.479166666,
-      "std_dev_ns": 659617.8300136974,
-      "p95_ns": 6721269.0
+      "mean_ns": 5043480.785904681,
+      "median_ns": 4903527.011764706,
+      "std_dev_ns": 403447.109908083,
+      "p95_ns": 6097317.375
     },
     "startup_executable_only": {
-      "mean_ns": 1918415.4917856562,
-      "median_ns": 1843758.8666666667,
-      "std_dev_ns": 175749.19658985347,
-      "p95_ns": 2470512.0454545454
+      "mean_ns": 1862320.4556859047,
+      "median_ns": 1856518.1845588235,
+      "std_dev_ns": 36596.22960940938,
+      "p95_ns": 1940723.3333333333
     },
     "startup_logging_cold": {
-      "mean_ns": 776403.4465862972,
-      "median_ns": 770520.3495370371,
-      "std_dev_ns": 24758.559385952027,
-      "p95_ns": 861262.825
+      "mean_ns": 797043.136457245,
+      "median_ns": 775694.5464638157,
+      "std_dev_ns": 57266.95674129344,
+      "p95_ns": 924000.0416666666
     },
     "startup_logging_warm": {
-      "mean_ns": 738481.1028052021,
-      "median_ns": 733340.651754386,
-      "std_dev_ns": 21539.16019615555,
-      "p95_ns": 801679.0416666666
+      "mean_ns": 727608.075214987,
+      "median_ns": 727126.9336734693,
+      "std_dev_ns": 12929.363615745906,
+      "p95_ns": 754640.2857142857
     },
     "startup_database_connection_cold": {
-      "mean_ns": 89381.66048017236,
-      "median_ns": 89386.07713963964,
-      "std_dev_ns": 1803.9266163054638,
-      "p95_ns": 93786.63243243244
+      "mean_ns": 92084.11077569638,
+      "median_ns": 90585.75433789955,
+      "std_dev_ns": 5409.899967067534,
+      "p95_ns": 113355.43835616438
     },
     "startup_database_connection_warm": {
-      "mean_ns": 75887.34558242155,
-      "median_ns": 75778.35472440945,
-      "std_dev_ns": 1253.5231336266704,
-      "p95_ns": 79301.04986876641
+      "mean_ns": 80595.3448564063,
+      "median_ns": 77649.84610655738,
+      "std_dev_ns": 8573.420005214977,
+      "p95_ns": 111990.59145815358
     },
     "startup_automatic_migration_cold": {
-      "mean_ns": 5317038.128370659,
-      "median_ns": 5275489.309065934,
-      "std_dev_ns": 648642.0376864229,
-      "p95_ns": 6821699.555555556
+      "mean_ns": 4937033.168487762,
+      "median_ns": 4852674.456349207,
+      "std_dev_ns": 322547.59380426403,
+      "p95_ns": 6118238.0
     },
     "startup_automatic_migration_warm": {
-      "mean_ns": 113922.84779853877,
-      "median_ns": 113414.96722689076,
-      "std_dev_ns": 3083.3612261775243,
-      "p95_ns": 120233.34509803922
+      "mean_ns": 124604.33677861906,
+      "median_ns": 120069.02323717948,
+      "std_dev_ns": 18673.34041391498,
+      "p95_ns": 190458.89636752137
     },
     "startup_automatic_migration_warm_unbatched": {
-      "mean_ns": 178840.85171274055,
-      "median_ns": 178282.37857142856,
-      "std_dev_ns": 6705.761692303144,
-      "p95_ns": 195282.10204081633
+      "mean_ns": 179057.59608008276,
+      "median_ns": 175296.56049641146,
+      "std_dev_ns": 13610.381530715833,
+      "p95_ns": 219510.76363636364
     },
     "startup_transaction_list_cold": {
-      "mean_ns": 9005129.250487696,
-      "median_ns": 8763144.5,
-      "std_dev_ns": 1241872.847388678,
-      "p95_ns": 12628073.5
+      "mean_ns": 7870902.73051036,
+      "median_ns": 7726491.080952381,
+      "std_dev_ns": 380917.12803706434,
+      "p95_ns": 9284273.105263159
     },
     "startup_transaction_list_warm": {
-      "mean_ns": 3190885.5193795157,
-      "median_ns": 3083339.027777778,
-      "std_dev_ns": 308609.62739168206,
-      "p95_ns": 4136608.25
+      "mean_ns": 2972742.636495192,
+      "median_ns": 2961905.123611111,
+      "std_dev_ns": 67890.74238103318,
+      "p95_ns": 3153529.25
     }
   },
   "acceptance": {
-    "approved_cold_startup_p95_target_ns": 115259889,
-    "migration_path_passed": true,
-    "cold_migration_passed": true,
-    "cold_transaction_list_passed": true,
-    "audited_warm_startup_ns": 10000000,
-    "approved_regression_tolerance_percent": 10,
-    "warm_median_limit_ns": 11000000,
-    "warm_transaction_list_passed": true,
-    "warm_unbatched_migration_median_ns": 178282.37857142856,
-    "warm_migration_regression_limit_ns": 196110.61642857143,
-    "warm_migration_regression_passed": true
+    "approved_issue_20_targets": {},
+    "fixed_target_results": {},
+    "all_paths_informational": true
   },
-  "conclusion": "Automatic migrations now run as one SQLite transaction. This preserves pending-migration checks and every migration while removing repeated durable commits; cold migration and full executable startup meet the approved target, and warm median startup remains below the audited value plus tolerance."
+  "conclusion": "Startup-specific paths were added after the issue #20 decision gate and remain informational evidence; immutable issue #20 target enforcement is reported by generate-performance-baseline.sh."
 }

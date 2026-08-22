@@ -26,7 +26,7 @@ use rstock::db::repos::transaction_repo;
 use rstock::models::{Asset, AssetType};
 use rstock::services::import::import_transactions_csv;
 use rstock::services::market_data::{MarketData, MarketDataSources, SourceObservation};
-use rstock::services::{analytics, metrics, nav, portfolio};
+use rstock::services::{analytics, clock::Clock, metrics, nav, portfolio};
 use sea_orm::{ActiveModelTrait, Database, DatabaseConnection, EntityTrait, Set};
 use tempfile::TempDir;
 
@@ -34,6 +34,14 @@ const START: &str = "2015-01-01";
 const END: &str = "2015-12-31";
 
 const FIXTURE_MATRIX: &[(usize, usize, usize)] = &[(5, 1, 100), (50, 10, 5_000), (100, 20, 20_000)];
+
+struct BenchmarkClock(NaiveDate);
+
+impl Clock for BenchmarkClock {
+    fn today(&self) -> NaiveDate {
+        self.0
+    }
+}
 
 struct CountingAllocator;
 
@@ -214,7 +222,11 @@ struct Fixture {
 
 impl Fixture {
     fn new_market_data(&self) -> MarketData {
-        let clock = rstock::services::clock::FixedClock::new(self.today);
+        self.new_market_data_at(self.today)
+    }
+
+    fn new_market_data_at(&self, today: NaiveDate) -> MarketData {
+        let clock = BenchmarkClock(today);
         MarketData::new_with_clock(
             Box::new(OfflineSources {
                 counters: self.counters.clone(),
@@ -344,13 +356,14 @@ async fn build_fixture_with_counters(
             .collect(),
     );
     let counters = shared_counters.unwrap_or_default();
+    let clock = BenchmarkClock(end + Duration::days(1));
     let market_data = MarketData::new_with_clock(
         Box::new(OfflineSources {
             counters: counters.clone(),
             observations: observations.clone(),
             delay_ms,
         }),
-        &rstock::services::clock::FixedClock::new(end + Duration::days(1)),
+        &clock,
     );
     Fixture {
         _tempdir: tempdir,
@@ -560,14 +573,16 @@ fn benchmark_performance(c: &mut Criterion) {
     group.bench_function("nav_readiness_warm_representative", |b| {
         // Complete the rebuild before timing readiness. The benchmark name is
         // warm readiness, not the first full representative rebuild.
+        let warm_market_data =
+            representative.new_market_data_at(representative.today - Duration::days(1));
         runtime
             .block_on(nav::ensure_portfolio_history(
                 &representative.db,
-                &representative.market_data,
+                &warm_market_data,
             ))
             .expect("representative NAV warm-up");
         b.to_async(&runtime).iter(|| async {
-            nav::ensure_portfolio_history(&representative.db, &representative.market_data)
+            nav::ensure_portfolio_history(&representative.db, &warm_market_data)
                 .await
                 .unwrap()
         });
