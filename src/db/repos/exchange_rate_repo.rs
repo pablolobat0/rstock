@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use sea_orm::{
-    sea_query::OnConflict, ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait,
-    FromQueryResult, QueryFilter, QueryOrder, Set, Statement,
+    sea_query::OnConflict, ColumnTrait, ConnectionTrait, EntityTrait, FromQueryResult, QueryFilter,
+    QueryOrder, Set, Statement,
 };
 
 use crate::db::entities::daily_exchange_rate;
@@ -210,38 +210,6 @@ pub async fn upsert(
     date: &str,
     rate: f64,
 ) -> anyhow::Result<()> {
-    let existing = daily_exchange_rate::Entity::find()
-        .filter(daily_exchange_rate::Column::FromCurrency.eq(from_currency))
-        .filter(daily_exchange_rate::Column::ToCurrency.eq(to_currency))
-        .filter(daily_exchange_rate::Column::Date.eq(date))
-        .one(db)
-        .await?;
-
-    if let Some(record) = existing {
-        let mut active: daily_exchange_rate::ActiveModel = record.into();
-        active.rate = Set(rate);
-        active.update(db).await?;
-    } else {
-        let record = daily_exchange_rate::ActiveModel {
-            from_currency: Set(from_currency.to_owned()),
-            to_currency: Set(to_currency.to_owned()),
-            date: Set(date.to_owned()),
-            rate: Set(rate),
-            ..Default::default()
-        };
-        record.insert(db).await?;
-    }
-
-    Ok(())
-}
-
-pub async fn upsert_native(
-    db: &impl ConnectionTrait,
-    from_currency: &str,
-    to_currency: &str,
-    date: &str,
-    rate: f64,
-) -> anyhow::Result<()> {
     daily_exchange_rate::Entity::insert(active_model(from_currency, to_currency, date, rate))
         .on_conflict(native_conflict())
         .exec_without_returning(db)
@@ -249,7 +217,7 @@ pub async fn upsert_native(
     Ok(())
 }
 
-pub async fn upsert_many_native(
+pub async fn upsert_many(
     db: &impl ConnectionTrait,
     rates: &[ExchangeRateWrite],
 ) -> anyhow::Result<()> {

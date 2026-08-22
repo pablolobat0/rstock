@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use sea_orm::{
     sea_query::{Expr, OnConflict},
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, FromQueryResult, QueryFilter,
-    QueryOrder, Set, Statement,
+    ColumnTrait, ConnectionTrait, EntityTrait, FromQueryResult, QueryFilter, QueryOrder, Set,
+    Statement,
 };
 
 use crate::db::entities::daily_asset_price;
@@ -197,38 +197,6 @@ pub async fn upsert(
     price: f64,
     is_api_failure: bool,
 ) -> anyhow::Result<()> {
-    let existing = daily_asset_price::Entity::find()
-        .filter(daily_asset_price::Column::AssetId.eq(asset_id))
-        .filter(daily_asset_price::Column::Date.eq(date))
-        .one(db)
-        .await?;
-
-    if let Some(record) = existing {
-        let mut active: daily_asset_price::ActiveModel = record.into();
-        active.closing_price = Set(price);
-        active.is_api_failure = Set(is_api_failure);
-        active.update(db).await?;
-    } else {
-        let record = daily_asset_price::ActiveModel {
-            asset_id: Set(asset_id),
-            date: Set(date.to_owned()),
-            closing_price: Set(price),
-            is_api_failure: Set(is_api_failure),
-            ..Default::default()
-        };
-        record.insert(db).await?;
-    }
-
-    Ok(())
-}
-
-pub async fn upsert_native(
-    db: &impl ConnectionTrait,
-    asset_id: i32,
-    date: &str,
-    price: f64,
-    is_api_failure: bool,
-) -> anyhow::Result<()> {
     daily_asset_price::Entity::insert(active_model(asset_id, date, price, is_api_failure))
         .on_conflict(native_conflict())
         .exec_without_returning(db)
@@ -236,7 +204,7 @@ pub async fn upsert_native(
     Ok(())
 }
 
-pub async fn upsert_many_native(
+pub async fn upsert_many(
     db: &impl ConnectionTrait,
     prices: &[DailyPriceWrite],
 ) -> anyhow::Result<()> {

@@ -128,17 +128,15 @@ targets = {
     if not name.startswith("delayed_source_limit_")
     and (not name.startswith("startup_") or name == "startup_and_migration")
 }
-best_candidate_p95 = min(
-    values["p95_ns"]
-    for name, values in estimates.items()
-    if name.startswith("delayed_source_limit_")
-)
-fixed_limit = min(
-    int(name.removeprefix("delayed_source_limit_"))
-    for name, values in estimates.items()
-    if name.startswith("delayed_source_limit_")
-    and values["p95_ns"] <= best_candidate_p95 * 1.1
-)
+# The concurrency limit was approved as 4 by the PRD #19 decision gate. Keep
+# rerun candidate measurements separate from that approved production contract.
+approved_fixed_limit = 4
+approved_startup_p95_target = 115_259_889
+startup_p95 = estimates["startup_and_migration"]["p95_ns"]
+if startup_p95 > approved_startup_p95_target:
+    raise SystemExit(
+        f"approved startup_and_migration p95 target failed: {startup_p95} > {approved_startup_p95_target}"
+    )
 report = {
     "procedure": {"samples": 10, "measurement_time_seconds": 0.1,
                   "warm_up_time_seconds": 0.1,
@@ -147,7 +145,9 @@ report = {
     "decision_gate": {
         "path_p95_targets_ns": targets,
         "target_rule": "generated p95 plus 10 percent noise allowance",
-        "fixed_source_concurrency_limit": fixed_limit,
+        "fixed_source_concurrency_limit": approved_fixed_limit,
+        "approved_startup_and_migration_p95_target_ns": approved_startup_p95_target,
+        "startup_and_migration_p95_target_passed": startup_p95 <= approved_startup_p95_target,
         "candidate_work": candidates,
         "warm_cache_source_calls_observed": warm_source_calls,
         "warm_cache_source_call_target": 0,
@@ -165,6 +165,11 @@ report = {
             None,
         ),
         "rolling_work_proxy": rolling_work,
+        "query_count": {
+            "approved_numeric_target": None,
+            "measured_explain_statements": 5,
+            "evidence": "performance_harness checks five representative SQLite query plans; no application query-count target is present in the approved baseline",
+        },
     },
     "verification": {
         "commands": ["cargo fmt --check", "cargo clippy -- -D warnings", "cargo test"],

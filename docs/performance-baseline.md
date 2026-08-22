@@ -33,6 +33,8 @@ offline benchmark includes representative and stress end-to-end and direct
 metric paths, and records a work/allocation proxy alongside timings without
 network data. The allocation count is collected through the benchmark's
 counting global allocator around the direct metric call.
+The final issue #32 rerun also includes the full representative and stress NAV
+rebuild paths.
 
 Transaction listing is immaterial at small scale but grows substantially at
 5,000 and 20,000 rows. Already-warm representative NAV readiness is
@@ -45,25 +47,26 @@ bottleneck claim is inferred from a plan alone.
 
 The committed report is generated from actual Criterion estimate and sample
 files by `generate-performance-baseline.sh`; no timing numbers are hand-authored.
+Issue #32 reran every listed target on the small, representative, and stress
+fixture scales without changing the production behavior of those paths.
 Each named path's target is its generated p95 plus a 10 percent noise allowance,
 recorded under `decision_gate.path_p95_targets_ns`. The measured warm-cache
 source-call count is recorded separately from the optimization target of zero;
 peak activity must be no greater than the approved fixed limit.
 
-“Warm” means the requested range has already been prepared. The baseline still
-observes six source retries because interior source gaps are not cached as
-successful Historical market data. Eliminating that redundant source work is a
-later optimization target, not a claim about the current implementation.
+“Warm” means the requested range has already been prepared. The final rerun
+observed zero source calls for warm Historical market data preparation. Failed
+source attempts remain retryable by later commands; no failure cooldown or
+refresh policy was introduced by issue #32.
 
 The concurrency candidates each run eight independent one-day Stock/EUR
 preparations against separate file-backed SQLite fixtures. Every operation
-makes one real delayed source call and one real cache write. Calls were equal at
-eight and observed peaks were 1, 2, 4, and 8 for limits 1, 2, 4, and 8. The
-generated p95 values improve through limit 4; limit 8 has a lower mean but
-a higher p95 because of an observed outlier. The fixed source-concurrency
-proposal is therefore **4**, the smallest candidate within 10 percent of the
-best candidate p95 (and the best candidate itself). This proposal and the
-generated path targets remain pending the decision gate below.
+makes one real delayed source call and one real cache write. The final rerun
+observed eight calls and peaks of 1, 2, 4, and 8 for limits 1, 2, 4, and 8.
+This run's generated candidate selector reported 8 as the fastest candidate;
+issue #32 makes no source-concurrency change, so the approved production limit
+of **4** remains in force. The candidate output is retained as rerun evidence,
+not as an authorization to change that separate performance slice.
 
 ## Verification
 

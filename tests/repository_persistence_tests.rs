@@ -34,7 +34,7 @@ async fn repository_writes_commit_and_rollback_in_caller_owned_transactions() {
     )
     .await
     .unwrap();
-    daily_price_repo::upsert_native(&rolled_back, asset_id, "2025-01-02", 12.5, false)
+    daily_price_repo::upsert(&rolled_back, asset_id, "2025-01-02", 12.5, false)
         .await
         .unwrap();
     assert!(transaction_repo::find_by_id(&rolled_back, rolled_back_id)
@@ -74,7 +74,7 @@ async fn repository_writes_commit_and_rollback_in_caller_owned_transactions() {
     )
     .await
     .unwrap();
-    daily_price_repo::upsert_native(&committed, asset_id, "2025-01-03", 12.5, false)
+    daily_price_repo::upsert(&committed, asset_id, "2025-01-03", 12.5, false)
         .await
         .unwrap();
     committed.commit().await.unwrap();
@@ -105,10 +105,10 @@ async fn complete_nav_snapshot_writes_share_one_transaction_boundary() {
     let assets = vec![asset_snapshot("2025-01-02", asset_id, 110.0)];
 
     let rolled_back = db.begin().await.unwrap();
-    portfolio_history_repo::upsert_native(&rolled_back, &portfolio)
+    portfolio_history_repo::upsert(&rolled_back, &portfolio)
         .await
         .unwrap();
-    portfolio_asset_history_repo::upsert_many_native(&rolled_back, &assets)
+    portfolio_asset_history_repo::upsert_many(&rolled_back, &assets)
         .await
         .unwrap();
     rolled_back.rollback().await.unwrap();
@@ -125,10 +125,10 @@ async fn complete_nav_snapshot_writes_share_one_transaction_boundary() {
     );
 
     let committed = db.begin().await.unwrap();
-    portfolio_history_repo::upsert_native(&committed, &portfolio)
+    portfolio_history_repo::upsert(&committed, &portfolio)
         .await
         .unwrap();
-    portfolio_asset_history_repo::upsert_many_native(&committed, &assets)
+    portfolio_asset_history_repo::upsert_many(&committed, &assets)
         .await
         .unwrap();
     committed.commit().await.unwrap();
@@ -178,45 +178,11 @@ async fn caller_transaction_rolls_back_completed_bulk_chunks_after_a_late_failur
 }
 
 #[tokio::test]
-async fn native_conflicts_preserve_identifiers_and_update_existing_values() {
+async fn native_conflicts_update_existing_values_without_manual_reads() {
     let db = setup_test_db().await;
-    let info = AssetInfo {
-        ticker: "XFAKE1".to_owned(),
-        name: "Original Name".to_owned(),
-        asset_type: AssetType::Stock,
-        currency: "USD".to_owned(),
-    };
-    let asset_id = asset_repo::create_on_conflict_do_nothing(
-        &db,
-        &info,
-        &AssetClassification::default(),
-        None,
-    )
-    .await
-    .unwrap();
-    let conflicting = AssetInfo {
-        name: "Ignored Name".to_owned(),
-        ..info
-    };
-    let conflicting_id = asset_repo::create_on_conflict_do_nothing(
-        &db,
-        &conflicting,
-        &AssetClassification::default(),
-        None,
-    )
-    .await
-    .unwrap();
-    assert_eq!(conflicting_id, asset_id);
-    assert_eq!(
-        asset_repo::find_by_ticker(&db, "XFAKE1")
-            .await
-            .unwrap()
-            .unwrap()
-            .name,
-        "Original Name"
-    );
+    let asset_id = insert_asset(&db, "XFAKE1", "Fake Stock", "stock", "USD").await;
 
-    daily_price_repo::upsert_native(&db, asset_id, "2025-01-02", 10.0, true)
+    daily_price_repo::upsert(&db, asset_id, "2025-01-02", 10.0, true)
         .await
         .unwrap();
     let original_price = daily_asset_price::Entity::find()
@@ -225,7 +191,7 @@ async fn native_conflicts_preserve_identifiers_and_update_existing_values() {
         .await
         .unwrap()
         .unwrap();
-    daily_price_repo::upsert_native(&db, asset_id, "2025-01-02", 11.5, false)
+    daily_price_repo::upsert(&db, asset_id, "2025-01-02", 11.5, false)
         .await
         .unwrap();
     let updated_price = daily_asset_price::Entity::find()
@@ -238,7 +204,7 @@ async fn native_conflicts_preserve_identifiers_and_update_existing_values() {
     assert_eq!(updated_price.closing_price, 11.5);
     assert!(!updated_price.is_api_failure);
 
-    exchange_rate_repo::upsert_native(&db, "USD", "EUR", "2025-01-02", 0.90)
+    exchange_rate_repo::upsert(&db, "USD", "EUR", "2025-01-02", 0.90)
         .await
         .unwrap();
     let original_rate = daily_exchange_rate::Entity::find()
@@ -246,7 +212,7 @@ async fn native_conflicts_preserve_identifiers_and_update_existing_values() {
         .await
         .unwrap()
         .unwrap();
-    exchange_rate_repo::upsert_native(&db, "USD", "EUR", "2025-01-02", 0.91)
+    exchange_rate_repo::upsert(&db, "USD", "EUR", "2025-01-02", 0.91)
         .await
         .unwrap();
     let updated_rate = daily_exchange_rate::Entity::find()
@@ -257,10 +223,10 @@ async fn native_conflicts_preserve_identifiers_and_update_existing_values() {
     assert_eq!(updated_rate.id, original_rate.id);
     assert_eq!(updated_rate.rate, 0.91);
 
-    portfolio_history_repo::upsert_native(&db, &portfolio_snapshot("2025-01-02", 100.0))
+    portfolio_history_repo::upsert(&db, &portfolio_snapshot("2025-01-02", 100.0))
         .await
         .unwrap();
-    portfolio_history_repo::upsert_native(&db, &portfolio_snapshot("2025-01-02", 101.0))
+    portfolio_history_repo::upsert(&db, &portfolio_snapshot("2025-01-02", 101.0))
         .await
         .unwrap();
     let updated_portfolio = portfolio_history_repo::find_latest(&db)
@@ -271,7 +237,7 @@ async fn native_conflicts_preserve_identifiers_and_update_existing_values() {
     assert_eq!(updated_portfolio.nav, 101.0);
 
     let first_snapshot = asset_snapshot("2025-01-02", asset_id, 10.0);
-    portfolio_asset_history_repo::upsert_native(&db, &first_snapshot)
+    portfolio_asset_history_repo::upsert(&db, &first_snapshot)
         .await
         .unwrap();
     let original_snapshot = portfolio_asset_history::Entity::find()
@@ -280,7 +246,7 @@ async fn native_conflicts_preserve_identifiers_and_update_existing_values() {
         .unwrap()
         .unwrap();
     let updated_snapshot = asset_snapshot("2025-01-02", asset_id, 12.0);
-    portfolio_asset_history_repo::upsert_native(&db, &updated_snapshot)
+    portfolio_asset_history_repo::upsert(&db, &updated_snapshot)
         .await
         .unwrap();
     let persisted_snapshot = portfolio_asset_history::Entity::find()
@@ -293,22 +259,54 @@ async fn native_conflicts_preserve_identifiers_and_update_existing_values() {
 }
 
 #[tokio::test]
-async fn bulk_writes_match_legacy_writes_for_ledger_market_data_and_nav() {
-    let legacy_db = setup_test_db().await;
+async fn create_or_find_by_ticker_reuses_concurrent_conflict_result() {
+    let db = setup_test_db().await;
+    let info = asset_info("XFAKE1");
+
+    let first_id =
+        asset_repo::create_or_find_by_ticker(&db, &info, &AssetClassification::default(), None)
+            .await
+            .unwrap();
+    let second_id = asset_repo::create_or_find_by_ticker(
+        &db,
+        &AssetInfo {
+            name: "Ignored Name".to_owned(),
+            ..info
+        },
+        &AssetClassification::default(),
+        None,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(second_id, first_id);
+    assert_eq!(
+        asset_repo::find_by_ticker(&db, "XFAKE1")
+            .await
+            .unwrap()
+            .unwrap()
+            .name,
+        "Fake Stock"
+    );
+}
+
+#[tokio::test]
+async fn bulk_writes_match_single_row_writes_for_ledger_market_data_and_nav() {
+    let single_db = setup_test_db().await;
     let bulk_db = setup_test_db().await;
-    let legacy_asset = insert_asset(&legacy_db, "XFAKE1", "Fake Stock", "stock", "USD").await;
+    let single_asset = insert_asset(&single_db, "XFAKE1", "Fake Stock", "stock", "USD").await;
     let bulk_asset = insert_asset(&bulk_db, "XFAKE1", "Fake Stock", "stock", "USD").await;
 
     transaction_repo::insert_buy(
-        &legacy_db,
-        legacy_asset,
+        &single_db,
+        single_asset,
         &buy_order("2025-01-02", 2.0, 10.015, 0.125),
     )
     .await
     .unwrap();
     transaction_repo::insert_sell(
-        &legacy_db,
-        legacy_asset,
+        &single_db,
+        single_asset,
         &SellOrder {
             date: "2025-01-03".to_owned(),
             quantity: 0.5,
@@ -319,8 +317,8 @@ async fn bulk_writes_match_legacy_writes_for_ledger_market_data_and_nav() {
     .await
     .unwrap();
     transaction_repo::insert_dividend(
-        &legacy_db,
-        legacy_asset,
+        &single_db,
+        single_asset,
         &DividendOrder {
             date: "2025-01-04".to_owned(),
             amount: 1.015,
@@ -330,8 +328,8 @@ async fn bulk_writes_match_legacy_writes_for_ledger_market_data_and_nav() {
     .await
     .unwrap();
     transaction_repo::insert_split(
-        &legacy_db,
-        legacy_asset,
+        &single_db,
+        single_asset,
         &SplitOrder {
             date: "2025-01-05".to_owned(),
             ratio: 2.0,
@@ -374,7 +372,7 @@ async fn bulk_writes_match_legacy_writes_for_ledger_market_data_and_nav() {
         .await
         .unwrap();
 
-    let legacy_transactions = transaction_repo::find_all_ordered_by_date(&legacy_db, None, None)
+    let single_transactions = transaction_repo::find_all_ordered_by_date(&single_db, None, None)
         .await
         .unwrap();
     let bulk_transactions = transaction_repo::find_all_ordered_by_date(&bulk_db, None, None)
@@ -396,20 +394,20 @@ async fn bulk_writes_match_legacy_writes_for_ledger_market_data_and_nav() {
             .collect::<Vec<_>>()
     };
     assert_eq!(
-        ledger_fields(legacy_transactions),
+        ledger_fields(single_transactions),
         ledger_fields(bulk_transactions)
     );
 
-    daily_price_repo::upsert(&legacy_db, legacy_asset, "2025-01-02", 10.0, true)
+    daily_price_repo::upsert(&single_db, single_asset, "2025-01-02", 10.0, true)
         .await
         .unwrap();
-    daily_price_repo::upsert(&legacy_db, legacy_asset, "2025-01-02", 11.0, false)
+    daily_price_repo::upsert(&single_db, single_asset, "2025-01-02", 11.0, false)
         .await
         .unwrap();
-    daily_price_repo::upsert(&legacy_db, legacy_asset, "2025-01-03", 12.0, false)
+    daily_price_repo::upsert(&single_db, single_asset, "2025-01-03", 12.0, false)
         .await
         .unwrap();
-    daily_price_repo::upsert_many_native(
+    daily_price_repo::upsert_many(
         &bulk_db,
         &[
             daily_price_repo::DailyPriceWrite {
@@ -435,7 +433,7 @@ async fn bulk_writes_match_legacy_writes_for_ledger_market_data_and_nav() {
     .await
     .unwrap();
     assert_eq!(
-        daily_price_repo::find_prices_between(&legacy_db, legacy_asset, "2025-01-01", "2025-01-04")
+        daily_price_repo::find_prices_between(&single_db, single_asset, "2025-01-01", "2025-01-04")
             .await
             .unwrap(),
         daily_price_repo::find_prices_between(&bulk_db, bulk_asset, "2025-01-01", "2025-01-04")
@@ -443,16 +441,16 @@ async fn bulk_writes_match_legacy_writes_for_ledger_market_data_and_nav() {
             .unwrap()
     );
 
-    exchange_rate_repo::upsert(&legacy_db, "USD", "EUR", "2025-01-02", 0.90)
+    exchange_rate_repo::upsert(&single_db, "USD", "EUR", "2025-01-02", 0.90)
         .await
         .unwrap();
-    exchange_rate_repo::upsert(&legacy_db, "USD", "EUR", "2025-01-02", 0.91)
+    exchange_rate_repo::upsert(&single_db, "USD", "EUR", "2025-01-02", 0.91)
         .await
         .unwrap();
-    exchange_rate_repo::upsert(&legacy_db, "USD", "EUR", "2025-01-03", 0.92)
+    exchange_rate_repo::upsert(&single_db, "USD", "EUR", "2025-01-03", 0.92)
         .await
         .unwrap();
-    exchange_rate_repo::upsert_many_native(
+    exchange_rate_repo::upsert_many(
         &bulk_db,
         &[
             exchange_rate_repo::ExchangeRateWrite {
@@ -479,7 +477,7 @@ async fn bulk_writes_match_legacy_writes_for_ledger_market_data_and_nav() {
     .unwrap();
     assert_eq!(
         exchange_rate_repo::find_rates_between(
-            &legacy_db,
+            &single_db,
             "USD",
             "EUR",
             "2025-01-01",
@@ -497,28 +495,28 @@ async fn bulk_writes_match_legacy_writes_for_ledger_market_data_and_nav() {
         portfolio_snapshot("2025-01-03", 101.0),
     ];
     for snapshot in &portfolio_snapshots {
-        portfolio_history_repo::upsert(&legacy_db, snapshot)
+        portfolio_history_repo::upsert(&single_db, snapshot)
             .await
             .unwrap();
     }
-    portfolio_history_repo::upsert_many_native(&bulk_db, &portfolio_snapshots)
+    portfolio_history_repo::upsert_many(&bulk_db, &portfolio_snapshots)
         .await
         .unwrap();
 
-    let legacy_nav = portfolio_history_repo::find_between(&legacy_db, "2025-01-01", "2025-01-04")
+    let single_nav = portfolio_history_repo::find_between(&single_db, "2025-01-01", "2025-01-04")
         .await
         .unwrap();
     let bulk_nav = portfolio_history_repo::find_between(&bulk_db, "2025-01-01", "2025-01-04")
         .await
         .unwrap();
-    assert_eq!(snapshot_values(&legacy_nav), snapshot_values(&bulk_nav));
+    assert_eq!(snapshot_values(&single_nav), snapshot_values(&bulk_nav));
 
-    let legacy_asset_snapshots = vec![
-        asset_snapshot("2025-01-02", legacy_asset, 10.0),
-        asset_snapshot("2025-01-03", legacy_asset, 11.0),
+    let single_asset_snapshots = vec![
+        asset_snapshot("2025-01-02", single_asset, 10.0),
+        asset_snapshot("2025-01-03", single_asset, 11.0),
     ];
-    for snapshot in &legacy_asset_snapshots {
-        portfolio_asset_history_repo::upsert(&legacy_db, snapshot)
+    for snapshot in &single_asset_snapshots {
+        portfolio_asset_history_repo::upsert(&single_db, snapshot)
             .await
             .unwrap();
     }
@@ -526,13 +524,13 @@ async fn bulk_writes_match_legacy_writes_for_ledger_market_data_and_nav() {
         asset_snapshot("2025-01-02", bulk_asset, 10.0),
         asset_snapshot("2025-01-03", bulk_asset, 11.0),
     ];
-    portfolio_asset_history_repo::upsert_many_native(&bulk_db, &bulk_asset_snapshots)
+    portfolio_asset_history_repo::upsert_many(&bulk_db, &bulk_asset_snapshots)
         .await
         .unwrap();
 
-    let legacy_rows = portfolio_asset_history::Entity::find()
+    let single_rows = portfolio_asset_history::Entity::find()
         .order_by_asc(portfolio_asset_history::Column::Date)
-        .all(&legacy_db)
+        .all(&single_db)
         .await
         .unwrap();
     let bulk_rows = portfolio_asset_history::Entity::find()
@@ -553,7 +551,7 @@ async fn bulk_writes_match_legacy_writes_for_ledger_market_data_and_nav() {
             })
             .collect::<Vec<_>>()
     };
-    assert_eq!(asset_values(legacy_rows), asset_values(bulk_rows));
+    assert_eq!(asset_values(single_rows), asset_values(bulk_rows));
 
     let bulk_rates = daily_exchange_rate::Entity::find()
         .all(&bulk_db)
