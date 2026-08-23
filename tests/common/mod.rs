@@ -308,15 +308,6 @@ pub async fn insert_portfolio_asset_snapshot(
         .expect("failed to insert portfolio asset snapshot");
 }
 
-pub async fn delete_portfolio_asset_snapshot(db: &DatabaseConnection, date: &str, asset_id: i32) {
-    portfolio_asset_history::Entity::delete_many()
-        .filter(portfolio_asset_history::Column::Date.eq(date))
-        .filter(portfolio_asset_history::Column::AssetId.eq(asset_id))
-        .exec(db)
-        .await
-        .expect("failed to delete portfolio asset snapshot");
-}
-
 pub async fn update_portfolio_asset_snapshot_quantity(
     db: &DatabaseConnection,
     date: &str,

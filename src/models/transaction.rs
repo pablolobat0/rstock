@@ -106,20 +106,6 @@ pub struct HoldingInput {
     pub quantity: f64,
 }
 
-impl HoldingInput {
-    pub fn is_buy(&self) -> bool {
-        self.tx_type == TxType::Buy
-    }
-
-    pub fn is_sell(&self) -> bool {
-        self.tx_type == TxType::Sell
-    }
-
-    pub fn is_split(&self) -> bool {
-        self.tx_type == TxType::Split
-    }
-}
-
 pub struct TransactionListItem {
     pub transaction: Transaction,
     pub ticker: String,

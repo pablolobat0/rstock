@@ -42,14 +42,14 @@ single-row and bulk writes. Existing market-data, NAV, ledger-ordering, effectiv
 valuation-date, Base currency, and complete-aggregate tests remain unchanged and are
 included in the full offline suite.
 
-The final baseline rerun recorded zero warm Historical market-data source calls,
-eight calls with observed concurrency peaks of 1, 2, 4, and 8 for the four delayed
-candidates, and successful query-plan and rolling allocation checks. The startup
-rerun recorded a 3,083,339 ns warm transaction-list median and a 113,415 ns
-transactional warm migration median versus 178,282 ns for the unbatched control.
-The benchmark candidate selector reported 8 as fastest in this noisy run, but the
-production source limit remains the approved 4 because this issue contracts
-persistence APIs and does not change source-concurrency behavior.
+The final full baseline command timed out during the stress NAV benchmark. The
+results-only refresh records zero warm Historical market-data source calls but no
+candidate or baseline work output, and it reports the fixed-target failures
+without treating them as passes. The completed startup rerun recorded a
+3,663,891 ns warm transaction-list median and a 132,956 ns transactional warm
+migration median versus 200,554 ns for the unbatched control. The production
+source limit remains the approved 4; no new concurrency decision is inferred
+from the partial baseline artifacts.
 
 The approved baseline contains no numeric application query-count target. The
 verification therefore records the five representative `EXPLAIN QUERY PLAN`

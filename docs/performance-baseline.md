@@ -37,8 +37,9 @@ The final issue #32 rerun also includes the full representative and stress NAV
 rebuild paths.
 
 Transaction listing is immaterial at small scale but grows substantially at
-5,000 and 20,000 rows. Already-warm representative NAV readiness is
-comparatively immaterial, while startup remains a separate measurable path.
+5,000 and 20,000 rows. Representative NAV readiness now always audits persisted
+history for completeness; the current measurement misses its approved target,
+while startup remains a separate measurable path.
 The unindexed transaction plan shapes are evidence for later index work, but
 their expected improvement is a hypothesis until that work is measured; no
 bottleneck claim is inferred from a plan alone.
@@ -47,8 +48,10 @@ bottleneck claim is inferred from a plan alone.
 
 The committed report is generated from actual Criterion estimate and sample
 files by `generate-performance-baseline.sh`; no timing numbers are hand-authored.
-Issue #32 reran every listed target on the small, representative, and stress
-fixture scales without changing the production behavior of those paths.
+The final full rerun timed out while collecting the stress NAV benchmark. The
+report was therefore refreshed in results-only mode from the available
+Criterion artifacts and records that provenance explicitly. It must not be
+read as evidence that every path completed in one final run.
 The issue #20 decision gate approved immutable p95 targets for the named paths;
 the one exception is `nav_readiness_warm_representative`, whose original
 `12,847,958 ns` target was explicitly user-approved as `20,338,526 ns` for the
@@ -67,12 +70,10 @@ refresh policy was introduced by issue #32.
 
 The concurrency candidates each run eight independent one-day Stock/EUR
 preparations against separate file-backed SQLite fixtures. Every operation
-makes one real delayed source call and one real cache write. The final rerun
-observed eight calls and peaks of 1, 2, 4, and 8 for limits 1, 2, 4, and 8.
-This run's generated candidate selector reported 8 as the fastest candidate;
-issue #32 makes no source-concurrency change, so the approved production limit
-of **4** remains in force. The candidate output is retained as rerun evidence,
-not as an authorization to change that separate performance slice.
+makes one real delayed source call and one real cache write. The partial final
+rerun did not retain candidate work output, so the generated report leaves that
+section empty rather than inferring results. The previously approved production
+limit of **4** remains in force.
 
 ## Verification
 

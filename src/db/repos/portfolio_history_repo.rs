@@ -1,7 +1,6 @@
-use anyhow::Context;
 use sea_orm::{
-    sea_query::OnConflict, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait,
-    QueryFilter, QueryOrder, QuerySelect, Set, Statement, TransactionTrait,
+    sea_query::OnConflict, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder,
+    QuerySelect, Set,
 };
 
 use crate::db::entities::portfolio_history;
@@ -15,73 +14,6 @@ pub async fn find_latest(db: &impl ConnectionTrait) -> anyhow::Result<Option<Por
         .one(db)
         .await?;
     Ok(result.map(PortfolioSnapshot::from))
-}
-
-pub async fn find_database_revision(db: &DatabaseConnection) -> anyhow::Result<(String, i64)> {
-    let transaction = db.begin().await?;
-    let (database_identity, fallback_identity) = match transaction
-        .query_one(Statement::from_string(
-            transaction.get_database_backend(),
-            "SELECT id, revision FROM rstock_database_identity WHERE database_key = 'database'",
-        ))
-        .await
-    {
-        Ok(Some(row)) => {
-            let identity = row.try_get("", "id")?;
-            let revision = row.try_get("", "revision")?;
-            ((identity, revision), false)
-        }
-        Ok(None) => anyhow::bail!("database identity table is empty"),
-        Err(error) if error.to_string().contains("no such table") => {
-            transaction
-                .execute_unprepared(
-                    "CREATE TABLE IF NOT EXISTS rstock_database_identity (database_key TEXT PRIMARY KEY NOT NULL, id TEXT NOT NULL, revision INTEGER NOT NULL)",
-                )
-                .await?;
-            transaction
-                .execute_unprepared(
-                    "INSERT INTO rstock_database_identity (database_key, id, revision) SELECT 'database', lower(hex(randomblob(16))), 0 WHERE NOT EXISTS (SELECT 1 FROM rstock_database_identity WHERE database_key = 'database')",
-                )
-                .await?;
-            for sql in revision_trigger_statements() {
-                transaction.execute_unprepared(sql).await?;
-            }
-            let row = transaction
-                .query_one(Statement::from_string(
-                    transaction.get_database_backend(),
-                    "SELECT id, revision FROM rstock_database_identity WHERE database_key = 'database'",
-                ))
-                .await?
-                .context("missing database identity result")?;
-            let identity = row.try_get("", "id")?;
-            let revision = row.try_get("", "revision")?;
-            ((identity, revision), true)
-        }
-        Err(error) => return Err(error.into()),
-    };
-    if fallback_identity {
-        transaction.commit().await?;
-    } else {
-        transaction.rollback().await?;
-    }
-    Ok(database_identity)
-}
-
-fn revision_trigger_statements() -> [&'static str; 12] {
-    [
-        "CREATE TRIGGER IF NOT EXISTS rstock_revision_transactions_insert AFTER INSERT ON transactions BEGIN UPDATE rstock_database_identity SET revision = revision + 1; END",
-        "CREATE TRIGGER IF NOT EXISTS rstock_revision_transactions_update AFTER UPDATE ON transactions BEGIN UPDATE rstock_database_identity SET revision = revision + 1; END",
-        "CREATE TRIGGER IF NOT EXISTS rstock_revision_transactions_delete AFTER DELETE ON transactions BEGIN UPDATE rstock_database_identity SET revision = revision + 1; END",
-        "CREATE TRIGGER IF NOT EXISTS rstock_revision_assets_insert AFTER INSERT ON assets BEGIN UPDATE rstock_database_identity SET revision = revision + 1; END",
-        "CREATE TRIGGER IF NOT EXISTS rstock_revision_assets_update AFTER UPDATE ON assets BEGIN UPDATE rstock_database_identity SET revision = revision + 1; END",
-        "CREATE TRIGGER IF NOT EXISTS rstock_revision_assets_delete AFTER DELETE ON assets BEGIN UPDATE rstock_database_identity SET revision = revision + 1; END",
-        "CREATE TRIGGER IF NOT EXISTS rstock_revision_portfolio_insert AFTER INSERT ON portfolio_history BEGIN UPDATE rstock_database_identity SET revision = revision + 1; END",
-        "CREATE TRIGGER IF NOT EXISTS rstock_revision_portfolio_update AFTER UPDATE ON portfolio_history BEGIN UPDATE rstock_database_identity SET revision = revision + 1; END",
-        "CREATE TRIGGER IF NOT EXISTS rstock_revision_portfolio_delete AFTER DELETE ON portfolio_history BEGIN UPDATE rstock_database_identity SET revision = revision + 1; END",
-        "CREATE TRIGGER IF NOT EXISTS rstock_revision_asset_history_insert AFTER INSERT ON portfolio_asset_history BEGIN UPDATE rstock_database_identity SET revision = revision + 1; END",
-        "CREATE TRIGGER IF NOT EXISTS rstock_revision_asset_history_update AFTER UPDATE ON portfolio_asset_history BEGIN UPDATE rstock_database_identity SET revision = revision + 1; END",
-        "CREATE TRIGGER IF NOT EXISTS rstock_revision_asset_history_delete AFTER DELETE ON portfolio_asset_history BEGIN UPDATE rstock_database_identity SET revision = revision + 1; END",
-    ]
 }
 
 pub async fn find_earliest(db: &impl ConnectionTrait) -> anyhow::Result<Option<PortfolioSnapshot>> {

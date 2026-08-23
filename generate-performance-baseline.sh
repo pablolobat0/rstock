@@ -15,6 +15,7 @@ fi
 
 python3 - <<'PY'
 import json
+import os
 import re
 from pathlib import Path
 
@@ -177,8 +178,10 @@ approved_startup_p95_target = 115_259_889
 startup_p95 = estimates["startup_and_migration"]["p95_ns"]
 report = {
     "procedure": {"samples": 10, "measurement_time_seconds": 0.1,
-                  "warm_up_time_seconds": 0.1,
-                  "command": "./generate-performance-baseline.sh"},
+                   "warm_up_time_seconds": 0.1,
+                   "command": "./generate-performance-baseline.sh",
+                   "generation_mode": "results-only from existing Criterion artifacts" if os.environ.get("PERFORMANCE_RESULTS_ONLY") == "1" else "full benchmark and verification",
+                   "note": os.environ.get("PERFORMANCE_RESULTS_NOTE")},
     "criterion_estimates": estimates,
     "decision_gate": {
         "path_p95_targets_ns": targets,
@@ -226,7 +229,11 @@ report = {
     },
     "verification": {
         "commands": ["cargo fmt --check", "cargo clippy --offline -- -D warnings", "cargo test --offline"],
-        "status": "failed" if failed_targets else "passed",
+        "status": os.environ.get(
+            "PERFORMANCE_VERIFICATION_STATUS",
+            "not run by results-only generation" if os.environ.get("PERFORMANCE_RESULTS_ONLY") == "1" else "passed",
+        ),
+        "decision_gate_status": "failed" if failed_targets else "passed",
     },
 }
 Path("docs/performance-baseline-results.json").write_text(json.dumps(report, indent=2) + "\n")

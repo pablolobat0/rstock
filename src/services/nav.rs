@@ -1,5 +1,4 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::Mutex;
 
 use anyhow::Context;
 use chrono::{Duration, NaiveDate};
@@ -11,6 +10,7 @@ use crate::db::repos::{
 };
 use crate::models::{
     cents_to_f64, Asset, AssetSnapshot, MarketDataLimitation, PortfolioSnapshot, Transaction,
+    TxType,
 };
 use crate::services::market_data::{MarketData, NavValuationData};
 
@@ -21,57 +21,6 @@ pub struct PortfolioHistoryReadiness {
     pub latest_snapshot: Option<PortfolioSnapshot>,
     pub market_data_limitations: Vec<MarketDataLimitation>,
     pub(crate) performance_market_data_prepared: bool,
-}
-
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub(crate) struct NavCompletenessKey {
-    database_identity: String,
-    latest_date: String,
-    database_revision: i64,
-}
-
-pub(crate) struct NavCompletenessCache {
-    entries: Mutex<HashMap<NavCompletenessKey, Option<String>>>,
-}
-
-pub(crate) enum NavCompletenessCacheLookup {
-    Miss,
-    Hit(Option<String>),
-}
-
-impl NavCompletenessCache {
-    pub(crate) fn new() -> Self {
-        Self {
-            entries: Mutex::new(HashMap::new()),
-        }
-    }
-
-    pub(crate) fn get(
-        &self,
-        key: &NavCompletenessKey,
-    ) -> anyhow::Result<NavCompletenessCacheLookup> {
-        self.entries
-            .lock()
-            .map_err(|_| anyhow::anyhow!("NAV completeness cache was poisoned"))
-            .map(|entries| {
-                entries.get(key).cloned().map_or(
-                    NavCompletenessCacheLookup::Miss,
-                    NavCompletenessCacheLookup::Hit,
-                )
-            })
-    }
-
-    pub(crate) fn insert(
-        &self,
-        key: NavCompletenessKey,
-        result: Option<String>,
-    ) -> anyhow::Result<()> {
-        self.entries
-            .lock()
-            .map_err(|_| anyhow::anyhow!("NAV completeness cache was poisoned"))?
-            .insert(key, result);
-        Ok(())
-    }
 }
 
 struct NavMarketDataPreparation {
@@ -117,7 +66,7 @@ pub async fn ensure_portfolio_history(
 
     let mut latest_snapshot = portfolio_history_repo::find_latest(db).await?;
     let incomplete_date = match latest_snapshot.as_ref() {
-        Some(snapshot) => find_first_incomplete_snapshot(db, &snapshot.date, market_data).await?,
+        Some(snapshot) => find_first_incomplete_snapshot(db, &snapshot.date).await?,
         None => None,
     };
     if let Some(incomplete_date) = incomplete_date {
@@ -188,33 +137,39 @@ pub async fn ensure_portfolio_history(
 async fn find_first_incomplete_snapshot(
     db: &DatabaseConnection,
     latest_date: &str,
-    market_data: &MarketData,
 ) -> anyhow::Result<Option<String>> {
-    let (database_identity, database_revision) =
-        portfolio_history_repo::find_database_revision(db).await?;
-    let key = NavCompletenessKey {
-        database_identity,
-        latest_date: latest_date.to_owned(),
-        database_revision,
-    };
-    if let NavCompletenessCacheLookup::Hit(result) =
-        market_data.nav_completeness_cache().get(&key)?
-    {
-        return Ok(result);
-    }
-
     let snapshot_dates = portfolio_history_repo::find_dates_between(db, "", latest_date).await?;
     let transactions = transaction_repo::find_holdings_inputs(db, Some(latest_date)).await?;
+    let actual_snapshot_holdings =
+        portfolio_asset_history_repo::find_holdings_at_or_before(db, latest_date).await?;
     let asset_ids: HashSet<i32> = transactions
         .iter()
         .map(|transaction| transaction.asset_id)
+        .chain(
+            actual_snapshot_holdings
+                .iter()
+                .map(|(_, asset_id, _)| *asset_id),
+        )
         .collect();
     let assets = asset_repo::find_by_ids(db, asset_ids.iter().copied()).await?;
     let asset_map: HashMap<i32, &Asset> = assets.iter().map(|asset| (asset.id, asset)).collect();
-    let asset_snapshots = portfolio_asset_history_repo::find_all(db).await?;
+    let actual_holdings_by_date = actual_snapshot_holdings.into_iter().fold(
+        HashMap::<String, HashMap<i32, f64>>::new(),
+        |mut snapshots, (date, asset_id, quantity)| {
+            if asset_map
+                .get(&asset_id)
+                .is_some_and(|asset| !asset.is_monetary())
+            {
+                snapshots
+                    .entry(date)
+                    .or_default()
+                    .insert(asset_id, quantity);
+            }
+            snapshots
+        },
+    );
 
     let mut holdings = HashMap::<i32, f64>::new();
-    let mut expected_holdings_by_date = Vec::<(String, HashMap<i32, f64>)>::new();
     let mut transaction_index = 0;
     for date in snapshot_dates {
         while transaction_index < transactions.len() && transactions[transaction_index].date <= date
@@ -223,48 +178,26 @@ async fn find_first_incomplete_snapshot(
             apply_transaction_to_holdings(&mut holdings, transaction, &asset_map);
             transaction_index += 1;
         }
-        expected_holdings_by_date.push((
-            date,
-            holdings
-                .iter()
-                .filter(|(_, quantity)| **quantity > FLOAT_EPSILON)
-                .map(|(asset_id, quantity)| (*asset_id, *quantity))
-                .collect(),
-        ));
-    }
-
-    let actual_holdings_by_date = asset_snapshots.into_iter().fold(
-        HashMap::<String, HashMap<i32, f64>>::new(),
-        |mut snapshots, snapshot| {
-            snapshots
-                .entry(snapshot.date)
-                .or_default()
-                .insert(snapshot.asset_id, snapshot.quantity);
-            snapshots
-        },
-    );
-    for (date, expected_holdings) in expected_holdings_by_date {
-        let actual_holdings = actual_holdings_by_date
-            .get(&date)
-            .cloned()
-            .unwrap_or_default();
-        if expected_holdings
+        let expected_holdings = holdings
             .iter()
-            .any(|(asset_id, expected_quantity)| {
-                actual_holdings.get(asset_id).is_none_or(|actual_quantity| {
-                    (actual_quantity - expected_quantity).abs() > FLOAT_EPSILON
+            .filter(|(_, quantity)| **quantity > FLOAT_EPSILON);
+        let expected_count = expected_holdings.clone().count();
+        let actual_holdings = actual_holdings_by_date.get(&date);
+        if actual_holdings.map_or(expected_count != 0, |actual| actual.len() != expected_count)
+            || expected_holdings
+                .into_iter()
+                .any(|(asset_id, expected_quantity)| {
+                    actual_holdings
+                        .and_then(|actual| actual.get(asset_id))
+                        .is_none_or(|actual_quantity| {
+                            (actual_quantity - expected_quantity).abs() > FLOAT_EPSILON
+                        })
                 })
-            })
         {
-            let result = Some(date);
-            market_data
-                .nav_completeness_cache()
-                .insert(key, result.clone())?;
-            return Ok(result);
+            return Ok(Some(date));
         }
     }
 
-    market_data.nav_completeness_cache().insert(key, None)?;
     Ok(None)
 }
 
@@ -278,12 +211,11 @@ fn apply_transaction_to_holdings(
         .is_some_and(|asset| !asset.is_monetary())
     {
         let holding = holdings.entry(transaction.asset_id).or_default();
-        if transaction.is_split() {
-            *holding *= transaction.quantity;
-        } else if transaction.is_buy() {
-            *holding += transaction.quantity;
-        } else if transaction.is_sell() {
-            *holding -= transaction.quantity;
+        match transaction.tx_type {
+            TxType::Buy => *holding += transaction.quantity,
+            TxType::Sell => *holding -= transaction.quantity,
+            TxType::Split => *holding *= transaction.quantity,
+            TxType::Dividend => {}
         }
     }
 }

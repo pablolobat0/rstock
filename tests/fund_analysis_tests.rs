@@ -3,7 +3,7 @@ mod common;
 use chrono::Duration;
 use common::{
     insert_asset, insert_fund_asset, insert_portfolio_asset_snapshot, insert_portfolio_snapshot,
-    market_data, market_data_at, setup_test_db, MockMarketDataSources,
+    insert_transaction, market_data, market_data_at, setup_test_db, MockMarketDataSources,
 };
 use rstock::constants::format_date;
 use rstock::constants::BENCHMARK_TICKER;
@@ -764,6 +764,8 @@ async fn test_fund_analysis_candidate_correlation_uses_nav_and_current_holdings(
         insert_portfolio_snapshot(&db, date, 100.0 + idx as f64, 10.0).await;
     }
     let end_str = format_date(end);
+    insert_transaction(&db, good_asset_id, &end_str, 1.0, 100.0, 0.0).await;
+    insert_transaction(&db, missing_asset_id, &end_str, 1.0, 100.0, 0.0).await;
     insert_portfolio_asset_snapshot(&db, &end_str, good_asset_id, 1.0, 100.0, 100.0, 1.0).await;
     insert_portfolio_asset_snapshot(&db, &end_str, missing_asset_id, 1.0, 100.0, 100.0, 1.0).await;
 
