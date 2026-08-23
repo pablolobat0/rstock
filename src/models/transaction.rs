@@ -96,6 +96,30 @@ pub struct Transaction {
     pub fees_cents: i64,
 }
 
+/// Transaction fields needed to reconstruct asset holdings without loading
+/// financial fields that do not participate in the holdings calculation.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HoldingInput {
+    pub asset_id: i32,
+    pub tx_type: TxType,
+    pub date: String,
+    pub quantity: f64,
+}
+
+impl HoldingInput {
+    pub fn is_buy(&self) -> bool {
+        self.tx_type == TxType::Buy
+    }
+
+    pub fn is_sell(&self) -> bool {
+        self.tx_type == TxType::Sell
+    }
+
+    pub fn is_split(&self) -> bool {
+        self.tx_type == TxType::Split
+    }
+}
+
 pub struct TransactionListItem {
     pub transaction: Transaction,
     pub ticker: String,

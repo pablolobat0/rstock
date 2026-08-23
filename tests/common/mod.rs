@@ -3,7 +3,9 @@
 use std::collections::HashMap;
 
 use migration::{Migrator, MigratorTrait};
-use sea_orm::{ColumnTrait, Database, DatabaseConnection, EntityTrait, QueryFilter, Set};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, Database, DatabaseConnection, EntityTrait, QueryFilter, Set,
+};
 
 use rstock::db::entities::{
     asset, daily_asset_price, daily_exchange_rate, portfolio_asset_history, portfolio_history,
@@ -304,6 +306,36 @@ pub async fn insert_portfolio_asset_snapshot(
         .exec(db)
         .await
         .expect("failed to insert portfolio asset snapshot");
+}
+
+pub async fn delete_portfolio_asset_snapshot(db: &DatabaseConnection, date: &str, asset_id: i32) {
+    portfolio_asset_history::Entity::delete_many()
+        .filter(portfolio_asset_history::Column::Date.eq(date))
+        .filter(portfolio_asset_history::Column::AssetId.eq(asset_id))
+        .exec(db)
+        .await
+        .expect("failed to delete portfolio asset snapshot");
+}
+
+pub async fn update_portfolio_asset_snapshot_quantity(
+    db: &DatabaseConnection,
+    date: &str,
+    asset_id: i32,
+    quantity: f64,
+) {
+    let model = portfolio_asset_history::Entity::find()
+        .filter(portfolio_asset_history::Column::Date.eq(date))
+        .filter(portfolio_asset_history::Column::AssetId.eq(asset_id))
+        .one(db)
+        .await
+        .expect("failed to find portfolio asset snapshot")
+        .expect("portfolio asset snapshot should exist");
+    let mut active: portfolio_asset_history::ActiveModel = model.into();
+    active.quantity = Set(quantity);
+    active
+        .update(db)
+        .await
+        .expect("failed to update portfolio asset snapshot quantity");
 }
 
 pub async fn get_portfolio_snapshot(

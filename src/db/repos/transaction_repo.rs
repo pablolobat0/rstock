@@ -6,7 +6,7 @@ use sea_orm::{
 
 use crate::db::entities::transaction;
 use crate::models::{
-    f64_to_cents, BuyOrder, DividendOrder, SellOrder, SplitOrder, Transaction, TxType,
+    f64_to_cents, BuyOrder, DividendOrder, HoldingInput, SellOrder, SplitOrder, Transaction, TxType,
 };
 
 const BULK_WRITE_SIZE: usize = 100;
@@ -51,11 +51,10 @@ pub async fn find_all_ordered_by_date(
 pub async fn find_holdings_inputs(
     db: &impl ConnectionTrait,
     end_date: Option<&str>,
-) -> anyhow::Result<Vec<Transaction>> {
+) -> anyhow::Result<Vec<HoldingInput>> {
     let mut query = transaction::Entity::find()
         .select_only()
         .columns([
-            transaction::Column::Id,
             transaction::Column::AssetId,
             transaction::Column::TxType,
             transaction::Column::Date,
@@ -68,19 +67,16 @@ pub async fn find_holdings_inputs(
     }
 
     query
-        .into_tuple::<(i32, i32, String, String, f64)>()
+        .into_tuple::<(i32, String, String, f64)>()
         .all(db)
         .await?
         .into_iter()
-        .map(|(id, asset_id, tx_type, date, quantity)| {
-            Ok(Transaction {
-                id,
+        .map(|(asset_id, tx_type, date, quantity)| {
+            Ok(HoldingInput {
                 asset_id,
                 tx_type: tx_type.parse()?,
                 date,
                 quantity,
-                price_cents: 0,
-                fees_cents: 0,
             })
         })
         .collect()

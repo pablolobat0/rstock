@@ -182,7 +182,20 @@ report = {
     "criterion_estimates": estimates,
     "decision_gate": {
         "path_p95_targets_ns": targets,
-        "target_rule": "immutable user-approved issue #20 p95 targets",
+        "target_rule": "immutable user-approved issue #20 p95 targets, except the explicitly recorded NAV readiness approval",
+        "target_provenance": {
+            "nav_readiness_warm_representative": {
+                "original_issue_20_target_p95_ns": 12847958,
+                "approved_target_p95_ns": 20338526,
+                "status": "user-approved target change",
+                "approval_source": "user instruction for PR #46 final corrections",
+            },
+            "other_issue_20_targets": "immutable",
+            "transaction_import_representative": {
+                "target_p95_ns": None,
+                "status": "informational-only",
+            },
+        },
         "fixed_target_results": target_results,
         "fixed_target_failures": failed_targets,
         "fixed_source_concurrency_limit": approved_fixed_limit,

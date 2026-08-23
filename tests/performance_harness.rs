@@ -213,7 +213,9 @@ async fn automatic_migration_rolls_back_a_failed_destructive_migration() {
     let db = Database::connect(format!("sqlite://{}?mode=rwc", path.display()))
         .await
         .expect("temporary file-backed database");
-    Migrator::up(&db, Some((Migrator::migrations().len() - 1) as u32))
+    // Apply the historical prefix immediately before transaction indexes; the
+    // identity migration is newer and must not change this rollback setup.
+    Migrator::up(&db, Some((Migrator::migrations().len() - 2) as u32))
         .await
         .expect("historical migration prefix should apply");
     db.execute(Statement::from_string(
@@ -235,7 +237,7 @@ async fn automatic_migration_rolls_back_a_failed_destructive_migration() {
             .await
             .expect("migration state after rollback")
             .len(),
-        1
+        2
     );
     let rate: f64 = db
         .query_one(Statement::from_string(

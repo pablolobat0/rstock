@@ -640,6 +640,71 @@ async fn test_incremental_missing_first_day_asset_valuation_preserves_existing_h
         .is_none());
 }
 
+#[tokio::test]
+async fn readiness_reaudits_same_date_after_asset_snapshot_mutation() {
+    let db = common::setup_test_db().await;
+    let asset_id = common::insert_asset(&db, "XFAKEREAUDIT", "Reaudit Stock", "stock", "EUR").await;
+    common::insert_transaction(&db, asset_id, "2025-01-02", 1.0, 100.0, 0.0).await;
+    common::insert_daily_price(&db, asset_id, "2025-01-02", 100.0, false).await;
+
+    let sources = common::MockMarketDataSources::new();
+    let market_data = nav_market_data(&sources);
+    nav::ensure_portfolio_history(&db, &market_data)
+        .await
+        .expect("initial readiness should succeed");
+    assert_eq!(
+        common::get_asset_snapshots(&db, "2025-01-02").await.len(),
+        1
+    );
+
+    common::update_portfolio_asset_snapshot_quantity(&db, "2025-01-02", asset_id, 999.0).await;
+
+    let readiness = nav::ensure_portfolio_history(&db, &market_data)
+        .await
+        .expect("readiness should re-audit after same-date mutation");
+    assert_eq!(readiness.latest_snapshot.unwrap().date, "2025-01-02");
+    assert_eq!(
+        common::get_asset_snapshots(&db, "2025-01-02").await.len(),
+        1
+    );
+    let quantity = common::get_asset_snapshots(&db, "2025-01-02")
+        .await
+        .first()
+        .unwrap()
+        .quantity;
+    assert!((quantity - 1.0).abs() < 1e-9);
+}
+
+#[tokio::test]
+async fn readiness_does_not_reuse_completeness_between_databases() {
+    let first_db = common::setup_test_db().await;
+    let second_db = common::setup_test_db().await;
+    let first_asset =
+        common::insert_asset(&first_db, "XFAKEDBONE", "First DB Stock", "stock", "EUR").await;
+    let second_asset =
+        common::insert_asset(&second_db, "XFAKEDBTWO", "Second DB Stock", "stock", "EUR").await;
+    common::insert_transaction(&first_db, first_asset, "2025-01-02", 1.0, 100.0, 0.0).await;
+    common::insert_transaction(&second_db, second_asset, "2025-01-02", 1.0, 100.0, 0.0).await;
+    common::insert_daily_price(&first_db, first_asset, "2025-01-02", 100.0, false).await;
+    common::insert_daily_price(&second_db, second_asset, "2025-01-02", 100.0, false).await;
+
+    let sources = common::MockMarketDataSources::new();
+    let market_data = nav_market_data(&sources);
+    nav::ensure_portfolio_history(&first_db, &market_data)
+        .await
+        .expect("first database readiness should succeed");
+    nav::ensure_portfolio_history(&second_db, &market_data)
+        .await
+        .expect("second database readiness should not reuse first database state");
+
+    assert_eq!(
+        common::get_asset_snapshots(&second_db, "2025-01-02")
+            .await
+            .len(),
+        1
+    );
+}
+
 /// Non-EUR asset with no FX data -> NAV readiness is unavailable without a
 /// snapshot or partial data, with an actionable FX limitation alongside the
 /// stale price limitation for the valued asset.

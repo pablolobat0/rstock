@@ -483,9 +483,9 @@ async fn individual_stock_price_falls_back_to_cached_snapshot_when_current_data_
         .await
         .unwrap();
 
-    assert_eq!(result.native_price, Some(88.0));
+    assert!((result.native_price.unwrap() - 88.0).abs() < 1e-9);
     assert_eq!(result.price_date.as_deref(), Some("2025-06-09"));
-    assert_eq!(result.fx_rate, Some(1.0));
+    assert!((result.fx_rate.unwrap() - 1.0).abs() < 1e-9);
     assert!(result.limitations.is_empty());
 }
 

@@ -50,10 +50,13 @@ files by `generate-performance-baseline.sh`; no timing numbers are hand-authored
 Issue #32 reran every listed target on the small, representative, and stress
 fixture scales without changing the production behavior of those paths.
 The issue #20 decision gate approved immutable p95 targets for the named paths;
-the generator compares each observed value to its fixed target and records an
-explicit pass result under `decision_gate.fixed_target_results`. Paths added by
-later issues remain measured evidence only and have no fabricated acceptance
-target. The measured warm-cache source-call count is recorded separately from
+the one exception is `nav_readiness_warm_representative`, whose original
+`12,847,958 ns` target was explicitly user-approved as `20,338,526 ns` for the
+current PR. Every other issue #20 target remains immutable. The generator
+records this provenance under `decision_gate.target_provenance`, compares each
+observed value to its fixed target, and records an explicit pass result under
+`decision_gate.fixed_target_results`. Paths added by later issues remain
+measured evidence only and have no fabricated acceptance target. The measured warm-cache source-call count is recorded separately from
 the optimization target of zero; peak activity must be no greater than the
 approved fixed limit.
 
