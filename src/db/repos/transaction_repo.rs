@@ -1,5 +1,7 @@
+use anyhow::Context;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder, Set,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder,
+    QuerySelect, Set,
 };
 
 use crate::db::entities::transaction;
@@ -44,6 +46,44 @@ pub async fn find_all_ordered_by_date(
 
     let results = query.all(db).await?;
     Ok(results.into_iter().map(Transaction::from).collect())
+}
+
+pub async fn find_holdings_inputs(
+    db: &impl ConnectionTrait,
+    end_date: Option<&str>,
+) -> anyhow::Result<Vec<Transaction>> {
+    let mut query = transaction::Entity::find()
+        .select_only()
+        .columns([
+            transaction::Column::Id,
+            transaction::Column::AssetId,
+            transaction::Column::TxType,
+            transaction::Column::Date,
+            transaction::Column::Quantity,
+        ])
+        .order_by_asc(transaction::Column::Date)
+        .order_by_asc(transaction::Column::Id);
+    if let Some(end) = end_date {
+        query = query.filter(transaction::Column::Date.lte(end.to_string()));
+    }
+
+    query
+        .into_tuple::<(i32, i32, String, String, f64)>()
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|(id, asset_id, tx_type, date, quantity)| {
+            Ok(Transaction {
+                id,
+                asset_id,
+                tx_type: tx_type.parse()?,
+                date,
+                quantity,
+                price_cents: 0,
+                fees_cents: 0,
+            })
+        })
+        .collect()
 }
 
 pub async fn find_by_asset_id(
@@ -97,7 +137,8 @@ pub async fn insert_many(
     for chunk in transactions.chunks(BULK_WRITE_SIZE) {
         let models = chunk.iter().map(active_model_for_write);
         let result = transaction::Entity::insert_many(models).exec(db).await?;
-        let chunk_len = i32::try_from(chunk.len()).expect("transaction bulk chunk fits in i32");
+        let chunk_len = i32::try_from(chunk.len())
+            .context("transaction bulk chunk exceeds the supported ID range")?;
         let first_id = result.last_insert_id - chunk_len + 1;
         ids.extend(first_id..=result.last_insert_id);
     }

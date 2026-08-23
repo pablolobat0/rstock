@@ -145,8 +145,8 @@ pub async fn import_transactions_csv(
                 classification: row.classification.clone(),
                 morningstar_code: row.morningstar_code.clone(),
             });
-            let temporary_id =
-                -i32::try_from(pending_index + 1).expect("pending asset count fits in i32");
+            let temporary_id = -i32::try_from(pending_index + 1)
+                .context("pending asset count exceeds the supported asset ID range")?;
             assets_by_ticker.insert(
                 row.ticker.clone(),
                 ImportAsset::new_pending(
@@ -159,9 +159,9 @@ pub async fn import_transactions_csv(
             );
         }
 
-        let state = assets_by_ticker
-            .get_mut(&row.ticker)
-            .expect("asset was resolved before validation");
+        let state = assets_by_ticker.get_mut(&row.ticker).ok_or_else(|| {
+            anyhow::anyhow!("row {row_num}: asset '{}' was not resolved", row.ticker)
+        })?;
         state.advance_holdings(&date_str);
         let row_invalidation_date = if row.tx_type == TxType::Split {
             state
@@ -277,11 +277,11 @@ pub async fn import_transactions_csv(
         .map(|row| {
             let asset_id = assets_by_ticker
                 .get(&row.ticker)
-                .expect("asset was resolved before persistence")
+                .ok_or_else(|| anyhow::anyhow!("asset '{}' was not resolved", row.ticker))?
                 .id;
-            transaction_write_for_row(row, asset_id)
+            Ok(transaction_write_for_row(row, asset_id))
         })
-        .collect::<Vec<_>>();
+        .collect::<anyhow::Result<Vec<_>>>()?;
     let transaction_ids = transaction_repo::insert_many(&mutation, &writes).await?;
     if transaction_ids.len() != rows.len() {
         anyhow::bail!(
@@ -291,12 +291,15 @@ pub async fn import_transactions_csv(
         );
     }
 
-    let split_asset_ids = split_tickers.into_iter().map(|ticker| {
-        assets_by_ticker
-            .get(&ticker)
-            .expect("split asset was resolved before persistence")
-            .id
-    });
+    let split_asset_ids = split_tickers
+        .into_iter()
+        .map(|ticker| {
+            assets_by_ticker
+                .get(&ticker)
+                .ok_or_else(|| anyhow::anyhow!("asset '{ticker}' was not resolved"))
+                .map(|asset| asset.id)
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
     daily_price_repo::delete_all_for_assets(&mutation, split_asset_ids).await?;
     if let Some(date) = invalidation_date {
         portfolio_history_repo::delete_from_date(&mutation, &date).await?;

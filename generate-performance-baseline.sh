@@ -23,6 +23,7 @@ expected = {
     "transaction_listing",
     "transaction_listing_representative",
     "transaction_listing_stress",
+    "transaction_import_representative",
     "market_data_preparation_representative",
     "nav_readiness_warm_representative",
     "portfolio_retrieval_representative",
@@ -129,7 +130,7 @@ approved_targets = {
     "historical_market_data_preparation_partial": 4_283_927_161,
     "historical_market_data_preparation_warm": 373_421_051,
     "market_data_preparation_representative": 25_443_133_881,
-    "nav_readiness_warm_representative": 12_847_958,
+    "nav_readiness_warm_representative": 20_338_526,
     "nav_rebuild_full": 11_640_612_859,
     "nav_rebuild_full_representative": 6_429_392_418,
     "nav_rebuild_full_stress": 34_716_733_645,
@@ -147,6 +148,7 @@ approved_targets = {
     "transaction_listing_stress": 98_552_625,
 }
 if set(approved_targets) != expected - {
+    "transaction_import_representative",
     "delayed_source_limit_1",
     "delayed_source_limit_2",
     "delayed_source_limit_4",

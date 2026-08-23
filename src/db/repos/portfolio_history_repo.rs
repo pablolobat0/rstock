@@ -1,5 +1,6 @@
 use sea_orm::{
-    sea_query::OnConflict, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder, Set,
+    sea_query::OnConflict, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder,
+    QuerySelect, Set,
 };
 
 use crate::db::entities::portfolio_history;
@@ -60,6 +61,23 @@ pub async fn find_between(
         .all(db)
         .await?;
     Ok(results.into_iter().map(PortfolioSnapshot::from).collect())
+}
+
+pub async fn find_dates_between(
+    db: &impl ConnectionTrait,
+    start_date: &str,
+    end_date: &str,
+) -> anyhow::Result<Vec<String>> {
+    portfolio_history::Entity::find()
+        .select_only()
+        .column(portfolio_history::Column::Date)
+        .filter(portfolio_history::Column::Date.gte(start_date))
+        .filter(portfolio_history::Column::Date.lte(end_date))
+        .order_by_asc(portfolio_history::Column::Date)
+        .into_tuple::<String>()
+        .all(db)
+        .await
+        .map_err(Into::into)
 }
 
 pub async fn delete_from_date(db: &impl ConnectionTrait, date: &str) -> anyhow::Result<()> {

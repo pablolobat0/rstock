@@ -125,6 +125,7 @@ const HISTORICAL_SOURCE_CONCURRENCY_LIMIT: usize = 4;
 pub struct MarketData {
     sources: Arc<dyn MarketDataSources>,
     historical_requests: Mutex<HashMap<HistoricalRequest, HistoricalRequestFuture>>,
+    pub(crate) nav_completeness_audits: Mutex<HashMap<String, Option<String>>>,
     historical_source_slots: Arc<Semaphore>,
     today: NaiveDate,
 }
@@ -138,6 +139,7 @@ impl MarketData {
         Self {
             sources: sources.into(),
             historical_requests: Mutex::new(HashMap::new()),
+            nav_completeness_audits: Mutex::new(HashMap::new()),
             historical_source_slots: Arc::new(Semaphore::new(HISTORICAL_SOURCE_CONCURRENCY_LIMIT)),
             // Capture the date once per command's MarketData instance. A command that crosses
             // midnight must not combine different definitions of today across portfolio, NAV,

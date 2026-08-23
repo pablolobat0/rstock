@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use anyhow::Context;
 use chrono::{Duration, NaiveDate};
@@ -65,16 +65,28 @@ pub async fn ensure_portfolio_history(
 
     let mut latest_snapshot = portfolio_history_repo::find_latest(db).await?;
     let incomplete_date = match latest_snapshot.as_ref() {
-        Some(snapshot) if snapshot.date < yesterday_str => {
-            find_first_incomplete_snapshot(db, &snapshot.date).await?
+        Some(snapshot) => {
+            let cached = market_data
+                .nav_completeness_audits
+                .lock()
+                .map_err(|_| anyhow::anyhow!("NAV completeness cache was poisoned"))?
+                .get(&snapshot.date)
+                .cloned();
+            if let Some(result) = cached {
+                result
+            } else {
+                let result = find_first_incomplete_snapshot(db, &snapshot.date).await?;
+                if result.is_none() {
+                    market_data
+                        .nav_completeness_audits
+                        .lock()
+                        .map_err(|_| anyhow::anyhow!("NAV completeness cache was poisoned"))?
+                        .insert(snapshot.date.clone(), None);
+                }
+                result
+            }
         }
-        Some(snapshot)
-            if snapshot.date == yesterday_str
-                && is_snapshot_incomplete_at(db, &snapshot.date).await? =>
-        {
-            Some(snapshot.date.clone())
-        }
-        _ => None,
+        None => None,
     };
     if let Some(incomplete_date) = incomplete_date {
         tracing::warn!(date = %incomplete_date, "discarding incomplete NAV snapshots");
@@ -141,23 +153,81 @@ pub async fn ensure_portfolio_history(
     })
 }
 
-async fn is_snapshot_incomplete_at(db: &DatabaseConnection, date: &str) -> anyhow::Result<bool> {
-    let transactions = transaction_repo::find_all_ordered_by_date(db, None, Some(date)).await?;
+async fn find_first_incomplete_snapshot(
+    db: &DatabaseConnection,
+    latest_date: &str,
+) -> anyhow::Result<Option<String>> {
+    let snapshot_dates = portfolio_history_repo::find_dates_between(db, "", latest_date).await?;
+    let transactions = transaction_repo::find_holdings_inputs(db, Some(latest_date)).await?;
     let asset_ids: HashSet<i32> = transactions
         .iter()
         .map(|transaction| transaction.asset_id)
         .collect();
     let assets = asset_repo::find_by_ids(db, asset_ids.iter().copied()).await?;
     let asset_map: HashMap<i32, &Asset> = assets.iter().map(|asset| (asset.id, asset)).collect();
-
     let mut holdings = HashMap::<i32, f64>::new();
-    for transaction in transactions {
-        if asset_map
-            .get(&transaction.asset_id)
-            .is_some_and(|asset| asset.is_monetary())
+    let mut expected_asset_ids = BTreeSet::new();
+    let mut expected_asset_ids_string = String::new();
+    let mut expected_asset_ids_dirty = true;
+    let mut expected_asset_ids_by_date = Vec::<(String, String)>::new();
+    let mut transaction_index = 0;
+    for date in snapshot_dates {
+        while transaction_index < transactions.len() && transactions[transaction_index].date <= date
         {
-            continue;
+            let transaction = &transactions[transaction_index];
+            expected_asset_ids_dirty |= apply_transaction_to_holdings(
+                &mut holdings,
+                &mut expected_asset_ids,
+                transaction,
+                &asset_map,
+            );
+            transaction_index += 1;
         }
+
+        if expected_asset_ids_dirty {
+            expected_asset_ids_string = format_asset_ids(&expected_asset_ids);
+            expected_asset_ids_dirty = false;
+        }
+        expected_asset_ids_by_date.push((date, expected_asset_ids_string.clone()));
+    }
+
+    let actual_asset_ids_by_date = portfolio_asset_history_repo::find_all(db)
+        .await?
+        .into_iter()
+        .fold(
+            HashMap::<String, BTreeSet<i32>>::new(),
+            |mut snapshots, snapshot| {
+                snapshots
+                    .entry(snapshot.date)
+                    .or_default()
+                    .insert(snapshot.asset_id);
+                snapshots
+            },
+        );
+    for (date, expected_asset_ids) in expected_asset_ids_by_date {
+        let expected_asset_ids = parse_asset_ids(&expected_asset_ids)?;
+        let actual_asset_ids = actual_asset_ids_by_date
+            .get(&date)
+            .cloned()
+            .unwrap_or_default();
+        if !expected_asset_ids.is_subset(&actual_asset_ids) {
+            return Ok(Some(date));
+        }
+    }
+
+    Ok(None)
+}
+
+fn apply_transaction_to_holdings(
+    holdings: &mut HashMap<i32, f64>,
+    expected_asset_ids: &mut BTreeSet<i32>,
+    transaction: &Transaction,
+    asset_map: &HashMap<i32, &Asset>,
+) -> bool {
+    if asset_map
+        .get(&transaction.asset_id)
+        .is_some_and(|asset| !asset.is_monetary())
+    {
         let holding = holdings.entry(transaction.asset_id).or_default();
         if transaction.is_split() {
             *holding *= transaction.quantity;
@@ -166,95 +236,35 @@ async fn is_snapshot_incomplete_at(db: &DatabaseConnection, date: &str) -> anyho
         } else if transaction.is_sell() {
             *holding -= transaction.quantity;
         }
+        let was_expected = expected_asset_ids.contains(&transaction.asset_id);
+        let is_expected = *holding > FLOAT_EPSILON;
+        if is_expected {
+            expected_asset_ids.insert(transaction.asset_id);
+        } else {
+            expected_asset_ids.remove(&transaction.asset_id);
+        }
+        return was_expected != is_expected;
     }
-
-    let expected_asset_ids: HashSet<i32> = holdings
-        .iter()
-        .filter(|(asset_id, quantity)| {
-            **quantity > FLOAT_EPSILON
-                && asset_map
-                    .get(asset_id)
-                    .is_some_and(|asset| !asset.is_monetary())
-        })
-        .map(|(asset_id, _)| *asset_id)
-        .collect();
-    let actual_asset_ids: HashSet<i32> = portfolio_asset_history_repo::find_by_date(db, date)
-        .await?
-        .into_iter()
-        .map(|snapshot| snapshot.asset_id)
-        .collect();
-
-    Ok(!expected_asset_ids.is_subset(&actual_asset_ids))
+    false
 }
 
-async fn find_first_incomplete_snapshot(
-    db: &DatabaseConnection,
-    latest_date: &str,
-) -> anyhow::Result<Option<String>> {
-    let snapshots = portfolio_history_repo::find_between(db, "", latest_date).await?;
-    let transactions =
-        transaction_repo::find_all_ordered_by_date(db, None, Some(latest_date)).await?;
-    let asset_ids: HashSet<i32> = transactions
-        .iter()
-        .map(|transaction| transaction.asset_id)
-        .collect();
-    let assets = asset_repo::find_by_ids(db, asset_ids.iter().copied()).await?;
-    let asset_map: HashMap<i32, &Asset> = assets.iter().map(|asset| (asset.id, asset)).collect();
-    let asset_snapshots = portfolio_asset_history_repo::find_all(db).await?;
-    let actual_asset_ids_by_date = asset_snapshots.into_iter().fold(
-        HashMap::<String, HashSet<i32>>::new(),
-        |mut asset_ids_by_date, asset_snapshot| {
-            asset_ids_by_date
-                .entry(asset_snapshot.date)
-                .or_default()
-                .insert(asset_snapshot.asset_id);
-            asset_ids_by_date
-        },
-    );
-
-    let mut holdings = HashMap::<i32, f64>::new();
-    let mut transaction_index = 0;
-    for snapshot in snapshots {
-        while transaction_index < transactions.len()
-            && transactions[transaction_index].date <= snapshot.date
-        {
-            let transaction = &transactions[transaction_index];
-            if asset_map
-                .get(&transaction.asset_id)
-                .is_some_and(|asset| !asset.is_monetary())
-            {
-                let holding = holdings.entry(transaction.asset_id).or_default();
-                if transaction.is_split() {
-                    *holding *= transaction.quantity;
-                } else if transaction.is_buy() {
-                    *holding += transaction.quantity;
-                } else if transaction.is_sell() {
-                    *holding -= transaction.quantity;
-                }
-            }
-            transaction_index += 1;
+fn format_asset_ids(asset_ids: &BTreeSet<i32>) -> String {
+    let mut formatted = String::new();
+    for (index, asset_id) in asset_ids.iter().enumerate() {
+        if index > 0 {
+            formatted.push(',');
         }
-
-        let expected_asset_ids: HashSet<i32> = holdings
-            .iter()
-            .filter(|(asset_id, quantity)| {
-                **quantity > FLOAT_EPSILON
-                    && asset_map
-                        .get(asset_id)
-                        .is_some_and(|asset| !asset.is_monetary())
-            })
-            .map(|(asset_id, _)| *asset_id)
-            .collect();
-        let actual_asset_ids = actual_asset_ids_by_date
-            .get(&snapshot.date)
-            .cloned()
-            .unwrap_or_default();
-        if !expected_asset_ids.is_subset(&actual_asset_ids) {
-            return Ok(Some(snapshot.date));
-        }
+        formatted.push_str(&asset_id.to_string());
     }
+    formatted
+}
 
-    Ok(None)
+fn parse_asset_ids(formatted: &str) -> anyhow::Result<BTreeSet<i32>> {
+    formatted
+        .split(',')
+        .filter(|asset_id| !asset_id.is_empty())
+        .map(|asset_id| asset_id.parse().context("invalid asset snapshot ID"))
+        .collect()
 }
 
 async fn discard_incomplete_snapshots_from(

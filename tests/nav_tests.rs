@@ -409,6 +409,62 @@ async fn incomplete_snapshot_at_latest_completed_date_is_discarded() {
     );
 }
 
+#[tokio::test]
+async fn earlier_incomplete_snapshot_is_discarded_when_latest_snapshot_is_complete() {
+    let db = common::setup_test_db().await;
+    let mock = common::MockMarketDataSources::new();
+    let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
+    let unrelated_asset_id =
+        common::insert_asset(&db, "XFAKE2", "Unrelated Stock", "stock", "EUR").await;
+    common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
+    for date in ["2025-01-02", "2025-01-03"] {
+        common::insert_daily_price(&db, asset_id, date, 50.0, false).await;
+    }
+    common::insert_portfolio_snapshot(&db, "2025-01-01", 100.0, 0.0).await;
+    common::insert_portfolio_snapshot(&db, "2025-01-02", 100.0, 5.0).await;
+    common::insert_portfolio_snapshot(&db, "2025-01-03", 100.0, 5.0).await;
+    common::insert_portfolio_asset_snapshot(
+        &db,
+        "2025-01-02",
+        unrelated_asset_id,
+        10.0,
+        50.0,
+        500.0,
+        1.0,
+    )
+    .await;
+    common::insert_portfolio_asset_snapshot(&db, "2025-01-03", asset_id, 10.0, 50.0, 500.0, 1.0)
+        .await;
+
+    let market_data = common::market_data_at(&mock, NaiveDate::from_ymd_opt(2025, 1, 4).unwrap());
+    nav::ensure_portfolio_history(&db, &market_data)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        common::get_asset_snapshots(&db, "2025-01-02").await.len(),
+        1
+    );
+    assert_eq!(
+        common::get_asset_snapshots(&db, "2025-01-02")
+            .await
+            .first()
+            .map(|snapshot| snapshot.asset_id),
+        Some(asset_id)
+    );
+    assert_eq!(
+        common::get_asset_snapshots(&db, "2025-01-03").await.len(),
+        1
+    );
+    assert_eq!(
+        common::get_asset_snapshots(&db, "2025-01-03")
+            .await
+            .first()
+            .map(|snapshot| snapshot.asset_id),
+        Some(asset_id)
+    );
+}
+
 /// A backdated buy invalidates and correctly recomputes history from its date.
 #[tokio::test]
 async fn test_back_dated_buy() {

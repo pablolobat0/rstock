@@ -96,14 +96,16 @@ All test utilities are in `tests/common/mod.rs`:
 |------|----------|
 | `tests/nav_tests.rs` | NAV unitization: empty portfolio, single/multiple buys, deposits at different NAVs, fee handling, sell transactions |
 | `tests/integration_test.rs` | End-to-end scenarios combining buys, price changes, and portfolio queries |
-| `tests/daily_price_tests.rs` | Price caching and forward-fill logic |
 | `tests/portfolio_summary_tests.rs` | Portfolio computation and return calculations |
 | `tests/current_positions_tests.rs` | Focused Transaction ledger inventory, shared performance/Monetary projection, nullable facts, and complete aggregates |
 | `tests/current_date_tests.rs` | Fixed-clock portfolio and NAV-readiness behavior |
-| `tests/individual_price_tests.rs` | Fixed-clock Live quote, Historical fallback, ETF capability, and mutual fund closing-price semantics |
+| `tests/market_data_tests.rs` | Public market-data valuation, Individual price Live quote and Historical fallback, ETF/fund semantics, FX limitations, and forward-fill behavior |
+| `tests/market_data_cache_tests.rs` | Historical market-data cache reuse and immutable coverage |
+| `tests/market_data_concurrency_tests.rs` | Bounded source concurrency and command-scoped request coordination |
 | `tests/dividend_tests.rs` | Dividend recording and NAV cash accumulation |
 | `tests/correlation_tests.rs` | Portfolio asset correlation matrix computation |
-| `tests/monitor_tests.rs` | Momentum indicators and monitor report generation |
+| `tests/fund_analysis_tests.rs` | Fund analysis, comparison, holdings, and period metrics |
+| `tests/metrics_tests.rs` | Shared portfolio-analysis metric calculations |
 
 ## How To: Add a New CLI Command
 

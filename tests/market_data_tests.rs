@@ -468,6 +468,28 @@ async fn individual_stock_price_uses_live_quotes_without_persisting_them() {
 }
 
 #[tokio::test]
+async fn individual_stock_price_falls_back_to_cached_snapshot_when_current_data_is_missing() {
+    let db = common::setup_test_db().await;
+    let asset_id =
+        common::insert_asset(&db, "XFAKEFALLBACK", "Fallback Stock", "stock", "EUR").await;
+    common::insert_daily_price(&db, asset_id, "2025-06-09", 88.0, false).await;
+    let asset = asset_repo::find_by_ticker(&db, "XFAKEFALLBACK")
+        .await
+        .unwrap()
+        .unwrap();
+
+    let result = common::market_data_at(&common::MockMarketDataSources::new(), date(2025, 6, 10))
+        .individual_price_if_available(&db, &asset)
+        .await
+        .unwrap();
+
+    assert_eq!(result.native_price, Some(88.0));
+    assert_eq!(result.price_date.as_deref(), Some("2025-06-09"));
+    assert_eq!(result.fx_rate, Some(1.0));
+    assert!(result.limitations.is_empty());
+}
+
+#[tokio::test]
 async fn individual_fund_price_keeps_historical_closing_semantics() {
     let db = common::setup_test_db().await;
     let _asset_id = common::insert_fund_asset(&db, "XFAKEFUND", "Test Fund", "EUR", "FUND1").await;
