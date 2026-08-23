@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::Context;
 use chrono::{Datelike, Duration, NaiveDate};
+use futures::stream::{self, StreamExt};
 use sea_orm::DatabaseConnection;
 
 use crate::constants::{
@@ -17,6 +18,14 @@ use crate::services::market_data::MarketData;
 use crate::services::nav;
 use crate::services::{analytics, metrics};
 
+const CURRENT_POSITION_CONCURRENCY_LIMIT: usize = 4;
+
+#[derive(Clone, Copy)]
+enum LedgerPreparationScope {
+    AllOpenHoldings,
+    ReuseNavPerformanceData,
+}
+
 #[allow(clippy::too_many_lines)]
 pub async fn get_portfolio(
     db: &DatabaseConnection,
@@ -27,7 +36,16 @@ pub async fn get_portfolio(
     // a NAV-limited readiness with nullable NAV facts, while genuine failures
     // (DB, parsing, invariants) propagate.
     let nav_readiness = nav::ensure_portfolio_history(db, market_data).await?;
-    let current_positions = get_current_positions(db, market_data).await?;
+    let current_positions = get_current_positions_inner(
+        db,
+        market_data,
+        if nav_readiness.performance_market_data_prepared {
+            LedgerPreparationScope::ReuseNavPerformanceData
+        } else {
+            LedgerPreparationScope::AllOpenHoldings
+        },
+    )
+    .await?;
     let mut nav_market_data_limitations = nav_readiness.market_data_limitations;
 
     let Some(current_snapshot) = &nav_readiness.latest_snapshot else {
@@ -138,6 +156,15 @@ pub async fn get_current_positions(
     db: &DatabaseConnection,
     market_data: &MarketData,
 ) -> anyhow::Result<CurrentPositions> {
+    get_current_positions_inner(db, market_data, LedgerPreparationScope::AllOpenHoldings).await
+}
+
+#[allow(clippy::too_many_lines)]
+async fn get_current_positions_inner(
+    db: &DatabaseConnection,
+    market_data: &MarketData,
+    preparation_scope: LedgerPreparationScope,
+) -> anyhow::Result<CurrentPositions> {
     let current_date = market_data.today();
     let today = format_date(current_date);
     let transactions = transaction_repo::find_all_ordered_by_date(db, None, Some(&today)).await?;
@@ -158,18 +185,24 @@ pub async fn get_current_positions(
     // Prepare historical prices and FX before projecting ledger facts so that
     // transaction-date FX is cached (fetch/persist, then read) and cost and
     // dividend facts are identical across repeated requests.
-    let Some(prepare_scope) = ledger_prepare_scope(&assets, &transactions_by_asset, &end_date)
-    else {
+    let Some(prepare_scope) = ledger_prepare_scope(
+        &assets,
+        &transactions_by_asset,
+        &end_date,
+        preparation_scope,
+    ) else {
         return Ok(empty_current_positions());
     };
-    market_data
-        .prepare_individual_price_market_data(
-            db,
-            &prepare_scope.assets,
-            &prepare_scope.start_date,
-            &end_date,
-        )
-        .await?;
+    if !prepare_scope.assets.is_empty() {
+        market_data
+            .prepare_individual_price_market_data(
+                db,
+                &prepare_scope.assets,
+                &prepare_scope.start_date,
+                &end_date,
+            )
+            .await?;
+    }
 
     let projections = project_open_holdings(db, market_data, assets, transactions_by_asset).await?;
     if projections.is_empty() {
@@ -180,9 +213,17 @@ pub async fn get_current_positions(
     let mut monetary_positions = Vec::new();
     let mut market_data_limitations = Vec::new();
     let mut monetary_market_data_limitations = Vec::new();
-    for projection in projections {
-        let is_monetary = projection.asset.is_monetary();
-        let position = current_position_from_projection(db, market_data, projection).await?;
+    let projected_positions = stream::iter(projections)
+        .map(|projection| async move {
+            let is_monetary = projection.asset.is_monetary();
+            let position = current_position_from_projection(db, market_data, projection).await?;
+            Ok::<_, anyhow::Error>((is_monetary, position))
+        })
+        .buffered(CURRENT_POSITION_CONCURRENCY_LIMIT)
+        .collect::<Vec<_>>()
+        .await;
+    for projected_position in projected_positions {
+        let (is_monetary, position) = projected_position?;
         if is_monetary {
             extend_unique_limitations(
                 &mut monetary_market_data_limitations,
@@ -257,9 +298,11 @@ fn ledger_prepare_scope(
     assets: &[Asset],
     transactions_by_asset: &HashMap<i32, Vec<Transaction>>,
     end_date: &str,
+    preparation_scope: LedgerPreparationScope,
 ) -> Option<LedgerPrepareScope> {
     let mut prepare_assets = Vec::new();
     let mut earliest_transaction_date: Option<NaiveDate> = None;
+    let mut has_open_holding = false;
     for asset in assets {
         if is_benchmark_ticker(&asset.ticker) {
             continue;
@@ -268,6 +311,16 @@ fn ledger_prepare_scope(
             continue;
         };
         if open_holding_quantity(transactions) > FLOAT_EPSILON {
+            has_open_holding = true;
+            let needs_preparation = match preparation_scope {
+                LedgerPreparationScope::AllOpenHoldings => true,
+                LedgerPreparationScope::ReuseNavPerformanceData => {
+                    asset.is_monetary() || transactions.iter().any(|tx| tx.date.as_str() > end_date)
+                }
+            };
+            if !needs_preparation {
+                continue;
+            }
             prepare_assets.push(asset.clone());
             let earliest =
                 NaiveDate::parse_from_str(&transactions.first()?.date, DATE_FORMAT).ok()?;
@@ -277,10 +330,13 @@ fn ledger_prepare_scope(
             });
         }
     }
-    if prepare_assets.is_empty() {
+    if !has_open_holding {
         return None;
     }
-    let start_date = format_date(earliest_transaction_date?).min(end_date.to_owned());
+    let start_date = match earliest_transaction_date {
+        Some(date) => format_date(date).min(end_date.to_owned()),
+        None => end_date.to_owned(),
+    };
     Some(LedgerPrepareScope {
         assets: prepare_assets,
         start_date,

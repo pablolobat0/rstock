@@ -17,7 +17,7 @@ Within each file, order functions top-to-bottom like a book: if function A calls
 - `mod.rs` files re-export public types for ergonomic imports (see `src/models/mod.rs`)
 - `lib.rs` declares modules (`pub mod db, models, services`) but does not re-export individual types. Constants and types live in one file; update all import paths directly
 - Services contain business logic and call repos for data access. Services do not call other services' internal/private functions
-- Repos are pure data access with no business logic. They accept `&DatabaseConnection` as the first parameter
+- Repos are pure data access with no business logic. They accept `&impl ConnectionTrait` as the first parameter when an operation must support either `DatabaseConnection` or a caller-owned transaction
 
 ## Naming Conventions
 
@@ -63,7 +63,7 @@ Three categories of model structs:
 ## Database Patterns
 
 - **ORM**: SeaORM with derive macros for entities. Entities are in `src/db/entities/`, auto-generated
-- **Upsert**: Check existence, then insert or update. SeaORM `on_conflict` is not used; the pattern is manual check + insert/update
+- **Upsert**: `upsert()` uses SeaORM `on_conflict` directly; repositories must not perform a manual existence check before writing. `upsert_many()` is the bulk form for behaviorally equivalent writes and may execute bounded chunks inside the caller's connection or transaction. `insert_many_immutable()` is reserved for Historical market data, where successful completed-date observations are preserved and only failure markers may be replaced
 - **Date storage**: Strings in `YYYY-MM-DD` format internally (DB, services), `DD-MM-YYYY` for user-facing input/output. See `display_date()` and `parse_date()` in constants/cli.
 - **Monetary amounts**: Transactions use `i64` cents (`price_cents`, `fees_cents`). Daily prices use `f64` directly. Use `f64_to_cents()` before insertion and `cents_to_f64()` after retrieval
 - **Migrations**: SeaORM migration crate in `migration/`. Migrations run automatically on database connect. Files are in `migration/src/` with timestamp-based naming
@@ -96,14 +96,16 @@ All test utilities are in `tests/common/mod.rs`:
 |------|----------|
 | `tests/nav_tests.rs` | NAV unitization: empty portfolio, single/multiple buys, deposits at different NAVs, fee handling, sell transactions |
 | `tests/integration_test.rs` | End-to-end scenarios combining buys, price changes, and portfolio queries |
-| `tests/daily_price_tests.rs` | Price caching and forward-fill logic |
 | `tests/portfolio_summary_tests.rs` | Portfolio computation and return calculations |
 | `tests/current_positions_tests.rs` | Focused Transaction ledger inventory, shared performance/Monetary projection, nullable facts, and complete aggregates |
 | `tests/current_date_tests.rs` | Fixed-clock portfolio and NAV-readiness behavior |
-| `tests/individual_price_tests.rs` | Fixed-clock Live quote, Historical fallback, ETF capability, and mutual fund closing-price semantics |
+| `tests/market_data_tests.rs` | Public market-data valuation, Individual price Live quote and Historical fallback, ETF/fund semantics, FX limitations, and forward-fill behavior |
+| `tests/market_data_cache_tests.rs` | Historical market-data cache reuse and immutable coverage |
+| `tests/market_data_concurrency_tests.rs` | Bounded source concurrency and command-scoped request coordination |
 | `tests/dividend_tests.rs` | Dividend recording and NAV cash accumulation |
 | `tests/correlation_tests.rs` | Portfolio asset correlation matrix computation |
-| `tests/monitor_tests.rs` | Momentum indicators and monitor report generation |
+| `tests/fund_analysis_tests.rs` | Fund analysis, comparison, holdings, and period metrics |
+| `tests/metrics_tests.rs` | Shared portfolio-analysis metric calculations |
 
 ## How To: Add a New CLI Command
 

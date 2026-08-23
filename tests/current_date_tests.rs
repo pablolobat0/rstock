@@ -1,9 +1,7 @@
 mod common;
 
 use chrono::NaiveDate;
-use rstock::constants::format_date;
-use rstock::db::repos::{asset_repo, daily_price_repo, portfolio_history_repo};
-use rstock::models::IndividualPriceFallback;
+use rstock::db::repos::{asset_repo, portfolio_history_repo};
 use rstock::services::{analytics, composition, nav, portfolio};
 
 fn fixed_today() -> NaiveDate {
@@ -81,42 +79,11 @@ async fn fixed_clock_limits_historical_market_data_to_latest_completed_date() {
         NaiveDate::from_ymd_opt(2025, 6, 9).unwrap()
     );
     assert_eq!(
-        daily_price_repo::find_price(&db, asset.id, "2025-06-10")
+        common::find_daily_price(&db, asset.id, "2025-06-10")
             .await
             .unwrap(),
         None
     );
-}
-
-#[tokio::test]
-async fn fixed_clock_sets_live_stock_price_date() {
-    let db = common::setup_test_db().await;
-    common::insert_asset(&db, "XFAKECLOCK3", "Live Clock Stock", "stock", "EUR").await;
-    let asset = asset_repo::find_by_ticker(&db, "XFAKECLOCK3")
-        .await
-        .unwrap()
-        .unwrap();
-    let mut sources = common::MockMarketDataSources::new();
-    sources.historical_prices.insert(
-        asset.ticker.clone(),
-        vec![(format_date(fixed_today()), 125.0)],
-    );
-
-    let result = common::market_data_at(&sources, fixed_today())
-        .individual_price(
-            &db,
-            &asset,
-            IndividualPriceFallback {
-                native_price: 100.0,
-                price_date: "2025-06-09".to_owned(),
-                fx_rate: 1.0,
-            },
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(result.price_date, "2025-06-10");
-    assert!((result.native_price - 125.0).abs() < 1e-9);
 }
 
 #[tokio::test]
@@ -166,7 +133,10 @@ async fn nav_chart_history_is_ready_without_portfolio_view_call_order() {
     );
     let market_data = common::market_data_at(&sources, fixed_today());
 
-    let snapshots = nav::get_portfolio_history(&db, "2025-06-08", "2025-06-09", &market_data)
+    nav::ensure_portfolio_history(&db, &market_data)
+        .await
+        .unwrap();
+    let snapshots = nav::get_ready_portfolio_history(&db, "2025-06-08", "2025-06-09")
         .await
         .unwrap();
 

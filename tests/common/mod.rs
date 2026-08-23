@@ -3,14 +3,16 @@
 use std::collections::HashMap;
 
 use migration::{Migrator, MigratorTrait};
-use sea_orm::{Database, DatabaseConnection, EntityTrait, Set};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, Database, DatabaseConnection, EntityTrait, QueryFilter, Set,
+};
 
 use rstock::db::entities::{
     asset, daily_asset_price, daily_exchange_rate, portfolio_asset_history, portfolio_history,
     transaction,
 };
 use rstock::models::{f64_to_cents, FundData, FundQuoteMetadata, StockInfo};
-use rstock::services::clock::FixedClock;
+use rstock::services::clock::Clock;
 use rstock::services::market_data::{MarketData, MarketDataSources, SourceObservation};
 
 pub async fn setup_test_db() -> DatabaseConnection {
@@ -232,6 +234,37 @@ pub async fn insert_daily_price(
         .expect("failed to insert daily price");
 }
 
+pub async fn find_daily_price(
+    db: &DatabaseConnection,
+    asset_id: i32,
+    date: &str,
+) -> anyhow::Result<Option<f64>> {
+    Ok(daily_asset_price::Entity::find()
+        .filter(daily_asset_price::Column::AssetId.eq(asset_id))
+        .filter(daily_asset_price::Column::Date.eq(date))
+        .filter(daily_asset_price::Column::IsApiFailure.eq(false))
+        .one(db)
+        .await
+        .expect("failed to query daily price")
+        .map(|price| price.closing_price))
+}
+
+pub async fn find_exchange_rate(
+    db: &DatabaseConnection,
+    from_currency: &str,
+    to_currency: &str,
+    date: &str,
+) -> anyhow::Result<Option<f64>> {
+    Ok(daily_exchange_rate::Entity::find()
+        .filter(daily_exchange_rate::Column::FromCurrency.eq(from_currency))
+        .filter(daily_exchange_rate::Column::ToCurrency.eq(to_currency))
+        .filter(daily_exchange_rate::Column::Date.eq(date))
+        .one(db)
+        .await
+        .expect("failed to query exchange rate")
+        .map(|rate| rate.rate))
+}
+
 pub async fn insert_portfolio_snapshot(
     db: &DatabaseConnection,
     date: &str,
@@ -273,6 +306,27 @@ pub async fn insert_portfolio_asset_snapshot(
         .exec(db)
         .await
         .expect("failed to insert portfolio asset snapshot");
+}
+
+pub async fn update_portfolio_asset_snapshot_quantity(
+    db: &DatabaseConnection,
+    date: &str,
+    asset_id: i32,
+    quantity: f64,
+) {
+    let model = portfolio_asset_history::Entity::find()
+        .filter(portfolio_asset_history::Column::Date.eq(date))
+        .filter(portfolio_asset_history::Column::AssetId.eq(asset_id))
+        .one(db)
+        .await
+        .expect("failed to find portfolio asset snapshot")
+        .expect("portfolio asset snapshot should exist");
+    let mut active: portfolio_asset_history::ActiveModel = model.into();
+    active.quantity = Set(quantity);
+    active
+        .update(db)
+        .await
+        .expect("failed to update portfolio asset snapshot quantity");
 }
 
 pub async fn get_portfolio_snapshot(
@@ -336,6 +390,7 @@ pub async fn insert_exchange_rate(
 pub struct MockMarketDataSources {
     pub historical_prices: HashMap<String, Vec<(String, f64)>>,
     pub exchange_rates: HashMap<String, Vec<(String, f64)>>,
+    pub panic_on_fund_price_history: bool,
     pub stock_info: HashMap<String, StockInfo>,
     pub fund_data: HashMap<String, FundData>,
     pub fund_quote_metadata: HashMap<String, FundQuoteMetadata>,
@@ -346,6 +401,7 @@ impl MockMarketDataSources {
         Self {
             historical_prices: HashMap::new(),
             exchange_rates: HashMap::new(),
+            panic_on_fund_price_history: false,
             stock_info: HashMap::new(),
             fund_data: HashMap::new(),
             fund_quote_metadata: HashMap::new(),
@@ -358,7 +414,23 @@ pub fn market_data(sources: &MockMarketDataSources) -> MarketData {
 }
 
 pub fn market_data_at(sources: &MockMarketDataSources, today: chrono::NaiveDate) -> MarketData {
-    MarketData::new_with_clock(Box::new(sources.clone()), &FixedClock::new(today))
+    MarketData::new_with_clock(Box::new(sources.clone()), &TestClock::new(today))
+}
+
+pub struct TestClock {
+    today: chrono::NaiveDate,
+}
+
+impl TestClock {
+    pub fn new(today: chrono::NaiveDate) -> Self {
+        Self { today }
+    }
+}
+
+impl Clock for TestClock {
+    fn today(&self) -> chrono::NaiveDate {
+        self.today
+    }
 }
 
 #[async_trait::async_trait]
@@ -383,6 +455,7 @@ impl MarketDataSources for MockMarketDataSources {
         _start: chrono::NaiveDate,
         _end: chrono::NaiveDate,
     ) -> anyhow::Result<Vec<SourceObservation>> {
+        assert!(!self.panic_on_fund_price_history);
         Ok(to_source_observations(
             self.historical_prices
                 .get(code)

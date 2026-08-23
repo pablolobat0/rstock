@@ -85,6 +85,7 @@ pub struct CsvRow {
     pub fees: f64,
 }
 
+#[derive(Clone)]
 pub struct Transaction {
     pub id: i32,
     pub asset_id: i32,
@@ -93,6 +94,16 @@ pub struct Transaction {
     pub quantity: f64,
     pub price_cents: i64,
     pub fees_cents: i64,
+}
+
+/// Transaction fields needed to reconstruct asset holdings without loading
+/// financial fields that do not participate in the holdings calculation.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HoldingInput {
+    pub asset_id: i32,
+    pub tx_type: TxType,
+    pub date: String,
+    pub quantity: f64,
 }
 
 pub struct TransactionListItem {

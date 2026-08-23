@@ -1,12 +1,21 @@
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Set,
+    sea_query::OnConflict, ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait,
+    QueryFilter, QueryOrder, Set,
 };
 
 use crate::db::entities::asset;
 use crate::models::{enum_to_db, Asset, AssetClassification, AssetInfo};
 
+const BULK_WRITE_SIZE: usize = 50;
+
+pub struct AssetWrite {
+    pub info: AssetInfo,
+    pub classification: AssetClassification,
+    pub morningstar_code: Option<String>,
+}
+
 pub async fn find_by_ticker(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     ticker: &str,
 ) -> anyhow::Result<Option<Asset>> {
     let result = asset::Entity::find()
@@ -17,7 +26,7 @@ pub async fn find_by_ticker(
 }
 
 pub async fn find_by_morningstar_code(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     code: &str,
 ) -> anyhow::Result<Option<Asset>> {
     let result = asset::Entity::find()
@@ -28,7 +37,7 @@ pub async fn find_by_morningstar_code(
 }
 
 pub async fn find_by_ids(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     ids: impl IntoIterator<Item = i32>,
 ) -> anyhow::Result<Vec<Asset>> {
     let ids: Vec<i32> = ids.into_iter().collect();
@@ -39,7 +48,7 @@ pub async fn find_by_ids(
     Ok(results.into_iter().map(Asset::from).collect())
 }
 
-pub async fn find_all(db: &DatabaseConnection) -> anyhow::Result<Vec<Asset>> {
+pub async fn find_all(db: &impl ConnectionTrait) -> anyhow::Result<Vec<Asset>> {
     let results = asset::Entity::find()
         .order_by_asc(asset::Column::Ticker)
         .all(db)
@@ -48,7 +57,7 @@ pub async fn find_all(db: &DatabaseConnection) -> anyhow::Result<Vec<Asset>> {
 }
 
 pub async fn create(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     info: &AssetInfo,
     classification: &AssetClassification,
     morningstar_code: Option<&str>,
@@ -60,27 +69,49 @@ pub async fn create(
         );
     }
 
-    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-    let new_asset = asset::ActiveModel {
-        ticker: Set(info.ticker.clone()),
-        name: Set(info.name.clone()),
-        asset_type: Set(info.asset_type.to_string()),
-        currency: Set(info.currency.clone()),
-        created_at: Set(now),
-        morningstar_code: Set(morningstar_code.map(str::to_owned)),
-        asset_class: Set(classification.asset_class.as_ref().map(enum_to_db)),
-        equity_style: Set(classification.equity_style.as_ref().map(enum_to_db)),
-        bond_credit: Set(classification.bond_credit.as_ref().map(enum_to_db)),
-        bond_duration: Set(classification.bond_duration.as_ref().map(enum_to_db)),
-        management: Set(classification.management.as_ref().map(enum_to_db)),
-        ..Default::default()
-    };
+    let new_asset = active_model(info, classification, morningstar_code);
     let result = new_asset.insert(db).await?;
     Ok(result.id)
 }
 
+pub async fn create_many(db: &impl ConnectionTrait, assets: &[AssetWrite]) -> anyhow::Result<()> {
+    for chunk in assets.chunks(BULK_WRITE_SIZE) {
+        asset::Entity::insert_many(chunk.iter().map(|asset| {
+            active_model(
+                &asset.info,
+                &asset.classification,
+                asset.morningstar_code.as_deref(),
+            )
+        }))
+        .exec(db)
+        .await?;
+    }
+    Ok(())
+}
+
+pub async fn create_or_find_by_ticker(
+    db: &impl ConnectionTrait,
+    info: &AssetInfo,
+    classification: &AssetClassification,
+    morningstar_code: Option<&str>,
+) -> anyhow::Result<i32> {
+    asset::Entity::insert(active_model(info, classification, morningstar_code))
+        .on_conflict(
+            OnConflict::column(asset::Column::Ticker)
+                .do_nothing()
+                .to_owned(),
+        )
+        .exec_without_returning(db)
+        .await?;
+
+    find_by_ticker(db, &info.ticker)
+        .await?
+        .map(|asset| asset.id)
+        .ok_or_else(|| anyhow::anyhow!("asset '{}' was not persisted", info.ticker))
+}
+
 pub async fn update(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     ticker: &str,
     classification: &AssetClassification,
     name: Option<&str>,
@@ -116,4 +147,26 @@ pub async fn update(
     }
     active.update(db).await?;
     Ok(())
+}
+
+fn active_model(
+    info: &AssetInfo,
+    classification: &AssetClassification,
+    morningstar_code: Option<&str>,
+) -> asset::ActiveModel {
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    asset::ActiveModel {
+        ticker: Set(info.ticker.clone()),
+        name: Set(info.name.clone()),
+        asset_type: Set(info.asset_type.to_string()),
+        currency: Set(info.currency.clone()),
+        created_at: Set(now),
+        morningstar_code: Set(morningstar_code.map(str::to_owned)),
+        asset_class: Set(classification.asset_class.as_ref().map(enum_to_db)),
+        equity_style: Set(classification.equity_style.as_ref().map(enum_to_db)),
+        bond_credit: Set(classification.bond_credit.as_ref().map(enum_to_db)),
+        bond_duration: Set(classification.bond_duration.as_ref().map(enum_to_db)),
+        management: Set(classification.management.as_ref().map(enum_to_db)),
+        ..Default::default()
+    }
 }

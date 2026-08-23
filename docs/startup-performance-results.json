@@ -1,0 +1,82 @@
+{
+  "procedure": {
+    "samples": 20,
+    "measurement_time_seconds": 2,
+    "warm_up_time_seconds": 0.2,
+    "command": "./generate-startup-performance-results.sh"
+  },
+  "criterion_estimates": {
+    "startup_and_migration_transactional": {
+      "mean_ns": 6377108.956274577,
+      "median_ns": 5956006.800000001,
+      "std_dev_ns": 875878.3240356555,
+      "p95_ns": 8511252.25
+    },
+    "startup_executable_only": {
+      "mean_ns": 2166665.661106498,
+      "median_ns": 2104343.8125,
+      "std_dev_ns": 220377.67754289124,
+      "p95_ns": 2902903.989473684
+    },
+    "startup_logging_cold": {
+      "mean_ns": 806719.2071928161,
+      "median_ns": 794282.05242674,
+      "std_dev_ns": 35839.207221327844,
+      "p95_ns": 908761.9
+    },
+    "startup_logging_warm": {
+      "mean_ns": 798395.0848190545,
+      "median_ns": 774430.5653846154,
+      "std_dev_ns": 59147.646643209984,
+      "p95_ns": 943056.6363636364
+    },
+    "startup_database_connection_cold": {
+      "mean_ns": 101775.58579224165,
+      "median_ns": 100082.0486013986,
+      "std_dev_ns": 9789.846368115259,
+      "p95_ns": 135654.5303030303
+    },
+    "startup_database_connection_warm": {
+      "mean_ns": 85873.45877105522,
+      "median_ns": 85245.14069884364,
+      "std_dev_ns": 4828.493328544367,
+      "p95_ns": 99638.89487179487
+    },
+    "startup_automatic_migration_cold": {
+      "mean_ns": 5771838.376381101,
+      "median_ns": 5716538.307692308,
+      "std_dev_ns": 626469.6934263211,
+      "p95_ns": 7036687.8
+    },
+    "startup_automatic_migration_warm": {
+      "mean_ns": 133453.7459722058,
+      "median_ns": 132955.56549295774,
+      "std_dev_ns": 8606.644039398952,
+      "p95_ns": 148019.72769953051
+    },
+    "startup_automatic_migration_warm_unbatched": {
+      "mean_ns": 211232.38236394586,
+      "median_ns": 200553.90761381475,
+      "std_dev_ns": 31323.741976954043,
+      "p95_ns": 308523.2303206997
+    },
+    "startup_transaction_list_cold": {
+      "mean_ns": 9889389.617306517,
+      "median_ns": 9623510.397435898,
+      "std_dev_ns": 1234641.1172134017,
+      "p95_ns": 13222659.25
+    },
+    "startup_transaction_list_warm": {
+      "mean_ns": 3854648.370164234,
+      "median_ns": 3663891.1515151514,
+      "std_dev_ns": 448450.51303423557,
+      "p95_ns": 4881684.976190476
+    }
+  },
+  "acceptance": {
+    "approved_issue_20_targets": {},
+    "fixed_target_results": {},
+    "all_paths_informational": true
+  },
+  "conclusion": "Startup-specific paths were added after the issue #20 decision gate and remain informational evidence; immutable issue #20 target enforcement is reported by generate-performance-baseline.sh."
+}

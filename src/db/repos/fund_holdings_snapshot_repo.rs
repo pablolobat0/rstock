@@ -1,9 +1,9 @@
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Set};
+use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder, Set};
 
 use crate::db::entities::fund_holdings_snapshot;
 
 pub async fn find_latest(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     ms_code: &str,
 ) -> anyhow::Result<Option<fund_holdings_snapshot::Model>> {
     let result = fund_holdings_snapshot::Entity::find()
@@ -16,7 +16,7 @@ pub async fn find_latest(
 }
 
 pub async fn find_by_snapshot_date(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     ms_code: &str,
     snapshot_date: &str,
 ) -> anyhow::Result<Option<fund_holdings_snapshot::Model>> {
@@ -30,7 +30,7 @@ pub async fn find_by_snapshot_date(
 }
 
 pub async fn insert(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     ms_code: &str,
     snapshot_date: &str,
     fingerprint: &str,

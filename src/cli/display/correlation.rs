@@ -89,7 +89,6 @@ pub fn print_rolling_correlation(result: &RollingCorrelationResult) {
         "\nRolling Correlation — {} vs {}  [{} | {}]\n",
         result.left_name, result.right_name, result.period_label, result.window_label
     );
-
     if result.points.is_empty() {
         println!(
             "Not enough aligned data to compute {} rolling correlation.",

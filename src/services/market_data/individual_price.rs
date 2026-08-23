@@ -5,52 +5,7 @@ use sea_orm::DatabaseConnection;
 use super::{historical, policy, MarketData};
 use crate::constants::{format_date, BASE_CURRENCY};
 use crate::db::repos::{daily_price_repo, exchange_rate_repo};
-use crate::models::{
-    Asset, AssetType, IndividualPrice, IndividualPriceAvailability, IndividualPriceFallback,
-    MarketDataLimitation,
-};
-
-#[allow(dead_code)]
-pub(crate) async fn get_individual_price(
-    db: &DatabaseConnection,
-    asset: &Asset,
-    fallback: IndividualPriceFallback,
-    market_data: &MarketData,
-) -> anyhow::Result<IndividualPrice> {
-    let today = market_data.today();
-    let today_str = format_date(today);
-    let yesterday_str = format_date(today - chrono::Duration::days(1));
-
-    let (native_price, price_date, price_limitation) = get_display_price(
-        db,
-        asset,
-        &today_str,
-        &yesterday_str,
-        &fallback,
-        market_data,
-    )
-    .await?;
-    let (fx_rate, mut limitations) = get_display_exchange_rate(
-        db,
-        asset,
-        &today_str,
-        &yesterday_str,
-        &fallback,
-        market_data,
-    )
-    .await?;
-    if let Some(limitation) = price_limitation {
-        limitations.push(limitation);
-    }
-
-    Ok(IndividualPrice {
-        native_price,
-        price_date,
-        fx_rate,
-        base_currency_price: native_price * fx_rate,
-        limitations,
-    })
-}
+use crate::models::{Asset, AssetType, IndividualPriceAvailability};
 
 pub(crate) async fn get_individual_price_if_available(
     db: &DatabaseConnection,
@@ -63,7 +18,12 @@ pub(crate) async fn get_individual_price_if_available(
     let yesterday_str = format_date(yesterday);
     let mut limitations = Vec::new();
 
-    let price = match fetch_same_day_asset_price(asset, today, market_data).await {
+    let (price_result, fx_result) = tokio::join!(
+        fetch_same_day_asset_price(asset, today, market_data),
+        fetch_live_exchange_rate_if_needed(asset, &today_str, market_data),
+    );
+
+    let price = match price_result {
         Ok(price) => price.map(|price| (price, today_str.clone())),
         Err(error) => {
             tracing::warn!(ticker = %asset.ticker, error = %error, "failed to fetch live asset price");
@@ -87,15 +47,7 @@ pub(crate) async fn get_individual_price_if_available(
         limitations.push(policy::missing_asset_limitation(asset, yesterday));
     }
 
-    let fx_rate = if asset.currency == BASE_CURRENCY {
-        Some(1.0)
-    } else if let Some(rate) = match fetch_live_exchange_rate(
-        &asset.currency,
-        &today_str,
-        market_data,
-    )
-    .await
-    {
+    let fx_rate = if let Some(rate) = match fx_result {
         Ok(rate) => rate,
         Err(error) => {
             tracing::warn!(currency = %asset.currency, error = %error, "failed to fetch live exchange rate");
@@ -133,6 +85,17 @@ pub(crate) async fn get_individual_price_if_available(
     })
 }
 
+async fn fetch_live_exchange_rate_if_needed(
+    asset: &Asset,
+    date: &str,
+    market_data: &MarketData,
+) -> anyhow::Result<Option<f64>> {
+    if asset.currency == BASE_CURRENCY {
+        return Ok(Some(1.0));
+    }
+    fetch_live_exchange_rate(&asset.currency, date, market_data).await
+}
+
 pub(crate) async fn prepare_individual_price_market_data(
     db: &DatabaseConnection,
     assets: &[Asset],
@@ -142,74 +105,6 @@ pub(crate) async fn prepare_individual_price_market_data(
 ) -> anyhow::Result<()> {
     historical::fill_historical_market_data_cache(db, assets, start_date, end_date, market_data)
         .await
-}
-
-#[allow(dead_code)]
-async fn get_display_price(
-    db: &DatabaseConnection,
-    asset: &Asset,
-    today: &str,
-    yesterday: &str,
-    fallback: &IndividualPriceFallback,
-    market_data: &MarketData,
-) -> anyhow::Result<(f64, String, Option<MarketDataLimitation>)> {
-    let today_date = policy::parse_market_data_date(today, "live asset price date")?;
-    if let Some(live_price) = fetch_same_day_asset_price(asset, today_date, market_data)
-        .await
-        .unwrap_or(None)
-    {
-        return Ok((live_price, today.to_owned(), None));
-    }
-
-    let (price, date) =
-        match daily_price_repo::find_price_and_date_at_or_before(db, asset.id, yesterday).await? {
-            Some((price, date)) => (price, date),
-            None => (fallback.native_price, fallback.price_date.clone()),
-        };
-    let available_on = policy::parse_market_data_date(&date, "asset price date")?;
-    let requested_end = policy::parse_market_data_date(yesterday, "display asset price end date")?;
-    let limitation = policy::classify_asset_limitation(asset, available_on, requested_end);
-
-    Ok((price, date, limitation))
-}
-
-#[allow(dead_code)]
-async fn get_display_exchange_rate(
-    db: &DatabaseConnection,
-    asset: &Asset,
-    today: &str,
-    yesterday: &str,
-    fallback: &IndividualPriceFallback,
-    market_data: &MarketData,
-) -> anyhow::Result<(f64, Vec<MarketDataLimitation>)> {
-    if asset.currency == BASE_CURRENCY {
-        return Ok((1.0, Vec::new()));
-    }
-
-    if let Some(live_rate) = fetch_live_exchange_rate(&asset.currency, today, market_data)
-        .await
-        .unwrap_or(None)
-    {
-        return Ok((live_rate, Vec::new()));
-    }
-
-    let Some((rate, date_string)) = exchange_rate_repo::find_rate_and_date_at_or_before(
-        db,
-        &asset.currency,
-        BASE_CURRENCY,
-        yesterday,
-    )
-    .await?
-    else {
-        return Ok((fallback.fx_rate, Vec::new()));
-    };
-    let available_on = policy::parse_market_data_date(&date_string, "FX rate date")?;
-    let requested_end = policy::parse_market_data_date(yesterday, "display FX end date")?;
-    let limitations = policy::classify_fx_limitation(&asset.currency, available_on, requested_end)
-        .into_iter()
-        .collect();
-
-    Ok((rate, limitations))
 }
 
 async fn fetch_same_day_asset_price(

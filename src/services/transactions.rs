@@ -1,4 +1,4 @@
-use sea_orm::DatabaseConnection;
+use sea_orm::{ConnectionTrait, DatabaseConnection, TransactionTrait};
 
 use crate::constants::{display_date, FLOAT_EPSILON};
 use crate::db::repos::{
@@ -40,7 +40,8 @@ pub async fn buy(
     ticker: String,
     order: BuyOrder,
 ) -> anyhow::Result<TransactionReceipt> {
-    let asset = asset_repo::find_by_ticker(db, &ticker).await?.ok_or_else(|| {
+    let mutation = db.begin().await?;
+    let asset = asset_repo::find_by_ticker(&mutation, &ticker).await?.ok_or_else(|| {
         anyhow::anyhow!(
             "asset with ticker '{ticker}' not found; create it first with `rstock portfolio asset add -t {ticker} ...`"
         )
@@ -60,11 +61,9 @@ pub async fn buy(
     );
 
     let order_date = order.date.clone();
-    let tx_id = transaction_repo::insert_buy(db, asset.id, &order).await?;
-
-    // Invalidate snapshots from the buy date
-    portfolio_history_repo::delete_from_date(db, &order_date).await?;
-    portfolio_asset_history_repo::delete_from_date_for_asset(db, &order_date, asset.id).await?;
+    let tx_id = transaction_repo::insert_buy(&mutation, asset.id, &order).await?;
+    invalidate_snapshots(&mutation, &order_date).await?;
+    mutation.commit().await?;
 
     tracing::info!(
         %ticker,
@@ -84,12 +83,13 @@ pub async fn sell(
     ticker: String,
     order: SellOrder,
 ) -> anyhow::Result<TransactionReceipt> {
-    let asset = asset_repo::find_by_ticker(db, &ticker)
+    let mutation = db.begin().await?;
+    let asset = asset_repo::find_by_ticker(&mutation, &ticker)
         .await?
         .ok_or_else(|| anyhow::anyhow!("Asset with ticker '{ticker}' not found"))?;
 
     // Validate holdings at the sell date (accounts for splits)
-    let transactions = transaction_repo::find_by_asset_id(db, asset.id).await?;
+    let transactions = transaction_repo::find_by_asset_id(&mutation, asset.id).await?;
     let filtered_transactions: Vec<_> = transactions
         .into_iter()
         .filter(|t| t.date <= order.date)
@@ -117,11 +117,9 @@ pub async fn sell(
     );
 
     let order_date = order.date.clone();
-    let tx_id = transaction_repo::insert_sell(db, asset.id, &order).await?;
-
-    // Invalidate snapshots from the sell date
-    portfolio_history_repo::delete_from_date(db, &order_date).await?;
-    portfolio_asset_history_repo::delete_from_date_for_asset(db, &order_date, asset.id).await?;
+    let tx_id = transaction_repo::insert_sell(&mutation, asset.id, &order).await?;
+    invalidate_snapshots(&mutation, &order_date).await?;
+    mutation.commit().await?;
 
     tracing::info!(
         %ticker,
@@ -141,12 +139,13 @@ pub async fn dividend(
     ticker: String,
     order: DividendOrder,
 ) -> anyhow::Result<TransactionReceipt> {
-    let asset = asset_repo::find_by_ticker(db, &ticker)
+    let mutation = db.begin().await?;
+    let asset = asset_repo::find_by_ticker(&mutation, &ticker)
         .await?
         .ok_or_else(|| anyhow::anyhow!("Asset with ticker '{ticker}' not found"))?;
 
     // Validate holdings at dividend date (accounts for splits)
-    let transactions = transaction_repo::find_by_asset_id(db, asset.id).await?;
+    let transactions = transaction_repo::find_by_asset_id(&mutation, asset.id).await?;
     let filtered_transactions: Vec<_> = transactions
         .into_iter()
         .filter(|t| t.date <= order.date)
@@ -173,11 +172,9 @@ pub async fn dividend(
     );
 
     let order_date = order.date.clone();
-    let tx_id = transaction_repo::insert_dividend(db, asset.id, &order).await?;
-
-    // Invalidate snapshots from the dividend date
-    portfolio_history_repo::delete_from_date(db, &order_date).await?;
-    portfolio_asset_history_repo::delete_from_date_for_asset(db, &order_date, asset.id).await?;
+    let tx_id = transaction_repo::insert_dividend(&mutation, asset.id, &order).await?;
+    invalidate_snapshots(&mutation, &order_date).await?;
+    mutation.commit().await?;
 
     tracing::info!(
         %ticker,
@@ -196,12 +193,13 @@ pub async fn split(
     ticker: String,
     order: SplitOrder,
 ) -> anyhow::Result<TransactionReceipt> {
-    let asset = asset_repo::find_by_ticker(db, &ticker)
+    let mutation = db.begin().await?;
+    let asset = asset_repo::find_by_ticker(&mutation, &ticker)
         .await?
         .ok_or_else(|| anyhow::anyhow!("Asset with ticker '{ticker}' not found"))?;
 
     // Validate holdings at split date (accounts for prior splits)
-    let transactions = transaction_repo::find_by_asset_id(db, asset.id).await?;
+    let transactions = transaction_repo::find_by_asset_id(&mutation, asset.id).await?;
     let earliest_date = transactions
         .first()
         .map_or_else(|| order.date.clone(), |t| t.date.clone());
@@ -230,16 +228,16 @@ pub async fn split(
         display_date(&order.date)
     );
 
-    let tx_id = transaction_repo::insert_split(db, asset.id, &order).await?;
+    let tx_id = transaction_repo::insert_split(&mutation, asset.id, &order).await?;
 
     // Price providers retroactively adjust all historical prices after a split,
     // so the entire price cache for this asset is stale.
-    daily_price_repo::delete_all_for_asset(db, asset.id).await?;
+    daily_price_repo::delete_all_for_asset(&mutation, asset.id).await?;
 
     // Invalidate portfolio snapshots from the asset's first transaction,
     // since adjusted prices affect the entire history for this asset.
-    portfolio_history_repo::delete_from_date(db, &earliest_date).await?;
-    portfolio_asset_history_repo::delete_from_date_for_asset(db, &earliest_date, asset.id).await?;
+    invalidate_snapshots(&mutation, &earliest_date).await?;
+    mutation.commit().await?;
 
     tracing::info!(
         %ticker,
@@ -254,18 +252,26 @@ pub async fn split(
 }
 
 pub async fn delete(db: &DatabaseConnection, id: i32) -> anyhow::Result<TransactionReceipt> {
-    let tx = transaction_repo::find_by_id(db, id)
+    let mutation = db.begin().await?;
+    let tx = transaction_repo::find_by_id(&mutation, id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("Transaction {id} not found"))?;
+    let invalidation_date = if tx.is_split() {
+        earliest_transaction_date(
+            &transaction_repo::find_by_asset_id(&mutation, tx.asset_id).await?,
+            None,
+        )
+    } else {
+        tx.date.clone()
+    };
 
-    transaction_repo::delete_by_id(db, id).await?;
-
-    portfolio_history_repo::delete_from_date(db, &tx.date).await?;
-    portfolio_asset_history_repo::delete_from_date_for_asset(db, &tx.date, tx.asset_id).await?;
+    transaction_repo::delete_by_id(&mutation, id).await?;
+    invalidate_snapshots(&mutation, &invalidation_date).await?;
 
     if tx.is_split() {
-        daily_price_repo::delete_all_for_asset(db, tx.asset_id).await?;
+        daily_price_repo::delete_all_for_asset(&mutation, tx.asset_id).await?;
     }
+    mutation.commit().await?;
 
     tracing::info!(id, "transaction deleted");
     Ok(TransactionReceipt {
@@ -282,7 +288,8 @@ pub async fn edit(
     new_price: Option<f64>,
     new_fees: Option<f64>,
 ) -> anyhow::Result<TransactionReceipt> {
-    let tx = transaction_repo::find_by_id(db, id)
+    let mutation = db.begin().await?;
+    let tx = transaction_repo::find_by_id(&mutation, id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("Transaction {id} not found"))?;
 
@@ -290,7 +297,7 @@ pub async fn edit(
     let new_fees_cents = new_fees.map(f64_to_cents);
 
     transaction_repo::update_by_id(
-        db,
+        &mutation,
         id,
         new_date.clone(),
         new_quantity,
@@ -299,22 +306,45 @@ pub async fn edit(
     )
     .await?;
 
-    let invalidation_date = match &new_date {
-        Some(d) if d < &tx.date => d.clone(),
-        _ => tx.date.clone(),
+    let invalidation_date = if tx.is_split() {
+        let transactions = transaction_repo::find_by_asset_id(&mutation, tx.asset_id).await?;
+        earliest_transaction_date(&transactions, new_date.as_deref())
+    } else {
+        match &new_date {
+            Some(d) if d < &tx.date => d.clone(),
+            _ => tx.date.clone(),
+        }
     };
 
-    portfolio_history_repo::delete_from_date(db, &invalidation_date).await?;
-    portfolio_asset_history_repo::delete_from_date_for_asset(db, &invalidation_date, tx.asset_id)
-        .await?;
+    invalidate_snapshots(&mutation, &invalidation_date).await?;
 
     if tx.is_split() {
-        daily_price_repo::delete_all_for_asset(db, tx.asset_id).await?;
+        daily_price_repo::delete_all_for_asset(&mutation, tx.asset_id).await?;
     }
+    mutation.commit().await?;
 
     tracing::info!(id, "transaction edited");
     Ok(TransactionReceipt {
         transaction_id: id,
         summary: format!("Transaction {id} updated."),
     })
+}
+
+async fn invalidate_snapshots(db: &impl ConnectionTrait, date: &str) -> anyhow::Result<()> {
+    portfolio_history_repo::delete_from_date(db, date).await?;
+    portfolio_asset_history_repo::delete_from_date(db, date).await?;
+    Ok(())
+}
+
+fn earliest_transaction_date(
+    transactions: &[Transaction],
+    additional_date: Option<&str>,
+) -> String {
+    transactions
+        .iter()
+        .map(|transaction| transaction.date.as_str())
+        .chain(additional_date)
+        .min()
+        .unwrap_or_default()
+        .to_owned()
 }

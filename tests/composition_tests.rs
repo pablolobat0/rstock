@@ -68,26 +68,14 @@ async fn insert_asset_snapshot(
 fn mock_stock_info(
     ticker: &str,
     sector: Option<&str>,
-    industry: Option<&str>,
+    _industry: Option<&str>,
     country: Option<&str>,
     market_cap: Option<f64>,
 ) -> StockInfo {
     StockInfo {
-        ticker: ticker.to_owned(),
         name: Some(format!("{ticker} Inc")),
-        currency: Some("USD".to_owned()),
-        current_price: Some(100.0),
-        previous_close: Some(99.0),
-        day_range: None,
-        fifty_two_week_range: None,
-        volume: None,
-        avg_volume: None,
         market_cap,
-        pe_ttm: None,
-        eps_ttm: None,
-        dividend_yield: None,
         sector: sector.map(str::to_owned),
-        industry: industry.map(str::to_owned),
         country: country.map(str::to_owned),
     }
 }
@@ -136,7 +124,7 @@ async fn test_composition_direct_stocks_only() {
     insert_daily_price(&db, id1, "2025-01-02", 100.0, false).await;
     insert_daily_price(&db, id2, "2025-01-02", 200.0, false).await;
 
-    // Insert historical snapshots for the legacy asset-series setup.
+    // Insert historical snapshots for the asset-series setup.
     insert_portfolio_snapshot(&db, "2025-01-02", 100.0, 20.0).await;
     insert_asset_snapshot(&db, "2025-01-02", id1, 10.0, 100.0, 1000.0).await;
     insert_asset_snapshot(&db, "2025-01-02", id2, 5.0, 200.0, 1000.0).await;

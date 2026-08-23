@@ -69,7 +69,7 @@ All business logic lives here. Key modules:
 
 **`nav.rs`** — Core NAV unitization engine. The public `ensure_portfolio_history()` interface owns readiness for the latest completed date and returns the latest snapshot together with NAV-scoped Market data limitations; it invokes a private rebuild loop when history is absent or stale. The loop advances only through the Effective valuation date supported by required Historical market data, processes share issuance and redemption, and calculates end-of-day portfolio value through strict valuation reads.
 
-**`market_data/historical.rs`** — Private implementation for reproducible Historical market data used by NAV and benchmark analytics. It fetches and caches required asset prices, infers required FX from supplied assets, hides provider-specific FX pair construction from external callers, calculates the Effective valuation date, returns actionable Market data limitation values, and exposes strict valuation reads through the `market_data` Module root.
+**`market_data/historical.rs`** — Private implementation for reproducible Historical market data used by NAV and benchmark analytics. It reads persisted coverage, requests only missing contiguous asset and FX intervals, bulk-persists successful observations without replacing covered dates, infers required FX from supplied assets, hides provider-specific FX pair construction from external callers, calculates the Effective valuation date, returns actionable Market data limitation values, and exposes strict valuation reads through the `market_data` Module root. A `MarketData` instance shares identical source attempts and their results for the lifetime of one command; a new command can retry failures.
 
 **`market_data/individual_price.rs`** — Private implementation for display-time Individual price values for portfolio rows. Stocks request same-day observations, and ETFs request them through the fund-price capability already exposed by `MarketDataSources`; neither caller depends on a concrete source Adapter. A same-day observation is a Live quote. If an ETF source cannot supply one, the row falls back to the latest Historical market data. Mutual funds retain closing-price semantics and never use same-day Live quotes.
 
@@ -79,7 +79,7 @@ All business logic lives here. Key modules:
 
 **`composition.rs`** — Builds portfolio composition analytics with look-through aggregation and top holdings.
 
-**`transactions.rs`** — `buy()` records a purchase and invalidates snapshots from the buy date forward. `sell()` validates holdings (cannot sell more than owned), records the sale, and invalidates snapshots. `dividend()` records a dividend payment. `split()` records a stock split, adjusting quantity via the split ratio.
+**`transactions.rs`** — `buy()`, `sell()`, `dividend()`, `split()`, `edit()`, and `delete()` commit each Transaction ledger change and all dependent snapshot or split-price-cache invalidation in one database transaction. Ledger reads use explicit `(date, id)` chronology.
 
 **`market_data/`** — Stateful market data Module. It exposes use-case-shaped Interfaces for valuation market data, correlation market data, Individual price, stock info, and fund data. Yahoo Finance and Morningstar source Adapters are private implementation details behind `MarketDataSources`.
 
@@ -149,7 +149,7 @@ Domain structs organized by concept:
 
 **`entities/`** — SeaORM-generated model structs for each table, including `fund_holdings_snapshot`. Each entity defines `Model`, `ActiveModel`, `Column`, and `Relation` types.
 
-**`repos/`** — Repository pattern with one module per entity (including `watchlist_repo`). All functions are `async` and take `&DatabaseConnection` as first parameter. Standard function naming: `find_*`, `find_by_*`, `find_*_between`, `find_at_or_before`, `upsert`, `insert_*`, `delete_*`.
+**`repos/`** — Repository pattern with one module per entity (including `watchlist_repo`). Functions are `async` and accept a SeaORM connection interface as their first parameter so callers can use either the application connection or a caller-owned transaction. Standard function naming: `find_*`, `find_by_*`, `find_*_between`, `find_at_or_before`, native-conflict `upsert`, bulk `upsert_many`, `insert_*`, and `delete_*`. Repository writes do not check existence before writing; callers own transaction boundaries when a mutation spans repositories.
 
 ### Constants (`constants.rs`)
 
@@ -186,6 +186,8 @@ Current schema includes the original portfolio tables plus watchlist and fund ho
 | price_cents | i64 | Price per unit in cents |
 | fees_cents | i64 | Commission in cents |
 | created_at | String | ISO timestamp |
+
+Chronological ledger access is indexed by `(date, id)`, while per-asset access is indexed by `(asset_id, date, id)`.
 
 ### Price Cache (Migration 2)
 
@@ -342,9 +344,10 @@ main.rs
 ```
 main.rs
   └─> transactions::buy()
-        ├─> asset_repo::find_by_ticker() (asset must already exist)
-        ├─> transaction_repo::insert_buy() (store with cents conversion)
-        └─> portfolio_history_repo::delete_from_date() (invalidate snapshots)
+        └─> Database transaction
+              ├─> asset_repo::find_by_ticker() (asset must already exist)
+              ├─> transaction_repo::insert_buy() (store with cents conversion)
+              └─> Delete all dependent portfolio and per-asset snapshots
 ```
 
 ### `transaction sell`
@@ -352,11 +355,11 @@ main.rs
 ```
 main.rs
   └─> transactions::sell()
-        ├─> asset_repo::find_by_ticker() (must exist)
-        ├─> transaction_repo::find_by_asset_id() (load all txs)
-        ├─> Validate: net holdings >= sell quantity at sell date
-        ├─> transaction_repo::insert_sell() (store with cents conversion)
-        └─> portfolio_history_repo::delete_from_date() (invalidate snapshots)
+        └─> Database transaction
+              ├─> Load the asset and its `(date, id)` ordered ledger
+              ├─> Validate: net holdings >= sell quantity at sell date
+              ├─> transaction_repo::insert_sell() (store with cents conversion)
+              └─> Delete all dependent portfolio and per-asset snapshots
 ```
 
 ### `transaction dividend`
@@ -364,9 +367,10 @@ main.rs
 ```
 main.rs
   └─> transactions::dividend()
-        ├─> asset_repo::find_by_ticker() (must exist)
-        ├─> transaction_repo::insert_dividend()
-        └─> portfolio_history_repo::delete_from_date() (invalidate snapshots)
+        └─> Database transaction
+              ├─> Load the asset and its `(date, id)` ordered ledger
+              ├─> transaction_repo::insert_dividend()
+              └─> Delete all dependent portfolio and per-asset snapshots
 ```
 
 ### `transaction split`
@@ -374,9 +378,11 @@ main.rs
 ```
 main.rs
   └─> transactions::split()
-        ├─> asset_repo::find_by_ticker() (must exist)
-        ├─> transaction_repo::insert_split()
-        └─> portfolio_history_repo::delete_from_date() (invalidate snapshots)
+        └─> Database transaction
+              ├─> Load the asset and its `(date, id)` ordered ledger
+              ├─> transaction_repo::insert_split()
+              ├─> Delete the asset's split-adjusted price cache
+              └─> Delete all dependent portfolio and per-asset snapshots
 ```
 
 ### `transaction export`
