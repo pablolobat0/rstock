@@ -483,6 +483,9 @@ fn validate_numeric_fields(
     price: f64,
     fees: f64,
 ) -> anyhow::Result<()> {
+    if !quantity.is_finite() || !price.is_finite() || !fees.is_finite() {
+        bail!("row {row_num}: numeric values must be finite");
+    }
     if fees < 0.0 {
         bail!("row {row_num}: fees must be non-negative");
     }
