@@ -434,7 +434,11 @@ pub fn enrich_replay(
                                 / transition.quantity_before
                         }
                     });
-                    if let (Some(cost), Some(removed)) = (remaining_cost, cost_removed) {
+                    if transition.quantity_after == 0.0 {
+                        // A fully liquidated position no longer depends on an
+                        // unavailable historical cost for its next opening.
+                        remaining_cost = Some(0.0);
+                    } else if let (Some(cost), Some(removed)) = (remaining_cost, cost_removed) {
                         remaining_cost = Some(cost - removed);
                     } else {
                         remaining_cost = None;

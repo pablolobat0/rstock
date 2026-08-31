@@ -8,9 +8,7 @@ use crate::constants::{format_date, FLOAT_EPSILON, INITIAL_NAV, MONETARY_MULTIPL
 use crate::db::repos::{
     asset_repo, portfolio_asset_history_repo, portfolio_history_repo, transaction_repo,
 };
-use crate::models::{
-    Asset, AssetSnapshot, MarketDataLimitation, PortfolioSnapshot, Transaction, TxType,
-};
+use crate::models::{Asset, AssetSnapshot, MarketDataLimitation, PortfolioSnapshot, Transaction};
 use crate::services::ledger::{self, LedgerEffect, LedgerTransition};
 use crate::services::market_data::{MarketData, NavValuationData};
 
@@ -93,7 +91,7 @@ pub async fn ensure_portfolio_history(
                 None,
             )
             .await?;
-            performance_market_data_prepared = true;
+            performance_market_data_prepared = preparation.data_available;
             let limitations = preparation.limitations.clone();
             if preparation.data_available {
                 rebuild_portfolio_history(db, start, yesterday, preparation, Some(snapshot))
@@ -117,7 +115,7 @@ pub async fn ensure_portfolio_history(
                     Some(transactions),
                 )
                 .await?;
-                performance_market_data_prepared = true;
+                performance_market_data_prepared = preparation.data_available;
                 let limitations = preparation.limitations.clone();
                 if preparation.data_available {
                     rebuild_portfolio_history(db, start, yesterday, preparation, None).await?;
@@ -139,7 +137,8 @@ async fn find_first_incomplete_snapshot(
     latest_date: &str,
 ) -> anyhow::Result<Option<String>> {
     let snapshot_dates = portfolio_history_repo::find_dates_between(db, "", latest_date).await?;
-    let transactions = transaction_repo::find_holdings_inputs(db, Some(latest_date)).await?;
+    let transactions =
+        transaction_repo::find_all_ordered_by_date(db, None, Some(latest_date)).await?;
     let actual_snapshot_holdings =
         portfolio_asset_history_repo::find_holdings_at_or_before(db, latest_date).await?;
     let asset_ids: HashSet<i32> = transactions
@@ -169,16 +168,39 @@ async fn find_first_incomplete_snapshot(
         },
     );
 
-    let mut holdings = HashMap::<i32, f64>::new();
-    let mut transaction_index = 0;
+    let transactions_by_asset = transactions.into_iter().fold(
+        HashMap::<i32, Vec<Transaction>>::new(),
+        |mut grouped, transaction| {
+            grouped
+                .entry(transaction.asset_id)
+                .or_default()
+                .push(transaction);
+            grouped
+        },
+    );
+    let mut transitions_by_asset = HashMap::<i32, Vec<LedgerTransition>>::new();
+    for (asset_id, transactions) in transactions_by_asset {
+        let replay = ledger::CanonicalLedger::from_transactions(asset_id, &transactions)
+            .and_then(|canonical| canonical.replay())
+            .map_err(|error| anyhow::anyhow!(error))?;
+        transitions_by_asset.insert(asset_id, replay.transitions);
+    }
     for date in snapshot_dates {
-        while transaction_index < transactions.len() && transactions[transaction_index].date <= date
-        {
-            let transaction = &transactions[transaction_index];
-            apply_transaction_to_holdings(&mut holdings, transaction, &asset_map);
-            transaction_index += 1;
-        }
-        let expected_holdings = holdings
+        let expected_holdings: HashMap<i32, f64> = transitions_by_asset
+            .iter()
+            .filter_map(|(asset_id, transitions)| {
+                let quantity = transitions
+                    .iter()
+                    .rfind(|transition| transition.entry.date <= date)
+                    .map_or(0.0, |transition| transition.quantity_after);
+                (quantity > FLOAT_EPSILON
+                    && asset_map
+                        .get(asset_id)
+                        .is_some_and(|asset| !asset.is_monetary()))
+                .then_some((*asset_id, quantity))
+            })
+            .collect();
+        let expected_holdings = expected_holdings
             .iter()
             .filter(|(_, quantity)| **quantity > FLOAT_EPSILON);
         let expected_count = expected_holdings.clone().count();
@@ -199,25 +221,6 @@ async fn find_first_incomplete_snapshot(
     }
 
     Ok(None)
-}
-
-fn apply_transaction_to_holdings(
-    holdings: &mut HashMap<i32, f64>,
-    transaction: &crate::models::HoldingInput,
-    asset_map: &HashMap<i32, &Asset>,
-) {
-    if asset_map
-        .get(&transaction.asset_id)
-        .is_some_and(|asset| !asset.is_monetary())
-    {
-        let holding = holdings.entry(transaction.asset_id).or_default();
-        match transaction.tx_type {
-            TxType::Buy => *holding += transaction.quantity,
-            TxType::Sell => *holding -= transaction.quantity,
-            TxType::Split => *holding *= transaction.quantity,
-            TxType::Dividend => {}
-        }
-    }
 }
 
 async fn discard_incomplete_snapshots_from(
@@ -265,31 +268,6 @@ async fn nav_market_data_availability(
     } else {
         raw_transactions
     };
-    let needed_ids: HashSet<i32> = holdings
-        .keys()
-        .copied()
-        .chain(all_transactions.iter().map(|tx| tx.asset_id))
-        .collect();
-    if needed_ids.is_empty() {
-        return Ok(NavMarketDataPreparation {
-            effective_end: end,
-            limitations: Vec::new(),
-            data_available: true,
-            holdings,
-            transactions: Vec::new(),
-            assets: Vec::new(),
-            valuation_data: None,
-        });
-    }
-    let assets = asset_repo::find_by_ids(db, needed_ids).await?;
-    let nav_assets: Vec<Asset> = assets
-        .iter()
-        .filter(|asset| !asset.is_monetary())
-        .cloned()
-        .collect();
-    let (mut availability, valuation_data) = market_data
-        .prepare_valuation_market_data_for_nav(db, &nav_assets, &start_str, &end_str)
-        .await?;
     let transactions_by_asset = all_transactions.into_iter().fold(
         HashMap::<i32, Vec<Transaction>>::new(),
         |mut grouped, transaction| {
@@ -315,6 +293,37 @@ async fn nav_market_data_availability(
             .cmp(&right.entry.date)
             .then(left.entry.id.cmp(&right.entry.id))
     });
+
+    let needed_ids: HashSet<i32> = holdings
+        .keys()
+        .copied()
+        .chain(
+            transactions
+                .iter()
+                .filter(|transition| transition.quantity_after > FLOAT_EPSILON)
+                .map(|transition| transition.entry.asset_id),
+        )
+        .collect();
+    if needed_ids.is_empty() {
+        return Ok(NavMarketDataPreparation {
+            effective_end: end,
+            limitations: Vec::new(),
+            data_available: true,
+            holdings,
+            transactions,
+            assets: Vec::new(),
+            valuation_data: None,
+        });
+    }
+    let assets = asset_repo::find_by_ids(db, needed_ids).await?;
+    let nav_assets: Vec<Asset> = assets
+        .iter()
+        .filter(|asset| !asset.is_monetary())
+        .cloned()
+        .collect();
+    let (mut availability, valuation_data) = market_data
+        .prepare_valuation_market_data_for_nav(db, &nav_assets, &start_str, &end_str)
+        .await?;
 
     if availability.data_available {
         let mut first_valuation_dates: HashMap<i32, NaiveDate> = holdings
