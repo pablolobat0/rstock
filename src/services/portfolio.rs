@@ -311,8 +311,7 @@ fn ledger_prepare_scope(
         let Some(transactions) = transactions_by_asset.get(&asset.id) else {
             continue;
         };
-        let replay = ledger::CanonicalLedger::from_transactions(asset.id, transactions)
-            .and_then(|canonical| canonical.replay())
+        let replay = ledger::replay_transactions(asset.id, transactions)
             .map_err(|error| anyhow::anyhow!(error))?;
         if replay.final_quantity > FLOAT_EPSILON {
             has_open_holding = true;
@@ -401,8 +400,7 @@ async fn project_holding(
     asset: Asset,
     transactions: &[Transaction],
 ) -> anyhow::Result<HoldingProjection> {
-    let replay = ledger::CanonicalLedger::from_transactions(asset.id, transactions)
-        .and_then(|canonical| canonical.replay())
+    let replay = ledger::replay_transactions(asset.id, transactions)
         .map_err(|error| anyhow::anyhow!(error))?;
     let first_date = replay
         .transitions
@@ -418,10 +416,9 @@ async fn project_holding(
     if asset.currency != BASE_CURRENCY {
         for transition in &enriched.transitions {
             if (transition.buy_contribution.is_none()
-                && transition.transition.entry.kind.entry_type() == ledger::LedgerEntryType::Buy)
+                && transition.entry_type() == ledger::LedgerEntryType::Buy)
                 || (transition.dividend_income.is_none()
-                    && transition.transition.entry.kind.entry_type()
-                        == ledger::LedgerEntryType::Dividend)
+                    && transition.entry_type() == ledger::LedgerEntryType::Dividend)
             {
                 let date =
                     NaiveDate::parse_from_str(&transition.transition.entry.date, DATE_FORMAT)

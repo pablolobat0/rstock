@@ -368,6 +368,15 @@ impl CanonicalLedger {
     }
 }
 
+/// Canonicalizes and replays persisted entries through the authoritative ledger
+/// boundary in one operation.
+pub fn replay_transactions(
+    asset_id: i32,
+    transactions: &[Transaction],
+) -> Result<LedgerReplay, LedgerError> {
+    CanonicalLedger::from_transactions(asset_id, transactions)?.replay()
+}
+
 /// Base-currency effects for one complete, valid ledger replay.  Missing FX
 /// only removes effects that depend on it; quantity remains available.
 #[derive(Clone, Debug, PartialEq)]
@@ -385,6 +394,13 @@ pub struct EnrichedLedgerTransition {
     pub sell_withdrawal: Option<f64>,
     pub cost_removed: Option<f64>,
     pub dividend_income: Option<f64>,
+}
+
+impl EnrichedLedgerTransition {
+    #[must_use]
+    pub fn entry_type(&self) -> LedgerEntryType {
+        self.transition.entry.kind.entry_type()
+    }
 }
 
 /// Applies transaction-date FX to native-currency semantic effects.

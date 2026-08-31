@@ -180,8 +180,7 @@ async fn find_first_incomplete_snapshot(
     );
     let mut transitions_by_asset = HashMap::<i32, Vec<LedgerTransition>>::new();
     for (asset_id, transactions) in transactions_by_asset {
-        let replay = ledger::CanonicalLedger::from_transactions(asset_id, &transactions)
-            .and_then(|canonical| canonical.replay())
+        let replay = ledger::replay_transactions(asset_id, &transactions)
             .map_err(|error| anyhow::anyhow!(error))?;
         transitions_by_asset.insert(asset_id, replay.transitions);
     }
@@ -280,8 +279,7 @@ async fn nav_market_data_availability(
     );
     let mut transactions = Vec::new();
     for (asset_id, asset_transactions) in transactions_by_asset {
-        let replay = ledger::CanonicalLedger::from_transactions(asset_id, &asset_transactions)
-            .and_then(|canonical| canonical.replay())
+        let replay = ledger::replay_transactions(asset_id, &asset_transactions)
             .map_err(|error| anyhow::anyhow!(error))?;
         transactions.extend(replay.transitions.into_iter().filter(|transition| {
             transition.entry.date >= start_str && transition.entry.date <= end_str
