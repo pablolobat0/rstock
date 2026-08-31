@@ -418,6 +418,145 @@ async fn same_day_ledger_reads_use_ascending_transaction_id() {
     assert!((rstock::models::Transaction::compute_holdings(&per_asset) - 5.0).abs() < f64::EPSILON);
 }
 
+#[tokio::test]
+async fn recording_commands_validate_shapes_before_persistence() {
+    let db = setup_test_db().await;
+    let asset_id = insert_asset(&db, "XFAKE1", "Fake Stock", "stock", "EUR").await;
+
+    let invalid_results = [
+        services::transactions::buy(
+            &db,
+            "XFAKE1".to_owned(),
+            BuyOrder {
+                date: "not-a-date".to_owned(),
+                quantity: 1.0,
+                price: 10.0,
+                fees: 0.0,
+            },
+        )
+        .await,
+        services::transactions::sell(
+            &db,
+            "XFAKE1".to_owned(),
+            SellOrder {
+                date: "2025-01-01".to_owned(),
+                quantity: f64::NAN,
+                price: 10.0,
+                fees: 0.0,
+            },
+        )
+        .await,
+        services::transactions::dividend(
+            &db,
+            "XFAKE1".to_owned(),
+            DividendOrder {
+                date: "2025-01-01".to_owned(),
+                amount: 1.0,
+                fees: 2.0,
+            },
+        )
+        .await,
+        services::transactions::split(
+            &db,
+            "XFAKE1".to_owned(),
+            SplitOrder {
+                date: "2025-01-01".to_owned(),
+                ratio: f64::INFINITY,
+            },
+        )
+        .await,
+    ];
+
+    assert!(invalid_results.into_iter().all(|result| result.is_err()));
+    assert!(transaction_repo::find_by_asset_id(&db, asset_id)
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+async fn recording_replays_the_complete_ledger_and_rolls_back_invalid_suffixes() {
+    let db = setup_test_db().await;
+    let asset_id = insert_asset(&db, "XFAKE1", "Fake Stock", "stock", "EUR").await;
+    insert_transaction(&db, asset_id, "2025-01-01", 1.0, 100.0, 0.0).await;
+    insert_transaction(&db, asset_id, "2025-01-03", 1.0, 100.0, 0.0).await;
+    let before = transaction_repo::find_by_asset_id(&db, asset_id)
+        .await
+        .unwrap();
+
+    let result = services::transactions::sell(
+        &db,
+        "XFAKE1".to_owned(),
+        SellOrder {
+            date: "2025-01-02".to_owned(),
+            quantity: 2.0,
+            price: 100.0,
+            fees: 0.0,
+        },
+    )
+    .await;
+
+    assert!(result.is_err());
+    assert_eq!(
+        transaction_repo::find_by_asset_id(&db, asset_id)
+            .await
+            .unwrap()
+            .iter()
+            .map(|tx| tx.id)
+            .collect::<Vec<_>>(),
+        before.iter().map(|tx| tx.id).collect::<Vec<_>>()
+    );
+}
+
+#[tokio::test]
+async fn same_day_recording_uses_generated_id_order_for_split_effects() {
+    let db = setup_test_db().await;
+    let asset_id = insert_asset(&db, "XFAKE1", "Fake Stock", "stock", "EUR").await;
+    insert_transaction(&db, asset_id, "2025-01-01", 1.0, 100.0, 0.0).await;
+
+    let receipt = services::transactions::split(
+        &db,
+        "XFAKE1".to_owned(),
+        SplitOrder {
+            date: "2025-01-01".to_owned(),
+            ratio: 2.0,
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(receipt.transaction_id, 2);
+    let entries = transaction_repo::find_by_asset_id(&db, asset_id)
+        .await
+        .unwrap();
+    let replay = rstock::services::ledger::CanonicalLedger::new(
+        asset_id,
+        entries
+            .iter()
+            .map(|tx| rstock::services::ledger::LedgerEntry {
+                id: tx.id,
+                asset_id: tx.asset_id,
+                date: tx.date.clone(),
+                kind: match &tx.tx_type {
+                    rstock::models::TxType::Buy => rstock::services::ledger::LedgerEntryKind::Buy {
+                        units: tx.quantity,
+                        unit_price_cents: tx.price_cents,
+                        fees_cents: tx.fees_cents,
+                    },
+                    rstock::models::TxType::Split => {
+                        rstock::services::ledger::LedgerEntryKind::Split { ratio: tx.quantity }
+                    }
+                    _ => unreachable!("test ledger only contains buy and split"),
+                },
+            })
+            .collect(),
+    )
+    .unwrap()
+    .replay()
+    .unwrap();
+    assert_eq!(replay.final_quantity, 2.0);
+}
+
 fn ledger_fields(
     transactions: Vec<rstock::models::Transaction>,
 ) -> Vec<(i32, String, String, f64, i64, i64)> {
