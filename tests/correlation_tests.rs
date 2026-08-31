@@ -2,7 +2,8 @@ mod common;
 
 use common::{
     insert_asset, insert_daily_price, insert_etf_asset, insert_exchange_rate, insert_fund_asset,
-    insert_portfolio_snapshot, insert_transaction, setup_test_db, MockMarketDataSources,
+    insert_portfolio_snapshot, insert_sell_transaction, insert_transaction, setup_test_db,
+    MockMarketDataSources,
 };
 use rstock::constants::BENCHMARK_TICKER;
 use rstock::db::repos::asset_repo;
@@ -80,6 +81,32 @@ fn seed_source_prices(
         .collect();
 
     fetcher.historical_prices.insert(ticker.to_owned(), prices);
+}
+
+#[tokio::test]
+async fn correlation_uses_authoritative_open_quantity_and_excludes_liquidated_assets() {
+    let db = setup_test_db().await;
+    let mut fetcher = MockMarketDataSources::new();
+    seed_benchmark_market_data(&mut fetcher, 25);
+
+    let open_id = insert_asset(&db, "XFAKEOPENAN", "Open Asset", "stock", "EUR").await;
+    let closed_id = insert_asset(&db, "XFAKECLOSEDAN", "Closed Asset", "stock", "EUR").await;
+    insert_transaction(&db, open_id, "2025-01-01", 1.0, 100.0, 0.0).await;
+    insert_transaction(&db, closed_id, "2025-01-01", 1.0, 100.0, 0.0).await;
+    insert_sell_transaction(&db, closed_id, "2025-01-02", 1.0, 100.0, 0.0).await;
+    seed_source_prices(&mut fetcher, "XFAKEOPENAN", 100.0, 25);
+
+    let matrix = compute_correlation_data(
+        &db,
+        "2025-01-01",
+        "2025-01-25",
+        &correlation_market_data(&fetcher),
+    )
+    .await
+    .unwrap();
+
+    assert!(matrix.names.iter().any(|name| name == "Open Asset"));
+    assert!(!matrix.names.iter().any(|name| name == "Closed Asset"));
 }
 
 /// Two perfectly correlated EUR assets (prices move in lockstep)

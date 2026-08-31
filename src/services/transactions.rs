@@ -8,6 +8,7 @@ use crate::db::repos::{
 use crate::models::{
     f64_to_cents, BuyOrder, DividendOrder, SellOrder, SplitOrder, Transaction, TransactionListItem,
 };
+use crate::services::ledger;
 
 #[derive(Debug)]
 pub struct TransactionReceipt {
@@ -94,7 +95,7 @@ pub async fn sell(
         .into_iter()
         .filter(|t| t.date <= order.date)
         .collect();
-    let net_qty = Transaction::compute_holdings(&filtered_transactions);
+    let net_qty = replay_quantity(asset.id, &filtered_transactions)?;
 
     if order.quantity > net_qty + FLOAT_EPSILON {
         anyhow::bail!(
@@ -150,7 +151,7 @@ pub async fn dividend(
         .into_iter()
         .filter(|t| t.date <= order.date)
         .collect();
-    let net_qty = Transaction::compute_holdings(&filtered_transactions);
+    let net_qty = replay_quantity(asset.id, &filtered_transactions)?;
 
     if net_qty <= FLOAT_EPSILON {
         anyhow::bail!(
@@ -207,7 +208,7 @@ pub async fn split(
         .into_iter()
         .filter(|t| t.date <= order.date)
         .collect();
-    let net_qty = Transaction::compute_holdings(&filtered_transactions);
+    let net_qty = replay_quantity(asset.id, &filtered_transactions)?;
 
     if net_qty <= FLOAT_EPSILON {
         anyhow::bail!(
@@ -347,4 +348,10 @@ fn earliest_transaction_date(
         .min()
         .unwrap_or_default()
         .to_owned()
+}
+
+fn replay_quantity(asset_id: i32, transactions: &[Transaction]) -> anyhow::Result<f64> {
+    Ok(ledger::replay_transactions(asset_id, transactions)
+        .map_err(|error| anyhow::anyhow!(error))?
+        .final_quantity)
 }
