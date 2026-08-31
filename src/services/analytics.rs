@@ -93,8 +93,7 @@ async fn current_correlation_assets(
         let Some(transactions) = transactions_by_asset.get(&asset.id) else {
             continue;
         };
-        let replay = ledger::CanonicalLedger::from_transactions(asset.id, transactions)
-            .and_then(|canonical| canonical.replay())
+        let replay = ledger::replay_transactions(asset.id, transactions)
             .map_err(|error| anyhow::anyhow!(error))?;
         if replay.final_quantity > FLOAT_EPSILON {
             current_assets.push(asset);

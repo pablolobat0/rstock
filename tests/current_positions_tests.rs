@@ -460,3 +460,53 @@ async fn focused_current_positions_keep_independent_facts_when_buy_fx_is_missing
             rstock::models::MarketDataSubject::FxRate { ref currency } if currency == "USD"
         )));
 }
+
+#[tokio::test]
+async fn focused_current_positions_keep_quantity_and_current_value_when_dividend_fx_is_missing() {
+    let db = common::setup_test_db().await;
+    let asset_id =
+        common::insert_asset(&db, "XFAKEFXDIV", "USD Dividend Stock", "stock", "USD").await;
+    common::insert_transaction(&db, asset_id, "2025-06-01", 2.0, 10.0, 0.0).await;
+    common::insert_dividend_transaction(&db, asset_id, "2025-06-02", 3.0, 0.0).await;
+    common::insert_daily_price(&db, asset_id, "2025-06-09", 12.0, false).await;
+    common::insert_exchange_rate(&db, "USD", "EUR", "2025-06-09", 0.9).await;
+
+    let result = portfolio::get_current_positions(
+        &db,
+        &common::market_data_at(&common::MockMarketDataSources::new(), fixed_today()),
+    )
+    .await
+    .unwrap();
+    let position = &result.positions[0];
+
+    assert_eq!(position.total_qty, 2.0);
+    assert_eq!(position.total_invested, None);
+    assert_eq!(position.dividends_received, None);
+    assert_eq!(position.current_value, Some(21.6));
+    assert!(position.open_position_gain_loss.is_none());
+    assert!(result.total_dividends.is_none());
+}
+
+#[tokio::test]
+async fn focused_current_positions_reopen_after_liquidation_with_fresh_cost_basis() {
+    let db = common::setup_test_db().await;
+    let asset_id = common::insert_asset(&db, "XFAKEREOPEN", "Reopened Stock", "stock", "EUR").await;
+    common::insert_transaction(&db, asset_id, "2025-06-01", 2.0, 10.0, 1.0).await;
+    common::insert_sell_transaction(&db, asset_id, "2025-06-02", 2.0, 12.0, 3.0).await;
+    common::insert_transaction(&db, asset_id, "2025-06-03", 1.0, 7.0, 0.5).await;
+    common::insert_daily_price(&db, asset_id, "2025-06-09", 8.0, false).await;
+
+    let result = portfolio::get_current_positions(
+        &db,
+        &common::market_data_at(&common::MockMarketDataSources::new(), fixed_today()),
+    )
+    .await
+    .unwrap();
+    let position = &result.positions[0];
+
+    assert_eq!(position.total_qty, 1.0);
+    assert_eq!(position.total_invested, Some(7.5));
+    assert_eq!(position.avg_cost, Some(7.5));
+    assert_eq!(position.current_value, Some(8.0));
+    assert_eq!(position.open_position_gain_loss, Some(0.5));
+}
