@@ -58,6 +58,7 @@ impl LedgerEntryKind {
 /// A compact, stable description of an entry's type for diagnostics.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LedgerEntryType {
+    Ledger,
     Buy,
     Sell,
     Dividend,
@@ -67,6 +68,7 @@ pub enum LedgerEntryType {
 impl fmt::Display for LedgerEntryType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Ledger => write!(f, "ledger"),
             Self::Buy => write!(f, "buy"),
             Self::Sell => write!(f, "sell"),
             Self::Dividend => write!(f, "dividend"),
@@ -85,19 +87,16 @@ pub struct CanonicalLedger {
 impl CanonicalLedger {
     /// Validates identity integrity and establishes the only replay order.
     pub fn new(asset_id: i32, mut entries: Vec<LedgerEntry>) -> Result<Self, LedgerError> {
+        if asset_id <= 0 {
+            return Err(LedgerError::for_ledger(
+                asset_id,
+                LedgerInvariant::PositiveAssetIdentity,
+            ));
+        }
         entries.sort_by(|left, right| left.date.cmp(&right.date).then(left.id.cmp(&right.id)));
 
         let mut seen_ids = std::collections::HashSet::new();
         for entry in &entries {
-            if asset_id <= 0 {
-                return Err(LedgerError::for_ledger_entry(
-                    asset_id,
-                    entry,
-                    0.0,
-                    LedgerAttempt::Identity,
-                    LedgerInvariant::PositiveAssetIdentity,
-                ));
-            }
             if entry.asset_id != asset_id {
                 return Err(LedgerError::for_ledger_entry(
                     asset_id,
@@ -116,7 +115,7 @@ impl CanonicalLedger {
                     LedgerInvariant::UniquePositiveEntryIdentity,
                 ));
             }
-            if NaiveDate::parse_from_str(&entry.date, DATE_FORMAT).is_err() {
+            if !is_canonical_date(&entry.date) {
                 return Err(LedgerError::for_ledger_entry(
                     asset_id,
                     entry,
@@ -296,7 +295,11 @@ impl CanonicalLedger {
             )?;
 
             quantity = normalize_quantity(quantity_after);
-            remaining_cost = normalize_cost(remaining_cost_after);
+            remaining_cost = if quantity == 0.0 {
+                0.0
+            } else {
+                normalize_cost(remaining_cost_after)
+            };
             transitions.push(LedgerTransition {
                 entry: entry.clone(),
                 quantity_before,
@@ -388,6 +391,18 @@ pub struct LedgerError {
 }
 
 impl LedgerError {
+    fn for_ledger(asset_id: i32, violated_invariant: LedgerInvariant) -> Self {
+        Self {
+            asset_id,
+            entry_id: 0,
+            date: String::new(),
+            entry_type: LedgerEntryType::Ledger,
+            quantity_before: 0.0,
+            attempted_effect: LedgerAttempt::Identity,
+            violated_invariant,
+        }
+    }
+
     fn for_entry(
         entry: &LedgerEntry,
         quantity_before: f64,
@@ -537,6 +552,11 @@ fn normalize_cost(cost: f64) -> f64 {
     } else {
         cost
     }
+}
+
+fn is_canonical_date(date: &str) -> bool {
+    NaiveDate::parse_from_str(date, DATE_FORMAT)
+        .is_ok_and(|parsed| parsed.format(DATE_FORMAT).to_string() == date)
 }
 
 #[cfg(test)]

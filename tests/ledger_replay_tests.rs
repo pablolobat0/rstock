@@ -153,3 +153,27 @@ fn public_replay_returns_the_first_invalid_prefix_with_context() {
         LedgerInvariant::NonNegativeQuantity
     );
 }
+
+#[test]
+fn public_constructor_requires_a_positive_identity_and_canonical_date() {
+    let error = CanonicalLedger::new(0, vec![]).unwrap_err();
+    assert_eq!(
+        error.violated_invariant,
+        LedgerInvariant::PositiveAssetIdentity
+    );
+
+    let error = CanonicalLedger::new(
+        42,
+        vec![entry(
+            1,
+            "2025-2-01",
+            LedgerEntryKind::Buy {
+                units: 1.0,
+                unit_price_cents: 100,
+                fees_cents: 0,
+            },
+        )],
+    )
+    .unwrap_err();
+    assert_eq!(error.violated_invariant, LedgerInvariant::ValidDate);
+}
