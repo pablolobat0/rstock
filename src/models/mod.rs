@@ -32,6 +32,6 @@ pub use portfolio::{
 };
 pub use stock_info::StockInfo;
 pub use transaction::{
-    cents_to_f64, f64_to_cents, BuyOrder, CsvRow, DividendOrder, HoldingInput, SellOrder,
-    SplitOrder, Transaction, TransactionListItem, TxType,
+    cents_to_f64, f64_to_cents, BuyOrder, CsvRow, DividendOrder, SellOrder, SplitOrder,
+    Transaction, TransactionListItem, TxType,
 };
