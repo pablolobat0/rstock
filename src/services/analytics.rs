@@ -11,7 +11,7 @@ use crate::models::{
     RollingCorrelationResult,
 };
 use crate::services::market_data::MarketData;
-use crate::services::metrics;
+use crate::services::{ledger, metrics};
 
 pub struct PeriodMetricsResult {
     pub ytd: Option<PeriodMetrics>,
@@ -85,17 +85,22 @@ async fn current_correlation_assets(
     }
 
     let assets = asset_repo::find_by_ids(db, transactions_by_asset.keys().copied()).await?;
-    Ok(assets
-        .into_iter()
-        .filter(|asset| !asset.is_monetary() && !is_benchmark_ticker(&asset.ticker))
-        .filter(|asset| {
-            transactions_by_asset
-                .get(&asset.id)
-                .is_some_and(|transactions| {
-                    crate::models::Transaction::compute_holdings(transactions) > FLOAT_EPSILON
-                })
-        })
-        .collect())
+    let mut current_assets = Vec::new();
+    for asset in assets {
+        if asset.is_monetary() || is_benchmark_ticker(&asset.ticker) {
+            continue;
+        }
+        let Some(transactions) = transactions_by_asset.get(&asset.id) else {
+            continue;
+        };
+        let replay = ledger::CanonicalLedger::from_transactions(asset.id, transactions)
+            .and_then(|canonical| canonical.replay())
+            .map_err(|error| anyhow::anyhow!(error))?;
+        if replay.final_quantity > FLOAT_EPSILON {
+            current_assets.push(asset);
+        }
+    }
+    Ok(current_assets)
 }
 
 #[allow(clippy::implicit_hasher)]
