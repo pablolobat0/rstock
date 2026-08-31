@@ -479,7 +479,7 @@ async fn recording_replays_the_complete_ledger_and_rolls_back_invalid_suffixes()
     let db = setup_test_db().await;
     let asset_id = insert_asset(&db, "XFAKE1", "Fake Stock", "stock", "EUR").await;
     insert_transaction(&db, asset_id, "2025-01-01", 1.0, 100.0, 0.0).await;
-    insert_transaction(&db, asset_id, "2025-01-03", 1.0, 100.0, 0.0).await;
+    insert_sell_transaction(&db, asset_id, "2025-01-03", 1.0, 100.0, 0.0).await;
     let before = transaction_repo::find_by_asset_id(&db, asset_id)
         .await
         .unwrap();
@@ -489,7 +489,7 @@ async fn recording_replays_the_complete_ledger_and_rolls_back_invalid_suffixes()
         "XFAKE1".to_owned(),
         SellOrder {
             date: "2025-01-02".to_owned(),
-            quantity: 2.0,
+            quantity: 1.0,
             price: 100.0,
             fees: 0.0,
         },
@@ -554,7 +554,7 @@ async fn same_day_recording_uses_generated_id_order_for_split_effects() {
     .unwrap()
     .replay()
     .unwrap();
-    assert_eq!(replay.final_quantity, 2.0);
+    assert!((replay.final_quantity - 2.0).abs() < f64::EPSILON);
 }
 
 fn ledger_fields(

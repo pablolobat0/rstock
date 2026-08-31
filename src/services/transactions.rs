@@ -2,7 +2,7 @@ use anyhow::Context;
 use chrono::NaiveDate;
 use sea_orm::{ConnectionTrait, DatabaseConnection, TransactionTrait};
 
-use crate::constants::{display_date, DATE_FORMAT};
+use crate::constants::{display_date, DATE_FORMAT, MONETARY_MULTIPLIER};
 use crate::db::repos::{
     asset_repo, daily_price_repo, portfolio_asset_history_repo, portfolio_history_repo,
     transaction_repo,
@@ -10,7 +10,9 @@ use crate::db::repos::{
 use crate::models::{
     f64_to_cents, BuyOrder, DividendOrder, SellOrder, SplitOrder, Transaction, TransactionListItem,
 };
-use crate::services::ledger::{CanonicalLedger, LedgerEntry, LedgerEntryKind, LedgerReplay};
+use crate::services::ledger::{
+    CanonicalLedger, LedgerEffect, LedgerEntry, LedgerEntryKind, LedgerReplay,
+};
 
 #[derive(Debug)]
 pub struct TransactionReceipt {
@@ -51,7 +53,12 @@ pub async fn buy(
         )
     })?;
 
-    let total = order.quantity * order.price + order.fees;
+    let tx_id = transaction_repo::insert_buy(&mutation, asset.id, &order).await?;
+    let replay = replay_asset_ledger(&mutation, asset.id).await?;
+    let total = match effect_for_entry(&replay, tx_id)? {
+        LedgerEffect::Buy { contribution } => contribution / MONETARY_MULTIPLIER,
+        _ => anyhow::bail!("inserted buy transaction {tx_id} has an unexpected replay effect"),
+    };
     let summary = format!(
         "Bought {} units of {} ({}) at {:.2} {} on {}. Total: {:.2} {}",
         order.quantity,
@@ -65,8 +72,6 @@ pub async fn buy(
     );
 
     let order_date = order.date.clone();
-    let tx_id = transaction_repo::insert_buy(&mutation, asset.id, &order).await?;
-    replay_asset_ledger(&mutation, asset.id).await?;
     invalidate_snapshots(&mutation, &order_date).await?;
     mutation.commit().await?;
 
@@ -94,7 +99,12 @@ pub async fn sell(
         .await?
         .ok_or_else(|| anyhow::anyhow!("Asset with ticker '{ticker}' not found"))?;
 
-    let proceeds = order.quantity * order.price - order.fees;
+    let tx_id = transaction_repo::insert_sell(&mutation, asset.id, &order).await?;
+    let replay = replay_asset_ledger(&mutation, asset.id).await?;
+    let proceeds = match effect_for_entry(&replay, tx_id)? {
+        LedgerEffect::Sell { withdrawal, .. } => withdrawal / MONETARY_MULTIPLIER,
+        _ => anyhow::bail!("inserted sell transaction {tx_id} has an unexpected replay effect"),
+    };
     let summary = format!(
         "Sold {} units of {} ({}) at {:.2} on {}. Proceeds: {:.2}",
         order.quantity,
@@ -106,8 +116,6 @@ pub async fn sell(
     );
 
     let order_date = order.date.clone();
-    let tx_id = transaction_repo::insert_sell(&mutation, asset.id, &order).await?;
-    replay_asset_ledger(&mutation, asset.id).await?;
     invalidate_snapshots(&mutation, &order_date).await?;
     mutation.commit().await?;
 
@@ -135,7 +143,12 @@ pub async fn dividend(
         .await?
         .ok_or_else(|| anyhow::anyhow!("Asset with ticker '{ticker}' not found"))?;
 
-    let net_amount = order.amount - order.fees;
+    let tx_id = transaction_repo::insert_dividend(&mutation, asset.id, &order).await?;
+    let replay = replay_asset_ledger(&mutation, asset.id).await?;
+    let net_amount = match effect_for_entry(&replay, tx_id)? {
+        LedgerEffect::Dividend { net_income } => net_income / MONETARY_MULTIPLIER,
+        _ => anyhow::bail!("inserted dividend transaction {tx_id} has an unexpected replay effect"),
+    };
     let summary = format!(
         "Dividend for {} ({}): {:.2} (fees: {:.2}, net: {:.2}) on {}",
         asset.name,
@@ -147,8 +160,6 @@ pub async fn dividend(
     );
 
     let order_date = order.date.clone();
-    let tx_id = transaction_repo::insert_dividend(&mutation, asset.id, &order).await?;
-    replay_asset_ledger(&mutation, asset.id).await?;
     invalidate_snapshots(&mutation, &order_date).await?;
     mutation.commit().await?;
 
@@ -313,6 +324,15 @@ async fn replay_asset_ledger(
         .context("transaction ledger replay failed")
 }
 
+fn effect_for_entry(replay: &LedgerReplay, transaction_id: i32) -> anyhow::Result<&LedgerEffect> {
+    replay
+        .transitions
+        .iter()
+        .find(|transition| transition.entry.id == transaction_id)
+        .map(|transition| &transition.effect)
+        .ok_or_else(|| anyhow::anyhow!("transaction {transaction_id} was not replayed"))
+}
+
 fn ledger_entry(transaction: &Transaction) -> LedgerEntry {
     let kind = match &transaction.tx_type {
         crate::models::TxType::Buy => LedgerEntryKind::Buy {
@@ -342,17 +362,18 @@ fn ledger_entry(transaction: &Transaction) -> LedgerEntry {
 }
 
 fn validate_buy_order(order: &BuyOrder) -> anyhow::Result<()> {
-    validate_date(&order.date)?;
-    validate_positive(order.quantity, "quantity")?;
-    validate_positive(order.price, "price")?;
-    validate_non_negative(order.fees, "fees")
+    validate_trade_shape(&order.date, order.quantity, order.price, order.fees)
 }
 
 fn validate_sell_order(order: &SellOrder) -> anyhow::Result<()> {
-    validate_date(&order.date)?;
-    validate_positive(order.quantity, "quantity")?;
-    validate_positive(order.price, "price")?;
-    validate_non_negative(order.fees, "fees")
+    validate_trade_shape(&order.date, order.quantity, order.price, order.fees)
+}
+
+fn validate_trade_shape(date: &str, quantity: f64, price: f64, fees: f64) -> anyhow::Result<()> {
+    validate_date(date)?;
+    validate_positive(quantity, "quantity")?;
+    validate_positive(price, "price")?;
+    validate_non_negative(fees, "fees")
 }
 
 fn validate_dividend_order(order: &DividendOrder) -> anyhow::Result<()> {
