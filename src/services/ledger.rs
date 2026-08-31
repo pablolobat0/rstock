@@ -8,7 +8,9 @@
 
 use std::fmt;
 
-use crate::constants::FLOAT_EPSILON;
+use chrono::NaiveDate;
+
+use crate::constants::{DATE_FORMAT, FLOAT_EPSILON};
 
 /// A transaction whose data shape is constrained by its type.
 #[derive(Clone, Debug, PartialEq)]
@@ -24,17 +26,17 @@ pub struct LedgerEntry {
 pub enum LedgerEntryKind {
     Buy {
         units: f64,
-        unit_price: f64,
-        fees: f64,
+        unit_price_cents: i64,
+        fees_cents: i64,
     },
     Sell {
         units: f64,
-        unit_price: f64,
-        fees: f64,
+        unit_price_cents: i64,
+        fees_cents: i64,
     },
     Dividend {
-        gross_amount: f64,
-        deductions: f64,
+        gross_amount_cents: i64,
+        deductions_cents: i64,
     },
     Split {
         ratio: f64,
@@ -88,7 +90,8 @@ impl CanonicalLedger {
         let mut seen_ids = std::collections::HashSet::new();
         for entry in &entries {
             if asset_id <= 0 {
-                return Err(LedgerError::for_entry(
+                return Err(LedgerError::for_ledger_entry(
+                    asset_id,
                     entry,
                     0.0,
                     LedgerAttempt::Identity,
@@ -96,7 +99,8 @@ impl CanonicalLedger {
                 ));
             }
             if entry.asset_id != asset_id {
-                return Err(LedgerError::for_entry(
+                return Err(LedgerError::for_ledger_entry(
+                    asset_id,
                     entry,
                     0.0,
                     LedgerAttempt::Identity,
@@ -104,11 +108,21 @@ impl CanonicalLedger {
                 ));
             }
             if entry.id <= 0 || !seen_ids.insert(entry.id) {
-                return Err(LedgerError::for_entry(
+                return Err(LedgerError::for_ledger_entry(
+                    asset_id,
                     entry,
                     0.0,
                     LedgerAttempt::Identity,
                     LedgerInvariant::UniquePositiveEntryIdentity,
+                ));
+            }
+            if NaiveDate::parse_from_str(&entry.date, DATE_FORMAT).is_err() {
+                return Err(LedgerError::for_ledger_entry(
+                    asset_id,
+                    entry,
+                    0.0,
+                    LedgerAttempt::Identity,
+                    LedgerInvariant::ValidDate,
                 ));
             }
         }
@@ -139,18 +153,23 @@ impl CanonicalLedger {
             let (quantity_after, remaining_cost_after, effect) = match &entry.kind {
                 LedgerEntryKind::Buy {
                     units,
-                    unit_price,
-                    fees,
+                    unit_price_cents,
+                    fees_cents,
                 } => {
                     validate_positive(entry, quantity_before, *units, LedgerAttempt::Units)?;
                     validate_positive(
                         entry,
                         quantity_before,
-                        *unit_price,
+                        *unit_price_cents as f64,
                         LedgerAttempt::UnitPrice,
                     )?;
-                    validate_non_negative(entry, quantity_before, *fees, LedgerAttempt::Fees)?;
-                    let contribution = units * unit_price + fees;
+                    validate_non_negative(
+                        entry,
+                        quantity_before,
+                        *fees_cents as f64,
+                        LedgerAttempt::Fees,
+                    )?;
+                    let contribution = units * *unit_price_cents as f64 + *fees_cents as f64;
                     validate_finite(
                         entry,
                         quantity_before,
@@ -165,19 +184,24 @@ impl CanonicalLedger {
                 }
                 LedgerEntryKind::Sell {
                     units,
-                    unit_price,
-                    fees,
+                    unit_price_cents,
+                    fees_cents,
                 } => {
                     validate_positive(entry, quantity_before, *units, LedgerAttempt::Units)?;
                     validate_positive(
                         entry,
                         quantity_before,
-                        *unit_price,
+                        *unit_price_cents as f64,
                         LedgerAttempt::UnitPrice,
                     )?;
-                    validate_non_negative(entry, quantity_before, *fees, LedgerAttempt::Fees)?;
-                    let quantity_after = normalize_quantity(quantity_before - units);
-                    if quantity_after < 0.0 {
+                    validate_non_negative(
+                        entry,
+                        quantity_before,
+                        *fees_cents as f64,
+                        LedgerAttempt::Fees,
+                    )?;
+                    let raw_quantity_after = quantity_before - units;
+                    if raw_quantity_after < -FLOAT_EPSILON {
                         return Err(LedgerError::for_entry(
                             entry,
                             quantity_before,
@@ -185,14 +209,19 @@ impl CanonicalLedger {
                             LedgerInvariant::NonNegativeQuantity,
                         ));
                     }
-                    let withdrawal = units * unit_price - fees;
+                    let quantity_after = normalize_quantity(raw_quantity_after);
+                    let withdrawal = units * *unit_price_cents as f64 - *fees_cents as f64;
                     validate_finite(
                         entry,
                         quantity_before,
                         withdrawal,
                         LedgerAttempt::Withdrawal,
                     )?;
-                    let cost_removed = remaining_cost_before * (units / quantity_before);
+                    let cost_removed = if quantity_after == 0.0 {
+                        remaining_cost_before
+                    } else {
+                        remaining_cost_before * (units / quantity_before)
+                    };
                     validate_finite(
                         entry,
                         quantity_before,
@@ -209,31 +238,31 @@ impl CanonicalLedger {
                     )
                 }
                 LedgerEntryKind::Dividend {
-                    gross_amount,
-                    deductions,
+                    gross_amount_cents,
+                    deductions_cents,
                 } => {
                     validate_positive(
                         entry,
                         quantity_before,
-                        *gross_amount,
+                        *gross_amount_cents as f64,
                         LedgerAttempt::GrossDividend,
                     )?;
                     validate_non_negative(
                         entry,
                         quantity_before,
-                        *deductions,
-                        LedgerAttempt::DividendDeductions(*deductions),
+                        *deductions_cents as f64,
+                        LedgerAttempt::DividendDeductions(*deductions_cents as f64),
                     )?;
                     require_open_quantity(entry, quantity_before)?;
-                    if deductions > gross_amount {
+                    if deductions_cents > gross_amount_cents {
                         return Err(LedgerError::for_entry(
                             entry,
                             quantity_before,
-                            LedgerAttempt::DividendDeductions(*deductions),
+                            LedgerAttempt::DividendDeductions(*deductions_cents as f64),
                             LedgerInvariant::DeductionsDoNotExceedGrossDividend,
                         ));
                     }
-                    let net_income = gross_amount - deductions;
+                    let net_income = (*gross_amount_cents - *deductions_cents) as f64;
                     (
                         quantity_before,
                         remaining_cost_before,
@@ -337,6 +366,7 @@ pub enum LedgerInvariant {
     PositiveAssetIdentity,
     MatchingAssetIdentity,
     UniquePositiveEntryIdentity,
+    ValidDate,
     FiniteValue,
     PositiveValue,
     NonNegativeValue,
@@ -366,6 +396,24 @@ impl LedgerError {
     ) -> Self {
         Self {
             asset_id: entry.asset_id,
+            entry_id: entry.id,
+            date: entry.date.clone(),
+            entry_type: entry.kind.entry_type(),
+            quantity_before,
+            attempted_effect,
+            violated_invariant,
+        }
+    }
+
+    fn for_ledger_entry(
+        ledger_asset_id: i32,
+        entry: &LedgerEntry,
+        quantity_before: f64,
+        attempted_effect: LedgerAttempt,
+        violated_invariant: LedgerInvariant,
+    ) -> Self {
+        Self {
+            asset_id: ledger_asset_id,
             entry_id: entry.id,
             date: entry.date.clone(),
             entry_type: entry.kind.entry_type(),
@@ -514,8 +562,8 @@ mod tests {
                     "2025-01-02",
                     LedgerEntryKind::Sell {
                         units: 2.0,
-                        unit_price: 20.0,
-                        fees: 1.0,
+                        unit_price_cents: 20,
+                        fees_cents: 1,
                     },
                 ),
                 entry(2, "2025-01-01", LedgerEntryKind::Split { ratio: 2.0 }),
@@ -524,16 +572,16 @@ mod tests {
                     "2025-01-01",
                     LedgerEntryKind::Buy {
                         units: 2.0,
-                        unit_price: 10.0,
-                        fees: 1.0,
+                        unit_price_cents: 10,
+                        fees_cents: 1,
                     },
                 ),
                 entry(
                     4,
                     "2025-01-02",
                     LedgerEntryKind::Dividend {
-                        gross_amount: 5.0,
-                        deductions: 1.0,
+                        gross_amount_cents: 5,
+                        deductions_cents: 1,
                     },
                 ),
             ],
@@ -578,8 +626,8 @@ mod tests {
                     "2025-01-01",
                     LedgerEntryKind::Buy {
                         units: 1.0,
-                        unit_price: 1.0,
-                        fees: 0.0,
+                        unit_price_cents: 1,
+                        fees_cents: 0,
                     },
                 ),
                 entry(
@@ -587,8 +635,8 @@ mod tests {
                     "2025-01-02",
                     LedgerEntryKind::Buy {
                         units: 1.0,
-                        unit_price: 1.0,
-                        fees: 0.0,
+                        unit_price_cents: 1,
+                        fees_cents: 0,
                     },
                 ),
             ],
@@ -610,8 +658,8 @@ mod tests {
                     "2025-01-01",
                     LedgerEntryKind::Buy {
                         units: 1.0,
-                        unit_price: 1.0,
-                        fees: 0.0,
+                        unit_price_cents: 1,
+                        fees_cents: 0,
                     },
                 ),
                 entry(
@@ -619,8 +667,8 @@ mod tests {
                     "2025-01-02",
                     LedgerEntryKind::Sell {
                         units: 2.0,
-                        unit_price: 1.0,
-                        fees: 0.0,
+                        unit_price_cents: 1,
+                        fees_cents: 0,
                     },
                 ),
                 entry(
@@ -628,8 +676,8 @@ mod tests {
                     "2025-01-03",
                     LedgerEntryKind::Sell {
                         units: 1.0,
-                        unit_price: 1.0,
-                        fees: 0.0,
+                        unit_price_cents: 1,
+                        fees_cents: 0,
                     },
                 ),
             ],
@@ -659,8 +707,8 @@ mod tests {
                     "2025-01-01",
                     LedgerEntryKind::Buy {
                         units: 0.3,
-                        unit_price: 10.0,
-                        fees: 0.0,
+                        unit_price_cents: 10,
+                        fees_cents: 0,
                     },
                 ),
                 entry(
@@ -668,8 +716,8 @@ mod tests {
                     "2025-01-02",
                     LedgerEntryKind::Sell {
                         units: 0.3,
-                        unit_price: 10.0,
-                        fees: 0.0,
+                        unit_price_cents: 10,
+                        fees_cents: 0,
                     },
                 ),
                 entry(
@@ -677,8 +725,8 @@ mod tests {
                     "2025-01-03",
                     LedgerEntryKind::Buy {
                         units: 1.0,
-                        unit_price: 5.0,
-                        fees: 0.0,
+                        unit_price_cents: 5,
+                        fees_cents: 0,
                     },
                 ),
             ],
@@ -696,8 +744,8 @@ mod tests {
     fn requires_an_open_position_for_dividends_and_splits() {
         for kind in [
             LedgerEntryKind::Dividend {
-                gross_amount: 1.0,
-                deductions: 0.0,
+                gross_amount_cents: 1,
+                deductions_cents: 0,
             },
             LedgerEntryKind::Split { ratio: 2.0 },
         ] {
@@ -714,18 +762,18 @@ mod tests {
         let cases = [
             LedgerEntryKind::Buy {
                 units: f64::NAN,
-                unit_price: 1.0,
-                fees: 0.0,
+                unit_price_cents: 1,
+                fees_cents: 0,
+            },
+            LedgerEntryKind::Buy {
+                units: f64::INFINITY,
+                unit_price_cents: 1,
+                fees_cents: 0,
             },
             LedgerEntryKind::Buy {
                 units: 1.0,
-                unit_price: f64::INFINITY,
-                fees: 0.0,
-            },
-            LedgerEntryKind::Buy {
-                units: 1.0,
-                unit_price: 1.0,
-                fees: -1.0,
+                unit_price_cents: 1,
+                fees_cents: -1,
             },
             LedgerEntryKind::Split { ratio: 0.0 },
         ];
@@ -747,16 +795,16 @@ mod tests {
                     "2025-01-01",
                     LedgerEntryKind::Buy {
                         units: 1.0,
-                        unit_price: 1.0,
-                        fees: 0.0,
+                        unit_price_cents: 1,
+                        fees_cents: 0,
                     },
                 ),
                 entry(
                     2,
                     "2025-01-02",
                     LedgerEntryKind::Dividend {
-                        gross_amount: 1.0,
-                        deductions: 1.1,
+                        gross_amount_cents: 10,
+                        deductions_cents: 11,
                     },
                 ),
             ],
