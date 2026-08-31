@@ -11,7 +11,7 @@ use crate::models::{
     f64_to_cents, BuyOrder, DividendOrder, SellOrder, SplitOrder, Transaction, TransactionListItem,
 };
 use crate::services::ledger::{
-    CanonicalLedger, LedgerEffect, LedgerEntry, LedgerEntryKind, LedgerReplay,
+    CanonicalLedger, LedgerEffect, LedgerEntry, LedgerEntryKind, LedgerReplay, LedgerTransition,
 };
 
 #[derive(Debug)]
@@ -188,11 +188,7 @@ pub async fn split(
 
     let tx_id = transaction_repo::insert_split(&mutation, asset.id, &order).await?;
     let replay = replay_asset_ledger(&mutation, asset.id).await?;
-    let transition = replay
-        .transitions
-        .iter()
-        .find(|transition| transition.entry.id == tx_id)
-        .ok_or_else(|| anyhow::anyhow!("inserted split transaction {tx_id} was not replayed"))?;
+    let transition = transition_for_entry(&replay, tx_id)?;
     let summary = format!(
         "Split {} ({}): ratio {}, holdings {:.4} -> {:.4} on {}",
         asset.name,
@@ -325,11 +321,17 @@ async fn replay_asset_ledger(
 }
 
 fn effect_for_entry(replay: &LedgerReplay, transaction_id: i32) -> anyhow::Result<&LedgerEffect> {
+    Ok(&transition_for_entry(replay, transaction_id)?.effect)
+}
+
+fn transition_for_entry(
+    replay: &LedgerReplay,
+    transaction_id: i32,
+) -> anyhow::Result<&LedgerTransition> {
     replay
         .transitions
         .iter()
         .find(|transition| transition.entry.id == transaction_id)
-        .map(|transition| &transition.effect)
         .ok_or_else(|| anyhow::anyhow!("transaction {transaction_id} was not replayed"))
 }
 
