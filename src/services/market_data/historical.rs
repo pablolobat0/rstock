@@ -48,6 +48,7 @@ pub(crate) async fn fill_historical_market_data_cache(
     Ok(())
 }
 
+#[allow(dead_code)]
 pub(crate) async fn get_exchange_rate_for_asset(
     db: &DatabaseConnection,
     asset: &Asset,
@@ -58,6 +59,50 @@ pub(crate) async fn get_exchange_rate_for_asset(
     }
 
     get_exchange_rate(db, &asset.currency, date).await
+}
+
+pub(crate) async fn get_exchange_rates_for_asset(
+    db: &DatabaseConnection,
+    asset: &Asset,
+    start_date: &str,
+    end_date: &str,
+) -> anyhow::Result<BTreeMap<NaiveDate, f64>> {
+    if asset.currency == BASE_CURRENCY {
+        return Ok(BTreeMap::new());
+    }
+    let rows = exchange_rate_repo::find_rates_between_currencies(
+        db,
+        std::slice::from_ref(&asset.currency),
+        BASE_CURRENCY,
+        start_date,
+        end_date,
+    )
+    .await?;
+    let mut rates: BTreeMap<NaiveDate, f64> = rows
+        .get(&asset.currency)
+        .into_iter()
+        .flatten()
+        .map(|(date, rate)| {
+            Ok((
+                policy::parse_market_data_date(date, "historical FX date")?,
+                *rate,
+            ))
+        })
+        .collect::<anyhow::Result<_>>()?;
+    if let Some((rate, date)) = exchange_rate_repo::find_rate_and_date_at_or_before(
+        db,
+        &asset.currency,
+        BASE_CURRENCY,
+        start_date,
+    )
+    .await?
+    {
+        rates.insert(
+            policy::parse_market_data_date(&date, "historical FX date")?,
+            rate,
+        );
+    }
+    Ok(rates)
 }
 
 pub(crate) async fn get_base_currency_price_series_for_assets(
@@ -112,6 +157,7 @@ pub(crate) async fn get_base_currency_price_series_for_assets(
     Ok(series)
 }
 
+#[allow(dead_code)]
 async fn get_exchange_rate(
     db: &DatabaseConnection,
     from_currency: &str,

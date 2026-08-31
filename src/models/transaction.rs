@@ -113,14 +113,17 @@ pub struct TransactionListItem {
 }
 
 impl Transaction {
+    #[allow(dead_code)]
     pub fn is_buy(&self) -> bool {
         self.tx_type == TxType::Buy
     }
 
+    #[allow(dead_code)]
     pub fn is_sell(&self) -> bool {
         self.tx_type == TxType::Sell
     }
 
+    #[allow(dead_code)]
     pub fn is_dividend(&self) -> bool {
         self.tx_type == TxType::Dividend
     }
@@ -129,6 +132,7 @@ impl Transaction {
         self.tx_type == TxType::Split
     }
 
+    #[allow(dead_code)]
     pub fn signed_quantity(&self) -> f64 {
         match self.tx_type {
             TxType::Buy => self.quantity,
@@ -139,6 +143,7 @@ impl Transaction {
 
     /// Compute net holdings from a chronologically-ordered slice of transactions,
     /// accounting for splits (which multiply holdings by their ratio).
+    #[allow(dead_code)]
     pub fn compute_holdings(transactions: &[Transaction]) -> f64 {
         let mut holdings = 0.0;
         for tx in transactions {

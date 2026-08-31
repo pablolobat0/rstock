@@ -22,6 +22,7 @@ struct DatedRate {
     value: f64,
 }
 
+#[allow(dead_code)]
 pub async fn find_rate(
     db: &impl ConnectionTrait,
     from_currency: &str,
@@ -37,6 +38,7 @@ pub async fn find_rate(
     Ok(result.map(|r| r.rate))
 }
 
+#[allow(dead_code)]
 pub async fn find_rate_at_or_before(
     db: &impl ConnectionTrait,
     from_currency: &str,

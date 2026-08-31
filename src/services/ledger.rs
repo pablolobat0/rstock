@@ -1,16 +1,18 @@
-#![allow(dead_code)] // Public replay seam; consumers are migrated in follow-up ledger issues.
-
 //! Pure canonical replay for one asset's transaction ledger.
 //!
 //! Persistence establishes transaction identities; this module establishes their
 //! chronological meaning. Monetary values are in the tracked asset's native
 //! currency and deliberately have no market-data or database dependency.
 
+#![allow(dead_code)] // Keep the pure replay surface available to downstream consumers and tests.
+
+use std::collections::BTreeMap;
 use std::fmt;
 
 use chrono::NaiveDate;
 
-use crate::constants::{DATE_FORMAT, FLOAT_EPSILON};
+use crate::constants::{DATE_FORMAT, FLOAT_EPSILON, MONETARY_MULTIPLIER};
+use crate::models::{Transaction, TxType};
 
 /// A transaction whose data shape is constrained by its type.
 #[derive(Clone, Debug, PartialEq)]
@@ -55,6 +57,40 @@ impl LedgerEntryKind {
     }
 }
 
+impl LedgerEntry {
+    /// Converts the persisted transaction representation into the typed replay
+    /// representation.  The database encoding is intentionally kept at this
+    /// boundary; consumers never need to reinterpret dividend or split fields.
+    #[must_use]
+    pub fn from_transaction(transaction: &Transaction) -> Self {
+        let kind = match transaction.tx_type {
+            TxType::Buy => LedgerEntryKind::Buy {
+                units: transaction.quantity,
+                unit_price_cents: transaction.price_cents,
+                fees_cents: transaction.fees_cents,
+            },
+            TxType::Sell => LedgerEntryKind::Sell {
+                units: transaction.quantity,
+                unit_price_cents: transaction.price_cents,
+                fees_cents: transaction.fees_cents,
+            },
+            TxType::Dividend => LedgerEntryKind::Dividend {
+                gross_amount_cents: transaction.price_cents,
+                deductions_cents: transaction.fees_cents,
+            },
+            TxType::Split => LedgerEntryKind::Split {
+                ratio: transaction.quantity,
+            },
+        };
+        Self {
+            id: transaction.id,
+            asset_id: transaction.asset_id,
+            date: transaction.date.clone(),
+            kind,
+        }
+    }
+}
+
 /// A compact, stable description of an entry's type for diagnostics.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LedgerEntryType {
@@ -85,6 +121,20 @@ pub struct CanonicalLedger {
 }
 
 impl CanonicalLedger {
+    /// Builds a canonical ledger from persisted transactions.
+    pub fn from_transactions(
+        asset_id: i32,
+        transactions: &[Transaction],
+    ) -> Result<Self, LedgerError> {
+        Self::new(
+            asset_id,
+            transactions
+                .iter()
+                .map(LedgerEntry::from_transaction)
+                .collect(),
+        )
+    }
+
     /// Validates identity integrity and establishes the only replay order.
     pub fn new(asset_id: i32, mut entries: Vec<LedgerEntry>) -> Result<Self, LedgerError> {
         if asset_id <= 0 {
@@ -316,6 +366,115 @@ impl CanonicalLedger {
             remaining_cost,
         })
     }
+}
+
+/// Base-currency effects for one complete, valid ledger replay.  Missing FX
+/// only removes effects that depend on it; quantity remains available.
+#[derive(Clone, Debug, PartialEq)]
+pub struct EnrichedLedgerReplay {
+    pub transitions: Vec<EnrichedLedgerTransition>,
+    pub final_quantity: f64,
+    pub remaining_cost: Option<f64>,
+    pub dividends: Option<f64>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct EnrichedLedgerTransition {
+    pub transition: LedgerTransition,
+    pub buy_contribution: Option<f64>,
+    pub sell_withdrawal: Option<f64>,
+    pub cost_removed: Option<f64>,
+    pub dividend_income: Option<f64>,
+}
+
+/// Applies transaction-date FX to native-currency semantic effects.
+///
+/// `rates` contains prepared historical rates.  The lookup deliberately uses
+/// the latest rate on or before each entry date and never a later/current rate.
+pub fn enrich_replay(
+    replay: &LedgerReplay,
+    currency: &str,
+    base_currency: &str,
+    rates: &BTreeMap<NaiveDate, f64>,
+) -> Result<EnrichedLedgerReplay, LedgerError> {
+    let mut remaining_cost = Some(0.0);
+    let mut dividends = Some(0.0);
+    let mut transitions = Vec::with_capacity(replay.transitions.len());
+
+    for transition in &replay.transitions {
+        let date =
+            NaiveDate::parse_from_str(&transition.entry.date, DATE_FORMAT).map_err(|_| {
+                LedgerError::for_entry(
+                    &transition.entry,
+                    transition.quantity_before,
+                    LedgerAttempt::Identity,
+                    LedgerInvariant::ValidDate,
+                )
+            })?;
+        let rate = if currency == base_currency {
+            Some(1.0)
+        } else {
+            rates.range(..=date).next_back().map(|(_, rate)| *rate)
+        };
+
+        let (buy_contribution, sell_withdrawal, cost_removed, dividend_income) =
+            match &transition.effect {
+                LedgerEffect::Buy { contribution } => (
+                    rate.map(|rate| *contribution * rate / MONETARY_MULTIPLIER),
+                    None,
+                    None,
+                    None,
+                ),
+                LedgerEffect::Sell { withdrawal, .. } => {
+                    let cost_removed = remaining_cost.map(|cost| {
+                        if transition.quantity_after == 0.0 {
+                            cost
+                        } else {
+                            cost * (transition.quantity_before - transition.quantity_after)
+                                / transition.quantity_before
+                        }
+                    });
+                    if let (Some(cost), Some(removed)) = (remaining_cost, cost_removed) {
+                        remaining_cost = Some(cost - removed);
+                    } else {
+                        remaining_cost = None;
+                    }
+                    (
+                        None,
+                        rate.map(|rate| *withdrawal * rate / MONETARY_MULTIPLIER),
+                        cost_removed,
+                        None,
+                    )
+                }
+                LedgerEffect::Dividend { net_income } => {
+                    let income = rate.map(|rate| *net_income * rate / MONETARY_MULTIPLIER);
+                    dividends = dividends.zip(income).map(|(total, income)| total + income);
+                    (None, None, None, income)
+                }
+                LedgerEffect::Split { .. } => (None, None, None, None),
+            };
+
+        if let Some(contribution) = buy_contribution {
+            remaining_cost = remaining_cost.map(|cost| cost + contribution);
+        } else if matches!(&transition.effect, LedgerEffect::Buy { .. }) {
+            remaining_cost = None;
+        }
+
+        transitions.push(EnrichedLedgerTransition {
+            transition: transition.clone(),
+            buy_contribution,
+            sell_withdrawal,
+            cost_removed,
+            dividend_income,
+        });
+    }
+
+    Ok(EnrichedLedgerReplay {
+        transitions,
+        final_quantity: replay.final_quantity,
+        remaining_cost,
+        dividends,
+    })
 }
 
 /// One validated state transition and its native-currency effect.
@@ -561,6 +720,8 @@ fn is_canonical_date(date: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
 
     fn entry(id: i32, date: &str, kind: LedgerEntryKind) -> LedgerEntry {
@@ -834,5 +995,59 @@ mod tests {
             ledger.replay().unwrap_err().violated_invariant,
             LedgerInvariant::DeductionsDoNotExceedGrossDividend
         );
+    }
+
+    #[test]
+    fn enriches_native_effects_with_prior_fx_and_keeps_missing_facts_independent() {
+        let ledger = CanonicalLedger::new(
+            7,
+            vec![
+                entry(
+                    1,
+                    "2025-01-02",
+                    LedgerEntryKind::Buy {
+                        units: 2.0,
+                        unit_price_cents: 1_000,
+                        fees_cents: 100,
+                    },
+                ),
+                entry(
+                    2,
+                    "2025-01-03",
+                    LedgerEntryKind::Dividend {
+                        gross_amount_cents: 300,
+                        deductions_cents: 100,
+                    },
+                ),
+                entry(
+                    3,
+                    "2025-01-04",
+                    LedgerEntryKind::Sell {
+                        units: 1.0,
+                        unit_price_cents: 1_200,
+                        fees_cents: 50,
+                    },
+                ),
+            ],
+        )
+        .unwrap();
+        let replay = ledger.replay().unwrap();
+        let mut rates = BTreeMap::new();
+        rates.insert(NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(), 0.8);
+        let enriched = enrich_replay(&replay, "USD", "EUR", &rates).unwrap();
+
+        assert_eq!(enriched.final_quantity, 1.0);
+        assert_eq!(enriched.remaining_cost, Some(0.084));
+        assert_eq!(enriched.dividends, Some(0.016));
+        assert_eq!(enriched.transitions[0].buy_contribution, Some(0.168));
+        assert_eq!(enriched.transitions[1].dividend_income, Some(0.016));
+        assert_eq!(enriched.transitions[2].sell_withdrawal, Some(0.092));
+        assert_eq!(enriched.transitions[2].cost_removed, Some(0.084));
+
+        let missing = enrich_replay(&replay, "USD", "EUR", &BTreeMap::new()).unwrap();
+        assert_eq!(missing.final_quantity, 1.0);
+        assert_eq!(missing.remaining_cost, None);
+        assert_eq!(missing.dividends, None);
+        assert_eq!(missing.transitions[2].sell_withdrawal, None);
     }
 }
