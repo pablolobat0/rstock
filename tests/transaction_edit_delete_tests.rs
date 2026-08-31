@@ -2,7 +2,7 @@ mod common;
 
 use rstock::db::repos::transaction_repo;
 use rstock::models::{f64_to_cents, BuyOrder, DividendOrder, SellOrder, SplitOrder};
-use rstock::services;
+use rstock::services::{self, ledger};
 use sea_orm::ConnectionTrait;
 
 use common::*;
@@ -415,7 +415,12 @@ async fn same_day_ledger_reads_use_ascending_transaction_id() {
         all.iter().map(|tx| tx.id).collect::<Vec<_>>(),
         vec![1, 2, 3]
     );
-    assert!((rstock::models::Transaction::compute_holdings(&per_asset) - 5.0).abs() < f64::EPSILON);
+    assert_eq!(
+        ledger::replay_transactions(asset_id, &per_asset)
+            .unwrap()
+            .final_quantity,
+        5.0
+    );
 }
 
 #[tokio::test]

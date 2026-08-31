@@ -130,21 +130,6 @@ impl Transaction {
             TxType::Dividend | TxType::Split => 0.0,
         }
     }
-
-    /// Compute net holdings from a chronologically-ordered slice of transactions,
-    /// accounting for splits (which multiply holdings by their ratio).
-    #[allow(dead_code)]
-    pub fn compute_holdings(transactions: &[Transaction]) -> f64 {
-        let mut holdings = 0.0;
-        for tx in transactions {
-            if tx.is_split() {
-                holdings *= tx.quantity;
-            } else {
-                holdings += tx.signed_quantity();
-            }
-        }
-        holdings
-    }
 }
 
 impl From<transaction::Model> for Transaction {
