@@ -48,19 +48,6 @@ pub(crate) async fn fill_historical_market_data_cache(
     Ok(())
 }
 
-#[allow(dead_code)]
-pub(crate) async fn get_exchange_rate_for_asset(
-    db: &DatabaseConnection,
-    asset: &Asset,
-    date: &str,
-) -> anyhow::Result<Option<f64>> {
-    if asset.currency == BASE_CURRENCY {
-        return Ok(Some(1.0));
-    }
-
-    get_exchange_rate(db, &asset.currency, date).await
-}
-
 pub(crate) async fn get_exchange_rates_for_asset(
     db: &DatabaseConnection,
     asset: &Asset,
@@ -155,21 +142,6 @@ pub(crate) async fn get_base_currency_price_series_for_assets(
         );
     }
     Ok(series)
-}
-
-#[allow(dead_code)]
-async fn get_exchange_rate(
-    db: &DatabaseConnection,
-    from_currency: &str,
-    date: &str,
-) -> anyhow::Result<Option<f64>> {
-    if let Some(rate) =
-        exchange_rate_repo::find_rate(db, from_currency, BASE_CURRENCY, date).await?
-    {
-        return Ok(Some(rate));
-    }
-
-    exchange_rate_repo::find_rate_at_or_before(db, from_currency, BASE_CURRENCY, date).await
 }
 
 async fn prepare_historical_market_data(

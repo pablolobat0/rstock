@@ -131,6 +131,13 @@ async fn test_import_rejects_non_finite_numeric_values() {
 
     let result = import_transactions_csv(&db, csv.path().to_str().unwrap()).await;
     assert!(result.unwrap_err().to_string().contains("finite"));
+
+    let csv = write_csv(&format!(
+        "{CSV_HEADER}{}",
+        classified_stock_row("buy", "1", "1e20", "0.00")
+    ));
+    let result = import_transactions_csv(&db, csv.path().to_str().unwrap()).await;
+    assert!(result.unwrap_err().to_string().contains("precision"));
 }
 
 #[tokio::test]

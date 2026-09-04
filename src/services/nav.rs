@@ -91,11 +91,11 @@ pub async fn ensure_portfolio_history(
                 None,
             )
             .await?;
-            performance_market_data_prepared = preparation.data_available;
             let limitations = preparation.limitations.clone();
             if preparation.data_available {
                 rebuild_portfolio_history(db, start, yesterday, preparation, Some(snapshot))
                     .await?;
+                performance_market_data_prepared = true;
             }
             market_data_limitations = limitations;
         }
@@ -115,10 +115,10 @@ pub async fn ensure_portfolio_history(
                     Some(transactions),
                 )
                 .await?;
-                performance_market_data_prepared = preparation.data_available;
                 let limitations = preparation.limitations.clone();
                 if preparation.data_available {
                     rebuild_portfolio_history(db, start, yesterday, preparation, None).await?;
+                    performance_market_data_prepared = true;
                 }
                 market_data_limitations = limitations;
             }
