@@ -5,7 +5,7 @@ use chrono::NaiveDate;
 use clap::ValueEnum;
 use sea_orm::{DatabaseConnection, TransactionTrait};
 
-use crate::constants::{format_date, DISPLAY_DATE_FORMAT};
+use crate::constants::{format_date, DISPLAY_DATE_FORMAT, MONETARY_MULTIPLIER};
 use crate::db::repos::{
     asset_repo, daily_price_repo, portfolio_asset_history_repo, portfolio_history_repo,
     transaction_repo,
@@ -486,6 +486,11 @@ fn validate_numeric_fields(
     if !quantity.is_finite() || !price.is_finite() || !fees.is_finite() {
         bail!("row {row_num}: numeric values must be finite");
     }
+    if !matches!(tx_type, TxType::Split)
+        && (!cents_are_representable(price) || !cents_are_representable(fees))
+    {
+        bail!("row {row_num}: monetary values exceed supported precision");
+    }
     if fees < 0.0 {
         bail!("row {row_num}: fees must be non-negative");
     }
@@ -512,6 +517,11 @@ fn validate_numeric_fields(
     }
 
     Ok(())
+}
+
+fn cents_are_representable(value: f64) -> bool {
+    let scaled = value * MONETARY_MULTIPLIER;
+    scaled.is_finite() && scaled >= i64::MIN as f64 && scaled < 2.0_f64.powi(63)
 }
 
 fn validate_headers(headers: &csv::StringRecord) -> anyhow::Result<()> {

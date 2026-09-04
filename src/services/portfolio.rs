@@ -314,7 +314,6 @@ fn ledger_prepare_scope(
         let replay = ledger::replay_transactions(asset.id, transactions)
             .map_err(|error| anyhow::anyhow!(error))?;
         if replay.final_quantity > FLOAT_EPSILON {
-            has_open_holding = true;
             let needs_preparation = match preparation_scope {
                 LedgerPreparationScope::AllOpenHoldings => true,
                 LedgerPreparationScope::ReuseNavPerformanceData => {
@@ -324,6 +323,7 @@ fn ledger_prepare_scope(
             if !needs_preparation {
                 continue;
             }
+            has_open_holding = true;
             prepare_assets.push(asset.clone());
             let earliest = NaiveDate::parse_from_str(
                 replay

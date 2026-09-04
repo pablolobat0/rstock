@@ -237,16 +237,6 @@ impl MarketData {
             .await
     }
 
-    #[allow(dead_code)]
-    pub async fn get_asset_exchange_rate(
-        &self,
-        db: &DatabaseConnection,
-        asset: &Asset,
-        date: &str,
-    ) -> anyhow::Result<Option<f64>> {
-        historical::get_exchange_rate_for_asset(db, asset, date).await
-    }
-
     /// Returns prepared historical FX observations for transaction enrichment.
     /// The market-data module owns the cache and source policy; callers only
     /// receive source-neutral rates for a pure date lookup.
