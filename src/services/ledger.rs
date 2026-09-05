@@ -252,7 +252,7 @@ impl CanonicalLedger {
                         *deductions_cents as f64,
                         LedgerAttempt::DividendDeductions(*deductions_cents as f64),
                     )?;
-                    require_open_quantity(entry, quantity_before)?;
+                    require_open_quantity(entry, quantity_before, LedgerAttempt::GrossDividend)?;
                     if deductions_cents > gross_amount_cents {
                         return Err(LedgerError::for_entry(
                             entry,
@@ -270,7 +270,7 @@ impl CanonicalLedger {
                 }
                 LedgerEntryKind::Split { ratio } => {
                     validate_positive(entry, quantity_before, *ratio, LedgerAttempt::SplitRatio)?;
-                    require_open_quantity(entry, quantity_before)?;
+                    require_open_quantity(entry, quantity_before, LedgerAttempt::SplitRatio)?;
                     let quantity_after = normalize_quantity(quantity_before * ratio);
                     validate_finite(
                         entry,
@@ -525,14 +525,18 @@ fn validate_finite(
     }
 }
 
-fn require_open_quantity(entry: &LedgerEntry, quantity_before: f64) -> Result<(), LedgerError> {
+fn require_open_quantity(
+    entry: &LedgerEntry,
+    quantity_before: f64,
+    attempted_effect: LedgerAttempt,
+) -> Result<(), LedgerError> {
     if quantity_before > FLOAT_EPSILON {
         Ok(())
     } else {
         Err(LedgerError::for_entry(
             entry,
             quantity_before,
-            LedgerAttempt::Units,
+            attempted_effect,
             LedgerInvariant::OpenQuantityRequired,
         ))
     }
@@ -769,9 +773,16 @@ mod tests {
             },
             LedgerEntryKind::Split { ratio: 2.0 },
         ] {
+            let attempted_effect = match &kind {
+                LedgerEntryKind::Dividend { .. } => LedgerAttempt::GrossDividend,
+                LedgerEntryKind::Split { .. } => LedgerAttempt::SplitRatio,
+                _ => unreachable!("test only contains dividend and split entries"),
+            };
             let ledger = CanonicalLedger::new(7, vec![entry(1, "2025-01-01", kind)]).unwrap();
+            let error = ledger.replay().unwrap_err();
+            assert_eq!(error.attempted_effect, attempted_effect);
             assert_eq!(
-                ledger.replay().unwrap_err().violated_invariant,
+                error.violated_invariant,
                 LedgerInvariant::OpenQuantityRequired
             );
         }
