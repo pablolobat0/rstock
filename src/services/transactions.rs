@@ -437,9 +437,3 @@ fn earliest_transaction_date(
         .unwrap_or_default()
         .to_owned()
 }
-
-fn replay_quantity(asset_id: i32, transactions: &[Transaction]) -> anyhow::Result<f64> {
-    Ok(ledger::replay_transactions(asset_id, transactions)
-        .map_err(|error| anyhow::anyhow!(error))?
-        .final_quantity)
-}
