@@ -381,6 +381,29 @@ fn transaction_cli_rejects_invalid_numeric_values() {
         "-1",
     ])
     .is_err());
+
+    assert!(Cli::try_parse_from([
+        "rstock",
+        "transaction",
+        "edit",
+        "1",
+        "--date",
+        "01-01-2025x",
+    ])
+    .is_err());
+
+    assert!(Cli::try_parse_from([
+        "rstock",
+        "transaction",
+        "split",
+        "-t",
+        "XFAKE1",
+        "-d",
+        "01-01-2025",
+        "-r",
+        "2x",
+    ])
+    .is_err());
 }
 
 #[test]

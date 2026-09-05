@@ -701,11 +701,34 @@ async fn edits_reject_fields_that_are_not_meaningful_for_the_transaction_type() 
 }
 
 #[tokio::test]
+async fn edits_accept_type_specific_dividend_and_split_fields() {
+    let db = setup_test_db().await;
+    let asset_id = insert_asset(&db, "XFAKE1", "Fake Stock", "stock", "EUR").await;
+    insert_transaction(&db, asset_id, "2025-01-01", 10.0, 100.0, 0.0).await;
+    insert_dividend_transaction(&db, asset_id, "2025-01-02", 5.0, 1.0).await;
+    insert_split_transaction(&db, asset_id, "2025-01-03", 2.0).await;
+
+    services::transactions::edit(&db, 2, None, None, Some(6.0), Some(2.0))
+        .await
+        .unwrap();
+    services::transactions::edit(&db, 3, Some("2025-01-04".to_owned()), Some(3.0), None, None)
+        .await
+        .unwrap();
+
+    let dividend = transaction_repo::find_by_id(&db, 2).await.unwrap().unwrap();
+    assert_eq!(dividend.price_cents, f64_to_cents(6.0));
+    assert_eq!(dividend.fees_cents, f64_to_cents(2.0));
+    let split = transaction_repo::find_by_id(&db, 3).await.unwrap().unwrap();
+    assert_eq!(split.date, "2025-01-04");
+    assert!((split.quantity - 3.0).abs() < f64::EPSILON);
+}
+
+#[tokio::test]
 async fn editing_preserves_id_and_uses_id_to_break_same_day_date_ties() {
     let db = setup_test_db().await;
     let asset_id = insert_asset(&db, "XFAKE1", "Fake Stock", "stock", "EUR").await;
     insert_transaction(&db, asset_id, "2025-01-01", 10.0, 100.0, 0.0).await;
-    insert_transaction(&db, asset_id, "2025-01-03", 2.0, 100.0, 0.0).await;
+    insert_split_transaction(&db, asset_id, "2025-01-03", 2.0).await;
     insert_transaction(&db, asset_id, "2025-01-02", 3.0, 100.0, 0.0).await;
 
     services::transactions::edit(&db, 2, Some("2025-01-02".to_owned()), None, None, None)
@@ -724,6 +747,13 @@ async fn editing_preserves_id_and_uses_id_to_break_same_day_date_ties() {
     );
     assert_eq!(transactions[1].date, "2025-01-02");
     assert_eq!(transactions[2].date, "2025-01-02");
+    assert!(matches!(
+        transactions[1].tx_type,
+        rstock::models::TxType::Split
+    ));
+
+    let replay = ledger::replay_transactions(asset_id, &transactions).unwrap();
+    assert!((replay.final_quantity - 23.0).abs() < f64::EPSILON);
 }
 
 fn ledger_fields(

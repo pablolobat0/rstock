@@ -267,8 +267,7 @@ pub async fn edit(
     new_price: Option<f64>,
     new_fees: Option<f64>,
 ) -> anyhow::Result<TransactionReceipt> {
-    let mutation = db.begin().await?;
-    let tx = transaction_repo::find_by_id(&mutation, id)
+    let existing = transaction_repo::find_by_id(db, id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("Transaction {id} not found"))?;
 
@@ -276,7 +275,21 @@ pub async fn edit(
         anyhow::bail!("at least one transaction field must be specified")
     }
 
-    validate_edit(&tx, new_date.as_deref(), new_quantity, new_price, new_fees)?;
+    // Validate the request shape before opening the mutation transaction. The
+    // transaction below is reserved for tentative persistence, replay, and
+    // invalidation, all of which must roll back together.
+    validate_edit(
+        &existing,
+        new_date.as_deref(),
+        new_quantity,
+        new_price,
+        new_fees,
+    )?;
+
+    let mutation = db.begin().await?;
+    let tx = transaction_repo::find_by_id(&mutation, id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("Transaction {id} not found"))?;
 
     let new_price_cents = new_price.map(f64_to_cents);
     let new_fees_cents = new_fees.map(f64_to_cents);
