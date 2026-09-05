@@ -272,6 +272,10 @@ pub async fn edit(
         .await?
         .ok_or_else(|| anyhow::anyhow!("Transaction {id} not found"))?;
 
+    if new_date.is_none() && new_quantity.is_none() && new_price.is_none() && new_fees.is_none() {
+        anyhow::bail!("at least one transaction field must be specified")
+    }
+
     validate_edit(&tx, new_date.as_deref(), new_quantity, new_price, new_fees)?;
 
     let new_price_cents = new_price.map(f64_to_cents);

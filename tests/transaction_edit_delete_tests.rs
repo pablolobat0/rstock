@@ -575,7 +575,7 @@ async fn editing_a_buy_replays_and_rejects_an_invalid_later_sell_atomically() {
     let transactions = transaction_repo::find_by_asset_id(&db, asset_id)
         .await
         .unwrap();
-    assert_eq!(transactions[0].quantity, 10.0);
+    assert!((transactions[0].quantity - 10.0).abs() < f64::EPSILON);
     assert_eq!(transactions[0].id, 1);
     assert_eq!(transactions[1].id, 2);
 }
@@ -590,14 +590,12 @@ async fn editing_a_sell_replays_and_rejects_an_oversell_atomically() {
     let result = services::transactions::edit(&db, 2, None, Some(11.0), None, None).await;
 
     assert!(result.is_err());
-    assert_eq!(
-        transaction_repo::find_by_id(&db, 2)
-            .await
-            .unwrap()
-            .unwrap()
-            .quantity,
-        5.0
-    );
+    let quantity = transaction_repo::find_by_id(&db, 2)
+        .await
+        .unwrap()
+        .unwrap()
+        .quantity;
+    assert!((quantity - 5.0).abs() < f64::EPSILON);
 }
 
 #[tokio::test]
@@ -645,14 +643,12 @@ async fn changing_a_split_that_supports_a_later_sell_is_rejected_atomically() {
     let result = services::transactions::edit(&db, 2, None, Some(1.0), None, None).await;
 
     assert!(result.is_err());
-    assert_eq!(
-        transaction_repo::find_by_id(&db, 2)
-            .await
-            .unwrap()
-            .unwrap()
-            .quantity,
-        2.0
-    );
+    let quantity = transaction_repo::find_by_id(&db, 2)
+        .await
+        .unwrap()
+        .unwrap()
+        .quantity;
+    assert!((quantity - 2.0).abs() < f64::EPSILON);
 }
 
 #[tokio::test]
@@ -690,22 +686,18 @@ async fn edits_reject_fields_that_are_not_meaningful_for_the_transaction_type() 
     assert!(dividend_result.is_err());
     assert!(split_result.is_err());
     assert!(split_fee_result.is_err());
-    assert_eq!(
-        transaction_repo::find_by_id(&db, 2)
-            .await
-            .unwrap()
-            .unwrap()
-            .quantity,
-        1.0
-    );
-    assert_eq!(
-        transaction_repo::find_by_id(&db, 3)
-            .await
-            .unwrap()
-            .unwrap()
-            .quantity,
-        2.0
-    );
+    let dividend_quantity = transaction_repo::find_by_id(&db, 2)
+        .await
+        .unwrap()
+        .unwrap()
+        .quantity;
+    let split_quantity = transaction_repo::find_by_id(&db, 3)
+        .await
+        .unwrap()
+        .unwrap()
+        .quantity;
+    assert!((dividend_quantity - 1.0).abs() < f64::EPSILON);
+    assert!((split_quantity - 2.0).abs() < f64::EPSILON);
 }
 
 #[tokio::test]
