@@ -552,6 +552,9 @@ fn validate_numeric_fields(
             if price <= 0.0 {
                 bail!("row {row_num}: dividend amount must be positive");
             }
+            if fees > price {
+                bail!("row {row_num}: dividend deductions must not exceed gross amount");
+            }
         }
         TxType::Split => {
             if quantity <= 0.0 {

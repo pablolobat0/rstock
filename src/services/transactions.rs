@@ -381,9 +381,11 @@ fn validate_edit(
             }
             if let Some(price) = new_price {
                 validate_positive(price, "price")?;
+                validate_cents_representable(price, "price")?;
             }
             if let Some(fees) = new_fees {
                 validate_non_negative(fees, "fees")?;
+                validate_cents_representable(fees, "fees")?;
             }
         }
         crate::models::TxType::Dividend => {
@@ -392,9 +394,11 @@ fn validate_edit(
             }
             if let Some(price) = new_price {
                 validate_positive(price, "amount")?;
+                validate_cents_representable(price, "amount")?;
             }
             if let Some(fees) = new_fees {
                 validate_non_negative(fees, "fees")?;
+                validate_cents_representable(fees, "fees")?;
             }
 
             let gross_cents = new_price.map_or(
@@ -444,13 +448,17 @@ fn validate_trade_shape(date: &str, quantity: f64, price: f64, fees: f64) -> any
     validate_date(date)?;
     validate_positive(quantity, "quantity")?;
     validate_positive(price, "price")?;
-    validate_non_negative(fees, "fees")
+    validate_cents_representable(price, "price")?;
+    validate_non_negative(fees, "fees")?;
+    validate_cents_representable(fees, "fees")
 }
 
 fn validate_dividend_order(order: &DividendOrder) -> anyhow::Result<()> {
     validate_date(&order.date)?;
     validate_positive(order.amount, "amount")?;
+    validate_cents_representable(order.amount, "amount")?;
     validate_non_negative(order.fees, "fees")?;
+    validate_cents_representable(order.fees, "fees")?;
     if order.fees > order.amount {
         anyhow::bail!("fees must not exceed dividend amount");
     }
@@ -490,6 +498,14 @@ fn validate_non_negative(value: f64, field: &str) -> anyhow::Result<()> {
     }
     if value < 0.0 {
         anyhow::bail!("{field} must be non-negative");
+    }
+    Ok(())
+}
+
+fn validate_cents_representable(value: f64, field: &str) -> anyhow::Result<()> {
+    let scaled = value * MONETARY_MULTIPLIER;
+    if !scaled.is_finite() || scaled < i64::MIN as f64 || scaled >= 2.0_f64.powi(63) {
+        anyhow::bail!("{field} exceeds supported cents precision")
     }
     Ok(())
 }
