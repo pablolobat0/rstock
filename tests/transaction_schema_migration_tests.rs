@@ -62,10 +62,10 @@ async fn semantic_migration_round_trips_every_transaction_kind_and_identity() {
         .expect("legacy rows");
     assert_eq!(legacy.len(), 4);
     assert_eq!(legacy[0].try_get::<i32>("", "id").unwrap(), 11);
-    assert_eq!(legacy[0].try_get::<f64>("", "quantity").unwrap(), 10.5);
-    assert_eq!(legacy[1].try_get::<f64>("", "quantity").unwrap(), 2.0);
+    assert!((legacy[0].try_get::<f64>("", "quantity").unwrap() - 10.5).abs() < 1e-12);
+    assert!((legacy[1].try_get::<f64>("", "quantity").unwrap() - 2.0).abs() < 1e-12);
     assert_eq!(legacy[1].try_get::<i64>("", "price_cents").unwrap(), 0);
-    assert_eq!(legacy[2].try_get::<f64>("", "quantity").unwrap(), 1.0);
+    assert!((legacy[2].try_get::<f64>("", "quantity").unwrap() - 1.0).abs() < 1e-12);
     assert_eq!(legacy[2].try_get::<i64>("", "price_cents").unwrap(), 700);
     assert_eq!(legacy[2].try_get::<i64>("", "fees_cents").unwrap(), 100);
     assert_eq!(legacy[3].try_get::<i64>("", "price_cents").unwrap(), 1500);

@@ -150,10 +150,8 @@ CREATE TABLE transactions (
 "#;
 
 async fn create_indexes(db: &impl ConnectionTrait) -> Result<(), DbErr> {
-    db.execute_unprepared(
-        "CREATE INDEX idx_transactions_date_id ON transactions (date, id)",
-    )
-    .await?;
+    db.execute_unprepared("CREATE INDEX idx_transactions_date_id ON transactions (date, id)")
+        .await?;
     db.execute_unprepared(
         "CREATE INDEX idx_transactions_asset_date_id ON transactions (asset_id, date, id)",
     )
