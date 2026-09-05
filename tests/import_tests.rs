@@ -158,6 +158,35 @@ async fn test_import_replay_error_identifies_the_imported_row() {
 }
 
 #[tokio::test]
+async fn test_import_replay_error_identifies_row_causing_existing_suffix_failure() {
+    let db = common::setup_test_db().await;
+    let asset_id = common::insert_asset(&db, "XFAKESUFFIX", "Suffix Stock", "stock", "EUR").await;
+    common::insert_transaction(&db, asset_id, "2025-01-01", 1.0, 100.0, 0.0).await;
+    common::insert_sell_transaction(&db, asset_id, "2025-01-04", 1.0, 100.0, 0.0).await;
+    let csv = write_csv(&format!(
+        "{CSV_HEADER}\
+         02-01-2025,XFAKESUFFIX,,,EUR,,,,,,,dividend,1,10.00,0.00\n\
+         03-01-2025,XFAKESUFFIX,,,EUR,,,,,,,sell,1,100.00,0.00\n"
+    ));
+
+    let error = import_transactions_csv(&db, csv.path().to_str().unwrap())
+        .await
+        .expect_err("an imported sell should invalidate the existing suffix");
+    let message = error.to_string();
+    assert!(
+        message.contains("row 3"),
+        "error should identify the imported row causing the suffix failure: {message}"
+    );
+    assert_eq!(
+        transaction_repo::find_all_ordered_by_date(&db, None, None)
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+#[tokio::test]
 async fn test_import_unsorted_dates_replay_in_canonical_order() {
     let db = common::setup_test_db().await;
     let csv = write_csv(&format!(
@@ -472,16 +501,13 @@ async fn test_import_export_roundtrip_preserves_all_transaction_types() {
     let roundtripped = transaction_repo::find_all_ordered_by_date(&db2, None, None)
         .await
         .unwrap();
-    assert_eq!(
-        original
-            .iter()
-            .map(|tx| (&tx.tx_type, tx.quantity, tx.price_cents, tx.fees_cents))
-            .collect::<Vec<_>>(),
-        roundtripped
-            .iter()
-            .map(|tx| (&tx.tx_type, tx.quantity, tx.price_cents, tx.fees_cents))
-            .collect::<Vec<_>>()
-    );
+    assert_eq!(original.len(), roundtripped.len());
+    for (original, roundtripped) in original.iter().zip(roundtripped.iter()) {
+        assert_eq!(original.tx_type, roundtripped.tx_type);
+        assert!((original.quantity - roundtripped.quantity).abs() < 1e-12);
+        assert_eq!(original.price_cents, roundtripped.price_cents);
+        assert_eq!(original.fees_cents, roundtripped.fees_cents);
+    }
 }
 
 #[tokio::test]

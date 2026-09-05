@@ -296,14 +296,12 @@ pub async fn import_transactions_csv(
     for asset_id in affected_asset_ids {
         let transactions = transaction_repo::find_by_asset_id(&mutation, asset_id).await?;
         if let Err(error) = ledger::replay_transactions(asset_id, &transactions) {
-            let source_row = source_rows_by_transaction_id
-                .get(&error.entry_id)
-                .copied()
-                .or_else(|| {
-                    source_rows_by_asset
-                        .get(&asset_id)
-                        .and_then(|rows| rows.first().copied())
-                });
+            let source_row = source_row_for_replay_error(
+                &error,
+                &transactions,
+                &source_rows_by_transaction_id,
+                source_rows_by_asset.get(&asset_id).map(Vec::as_slice),
+            );
             if let Some(source_row) = source_row {
                 let ticker = tickers_by_asset_id
                     .get(&asset_id)
@@ -588,6 +586,30 @@ fn parse_optional(s: &str) -> Option<String> {
     } else {
         Some(trimmed.to_string())
     }
+}
+
+fn source_row_for_replay_error(
+    error: &ledger::LedgerError,
+    transactions: &[Transaction],
+    source_rows_by_transaction_id: &HashMap<i32, usize>,
+    source_rows: Option<&[usize]>,
+) -> Option<usize> {
+    source_rows_by_transaction_id
+        .get(&error.entry_id)
+        .copied()
+        .or_else(|| {
+            transactions
+                .iter()
+                .position(|transaction| transaction.id == error.entry_id)
+                .and_then(|error_index| {
+                    transactions[..error_index]
+                        .iter()
+                        .rev()
+                        .find_map(|transaction| source_rows_by_transaction_id.get(&transaction.id))
+                        .copied()
+                })
+        })
+        .or_else(|| source_rows.and_then(|rows| rows.first().copied()))
 }
 
 fn parse_optional_enum<E>(s: &str, row_num: usize, field: &str) -> anyhow::Result<Option<E>>
