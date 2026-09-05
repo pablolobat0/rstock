@@ -8,6 +8,12 @@ pub fn f64_to_cents(val: f64) -> i64 {
     (val * MONETARY_MULTIPLIER).round() as i64
 }
 
+#[must_use]
+pub fn cents_are_representable(value: f64) -> bool {
+    let scaled = value * MONETARY_MULTIPLIER;
+    scaled.is_finite() && scaled >= i64::MIN as f64 && scaled < 2.0_f64.powi(63)
+}
+
 pub fn cents_to_f64(cents: i64) -> f64 {
     cents as f64 / MONETARY_MULTIPLIER
 }

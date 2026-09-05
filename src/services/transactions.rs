@@ -8,7 +8,8 @@ use crate::db::repos::{
     transaction_repo,
 };
 use crate::models::{
-    f64_to_cents, BuyOrder, DividendOrder, SellOrder, SplitOrder, Transaction, TransactionListItem,
+    cents_are_representable, f64_to_cents, BuyOrder, DividendOrder, SellOrder, SplitOrder,
+    Transaction, TransactionListItem,
 };
 use crate::services::ledger::{self, LedgerEffect, LedgerReplay, LedgerTransition};
 
@@ -503,8 +504,7 @@ fn validate_non_negative(value: f64, field: &str) -> anyhow::Result<()> {
 }
 
 fn validate_cents_representable(value: f64, field: &str) -> anyhow::Result<()> {
-    let scaled = value * MONETARY_MULTIPLIER;
-    if !scaled.is_finite() || scaled < i64::MIN as f64 || scaled >= 2.0_f64.powi(63) {
+    if !cents_are_representable(value) {
         anyhow::bail!("{field} exceeds supported cents precision")
     }
     Ok(())

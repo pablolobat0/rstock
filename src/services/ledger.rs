@@ -161,6 +161,8 @@ impl CanonicalLedger {
         asset_id: i32,
         transactions: &[Transaction],
     ) -> Result<Self, LedgerError> {
+        let mut transactions = transactions.to_vec();
+        transactions.sort_by(|left, right| left.date.cmp(&right.date).then(left.id.cmp(&right.id)));
         Self::new(
             asset_id,
             transactions
