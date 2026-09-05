@@ -61,37 +61,68 @@ impl LedgerEntry {
     /// Converts the persisted transaction representation into the typed replay
     /// representation.  The database encoding is intentionally kept at this
     /// boundary; consumers never need to reinterpret dividend or split fields.
-    #[must_use]
-    pub fn from_transaction(transaction: &Transaction) -> Self {
-        let kind = match transaction.tx_type {
+    pub fn from_transaction(transaction: &Transaction) -> Result<Self, LedgerError> {
+        let kind = match &transaction.tx_type {
             TxType::Buy => LedgerEntryKind::Buy {
-                units: transaction.ledger_units().unwrap_or_default(),
-                unit_price_cents: transaction.ledger_unit_price_cents().unwrap_or_default(),
-                fees_cents: transaction.ledger_fees_cents().unwrap_or_default(),
+                units: required_field(
+                    transaction.ledger_units(),
+                    transaction,
+                    LedgerAttempt::Units,
+                )?,
+                unit_price_cents: required_field(
+                    transaction.ledger_unit_price_cents(),
+                    transaction,
+                    LedgerAttempt::UnitPrice,
+                )?,
+                fees_cents: required_field(
+                    transaction.ledger_fees_cents(),
+                    transaction,
+                    LedgerAttempt::Fees,
+                )?,
             },
             TxType::Sell => LedgerEntryKind::Sell {
-                units: transaction.ledger_units().unwrap_or_default(),
-                unit_price_cents: transaction.ledger_unit_price_cents().unwrap_or_default(),
-                fees_cents: transaction.ledger_fees_cents().unwrap_or_default(),
+                units: required_field(
+                    transaction.ledger_units(),
+                    transaction,
+                    LedgerAttempt::Units,
+                )?,
+                unit_price_cents: required_field(
+                    transaction.ledger_unit_price_cents(),
+                    transaction,
+                    LedgerAttempt::UnitPrice,
+                )?,
+                fees_cents: required_field(
+                    transaction.ledger_fees_cents(),
+                    transaction,
+                    LedgerAttempt::Fees,
+                )?,
             },
             TxType::Dividend => LedgerEntryKind::Dividend {
-                gross_amount_cents: transaction
-                    .ledger_dividend_amount_cents()
-                    .unwrap_or_default(),
-                deductions_cents: transaction
-                    .ledger_dividend_deductions_cents()
-                    .unwrap_or_default(),
+                gross_amount_cents: required_field(
+                    transaction.ledger_dividend_amount_cents(),
+                    transaction,
+                    LedgerAttempt::GrossDividend,
+                )?,
+                deductions_cents: required_field(
+                    transaction.ledger_dividend_deductions_cents(),
+                    transaction,
+                    LedgerAttempt::DividendDeductions(0.0),
+                )?,
             },
             TxType::Split => LedgerEntryKind::Split {
-                ratio: transaction.ledger_split_ratio().unwrap_or_default(),
+                ratio: required_field(
+                    transaction.ledger_split_ratio(),
+                    transaction,
+                    LedgerAttempt::SplitRatio,
+                )?,
             },
         };
-        Self {
+        Ok(Self {
             id: transaction.id,
             asset_id: transaction.asset_id,
             date: transaction.date.clone(),
             kind,
-        }
+        })
     }
 }
 
@@ -135,7 +166,7 @@ impl CanonicalLedger {
             transactions
                 .iter()
                 .map(LedgerEntry::from_transaction)
-                .collect(),
+                .collect::<Result<Vec<_>, _>>()?,
         )
     }
 
@@ -559,6 +590,7 @@ pub enum LedgerInvariant {
     NonNegativeQuantity,
     OpenQuantityRequired,
     DeductionsDoNotExceedGrossDividend,
+    RequiredField,
 }
 
 /// Context for the first invalid canonical prefix.
@@ -574,6 +606,23 @@ pub struct LedgerError {
 }
 
 impl LedgerError {
+    fn missing_field(transaction: &Transaction, attempted_effect: LedgerAttempt) -> Self {
+        Self {
+            asset_id: transaction.asset_id,
+            entry_id: transaction.id,
+            date: transaction.date.clone(),
+            entry_type: match &transaction.tx_type {
+                TxType::Buy => LedgerEntryType::Buy,
+                TxType::Sell => LedgerEntryType::Sell,
+                TxType::Dividend => LedgerEntryType::Dividend,
+                TxType::Split => LedgerEntryType::Split,
+            },
+            quantity_before: 0.0,
+            attempted_effect,
+            violated_invariant: LedgerInvariant::RequiredField,
+        }
+    }
+
     fn for_ledger(asset_id: i32, violated_invariant: LedgerInvariant) -> Self {
         Self {
             asset_id,
@@ -620,6 +669,14 @@ impl LedgerError {
             violated_invariant,
         }
     }
+}
+
+fn required_field<T>(
+    value: Option<T>,
+    transaction: &Transaction,
+    attempted_effect: LedgerAttempt,
+) -> Result<T, LedgerError> {
+    value.ok_or_else(|| LedgerError::missing_field(transaction, attempted_effect))
 }
 
 impl fmt::Display for LedgerError {
@@ -855,6 +912,25 @@ mod tests {
             result.unwrap_err().violated_invariant,
             LedgerInvariant::UniquePositiveEntryIdentity
         );
+    }
+
+    #[test]
+    fn rejects_missing_required_semantic_persistence_fields() {
+        let transaction = Transaction {
+            id: 1,
+            asset_id: 7,
+            tx_type: TxType::Buy,
+            date: "2025-01-01".to_owned(),
+            units: Some(1.0),
+            unit_price_cents: Some(100),
+            dividend_amount_cents: None,
+            dividend_deductions_cents: None,
+            split_ratio: None,
+            trade_fees_cents: None,
+        };
+        let error = LedgerEntry::from_transaction(&transaction).unwrap_err();
+        assert_eq!(error.violated_invariant, LedgerInvariant::RequiredField);
+        assert_eq!(error.attempted_effect, LedgerAttempt::Fees);
     }
 
     #[test]
