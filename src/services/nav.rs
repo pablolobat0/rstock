@@ -4,14 +4,12 @@ use anyhow::Context;
 use chrono::{Duration, NaiveDate};
 use sea_orm::{DatabaseConnection, TransactionTrait};
 
-use crate::constants::{format_date, FLOAT_EPSILON, INITIAL_NAV};
+use crate::constants::{format_date, FLOAT_EPSILON, INITIAL_NAV, MONETARY_MULTIPLIER};
 use crate::db::repos::{
     asset_repo, portfolio_asset_history_repo, portfolio_history_repo, transaction_repo,
 };
-use crate::models::{
-    cents_to_f64, Asset, AssetSnapshot, MarketDataLimitation, PortfolioSnapshot, Transaction,
-    TxType,
-};
+use crate::models::{Asset, AssetSnapshot, MarketDataLimitation, PortfolioSnapshot, Transaction};
+use crate::services::ledger::{self, LedgerEffect, LedgerTransition};
 use crate::services::market_data::{MarketData, NavValuationData};
 
 /// NAV history made ready for consumers, together with the limitations that
@@ -28,7 +26,7 @@ struct NavMarketDataPreparation {
     limitations: Vec<MarketDataLimitation>,
     data_available: bool,
     holdings: HashMap<i32, f64>,
-    transactions: Vec<Transaction>,
+    transactions: Vec<LedgerTransition>,
     assets: Vec<Asset>,
     valuation_data: Option<NavValuationData>,
 }
@@ -93,11 +91,11 @@ pub async fn ensure_portfolio_history(
                 None,
             )
             .await?;
-            performance_market_data_prepared = true;
             let limitations = preparation.limitations.clone();
             if preparation.data_available {
                 rebuild_portfolio_history(db, start, yesterday, preparation, Some(snapshot))
                     .await?;
+                performance_market_data_prepared = true;
             }
             market_data_limitations = limitations;
         }
@@ -117,10 +115,10 @@ pub async fn ensure_portfolio_history(
                     Some(transactions),
                 )
                 .await?;
-                performance_market_data_prepared = true;
                 let limitations = preparation.limitations.clone();
                 if preparation.data_available {
                     rebuild_portfolio_history(db, start, yesterday, preparation, None).await?;
+                    performance_market_data_prepared = true;
                 }
                 market_data_limitations = limitations;
             }
@@ -139,7 +137,8 @@ async fn find_first_incomplete_snapshot(
     latest_date: &str,
 ) -> anyhow::Result<Option<String>> {
     let snapshot_dates = portfolio_history_repo::find_dates_between(db, "", latest_date).await?;
-    let transactions = transaction_repo::find_holdings_inputs(db, Some(latest_date)).await?;
+    let transactions =
+        transaction_repo::find_all_ordered_by_date(db, None, Some(latest_date)).await?;
     let actual_snapshot_holdings =
         portfolio_asset_history_repo::find_holdings_at_or_before(db, latest_date).await?;
     let asset_ids: HashSet<i32> = transactions
@@ -169,16 +168,38 @@ async fn find_first_incomplete_snapshot(
         },
     );
 
-    let mut holdings = HashMap::<i32, f64>::new();
-    let mut transaction_index = 0;
+    let transactions_by_asset = transactions.into_iter().fold(
+        HashMap::<i32, Vec<Transaction>>::new(),
+        |mut grouped, transaction| {
+            grouped
+                .entry(transaction.asset_id)
+                .or_default()
+                .push(transaction);
+            grouped
+        },
+    );
+    let mut transitions_by_asset = HashMap::<i32, Vec<LedgerTransition>>::new();
+    for (asset_id, transactions) in transactions_by_asset {
+        let replay = ledger::replay_transactions(asset_id, &transactions)
+            .map_err(|error| anyhow::anyhow!(error))?;
+        transitions_by_asset.insert(asset_id, replay.transitions);
+    }
     for date in snapshot_dates {
-        while transaction_index < transactions.len() && transactions[transaction_index].date <= date
-        {
-            let transaction = &transactions[transaction_index];
-            apply_transaction_to_holdings(&mut holdings, transaction, &asset_map);
-            transaction_index += 1;
-        }
-        let expected_holdings = holdings
+        let expected_holdings: HashMap<i32, f64> = transitions_by_asset
+            .iter()
+            .filter_map(|(asset_id, transitions)| {
+                let quantity = transitions
+                    .iter()
+                    .rfind(|transition| transition.entry.date <= date)
+                    .map_or(0.0, |transition| transition.quantity_after);
+                (quantity > FLOAT_EPSILON
+                    && asset_map
+                        .get(asset_id)
+                        .is_some_and(|asset| !asset.is_monetary()))
+                .then_some((*asset_id, quantity))
+            })
+            .collect();
+        let expected_holdings = expected_holdings
             .iter()
             .filter(|(_, quantity)| **quantity > FLOAT_EPSILON);
         let expected_count = expected_holdings.clone().count();
@@ -201,25 +222,6 @@ async fn find_first_incomplete_snapshot(
     Ok(None)
 }
 
-fn apply_transaction_to_holdings(
-    holdings: &mut HashMap<i32, f64>,
-    transaction: &crate::models::HoldingInput,
-    asset_map: &HashMap<i32, &Asset>,
-) {
-    if asset_map
-        .get(&transaction.asset_id)
-        .is_some_and(|asset| !asset.is_monetary())
-    {
-        let holding = holdings.entry(transaction.asset_id).or_default();
-        match transaction.tx_type {
-            TxType::Buy => *holding += transaction.quantity,
-            TxType::Sell => *holding -= transaction.quantity,
-            TxType::Split => *holding *= transaction.quantity,
-            TxType::Dividend => {}
-        }
-    }
-}
-
 async fn discard_incomplete_snapshots_from(
     db: &DatabaseConnection,
     date: &str,
@@ -236,6 +238,7 @@ async fn discard_incomplete_snapshots_from(
 /// rate is available. The single preparation pass both fills the cache the
 /// rebuild will reuse and yields the NAV-scoped limitations; no second pass is
 /// needed to reconstruct them after a failed rebuild.
+#[allow(clippy::too_many_lines)]
 async fn nav_market_data_availability(
     db: &DatabaseConnection,
     market_data: &MarketData,
@@ -253,16 +256,51 @@ async fn nav_market_data_availability(
             holdings.insert(row.asset_id, row.quantity);
         }
     }
-    let transactions = match prepared_transactions {
+    let raw_transactions = match prepared_transactions {
         Some(transactions) => transactions,
         None => {
             transaction_repo::find_all_ordered_by_date(db, Some(&start_str), Some(&end_str)).await?
         }
     };
+    let all_transactions = if prev_snapshot.is_some() {
+        transaction_repo::find_all_ordered_by_date(db, None, Some(&end_str)).await?
+    } else {
+        raw_transactions
+    };
+    let transactions_by_asset = all_transactions.into_iter().fold(
+        HashMap::<i32, Vec<Transaction>>::new(),
+        |mut grouped, transaction| {
+            grouped
+                .entry(transaction.asset_id)
+                .or_default()
+                .push(transaction);
+            grouped
+        },
+    );
+    let mut transactions = Vec::new();
+    for (asset_id, asset_transactions) in transactions_by_asset {
+        let replay = ledger::replay_transactions(asset_id, &asset_transactions)
+            .map_err(|error| anyhow::anyhow!(error))?;
+        transactions.extend(replay.transitions.into_iter().filter(|transition| {
+            transition.entry.date >= start_str && transition.entry.date <= end_str
+        }));
+    }
+    transactions.sort_by(|left, right| {
+        left.entry
+            .date
+            .cmp(&right.entry.date)
+            .then(left.entry.id.cmp(&right.entry.id))
+    });
+
     let needed_ids: HashSet<i32> = holdings
         .keys()
         .copied()
-        .chain(transactions.iter().map(|tx| tx.asset_id))
+        .chain(
+            transactions
+                .iter()
+                .filter(|transition| transition.quantity_after > FLOAT_EPSILON)
+                .map(|transition| transition.entry.asset_id),
+        )
         .collect();
     if needed_ids.is_empty() {
         return Ok(NavMarketDataPreparation {
@@ -284,6 +322,7 @@ async fn nav_market_data_availability(
     let (mut availability, valuation_data) = market_data
         .prepare_valuation_market_data_for_nav(db, &nav_assets, &start_str, &end_str)
         .await?;
+
     if availability.data_available {
         let mut first_valuation_dates: HashMap<i32, NaiveDate> = holdings
             .iter()
@@ -292,13 +331,13 @@ async fn nav_market_data_availability(
             .collect();
         for transaction in transactions
             .iter()
-            .filter(|transaction| transaction.is_buy())
+            .filter(|transaction| matches!(&transaction.effect, LedgerEffect::Buy { .. }))
         {
             let transaction_date =
-                NaiveDate::parse_from_str(&transaction.date, crate::constants::DATE_FORMAT)
+                NaiveDate::parse_from_str(&transaction.entry.date, crate::constants::DATE_FORMAT)
                     .context("invalid transaction date")?;
             first_valuation_dates
-                .entry(transaction.asset_id)
+                .entry(transaction.entry.asset_id)
                 .or_insert(transaction_date);
         }
 
@@ -363,9 +402,12 @@ async fn rebuild_portfolio_history(
     }
     let valuation_data = valuation_data.context("missing preloaded NAV valuation data")?;
 
-    let mut tx_by_date: HashMap<String, Vec<&Transaction>> = HashMap::new();
+    let mut tx_by_date: HashMap<String, Vec<&LedgerTransition>> = HashMap::new();
     for tx in &transactions {
-        tx_by_date.entry(tx.date.clone()).or_default().push(tx);
+        tx_by_date
+            .entry(tx.entry.date.clone())
+            .or_default()
+            .push(tx);
     }
 
     let asset_map: HashMap<i32, &Asset> = assets.iter().map(|a| (a.id, a)).collect();
@@ -446,7 +488,7 @@ async fn rebuild_portfolio_history(
 /// Returns `(outstanding_shares, nav, dividend_income_eur)`.
 #[allow(clippy::implicit_hasher)]
 fn process_day_transactions(
-    day_txs: &[&Transaction],
+    day_txs: &[&LedgerTransition],
     holdings: &mut HashMap<i32, f64>,
     outstanding_shares: f64,
     nav: f64,
@@ -458,7 +500,8 @@ fn process_day_transactions(
     let mut current_nav = nav;
     let mut dividend_income = 0.0;
 
-    for tx in day_txs {
+    for transition in day_txs {
+        let tx = &transition.entry;
         if asset_map
             .get(&tx.asset_id)
             .is_some_and(|asset| asset.is_monetary())
@@ -473,42 +516,40 @@ fn process_day_transactions(
             .transpose()?
             .unwrap_or(1.0);
 
-        if tx.is_split() {
-            *holdings.entry(tx.asset_id).or_insert(0.0) *= tx.quantity;
-        } else if tx.is_dividend() {
-            // Dividend = income: accumulate as cash, no holdings or shares change
-            let amount = tx.quantity * cents_to_f64(tx.price_cents) - cents_to_f64(tx.fees_cents);
-            dividend_income += amount * rate;
-        } else if tx.is_sell() {
-            // Sell = withdrawal: proceeds = qty * price - fees
-            let withdrawal =
-                tx.quantity * cents_to_f64(tx.price_cents) - cents_to_f64(tx.fees_cents);
-            let withdrawal_eur = withdrawal * rate;
-
-            if os > 0.0 && current_nav > 0.0 {
-                let shares_redeemed = withdrawal_eur / current_nav;
-                os -= shares_redeemed;
-                if os < 0.0 {
-                    os = 0.0;
+        match &transition.effect {
+            LedgerEffect::Split { ratio } => {
+                *holdings.entry(tx.asset_id).or_insert(0.0) *= ratio;
+            }
+            LedgerEffect::Dividend { net_income } => {
+                // Dividend = income: accumulate cash, no holdings or shares change.
+                dividend_income += net_income * rate / MONETARY_MULTIPLIER;
+            }
+            LedgerEffect::Sell { withdrawal, .. } => {
+                let withdrawal_eur = withdrawal * rate / MONETARY_MULTIPLIER;
+                if os > 0.0 && current_nav > 0.0 {
+                    let shares_redeemed = withdrawal_eur / current_nav;
+                    os -= shares_redeemed;
+                    if os < 0.0 {
+                        os = 0.0;
+                    }
                 }
+                *holdings.entry(tx.asset_id).or_insert(0.0) -=
+                    transition.quantity_before - transition.quantity_after;
             }
-
-            *holdings.entry(tx.asset_id).or_insert(0.0) -= tx.quantity;
-        } else {
-            // Buy = deposit: cost = qty * price + fees
-            let deposit = tx.quantity * cents_to_f64(tx.price_cents) + cents_to_f64(tx.fees_cents);
-            let deposit_eur = deposit * rate;
-
-            if os == 0.0 {
-                current_nav = INITIAL_NAV;
-                let shares_issued = deposit_eur / INITIAL_NAV;
-                os = shares_issued;
-            } else {
-                let shares_issued = deposit_eur / current_nav;
-                os += shares_issued;
+            LedgerEffect::Buy { contribution } => {
+                // Buy = deposit: contribution includes buy fees.
+                let deposit_eur = contribution * rate / MONETARY_MULTIPLIER;
+                if os == 0.0 {
+                    current_nav = INITIAL_NAV;
+                    let shares_issued = deposit_eur / INITIAL_NAV;
+                    os = shares_issued;
+                } else {
+                    let shares_issued = deposit_eur / current_nav;
+                    os += shares_issued;
+                }
+                *holdings.entry(tx.asset_id).or_insert(0.0) +=
+                    transition.quantity_after - transition.quantity_before;
             }
-
-            *holdings.entry(tx.asset_id).or_insert(0.0) += tx.quantity;
         }
     }
 

@@ -101,6 +101,46 @@ async fn test_import_sell_nonexistent_asset() {
 }
 
 #[tokio::test]
+async fn test_import_replays_existing_ledger_before_commit() {
+    let db = common::setup_test_db().await;
+    let asset_id = common::insert_asset(&db, "XFAKEIMPORT", "Import Stock", "stock", "EUR").await;
+    common::insert_transaction(&db, asset_id, "2025-01-01", 1.0, 100.0, 0.0).await;
+    let csv = write_csv(&format!(
+        "{CSV_HEADER}{}",
+        classified_stock_row("sell", "2", "100.00", "0.00").replace("XFAKE1", "XFAKEIMPORT")
+    ));
+
+    let result = import_transactions_csv(&db, csv.path().to_str().unwrap()).await;
+    assert!(result.is_err());
+    assert_eq!(
+        transaction_repo::find_all_ordered_by_date(&db, None, None)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn test_import_rejects_non_finite_numeric_values() {
+    let db = common::setup_test_db().await;
+    let csv = write_csv(&format!(
+        "{CSV_HEADER}{}",
+        classified_stock_row("buy", "NaN", "100.00", "0.00")
+    ));
+
+    let result = import_transactions_csv(&db, csv.path().to_str().unwrap()).await;
+    assert!(result.unwrap_err().to_string().contains("finite"));
+
+    let csv = write_csv(&format!(
+        "{CSV_HEADER}{}",
+        classified_stock_row("buy", "1", "1e20", "0.00")
+    ));
+    let result = import_transactions_csv(&db, csv.path().to_str().unwrap()).await;
+    assert!(result.unwrap_err().to_string().contains("precision"));
+}
+
+#[tokio::test]
 async fn test_import_buy_missing_name() {
     let db = common::setup_test_db().await;
     let csv = write_csv(&format!(

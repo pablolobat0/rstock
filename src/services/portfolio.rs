@@ -11,12 +11,12 @@ use crate::constants::{
 };
 use crate::db::repos::{asset_repo, portfolio_history_repo, transaction_repo};
 use crate::models::{
-    cents_to_f64, Asset, CurrentPosition, CurrentPositions, MarketDataLimitation,
+    Asset, CurrentPosition, CurrentPositions, MarketDataLimitation,
     MarketDataLimitationClassification, MarketDataSubject, PortfolioResult, Transaction,
 };
 use crate::services::market_data::MarketData;
-use crate::services::nav;
 use crate::services::{analytics, metrics};
+use crate::services::{ledger, nav};
 
 const CURRENT_POSITION_CONCURRENCY_LIMIT: usize = 4;
 
@@ -190,7 +190,8 @@ async fn get_current_positions_inner(
         &transactions_by_asset,
         &end_date,
         preparation_scope,
-    ) else {
+    )?
+    else {
         return Ok(empty_current_positions());
     };
     if !prepare_scope.assets.is_empty() {
@@ -299,7 +300,7 @@ fn ledger_prepare_scope(
     transactions_by_asset: &HashMap<i32, Vec<Transaction>>,
     end_date: &str,
     preparation_scope: LedgerPreparationScope,
-) -> Option<LedgerPrepareScope> {
+) -> anyhow::Result<Option<LedgerPrepareScope>> {
     let mut prepare_assets = Vec::new();
     let mut earliest_transaction_date: Option<NaiveDate> = None;
     let mut has_open_holding = false;
@@ -310,8 +311,9 @@ fn ledger_prepare_scope(
         let Some(transactions) = transactions_by_asset.get(&asset.id) else {
             continue;
         };
-        if open_holding_quantity(transactions) > FLOAT_EPSILON {
-            has_open_holding = true;
+        let replay = ledger::replay_transactions(asset.id, transactions)
+            .map_err(|error| anyhow::anyhow!(error))?;
+        if replay.final_quantity > FLOAT_EPSILON {
             let needs_preparation = match preparation_scope {
                 LedgerPreparationScope::AllOpenHoldings => true,
                 LedgerPreparationScope::ReuseNavPerformanceData => {
@@ -321,9 +323,15 @@ fn ledger_prepare_scope(
             if !needs_preparation {
                 continue;
             }
+            has_open_holding = true;
             prepare_assets.push(asset.clone());
-            let earliest =
-                NaiveDate::parse_from_str(&transactions.first()?.date, DATE_FORMAT).ok()?;
+            let earliest = NaiveDate::parse_from_str(
+                replay
+                    .transitions
+                    .first()
+                    .map_or(end_date, |transition| transition.entry.date.as_str()),
+                DATE_FORMAT,
+            )?;
             earliest_transaction_date = Some(match earliest_transaction_date {
                 Some(previous) => previous.min(earliest),
                 None => earliest,
@@ -331,32 +339,16 @@ fn ledger_prepare_scope(
         }
     }
     if !has_open_holding {
-        return None;
+        return Ok(None);
     }
     let start_date = match earliest_transaction_date {
         Some(date) => format_date(date).min(end_date.to_owned()),
         None => end_date.to_owned(),
     };
-    Some(LedgerPrepareScope {
+    Ok(Some(LedgerPrepareScope {
         assets: prepare_assets,
         start_date,
-    })
-}
-
-/// Net current quantity for an asset, mirroring the quantity arithmetic used by
-/// `project_holding` (splits scale, buys add, sells remove; no FX involved).
-fn open_holding_quantity(transactions: &[Transaction]) -> f64 {
-    let mut total_qty = 0.0;
-    for transaction in transactions {
-        if transaction.is_split() {
-            total_qty *= transaction.quantity;
-        } else if transaction.is_buy() {
-            total_qty += transaction.quantity;
-        } else if transaction.is_sell() {
-            total_qty -= transaction.quantity;
-        }
-    }
-    total_qty
+    }))
 }
 
 fn empty_current_positions() -> CurrentPositions {
@@ -408,47 +400,49 @@ async fn project_holding(
     asset: Asset,
     transactions: &[Transaction],
 ) -> anyhow::Result<HoldingProjection> {
-    let mut total_qty = 0.0;
-    let mut total_invested = Some(0.0);
-    let mut dividends_received = Some(0.0);
+    let replay = ledger::replay_transactions(asset.id, transactions)
+        .map_err(|error| anyhow::anyhow!(error))?;
+    let first_date = replay
+        .transitions
+        .first()
+        .map(|transition| transition.entry.date.as_str())
+        .context("open holding has no transactions")?;
+    let rates = market_data
+        .get_asset_exchange_rates(db, &asset, first_date, &format_date(market_data.today()))
+        .await?;
+    let enriched = ledger::enrich_replay(&replay, &asset.currency, BASE_CURRENCY, &rates)
+        .map_err(|error| anyhow::anyhow!(error))?;
     let mut market_data_limitations = Vec::new();
-
-    for transaction in transactions {
-        if transaction.is_split() {
-            total_qty *= transaction.quantity;
-        } else if transaction.is_buy() {
-            let native_cost = transaction.quantity * cents_to_f64(transaction.price_cents)
-                + cents_to_f64(transaction.fees_cents);
-            let (rate, limitations) =
-                transaction_exchange_rate(db, market_data, &asset, transaction).await?;
-            extend_unique_limitations(&mut market_data_limitations, limitations);
-            total_invested = total_invested
-                .zip(rate)
-                .map(|(cost, rate)| cost + native_cost * rate);
-            total_qty += transaction.quantity;
-        } else if transaction.is_sell() {
-            if total_qty > FLOAT_EPSILON {
-                let sold_fraction = (transaction.quantity / total_qty).min(1.0);
-                total_invested = total_invested.map(|cost| cost * (1.0 - sold_fraction));
+    if asset.currency != BASE_CURRENCY {
+        for transition in &enriched.transitions {
+            if (transition.buy_contribution.is_none()
+                && transition.entry_type() == ledger::LedgerEntryType::Buy)
+                || (transition.dividend_income.is_none()
+                    && transition.entry_type() == ledger::LedgerEntryType::Dividend)
+            {
+                let date =
+                    NaiveDate::parse_from_str(&transition.transition.entry.date, DATE_FORMAT)
+                        .context("invalid transaction date")?;
+                extend_unique_limitations(
+                    &mut market_data_limitations,
+                    vec![MarketDataLimitation {
+                        subject: MarketDataSubject::FxRate {
+                            currency: asset.currency.clone(),
+                        },
+                        latest_available_date: None,
+                        requested_end_date: date,
+                        classification: MarketDataLimitationClassification::ActionableMissingData,
+                    }],
+                );
             }
-            total_qty -= transaction.quantity;
-        } else if transaction.is_dividend() {
-            let native_dividend = transaction.quantity * cents_to_f64(transaction.price_cents)
-                - cents_to_f64(transaction.fees_cents);
-            let (rate, limitations) =
-                transaction_exchange_rate(db, market_data, &asset, transaction).await?;
-            extend_unique_limitations(&mut market_data_limitations, limitations);
-            dividends_received = dividends_received
-                .zip(rate)
-                .map(|(dividends, rate)| dividends + native_dividend * rate);
         }
     }
 
     Ok(HoldingProjection {
         asset,
-        total_qty,
-        total_invested,
-        dividends_received,
+        total_qty: enriched.final_quantity,
+        total_invested: enriched.remaining_cost,
+        dividends_received: enriched.dividends,
         market_data_limitations,
     })
 }
@@ -577,36 +571,6 @@ fn result_without_nav(
         nav_market_data_limitations,
         current_position_market_data_limitations: current_positions.market_data_limitations,
         monetary_market_data_limitations: current_positions.monetary_market_data_limitations,
-    }
-}
-
-async fn transaction_exchange_rate(
-    db: &DatabaseConnection,
-    market_data: &MarketData,
-    asset: &Asset,
-    transaction: &Transaction,
-) -> anyhow::Result<(Option<f64>, Vec<MarketDataLimitation>)> {
-    if asset.currency == BASE_CURRENCY {
-        Ok((Some(1.0), Vec::new()))
-    } else {
-        let rate = market_data
-            .get_asset_exchange_rate(db, asset, &transaction.date)
-            .await?;
-        let limitations = if rate.is_none() {
-            let date = NaiveDate::parse_from_str(&transaction.date, DATE_FORMAT)
-                .context("invalid transaction date")?;
-            vec![MarketDataLimitation {
-                subject: MarketDataSubject::FxRate {
-                    currency: asset.currency.clone(),
-                },
-                latest_available_date: None,
-                requested_end_date: date,
-                classification: MarketDataLimitationClassification::ActionableMissingData,
-            }]
-        } else {
-            Vec::new()
-        };
-        Ok((rate, limitations))
     }
 }
 

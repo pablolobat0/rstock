@@ -96,16 +96,6 @@ pub struct Transaction {
     pub fees_cents: i64,
 }
 
-/// Transaction fields needed to reconstruct asset holdings without loading
-/// financial fields that do not participate in the holdings calculation.
-#[derive(Clone, Debug, PartialEq)]
-pub struct HoldingInput {
-    pub asset_id: i32,
-    pub tx_type: TxType,
-    pub date: String,
-    pub quantity: f64,
-}
-
 pub struct TransactionListItem {
     pub transaction: Transaction,
     pub ticker: String,
@@ -113,14 +103,17 @@ pub struct TransactionListItem {
 }
 
 impl Transaction {
+    #[allow(dead_code)]
     pub fn is_buy(&self) -> bool {
         self.tx_type == TxType::Buy
     }
 
+    #[allow(dead_code)]
     pub fn is_sell(&self) -> bool {
         self.tx_type == TxType::Sell
     }
 
+    #[allow(dead_code)]
     pub fn is_dividend(&self) -> bool {
         self.tx_type == TxType::Dividend
     }
@@ -129,26 +122,13 @@ impl Transaction {
         self.tx_type == TxType::Split
     }
 
+    #[allow(dead_code)]
     pub fn signed_quantity(&self) -> f64 {
         match self.tx_type {
             TxType::Buy => self.quantity,
             TxType::Sell => -self.quantity,
             TxType::Dividend | TxType::Split => 0.0,
         }
-    }
-
-    /// Compute net holdings from a chronologically-ordered slice of transactions,
-    /// accounting for splits (which multiply holdings by their ratio).
-    pub fn compute_holdings(transactions: &[Transaction]) -> f64 {
-        let mut holdings = 0.0;
-        for tx in transactions {
-            if tx.is_split() {
-                holdings *= tx.quantity;
-            } else {
-                holdings += tx.signed_quantity();
-            }
-        }
-        holdings
     }
 }
 

@@ -1,12 +1,11 @@
 use anyhow::Context;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder,
-    QuerySelect, Set,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder, Set,
 };
 
 use crate::db::entities::transaction;
 use crate::models::{
-    f64_to_cents, BuyOrder, DividendOrder, HoldingInput, SellOrder, SplitOrder, Transaction, TxType,
+    f64_to_cents, BuyOrder, DividendOrder, SellOrder, SplitOrder, Transaction, TxType,
 };
 
 const BULK_WRITE_SIZE: usize = 100;
@@ -46,40 +45,6 @@ pub async fn find_all_ordered_by_date(
 
     let results = query.all(db).await?;
     Ok(results.into_iter().map(Transaction::from).collect())
-}
-
-pub async fn find_holdings_inputs(
-    db: &impl ConnectionTrait,
-    end_date: Option<&str>,
-) -> anyhow::Result<Vec<HoldingInput>> {
-    let mut query = transaction::Entity::find()
-        .select_only()
-        .columns([
-            transaction::Column::AssetId,
-            transaction::Column::TxType,
-            transaction::Column::Date,
-            transaction::Column::Quantity,
-        ])
-        .order_by_asc(transaction::Column::Date)
-        .order_by_asc(transaction::Column::Id);
-    if let Some(end) = end_date {
-        query = query.filter(transaction::Column::Date.lte(end.to_string()));
-    }
-
-    query
-        .into_tuple::<(i32, String, String, f64)>()
-        .all(db)
-        .await?
-        .into_iter()
-        .map(|(asset_id, tx_type, date, quantity)| {
-            Ok(HoldingInput {
-                asset_id,
-                tx_type: tx_type.parse()?,
-                date,
-                quantity,
-            })
-        })
-        .collect()
 }
 
 pub async fn find_by_asset_id(
