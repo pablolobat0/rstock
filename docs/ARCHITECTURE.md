@@ -79,7 +79,7 @@ All business logic lives here. Key modules:
 
 **`composition.rs`** — Builds portfolio composition analytics with look-through aggregation and top holdings.
 
-**`transactions.rs`** — `buy()`, `sell()`, `dividend()`, `split()`, `edit()`, and `delete()` commit each Transaction ledger change and all dependent snapshot or split-price-cache invalidation in one database transaction. Ledger reads use explicit `(date, id)` chronology.
+**`transactions.rs`** — `buy()`, `sell()`, `dividend()`, `split()`, `edit()`, and `delete()` tentatively apply each Transaction ledger change, replay every affected asset ledger from zero, and commit the mutation with all dependent invalidation in one database transaction. Ordinary mutations invalidate Complete NAV snapshots from the earliest affected transaction date (the old or new date for edits); split creation, editing, or deletion also clears the asset's entire split-adjusted price cache and invalidates snapshots from the asset's earliest transaction date. Ledger reads use explicit `(date, id)` chronology, while replay owns canonical ordering and prefix validity.
 
 **`market_data/`** — Stateful market data Module. It exposes use-case-shaped Interfaces for valuation market data, correlation market data, Individual price, stock info, and fund data. Yahoo Finance and Morningstar source Adapters are private implementation details behind `MarketDataSources`.
 
