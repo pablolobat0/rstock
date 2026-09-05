@@ -319,25 +319,61 @@ async fn build_fixture_with_counters(
         let asset_id = assets[index % assets.len()].id;
         let offset = i64::try_from(index).unwrap() * (end - start).num_days()
             / i64::try_from(transaction_count).unwrap();
+        let (
+            tx_type,
+            units,
+            unit_price_cents,
+            dividend_amount_cents,
+            dividend_deductions_cents,
+            split_ratio,
+            fees_cents,
+        ) = if index < asset_count {
+            (
+                "buy",
+                Some(100.0),
+                Some(10_000 + i64::try_from(index % 100).unwrap()),
+                None,
+                None,
+                None,
+                Some(0),
+            )
+        } else if index % 17 == 0 {
+            ("dividend", None, None, Some(100), Some(0), None, None)
+        } else if index % 19 == 0 {
+            (
+                "sell",
+                Some(1.0),
+                Some(10_000 + i64::try_from(index % 100).unwrap()),
+                None,
+                None,
+                None,
+                Some(0),
+            )
+        } else if index % 23 == 0 {
+            ("split", None, None, None, None, Some(1.0), None)
+        } else {
+            (
+                "buy",
+                Some(1.0),
+                Some(10_000 + i64::try_from(index % 100).unwrap()),
+                None,
+                None,
+                None,
+                Some(0),
+            )
+        };
         transaction::ActiveModel {
             asset_id: Set(asset_id),
-            tx_type: Set(if index < asset_count {
-                "buy".into()
-            } else if index % 17 == 0 {
-                "dividend".into()
-            } else if index % 19 == 0 {
-                "sell".into()
-            } else if index % 23 == 0 {
-                "split".into()
-            } else {
-                "buy".into()
-            }),
+            tx_type: Set(tx_type.into()),
             date: Set((start + Duration::days(offset))
                 .format("%Y-%m-%d")
                 .to_string()),
-            quantity: Set(if index < asset_count { 100.0 } else { 1.0 }),
-            price_cents: Set(10_000 + i64::try_from(index % 100).unwrap()),
-            fees_cents: Set(0),
+            units: Set(units),
+            unit_price_cents: Set(unit_price_cents),
+            dividend_amount_cents: Set(dividend_amount_cents),
+            dividend_deductions_cents: Set(dividend_deductions_cents),
+            split_ratio: Set(split_ratio),
+            fees_cents: Set(fees_cents),
             created_at: Set("2015-01-01T00:00:00".into()),
             ..Default::default()
         }

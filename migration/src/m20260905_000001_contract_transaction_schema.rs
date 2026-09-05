@@ -98,9 +98,12 @@ CREATE TABLE transactions (
     CHECK (tx_type IN ('buy', 'sell', 'dividend', 'split')),
     CHECK (
         (tx_type IN ('buy', 'sell')
-            AND units IS NOT NULL AND units > 0
-            AND unit_price_cents IS NOT NULL AND unit_price_cents > 0
-            AND fees_cents IS NOT NULL AND fees_cents >= 0
+            AND units IS NOT NULL AND typeof(units) = 'real'
+            AND units > 0 AND units < 1e999
+            AND unit_price_cents IS NOT NULL AND typeof(unit_price_cents) = 'integer'
+            AND unit_price_cents > 0
+            AND fees_cents IS NOT NULL AND typeof(fees_cents) = 'integer'
+            AND fees_cents >= 0
             AND dividend_amount_cents IS NULL
             AND dividend_deductions_cents IS NULL
             AND split_ratio IS NULL)
@@ -108,8 +111,10 @@ CREATE TABLE transactions (
         (tx_type = 'dividend'
             AND units IS NULL
             AND unit_price_cents IS NULL
-            AND dividend_amount_cents IS NOT NULL AND dividend_amount_cents > 0
+            AND dividend_amount_cents IS NOT NULL AND typeof(dividend_amount_cents) = 'integer'
+            AND dividend_amount_cents > 0
             AND dividend_deductions_cents IS NOT NULL
+            AND typeof(dividend_deductions_cents) = 'integer'
             AND dividend_deductions_cents >= 0
             AND dividend_deductions_cents <= dividend_amount_cents
             AND split_ratio IS NULL AND fees_cents IS NULL)
@@ -118,7 +123,8 @@ CREATE TABLE transactions (
             AND units IS NULL AND unit_price_cents IS NULL
             AND dividend_amount_cents IS NULL
             AND dividend_deductions_cents IS NULL
-            AND split_ratio IS NOT NULL AND split_ratio > 0
+            AND split_ratio IS NOT NULL AND typeof(split_ratio) = 'real'
+            AND split_ratio > 0 AND split_ratio < 1e999
             AND fees_cents IS NULL)
     )
 )

@@ -83,6 +83,8 @@ async fn semantic_constraints_reject_irrelevant_fields_and_invalid_signs() {
     let cases = [
         format!("INSERT INTO transactions (asset_id,tx_type,date,units,unit_price_cents,fees_cents) VALUES ({asset_id},'buy','2025-01-01',0,100,0)"),
         format!("INSERT INTO transactions (asset_id,tx_type,date,units,unit_price_cents,fees_cents) VALUES ({asset_id},'sell','2025-01-01',1,-1,0)"),
+        format!("INSERT INTO transactions (asset_id,tx_type,date,units,unit_price_cents,fees_cents) VALUES ({asset_id},'buy', '2025-01-01',1.5,100.5,0)"),
+        format!("INSERT INTO transactions (asset_id,tx_type,date,units,unit_price_cents,fees_cents) VALUES ({asset_id},'buy', '2025-01-01',1e999,100,0)"),
         format!("INSERT INTO transactions (asset_id,tx_type,date,dividend_amount_cents,dividend_deductions_cents) VALUES ({asset_id},'dividend','2025-01-01',10,11)"),
         format!("INSERT INTO transactions (asset_id,tx_type,date,split_ratio,fees_cents) VALUES ({asset_id},'split','2025-01-01',2,0)"),
         format!("INSERT INTO transactions (asset_id,tx_type,date,units,unit_price_cents,fees_cents) VALUES ({asset_id},'unknown','2025-01-01',1,100,0)"),

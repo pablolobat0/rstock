@@ -18,7 +18,7 @@ async fn test_find_by_id() {
     let tx = tx.unwrap();
     assert_eq!(tx.id, 1);
     assert_eq!(tx.asset_id, asset_id);
-    assert_eq!(tx.quantity, 10.0);
+    assert_eq!(tx.units, Some(10.0));
 }
 
 #[tokio::test]
@@ -53,8 +53,8 @@ async fn test_update_by_id_partial() {
         .unwrap();
 
     let tx = transaction_repo::find_by_id(&db, 1).await.unwrap().unwrap();
-    assert_eq!(tx.price_cents, f64_to_cents(200.0));
-    assert_eq!(tx.quantity, 10.0); // unchanged
+    assert_eq!(tx.unit_price_cents, Some(f64_to_cents(200.0)));
+    assert_eq!(tx.units, Some(10.0)); // unchanged
     assert_eq!(tx.date, "2025-01-02"); // unchanged
 }
 
@@ -77,9 +77,9 @@ async fn test_update_by_id_all_fields() {
 
     let tx = transaction_repo::find_by_id(&db, 1).await.unwrap().unwrap();
     assert_eq!(tx.date, "2025-02-01");
-    assert_eq!(tx.quantity, 20.0);
-    assert_eq!(tx.price_cents, f64_to_cents(150.0));
-    assert_eq!(tx.fees_cents, f64_to_cents(2.0));
+    assert_eq!(tx.units, Some(20.0));
+    assert_eq!(tx.unit_price_cents, Some(f64_to_cents(150.0)));
+    assert_eq!(tx.trade_fees_cents, Some(f64_to_cents(2.0)));
 }
 
 #[tokio::test]
@@ -544,12 +544,14 @@ async fn same_day_recording_uses_generated_id_order_for_split_effects() {
                 date: tx.date.clone(),
                 kind: match &tx.tx_type {
                     rstock::models::TxType::Buy => rstock::services::ledger::LedgerEntryKind::Buy {
-                        units: tx.quantity,
-                        unit_price_cents: tx.price_cents,
-                        fees_cents: tx.fees_cents,
+                        units: tx.units.unwrap_or_default(),
+                        unit_price_cents: tx.unit_price_cents.unwrap_or_default(),
+                        fees_cents: tx.trade_fees_cents.unwrap_or_default(),
                     },
                     rstock::models::TxType::Split => {
-                        rstock::services::ledger::LedgerEntryKind::Split { ratio: tx.quantity }
+                        rstock::services::ledger::LedgerEntryKind::Split {
+                            ratio: tx.split_ratio.unwrap_or_default(),
+                        }
                     }
                     _ => unreachable!("test ledger only contains buy and split"),
                 },
@@ -575,7 +577,7 @@ async fn editing_a_buy_replays_and_rejects_an_invalid_later_sell_atomically() {
     let transactions = transaction_repo::find_by_asset_id(&db, asset_id)
         .await
         .unwrap();
-    assert!((transactions[0].quantity - 10.0).abs() < f64::EPSILON);
+    assert!((transactions[0].units.unwrap_or_default() - 10.0).abs() < f64::EPSILON);
     assert_eq!(transactions[0].id, 1);
     assert_eq!(transactions[1].id, 2);
 }
@@ -594,7 +596,8 @@ async fn editing_a_sell_replays_and_rejects_an_oversell_atomically() {
         .await
         .unwrap()
         .unwrap()
-        .quantity;
+        .units
+        .unwrap_or_default();
     assert!((quantity - 5.0).abs() < f64::EPSILON);
 }
 
@@ -647,7 +650,8 @@ async fn changing_a_split_that_supports_a_later_sell_is_rejected_atomically() {
         .await
         .unwrap()
         .unwrap()
-        .quantity;
+        .split_ratio
+        .unwrap_or_default();
     assert!((quantity - 2.0).abs() < f64::EPSILON);
 }
 
@@ -690,12 +694,14 @@ async fn edits_reject_fields_that_are_not_meaningful_for_the_transaction_type() 
         .await
         .unwrap()
         .unwrap()
-        .quantity;
+        .units
+        .unwrap_or_default();
     let split_quantity = transaction_repo::find_by_id(&db, 3)
         .await
         .unwrap()
         .unwrap()
-        .quantity;
+        .split_ratio
+        .unwrap_or_default();
     assert!((dividend_quantity - 1.0).abs() < f64::EPSILON);
     assert!((split_quantity - 2.0).abs() < f64::EPSILON);
 }
@@ -716,11 +722,11 @@ async fn edits_accept_type_specific_dividend_and_split_fields() {
         .unwrap();
 
     let dividend = transaction_repo::find_by_id(&db, 2).await.unwrap().unwrap();
-    assert_eq!(dividend.price_cents, f64_to_cents(6.0));
-    assert_eq!(dividend.fees_cents, f64_to_cents(2.0));
+    assert_eq!(dividend.dividend_amount_cents, Some(f64_to_cents(6.0)));
+    assert_eq!(dividend.dividend_deductions_cents, Some(f64_to_cents(2.0)));
     let split = transaction_repo::find_by_id(&db, 3).await.unwrap().unwrap();
     assert_eq!(split.date, "2025-01-04");
-    assert!((split.quantity - 3.0).abs() < f64::EPSILON);
+    assert!((split.split_ratio.unwrap_or_default() - 3.0).abs() < f64::EPSILON);
 }
 
 #[tokio::test]
@@ -765,10 +771,10 @@ fn ledger_fields(
             (
                 tx.id,
                 tx.tx_type.to_string(),
-                tx.date,
-                tx.quantity,
-                tx.price_cents,
-                tx.fees_cents,
+                tx.date.clone(),
+                tx.display_quantity(),
+                tx.display_price_cents(),
+                tx.display_fees_cents(),
             )
         })
         .collect()

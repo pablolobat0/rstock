@@ -99,14 +99,6 @@ pub struct Transaction {
     pub dividend_deductions_cents: Option<i64>,
     pub split_ratio: Option<f64>,
     pub trade_fees_cents: Option<i64>,
-    // Compatibility projections for older clients. New domain code uses the
-    // semantic fields above.
-    #[allow(dead_code)]
-    pub quantity: f64,
-    #[allow(dead_code)]
-    pub price_cents: i64,
-    #[allow(dead_code)]
-    pub fees_cents: i64,
 }
 
 pub struct TransactionListItem {
@@ -193,25 +185,12 @@ impl Transaction {
     }
 }
 
-impl From<transaction::Model> for Transaction {
-    fn from(m: transaction::Model) -> Self {
-        let tx_type = m.tx_type.parse().expect("invalid tx_type in DB");
-        let quantity = match &tx_type {
-            TxType::Buy | TxType::Sell => m.units.unwrap_or_default(),
-            TxType::Dividend => 1.0,
-            TxType::Split => m.split_ratio.unwrap_or_default(),
-        };
-        let price_cents = match &tx_type {
-            TxType::Buy | TxType::Sell => m.unit_price_cents.unwrap_or_default(),
-            TxType::Dividend => m.dividend_amount_cents.unwrap_or_default(),
-            TxType::Split => 0,
-        };
-        let fees_cents = match &tx_type {
-            TxType::Buy | TxType::Sell => m.fees_cents.unwrap_or_default(),
-            TxType::Dividend => m.dividend_deductions_cents.unwrap_or_default(),
-            TxType::Split => 0,
-        };
-        Self {
+impl TryFrom<transaction::Model> for Transaction {
+    type Error = anyhow::Error;
+
+    fn try_from(m: transaction::Model) -> Result<Self, Self::Error> {
+        let tx_type = m.tx_type.parse()?;
+        Ok(Self {
             id: m.id,
             asset_id: m.asset_id,
             tx_type,
@@ -222,9 +201,6 @@ impl From<transaction::Model> for Transaction {
             dividend_deductions_cents: m.dividend_deductions_cents,
             split_ratio: m.split_ratio,
             trade_fees_cents: m.fees_cents,
-            quantity,
-            price_cents,
-            fees_cents,
-        }
+        })
     }
 }

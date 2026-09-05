@@ -44,7 +44,10 @@ pub async fn find_all_ordered_by_date(
     }
 
     let results = query.all(db).await?;
-    Ok(results.into_iter().map(Transaction::from).collect())
+    results
+        .into_iter()
+        .map(Transaction::try_from)
+        .collect::<anyhow::Result<Vec<_>>>()
 }
 
 pub async fn find_by_asset_id(
@@ -57,7 +60,10 @@ pub async fn find_by_asset_id(
         .order_by_asc(transaction::Column::Id)
         .all(db)
         .await?;
-    Ok(results.into_iter().map(Transaction::from).collect())
+    results
+        .into_iter()
+        .map(Transaction::try_from)
+        .collect::<anyhow::Result<Vec<_>>>()
 }
 
 pub async fn insert_sell(
@@ -108,7 +114,7 @@ pub async fn insert_many(
 
 pub async fn find_by_id(db: &impl ConnectionTrait, id: i32) -> anyhow::Result<Option<Transaction>> {
     let result = transaction::Entity::find_by_id(id).one(db).await?;
-    Ok(result.map(Transaction::from))
+    result.map(Transaction::try_from).transpose()
 }
 
 pub async fn delete_by_id(db: &impl ConnectionTrait, id: i32) -> anyhow::Result<()> {
