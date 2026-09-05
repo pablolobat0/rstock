@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use anyhow::{bail, Context};
 use chrono::NaiveDate;
@@ -47,7 +47,14 @@ pub async fn import_transactions_csv(
     path: &str,
 ) -> anyhow::Result<ImportResult> {
     let mut rows = read_rows(path)?;
-    rows.sort_by_key(|r| r.date);
+    // Generated IDs follow this write order.  Include the source row explicitly
+    // so same-date entries retain CSV order even if the sort implementation's
+    // stability ever changes.
+    rows.sort_by(|left, right| {
+        left.date
+            .cmp(&right.date)
+            .then(left.source_row.cmp(&right.source_row))
+    });
 
     let count = rows.len();
     if rows.is_empty() {
@@ -241,6 +248,10 @@ pub async fn import_transactions_csv(
                 .ok_or_else(|| anyhow::anyhow!("asset '{}' was not persisted", state.ticker))?;
         }
     }
+    let tickers_by_asset_id = assets_by_ticker
+        .values()
+        .map(|asset| (asset.id, asset.ticker.as_str()))
+        .collect::<HashMap<_, _>>();
 
     let writes = rows
         .iter()
@@ -261,14 +272,47 @@ pub async fn import_transactions_csv(
         );
     }
 
-    let affected_asset_ids: HashSet<i32> = rows
+    let source_rows_by_transaction_id = transaction_ids
+        .iter()
+        .copied()
+        .zip(rows.iter().map(|row| row.source_row))
+        .collect::<HashMap<_, _>>();
+    let mut source_rows_by_asset = HashMap::<i32, Vec<usize>>::new();
+    for row in &rows {
+        let asset_id = assets_by_ticker
+            .get(&row.ticker)
+            .ok_or_else(|| anyhow::anyhow!("asset '{}' was not resolved", row.ticker))?
+            .id;
+        source_rows_by_asset
+            .entry(asset_id)
+            .or_default()
+            .push(row.source_row);
+    }
+
+    let affected_asset_ids: BTreeSet<i32> = rows
         .iter()
         .filter_map(|row| assets_by_ticker.get(&row.ticker).map(|asset| asset.id))
         .collect();
     for asset_id in affected_asset_ids {
         let transactions = transaction_repo::find_by_asset_id(&mutation, asset_id).await?;
-        ledger::replay_transactions(asset_id, &transactions)
-            .map_err(|error| anyhow::anyhow!(error))?;
+        if let Err(error) = ledger::replay_transactions(asset_id, &transactions) {
+            let source_row = source_row_for_replay_error(
+                &error,
+                &transactions,
+                &source_rows_by_transaction_id,
+                source_rows_by_asset.get(&asset_id).map(Vec::as_slice),
+            );
+            if let Some(source_row) = source_row {
+                let ticker = tickers_by_asset_id
+                    .get(&asset_id)
+                    .copied()
+                    .unwrap_or("unknown");
+                anyhow::bail!(
+                    "row {source_row}: transaction CSV import replay failed for asset {ticker} ({asset_id}): {error}"
+                );
+            }
+            return Err(anyhow::Error::from(error).context("transaction CSV import replay failed"));
+        }
     }
 
     let split_asset_ids = split_tickers
@@ -542,6 +586,36 @@ fn parse_optional(s: &str) -> Option<String> {
     } else {
         Some(trimmed.to_string())
     }
+}
+
+fn source_row_for_replay_error(
+    error: &ledger::LedgerError,
+    transactions: &[Transaction],
+    source_rows_by_transaction_id: &HashMap<i32, usize>,
+    source_rows: Option<&[usize]>,
+) -> Option<usize> {
+    source_rows_by_transaction_id
+        .get(&error.entry_id)
+        .copied()
+        .or_else(|| {
+            transactions
+                .iter()
+                .position(|transaction| transaction.id == error.entry_id)
+                .and_then(|error_index| {
+                    transactions[..error_index]
+                        .iter()
+                        .rev()
+                        .filter(|transaction| {
+                            matches!(
+                                &transaction.tx_type,
+                                TxType::Buy | TxType::Sell | TxType::Split
+                            )
+                        })
+                        .find_map(|transaction| source_rows_by_transaction_id.get(&transaction.id))
+                        .copied()
+                })
+        })
+        .or_else(|| source_rows.and_then(|rows| rows.first().copied()))
 }
 
 fn parse_optional_enum<E>(s: &str, row_num: usize, field: &str) -> anyhow::Result<Option<E>>
