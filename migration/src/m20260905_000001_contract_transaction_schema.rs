@@ -11,6 +11,7 @@ pub struct Migration;
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         let db = manager.get_connection();
+        preserve_sequence(db).await?;
         db.execute_unprepared("DROP INDEX IF EXISTS idx_transactions_date_id")
             .await?;
         db.execute_unprepared("DROP INDEX IF EXISTS idx_transactions_asset_date_id")
@@ -37,11 +38,13 @@ impl MigrationTrait for Migration {
         .await?;
         db.execute_unprepared("DROP TABLE transactions_legacy")
             .await?;
+        restore_sequence(db).await?;
         create_indexes(db).await
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         let db = manager.get_connection();
+        preserve_sequence(db).await?;
         db.execute_unprepared("DROP INDEX IF EXISTS idx_transactions_date_id")
             .await?;
         db.execute_unprepared("DROP INDEX IF EXISTS idx_transactions_asset_date_id")
@@ -76,6 +79,7 @@ impl MigrationTrait for Migration {
         .await?;
         db.execute_unprepared("DROP TABLE transactions_semantic")
             .await?;
+        restore_sequence(db).await?;
         create_indexes(db).await
     }
 }
@@ -155,4 +159,29 @@ async fn create_indexes(db: &impl ConnectionTrait) -> Result<(), DbErr> {
     )
     .await?;
     Ok(())
+}
+
+async fn preserve_sequence(db: &impl ConnectionTrait) -> Result<(), DbErr> {
+    db.execute_unprepared(
+        "CREATE TEMP TABLE transaction_schema_sequence AS
+         SELECT seq FROM sqlite_sequence WHERE name = 'transactions'",
+    )
+    .await
+    .map(|_| ())
+}
+
+async fn restore_sequence(db: &impl ConnectionTrait) -> Result<(), DbErr> {
+    db.execute_unprepared(
+        "INSERT OR REPLACE INTO sqlite_sequence (name, seq)
+         SELECT 'transactions',
+            CASE WHEN COALESCE((SELECT seq FROM transaction_schema_sequence), 0)
+                      > COALESCE((SELECT MAX(id) FROM transactions), 0)
+                 THEN COALESCE((SELECT seq FROM transaction_schema_sequence), 0)
+                 ELSE COALESCE((SELECT MAX(id) FROM transactions), 0)
+            END",
+    )
+    .await?;
+    db.execute_unprepared("DROP TABLE transaction_schema_sequence")
+        .await
+        .map(|_| ())
 }

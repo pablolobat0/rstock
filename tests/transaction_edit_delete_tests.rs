@@ -534,33 +534,7 @@ async fn same_day_recording_uses_generated_id_order_for_split_effects() {
     let entries = transaction_repo::find_by_asset_id(&db, asset_id)
         .await
         .unwrap();
-    let replay = rstock::services::ledger::CanonicalLedger::new(
-        asset_id,
-        entries
-            .iter()
-            .map(|tx| rstock::services::ledger::LedgerEntry {
-                id: tx.id,
-                asset_id: tx.asset_id,
-                date: tx.date.clone(),
-                kind: match &tx.tx_type {
-                    rstock::models::TxType::Buy => rstock::services::ledger::LedgerEntryKind::Buy {
-                        units: tx.units.unwrap_or_default(),
-                        unit_price_cents: tx.unit_price_cents.unwrap_or_default(),
-                        fees_cents: tx.trade_fees_cents.unwrap_or_default(),
-                    },
-                    rstock::models::TxType::Split => {
-                        rstock::services::ledger::LedgerEntryKind::Split {
-                            ratio: tx.split_ratio.unwrap_or_default(),
-                        }
-                    }
-                    _ => unreachable!("test ledger only contains buy and split"),
-                },
-            })
-            .collect(),
-    )
-    .unwrap()
-    .replay()
-    .unwrap();
+    let replay = ledger::replay_transactions(asset_id, &entries).unwrap();
     assert!((replay.final_quantity - 2.0).abs() < f64::EPSILON);
 }
 
@@ -690,11 +664,11 @@ async fn edits_reject_fields_that_are_not_meaningful_for_the_transaction_type() 
     assert!(dividend_result.is_err());
     assert!(split_result.is_err());
     assert!(split_fee_result.is_err());
-    let dividend_quantity = transaction_repo::find_by_id(&db, 2)
+    let dividend_amount = transaction_repo::find_by_id(&db, 2)
         .await
         .unwrap()
         .unwrap()
-        .units
+        .dividend_amount_cents
         .unwrap_or_default();
     let split_quantity = transaction_repo::find_by_id(&db, 3)
         .await
@@ -702,7 +676,7 @@ async fn edits_reject_fields_that_are_not_meaningful_for_the_transaction_type() 
         .unwrap()
         .split_ratio
         .unwrap_or_default();
-    assert!((dividend_quantity - 1.0).abs() < f64::EPSILON);
+    assert_eq!(dividend_amount, f64_to_cents(5.0));
     assert!((split_quantity - 2.0).abs() < f64::EPSILON);
 }
 
