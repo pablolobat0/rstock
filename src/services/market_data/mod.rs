@@ -85,6 +85,13 @@ impl NavValuationData {
             })
     }
 
+    pub(crate) fn exchange_rates_for_currency(
+        &self,
+        currency: &str,
+    ) -> Option<&BTreeMap<NaiveDate, f64>> {
+        self.exchange_rates.get(currency)
+    }
+
     pub(crate) fn valuation_limitations(
         &self,
         asset: &Asset,
