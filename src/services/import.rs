@@ -605,6 +605,12 @@ fn source_row_for_replay_error(
                     transactions[..error_index]
                         .iter()
                         .rev()
+                        .filter(|transaction| {
+                            matches!(
+                                &transaction.tx_type,
+                                TxType::Buy | TxType::Sell | TxType::Split
+                            )
+                        })
                         .find_map(|transaction| source_rows_by_transaction_id.get(&transaction.id))
                         .copied()
                 })

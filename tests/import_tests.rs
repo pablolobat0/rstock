@@ -165,8 +165,8 @@ async fn test_import_replay_error_identifies_row_causing_existing_suffix_failure
     common::insert_sell_transaction(&db, asset_id, "2025-01-04", 1.0, 100.0, 0.0).await;
     let csv = write_csv(&format!(
         "{CSV_HEADER}\
-         02-01-2025,XFAKESUFFIX,,,EUR,,,,,,,dividend,1,10.00,0.00\n\
-         03-01-2025,XFAKESUFFIX,,,EUR,,,,,,,sell,1,100.00,0.00\n"
+         02-01-2025,XFAKESUFFIX,,,EUR,,,,,,,sell,0.5,100.00,0.00\n\
+         03-01-2025,XFAKESUFFIX,,,EUR,,,,,,,dividend,1,10.00,0.00\n"
     ));
 
     let error = import_transactions_csv(&db, csv.path().to_str().unwrap())
@@ -174,7 +174,7 @@ async fn test_import_replay_error_identifies_row_causing_existing_suffix_failure
         .expect_err("an imported sell should invalidate the existing suffix");
     let message = error.to_string();
     assert!(
-        message.contains("row 3"),
+        message.contains("row 2"),
         "error should identify the imported row causing the suffix failure: {message}"
     );
     assert_eq!(
