@@ -10,9 +10,7 @@ use crate::db::repos::{
 use crate::models::{
     f64_to_cents, BuyOrder, DividendOrder, SellOrder, SplitOrder, Transaction, TransactionListItem,
 };
-use crate::services::ledger::{
-    CanonicalLedger, LedgerEffect, LedgerEntry, LedgerEntryKind, LedgerReplay, LedgerTransition,
-};
+use crate::services::ledger::{self, LedgerEffect, LedgerReplay, LedgerTransition};
 
 #[derive(Debug)]
 pub struct TransactionReceipt {
@@ -345,9 +343,7 @@ async fn replay_asset_ledger(
     asset_id: i32,
 ) -> anyhow::Result<LedgerReplay> {
     let transactions = transaction_repo::find_by_asset_id(db, asset_id).await?;
-    let entries = transactions.iter().map(ledger_entry).collect();
-    CanonicalLedger::new(asset_id, entries)
-        .and_then(|ledger| ledger.replay())
+    ledger::replay_transactions(asset_id, &transactions)
         .map_err(anyhow::Error::from)
         .context("transaction ledger replay failed")
 }
@@ -401,8 +397,18 @@ fn validate_edit(
                 validate_non_negative(fees, "fees")?;
             }
 
-            let gross_cents = new_price.map_or(transaction.price_cents, f64_to_cents);
-            let deductions_cents = new_fees.map_or(transaction.fees_cents, f64_to_cents);
+            let gross_cents = new_price.map_or(
+                transaction
+                    .ledger_dividend_amount_cents()
+                    .unwrap_or_default(),
+                f64_to_cents,
+            );
+            let deductions_cents = new_fees.map_or(
+                transaction
+                    .ledger_dividend_deductions_cents()
+                    .unwrap_or_default(),
+                f64_to_cents,
+            );
             if deductions_cents > gross_cents {
                 anyhow::bail!("fees must not exceed dividend amount");
             }
@@ -424,34 +430,6 @@ fn validate_edit(
         }
     }
     Ok(())
-}
-
-fn ledger_entry(transaction: &Transaction) -> LedgerEntry {
-    let kind = match &transaction.tx_type {
-        crate::models::TxType::Buy => LedgerEntryKind::Buy {
-            units: transaction.quantity,
-            unit_price_cents: transaction.price_cents,
-            fees_cents: transaction.fees_cents,
-        },
-        crate::models::TxType::Sell => LedgerEntryKind::Sell {
-            units: transaction.quantity,
-            unit_price_cents: transaction.price_cents,
-            fees_cents: transaction.fees_cents,
-        },
-        crate::models::TxType::Dividend => LedgerEntryKind::Dividend {
-            gross_amount_cents: transaction.price_cents,
-            deductions_cents: transaction.fees_cents,
-        },
-        crate::models::TxType::Split => LedgerEntryKind::Split {
-            ratio: transaction.quantity,
-        },
-    };
-    LedgerEntry {
-        id: transaction.id,
-        asset_id: transaction.asset_id,
-        date: transaction.date.clone(),
-        kind,
-    }
 }
 
 fn validate_buy_order(order: &BuyOrder) -> anyhow::Result<()> {

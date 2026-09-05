@@ -129,18 +129,36 @@ pub async fn update_by_id(
         .await?
         .ok_or_else(|| anyhow::anyhow!("Transaction {id} not found"))?;
 
+    let tx_type = record.tx_type.parse::<TxType>()?;
     let mut active: transaction::ActiveModel = record.into();
     if let Some(d) = date {
         active.date = Set(d);
     }
-    if let Some(q) = quantity {
-        active.quantity = Set(q);
-    }
-    if let Some(p) = price_cents {
-        active.price_cents = Set(p);
-    }
-    if let Some(f) = fees_cents {
-        active.fees_cents = Set(f);
+    match tx_type {
+        TxType::Buy | TxType::Sell => {
+            if let Some(q) = quantity {
+                active.units = Set(Some(q));
+            }
+            if let Some(p) = price_cents {
+                active.unit_price_cents = Set(Some(p));
+            }
+            if let Some(f) = fees_cents {
+                active.fees_cents = Set(Some(f));
+            }
+        }
+        TxType::Dividend => {
+            if let Some(p) = price_cents {
+                active.dividend_amount_cents = Set(Some(p));
+            }
+            if let Some(f) = fees_cents {
+                active.dividend_deductions_cents = Set(Some(f));
+            }
+        }
+        TxType::Split => {
+            if let Some(q) = quantity {
+                active.split_ratio = Set(Some(q));
+            }
+        }
     }
     active.update(db).await?;
     Ok(())
@@ -178,18 +196,28 @@ fn sell_active_model(asset_id: i32, order: &SellOrder) -> transaction::ActiveMod
 }
 
 fn dividend_active_model(asset_id: i32, order: &DividendOrder) -> transaction::ActiveModel {
-    active_model(
-        asset_id,
-        &TxType::Dividend,
-        &order.date,
-        1.0,
-        f64_to_cents(order.amount),
-        f64_to_cents(order.fees),
-    )
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    transaction::ActiveModel {
+        asset_id: Set(asset_id),
+        tx_type: Set(TxType::Dividend.to_string()),
+        date: Set(order.date.clone()),
+        dividend_amount_cents: Set(Some(f64_to_cents(order.amount))),
+        dividend_deductions_cents: Set(Some(f64_to_cents(order.fees))),
+        created_at: Set(now),
+        ..Default::default()
+    }
 }
 
 fn split_active_model(asset_id: i32, order: &SplitOrder) -> transaction::ActiveModel {
-    active_model(asset_id, &TxType::Split, &order.date, order.ratio, 0, 0)
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    transaction::ActiveModel {
+        asset_id: Set(asset_id),
+        tx_type: Set(TxType::Split.to_string()),
+        date: Set(order.date.clone()),
+        split_ratio: Set(Some(order.ratio)),
+        created_at: Set(now),
+        ..Default::default()
+    }
 }
 
 fn active_model(
@@ -205,9 +233,9 @@ fn active_model(
         asset_id: Set(asset_id),
         tx_type: Set(tx_type.to_string()),
         date: Set(date.to_owned()),
-        quantity: Set(quantity),
-        price_cents: Set(price_cents),
-        fees_cents: Set(fees_cents),
+        units: Set(Some(quantity)),
+        unit_price_cents: Set(Some(price_cents)),
+        fees_cents: Set(Some(fees_cents)),
         created_at: Set(now),
         ..Default::default()
     }

@@ -91,8 +91,21 @@ pub struct Transaction {
     pub asset_id: i32,
     pub tx_type: TxType,
     pub date: String,
+    /// Semantic persistence fields.  Only the fields meaningful to `tx_type`
+    /// are populated; the database enforces the same shape.
+    pub units: Option<f64>,
+    pub unit_price_cents: Option<i64>,
+    pub dividend_amount_cents: Option<i64>,
+    pub dividend_deductions_cents: Option<i64>,
+    pub split_ratio: Option<f64>,
+    pub trade_fees_cents: Option<i64>,
+    // Compatibility projections for older clients. New domain code uses the
+    // semantic fields above.
+    #[allow(dead_code)]
     pub quantity: f64,
+    #[allow(dead_code)]
     pub price_cents: i64,
+    #[allow(dead_code)]
     pub fees_cents: i64,
 }
 
@@ -103,6 +116,63 @@ pub struct TransactionListItem {
 }
 
 impl Transaction {
+    #[must_use]
+    pub fn display_quantity(&self) -> f64 {
+        match &self.tx_type {
+            TxType::Buy | TxType::Sell => self.units.unwrap_or_default(),
+            TxType::Dividend => 1.0,
+            TxType::Split => self.split_ratio.unwrap_or_default(),
+        }
+    }
+
+    #[must_use]
+    pub fn display_price_cents(&self) -> i64 {
+        match &self.tx_type {
+            TxType::Buy | TxType::Sell => self.unit_price_cents.unwrap_or_default(),
+            TxType::Dividend => self.dividend_amount_cents.unwrap_or_default(),
+            TxType::Split => 0,
+        }
+    }
+
+    #[must_use]
+    pub fn display_fees_cents(&self) -> i64 {
+        match &self.tx_type {
+            TxType::Buy | TxType::Sell => self.trade_fees_cents.unwrap_or_default(),
+            TxType::Dividend => self.dividend_deductions_cents.unwrap_or_default(),
+            TxType::Split => 0,
+        }
+    }
+
+    #[must_use]
+    pub fn ledger_units(&self) -> Option<f64> {
+        self.units
+    }
+
+    #[must_use]
+    pub fn ledger_unit_price_cents(&self) -> Option<i64> {
+        self.unit_price_cents
+    }
+
+    #[must_use]
+    pub fn ledger_fees_cents(&self) -> Option<i64> {
+        self.trade_fees_cents
+    }
+
+    #[must_use]
+    pub fn ledger_dividend_amount_cents(&self) -> Option<i64> {
+        self.dividend_amount_cents
+    }
+
+    #[must_use]
+    pub fn ledger_dividend_deductions_cents(&self) -> Option<i64> {
+        self.dividend_deductions_cents
+    }
+
+    #[must_use]
+    pub fn ledger_split_ratio(&self) -> Option<f64> {
+        self.split_ratio
+    }
+
     #[allow(dead_code)]
     pub fn is_buy(&self) -> bool {
         self.tx_type == TxType::Buy
@@ -121,27 +191,40 @@ impl Transaction {
     pub fn is_split(&self) -> bool {
         self.tx_type == TxType::Split
     }
-
-    #[allow(dead_code)]
-    pub fn signed_quantity(&self) -> f64 {
-        match self.tx_type {
-            TxType::Buy => self.quantity,
-            TxType::Sell => -self.quantity,
-            TxType::Dividend | TxType::Split => 0.0,
-        }
-    }
 }
 
 impl From<transaction::Model> for Transaction {
     fn from(m: transaction::Model) -> Self {
+        let tx_type = m.tx_type.parse().expect("invalid tx_type in DB");
+        let quantity = match &tx_type {
+            TxType::Buy | TxType::Sell => m.units.unwrap_or_default(),
+            TxType::Dividend => 1.0,
+            TxType::Split => m.split_ratio.unwrap_or_default(),
+        };
+        let price_cents = match &tx_type {
+            TxType::Buy | TxType::Sell => m.unit_price_cents.unwrap_or_default(),
+            TxType::Dividend => m.dividend_amount_cents.unwrap_or_default(),
+            TxType::Split => 0,
+        };
+        let fees_cents = match &tx_type {
+            TxType::Buy | TxType::Sell => m.fees_cents.unwrap_or_default(),
+            TxType::Dividend => m.dividend_deductions_cents.unwrap_or_default(),
+            TxType::Split => 0,
+        };
         Self {
             id: m.id,
             asset_id: m.asset_id,
-            tx_type: m.tx_type.parse().expect("invalid tx_type in DB"),
+            tx_type,
             date: m.date,
-            quantity: m.quantity,
-            price_cents: m.price_cents,
-            fees_cents: m.fees_cents,
+            units: m.units,
+            unit_price_cents: m.unit_price_cents,
+            dividend_amount_cents: m.dividend_amount_cents,
+            dividend_deductions_cents: m.dividend_deductions_cents,
+            split_ratio: m.split_ratio,
+            trade_fees_cents: m.fees_cents,
+            quantity,
+            price_cents,
+            fees_cents,
         }
     }
 }

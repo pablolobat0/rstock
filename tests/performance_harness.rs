@@ -157,9 +157,14 @@ async fn automatic_migration_covers_fresh_partial_and_current_schemas() {
             ))
             .await
             .expect("historical schema should accept persisted asset data");
+            let transaction_insert = if applied_count < migration_count {
+                "INSERT INTO transactions (asset_id, tx_type, date, quantity, price_cents, fees_cents, created_at) VALUES (1, 'buy', '2025-01-01', 1.0, 10000, 0, '2025-01-01T00:00:00')"
+            } else {
+                "INSERT INTO transactions (asset_id, tx_type, date, units, unit_price_cents, fees_cents, created_at) VALUES (1, 'buy', '2025-01-01', 1.0, 10000, 0, '2025-01-01T00:00:00')"
+            };
             db.execute(Statement::from_string(
                 DbBackend::Sqlite,
-                "INSERT INTO transactions (asset_id, tx_type, date, quantity, price_cents, fees_cents, created_at) VALUES (1, 'buy', '2025-01-01', 1.0, 10000, 0, '2025-01-01T00:00:00')",
+                transaction_insert,
             ))
             .await
             .expect("historical schema should accept persisted ledger data");
@@ -224,10 +229,16 @@ async fn automatic_migration_rolls_back_a_failed_destructive_migration() {
     .expect("historical exchange rate should be stored");
     db.execute(Statement::from_string(
         DbBackend::Sqlite,
-        "CREATE INDEX idx_transactions_date_id ON transactions (date, id)",
+        "INSERT INTO assets (ticker, name, asset_type, currency, created_at) VALUES ('XROLLBACK', 'Rollback fixture', 'stock', 'EUR', '2025-01-01T00:00:00')",
     ))
     .await
-    .expect("conflicting index should be created");
+    .expect("historical asset should be stored");
+    db.execute(Statement::from_string(
+        DbBackend::Sqlite,
+        "INSERT INTO transactions (asset_id, tx_type, date, quantity, price_cents, fees_cents, created_at) VALUES (1, 'buy', '2025-01-01', 0.0, 10000, 0, '2025-01-01T00:00:00')",
+    ))
+    .await
+    .expect("historical invalid fixture should be stored before contract migration");
 
     assert!(rstock::db::migrate(&db).await.is_err());
     assert_eq!(

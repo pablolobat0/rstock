@@ -120,7 +120,7 @@ Domain structs organized by concept:
 **`transaction.rs`**:
 - `TxType` enum — Buy, Sell, Dividend, Split (with `Display`/`FromStr` for DB serialization)
 - `BuyOrder`, `SellOrder`, `DividendOrder`, `SplitOrder` — Input structs for recording transactions
-- `Transaction` — DB-backed struct with `price_cents` and `fees_cents` (i64), includes `compute_holdings()` for net position calculation accounting for splits
+- `Transaction` — DB-backed semantic transaction struct whose type-specific fields map to typed ledger entries at the replay boundary
 - `f64_to_cents()` / `cents_to_f64()` — Conversion helpers for monetary precision
 
 **`portfolio.rs`**:
@@ -175,16 +175,19 @@ Current schema includes the original portfolio tables plus watchlist and fund ho
 | currency | String | Asset's native currency |
 | created_at | String | ISO timestamp |
 
-**`transactions`** — Buy/sell records
+**`transactions`** — Semantic Transaction ledger records
 | Column | Type | Notes |
 |--------|------|-------|
 | id | i32 PK | Auto-increment |
 | asset_id | i32 FK | References assets.id |
 | tx_type | String | "buy", "sell", "dividend", or "split" |
 | date | String | YYYY-MM-DD |
-| quantity | f64 | Number of shares/units |
-| price_cents | i64 | Price per unit in cents |
-| fees_cents | i64 | Commission in cents |
+| units | f64 nullable | Positive units for buys/sells only |
+| unit_price_cents | i64 nullable | Positive native-currency unit price for buys/sells only |
+| dividend_amount_cents | i64 nullable | Positive Gross dividend distribution for dividends only |
+| dividend_deductions_cents | i64 nullable | Non-negative dividend deductions, bounded by gross |
+| split_ratio | f64 nullable | Positive new-units-per-old-unit ratio for splits only |
+| fees_cents | i64 nullable | Non-negative buy/sell fees only |
 | created_at | String | ISO timestamp |
 
 Chronological ledger access is indexed by `(date, id)`, while per-asset access is indexed by `(asset_id, date, id)`.

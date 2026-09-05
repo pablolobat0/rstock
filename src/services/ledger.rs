@@ -65,21 +65,25 @@ impl LedgerEntry {
     pub fn from_transaction(transaction: &Transaction) -> Self {
         let kind = match transaction.tx_type {
             TxType::Buy => LedgerEntryKind::Buy {
-                units: transaction.quantity,
-                unit_price_cents: transaction.price_cents,
-                fees_cents: transaction.fees_cents,
+                units: transaction.ledger_units().unwrap_or_default(),
+                unit_price_cents: transaction.ledger_unit_price_cents().unwrap_or_default(),
+                fees_cents: transaction.ledger_fees_cents().unwrap_or_default(),
             },
             TxType::Sell => LedgerEntryKind::Sell {
-                units: transaction.quantity,
-                unit_price_cents: transaction.price_cents,
-                fees_cents: transaction.fees_cents,
+                units: transaction.ledger_units().unwrap_or_default(),
+                unit_price_cents: transaction.ledger_unit_price_cents().unwrap_or_default(),
+                fees_cents: transaction.ledger_fees_cents().unwrap_or_default(),
             },
             TxType::Dividend => LedgerEntryKind::Dividend {
-                gross_amount_cents: transaction.price_cents,
-                deductions_cents: transaction.fees_cents,
+                gross_amount_cents: transaction
+                    .ledger_dividend_amount_cents()
+                    .unwrap_or_default(),
+                deductions_cents: transaction
+                    .ledger_dividend_deductions_cents()
+                    .unwrap_or_default(),
             },
             TxType::Split => LedgerEntryKind::Split {
-                ratio: transaction.quantity,
+                ratio: transaction.ledger_split_ratio().unwrap_or_default(),
             },
         };
         Self {
