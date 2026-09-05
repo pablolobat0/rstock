@@ -228,16 +228,23 @@ pub async fn delete(db: &DatabaseConnection, id: i32) -> anyhow::Result<Transact
     let tx = transaction_repo::find_by_id(&mutation, id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("Transaction {id} not found"))?;
+
+    transaction_repo::delete_by_id(&mutation, id).await?;
+
+    // Deletion is a ledger mutation, not merely a row removal.  Replay the
+    // exact resulting asset ledger so that a deleted acquisition or split
+    // cannot leave a later entry with an invalid prefix.
+    replay_asset_ledger(&mutation, tx.asset_id).await?;
+
+    let remaining_transactions = transaction_repo::find_by_asset_id(&mutation, tx.asset_id).await?;
     let invalidation_date = if tx.is_split() {
-        earliest_transaction_date(
-            &transaction_repo::find_by_asset_id(&mutation, tx.asset_id).await?,
-            None,
-        )
+        // A split changes the interpretation of the complete historical
+        // price cache. Include the old date even when it was the first entry
+        // and is no longer present after deletion.
+        earliest_transaction_date(&remaining_transactions, Some(&tx.date))
     } else {
         tx.date.clone()
     };
-
-    transaction_repo::delete_by_id(&mutation, id).await?;
     invalidate_snapshots(&mutation, &invalidation_date).await?;
 
     if tx.is_split() {
@@ -265,6 +272,8 @@ pub async fn edit(
         .await?
         .ok_or_else(|| anyhow::anyhow!("Transaction {id} not found"))?;
 
+    validate_edit(&tx, new_date.as_deref(), new_quantity, new_price, new_fees)?;
+
     let new_price_cents = new_price.map(f64_to_cents);
     let new_fees_cents = new_fees.map(f64_to_cents);
 
@@ -278,9 +287,15 @@ pub async fn edit(
     )
     .await?;
 
+    // Replaying after tentative persistence validates every later prefix,
+    // including entries whose meaning changed because this entry moved in
+    // chronological order. Any error rolls back the update and all
+    // invalidation work below with the caller-owned transaction.
+    replay_asset_ledger(&mutation, tx.asset_id).await?;
+
     let invalidation_date = if tx.is_split() {
         let transactions = transaction_repo::find_by_asset_id(&mutation, tx.asset_id).await?;
-        earliest_transaction_date(&transactions, new_date.as_deref())
+        earliest_transaction_date(&transactions, Some(&tx.date))
     } else {
         match &new_date {
             Some(d) if d < &tx.date => d.clone(),
@@ -333,6 +348,65 @@ fn transition_for_entry(
         .iter()
         .find(|transition| transition.entry.id == transaction_id)
         .ok_or_else(|| anyhow::anyhow!("transaction {transaction_id} was not replayed"))
+}
+
+fn validate_edit(
+    transaction: &Transaction,
+    new_date: Option<&str>,
+    new_quantity: Option<f64>,
+    new_price: Option<f64>,
+    new_fees: Option<f64>,
+) -> anyhow::Result<()> {
+    if let Some(date) = new_date {
+        validate_date(date)?;
+    }
+
+    match &transaction.tx_type {
+        crate::models::TxType::Buy | crate::models::TxType::Sell => {
+            if let Some(quantity) = new_quantity {
+                validate_positive(quantity, "quantity")?;
+            }
+            if let Some(price) = new_price {
+                validate_positive(price, "price")?;
+            }
+            if let Some(fees) = new_fees {
+                validate_non_negative(fees, "fees")?;
+            }
+        }
+        crate::models::TxType::Dividend => {
+            if new_quantity.is_some() {
+                anyhow::bail!("quantity cannot be edited for a dividend; use --price for amount")
+            }
+            if let Some(price) = new_price {
+                validate_positive(price, "amount")?;
+            }
+            if let Some(fees) = new_fees {
+                validate_non_negative(fees, "fees")?;
+            }
+
+            let gross_cents = new_price.map_or(transaction.price_cents, f64_to_cents);
+            let deductions_cents = new_fees.map_or(transaction.fees_cents, f64_to_cents);
+            if deductions_cents > gross_cents {
+                anyhow::bail!("fees must not exceed dividend amount");
+            }
+        }
+        crate::models::TxType::Split => {
+            if new_quantity.is_none() && new_price.is_none() && new_fees.is_none() {
+                // Date-only split corrections are meaningful and valid.
+                return Ok(());
+            }
+            if let Some(quantity) = new_quantity {
+                validate_positive(quantity, "ratio")?;
+            }
+            if new_price.is_some() {
+                anyhow::bail!("price cannot be edited for a split; use --quantity for ratio")
+            }
+            if new_fees.is_some() {
+                anyhow::bail!("fees cannot be edited for a split")
+            }
+        }
+    }
+    Ok(())
 }
 
 fn ledger_entry(transaction: &Transaction) -> LedgerEntry {

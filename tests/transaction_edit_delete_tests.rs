@@ -562,6 +562,178 @@ async fn same_day_recording_uses_generated_id_order_for_split_effects() {
     assert!((replay.final_quantity - 2.0).abs() < f64::EPSILON);
 }
 
+#[tokio::test]
+async fn editing_a_buy_replays_and_rejects_an_invalid_later_sell_atomically() {
+    let db = setup_test_db().await;
+    let asset_id = insert_asset(&db, "XFAKE1", "Fake Stock", "stock", "EUR").await;
+    insert_transaction(&db, asset_id, "2025-01-01", 10.0, 100.0, 1.0).await;
+    insert_sell_transaction(&db, asset_id, "2025-01-03", 10.0, 100.0, 0.0).await;
+
+    let result = services::transactions::edit(&db, 1, None, Some(9.0), None, None).await;
+
+    assert!(result.is_err());
+    let transactions = transaction_repo::find_by_asset_id(&db, asset_id)
+        .await
+        .unwrap();
+    assert_eq!(transactions[0].quantity, 10.0);
+    assert_eq!(transactions[0].id, 1);
+    assert_eq!(transactions[1].id, 2);
+}
+
+#[tokio::test]
+async fn editing_a_sell_replays_and_rejects_an_oversell_atomically() {
+    let db = setup_test_db().await;
+    let asset_id = insert_asset(&db, "XFAKE1", "Fake Stock", "stock", "EUR").await;
+    insert_transaction(&db, asset_id, "2025-01-01", 10.0, 100.0, 0.0).await;
+    insert_sell_transaction(&db, asset_id, "2025-01-02", 5.0, 100.0, 0.0).await;
+
+    let result = services::transactions::edit(&db, 2, None, Some(11.0), None, None).await;
+
+    assert!(result.is_err());
+    assert_eq!(
+        transaction_repo::find_by_id(&db, 2)
+            .await
+            .unwrap()
+            .unwrap()
+            .quantity,
+        5.0
+    );
+}
+
+#[tokio::test]
+async fn moving_a_sell_before_its_buy_is_rejected_without_reordering_identity() {
+    let db = setup_test_db().await;
+    let asset_id = insert_asset(&db, "XFAKE1", "Fake Stock", "stock", "EUR").await;
+    insert_transaction(&db, asset_id, "2025-01-02", 10.0, 100.0, 0.0).await;
+    insert_sell_transaction(&db, asset_id, "2025-01-03", 1.0, 100.0, 0.0).await;
+
+    let result =
+        services::transactions::edit(&db, 2, Some("2025-01-01".to_owned()), None, None, None).await;
+
+    assert!(result.is_err());
+    let transaction = transaction_repo::find_by_id(&db, 2).await.unwrap().unwrap();
+    assert_eq!(transaction.date, "2025-01-03");
+}
+
+#[tokio::test]
+async fn deleting_an_acquisition_required_by_later_entries_is_atomic() {
+    let db = setup_test_db().await;
+    let asset_id = insert_asset(&db, "XFAKE1", "Fake Stock", "stock", "EUR").await;
+    insert_transaction(&db, asset_id, "2025-01-01", 10.0, 100.0, 0.0).await;
+    insert_sell_transaction(&db, asset_id, "2025-01-02", 1.0, 100.0, 0.0).await;
+
+    let result = services::transactions::delete(&db, 1).await;
+
+    assert!(result.is_err());
+    assert_eq!(
+        transaction_repo::find_by_asset_id(&db, asset_id)
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn changing_a_split_that_supports_a_later_sell_is_rejected_atomically() {
+    let db = setup_test_db().await;
+    let asset_id = insert_asset(&db, "XFAKE1", "Fake Stock", "stock", "EUR").await;
+    insert_transaction(&db, asset_id, "2025-01-01", 10.0, 100.0, 0.0).await;
+    insert_split_transaction(&db, asset_id, "2025-01-02", 2.0).await;
+    insert_sell_transaction(&db, asset_id, "2025-01-03", 19.0, 100.0, 0.0).await;
+
+    let result = services::transactions::edit(&db, 2, None, Some(1.0), None, None).await;
+
+    assert!(result.is_err());
+    assert_eq!(
+        transaction_repo::find_by_id(&db, 2)
+            .await
+            .unwrap()
+            .unwrap()
+            .quantity,
+        2.0
+    );
+}
+
+#[tokio::test]
+async fn deleting_a_split_required_by_a_later_sell_is_atomic() {
+    let db = setup_test_db().await;
+    let asset_id = insert_asset(&db, "XFAKE1", "Fake Stock", "stock", "EUR").await;
+    insert_transaction(&db, asset_id, "2025-01-01", 10.0, 100.0, 0.0).await;
+    insert_split_transaction(&db, asset_id, "2025-01-02", 2.0).await;
+    insert_sell_transaction(&db, asset_id, "2025-01-03", 19.0, 100.0, 0.0).await;
+
+    let result = services::transactions::delete(&db, 2).await;
+
+    assert!(result.is_err());
+    assert_eq!(
+        transaction_repo::find_by_asset_id(&db, asset_id)
+            .await
+            .unwrap()
+            .len(),
+        3
+    );
+}
+
+#[tokio::test]
+async fn edits_reject_fields_that_are_not_meaningful_for_the_transaction_type() {
+    let db = setup_test_db().await;
+    let asset_id = insert_asset(&db, "XFAKE1", "Fake Stock", "stock", "EUR").await;
+    insert_transaction(&db, asset_id, "2025-01-01", 10.0, 100.0, 0.0).await;
+    insert_dividend_transaction(&db, asset_id, "2025-01-02", 5.0, 1.0).await;
+    insert_split_transaction(&db, asset_id, "2025-01-03", 2.0).await;
+
+    let dividend_result = services::transactions::edit(&db, 2, None, Some(2.0), None, None).await;
+    let split_result = services::transactions::edit(&db, 3, None, None, Some(100.0), None).await;
+    let split_fee_result = services::transactions::edit(&db, 3, None, None, None, Some(1.0)).await;
+
+    assert!(dividend_result.is_err());
+    assert!(split_result.is_err());
+    assert!(split_fee_result.is_err());
+    assert_eq!(
+        transaction_repo::find_by_id(&db, 2)
+            .await
+            .unwrap()
+            .unwrap()
+            .quantity,
+        1.0
+    );
+    assert_eq!(
+        transaction_repo::find_by_id(&db, 3)
+            .await
+            .unwrap()
+            .unwrap()
+            .quantity,
+        2.0
+    );
+}
+
+#[tokio::test]
+async fn editing_preserves_id_and_uses_id_to_break_same_day_date_ties() {
+    let db = setup_test_db().await;
+    let asset_id = insert_asset(&db, "XFAKE1", "Fake Stock", "stock", "EUR").await;
+    insert_transaction(&db, asset_id, "2025-01-01", 10.0, 100.0, 0.0).await;
+    insert_transaction(&db, asset_id, "2025-01-03", 2.0, 100.0, 0.0).await;
+    insert_transaction(&db, asset_id, "2025-01-02", 3.0, 100.0, 0.0).await;
+
+    services::transactions::edit(&db, 2, Some("2025-01-02".to_owned()), None, None, None)
+        .await
+        .unwrap();
+
+    let transactions = transaction_repo::find_by_asset_id(&db, asset_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        transactions
+            .iter()
+            .map(|transaction| transaction.id)
+            .collect::<Vec<_>>(),
+        vec![1, 2, 3]
+    );
+    assert_eq!(transactions[1].date, "2025-01-02");
+    assert_eq!(transactions[2].date, "2025-01-02");
+}
+
 fn ledger_fields(
     transactions: Vec<rstock::models::Transaction>,
 ) -> Vec<(i32, String, String, f64, i64, i64)> {
