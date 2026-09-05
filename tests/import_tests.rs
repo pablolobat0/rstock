@@ -112,6 +112,7 @@ async fn test_import_replays_existing_ledger_before_commit() {
 
     let result = import_transactions_csv(&db, csv.path().to_str().unwrap()).await;
     assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("row 2"));
     assert_eq!(
         transaction_repo::find_all_ordered_by_date(&db, None, None)
             .await
@@ -119,6 +120,91 @@ async fn test_import_replays_existing_ledger_before_commit() {
             .len(),
         1
     );
+}
+
+#[tokio::test]
+async fn test_import_replay_error_identifies_the_imported_row() {
+    let db = common::setup_test_db().await;
+    let asset_id = common::insert_asset(&db, "XFAKEIMPORT", "Import Stock", "stock", "EUR").await;
+    common::insert_transaction(&db, asset_id, "2025-01-01", 1.0, 100.0, 0.0).await;
+    let csv = write_csv(&format!(
+        "{CSV_HEADER}\
+         02-01-2025,XFAKEIMPORT,,,EUR,,,,,,,sell,2,100.00,0.00\n"
+    ));
+
+    let error = import_transactions_csv(&db, csv.path().to_str().unwrap())
+        .await
+        .expect_err("oversell should be rejected");
+    let message = error.to_string();
+    assert!(
+        message.contains("row 2"),
+        "error should identify CSV row: {message}"
+    );
+    assert!(
+        message.contains("XFAKEIMPORT"),
+        "error should identify asset: {message}"
+    );
+    assert!(
+        message.contains("NonNegativeQuantity"),
+        "error should identify invariant: {message}"
+    );
+    assert_eq!(
+        transaction_repo::find_all_ordered_by_date(&db, None, None)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn test_import_unsorted_dates_replay_in_canonical_order() {
+    let db = common::setup_test_db().await;
+    let csv = write_csv(&format!(
+        "{CSV_HEADER}\
+         10-01-2025,XFAKE1,,,EUR,,,,,,,sell,2,110.00,0.00\n\
+         01-01-2025,XFAKE1,Fake Stock,stock,EUR,,equity,blend,,,passive,buy,3,100.00,0.00\n"
+    ));
+
+    import_transactions_csv(&db, csv.path().to_str().unwrap())
+        .await
+        .expect("dates should be canonicalized before replay");
+    let transactions = transaction_repo::find_all_ordered_by_date(&db, None, None)
+        .await
+        .unwrap();
+    assert_eq!(transactions.len(), 2);
+    assert_eq!(transactions[0].tx_type, TxType::Buy);
+    assert_eq!(transactions[1].tx_type, TxType::Sell);
+}
+
+#[tokio::test]
+async fn test_import_rolls_back_all_assets_when_one_replay_fails() {
+    let db = common::setup_test_db().await;
+    let first_asset = common::insert_asset(&db, "XFAKE1", "First Stock", "stock", "EUR").await;
+    let second_asset = common::insert_asset(&db, "XFAKE2", "Second Stock", "stock", "EUR").await;
+    common::insert_transaction(&db, first_asset, "2025-01-01", 1.0, 100.0, 0.0).await;
+    common::insert_transaction(&db, second_asset, "2025-01-01", 1.0, 100.0, 0.0).await;
+    common::insert_portfolio_snapshot(&db, "2025-01-01", 100.0, 1.0).await;
+    let csv = write_csv(&format!(
+        "{CSV_HEADER}\
+         02-01-2025,XFAKE1,,,EUR,,,,,,,sell,1,110.00,0.00\n\
+         02-01-2025,XFAKE2,,,EUR,,,,,,,sell,2,110.00,0.00\n"
+    ));
+
+    let error = import_transactions_csv(&db, csv.path().to_str().unwrap())
+        .await
+        .expect_err("one invalid affected ledger should reject the complete import");
+    assert!(error.to_string().contains("row 3"));
+    assert_eq!(
+        transaction_repo::find_all_ordered_by_date(&db, None, None)
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+    assert!(common::get_portfolio_snapshot(&db, "2025-01-01")
+        .await
+        .is_some());
 }
 
 #[tokio::test]
@@ -354,6 +440,48 @@ async fn test_import_export_roundtrip() {
     let csv1 = std::fs::read_to_string(export_path).expect("failed to read first export");
     let csv2 = std::fs::read_to_string(export_path2).expect("failed to read second export");
     assert_eq!(csv1, csv2, "roundtrip CSVs should be identical");
+}
+
+#[tokio::test]
+async fn test_import_export_roundtrip_preserves_all_transaction_types() {
+    let db1 = common::setup_test_db().await;
+    let csv = write_csv(&format!(
+        "{CSV_HEADER}\
+         01-01-2025,XFAKE1,Fake Stock,stock,EUR,,equity,blend,,,passive,buy,10,100.00,5.00\n\
+         10-01-2025,XFAKE1,,,EUR,,,,,,,dividend,1,50.00,5.00\n\
+         15-01-2025,XFAKE1,,,EUR,,,,,,,split,2,0.00,0.00\n\
+         20-01-2025,XFAKE1,,,EUR,,,,,,,sell,3,120.00,2.00\n"
+    ));
+    import_transactions_csv(&db1, csv.path().to_str().unwrap())
+        .await
+        .expect("initial import should succeed");
+
+    let export_file = NamedTempFile::new().expect("failed to create temp file");
+    let export_path = export_file.path().to_str().unwrap();
+    export_transactions_csv(&db1, export_path)
+        .await
+        .expect("export should succeed");
+
+    let db2 = common::setup_test_db().await;
+    import_transactions_csv(&db2, export_path)
+        .await
+        .expect("roundtrip import should succeed");
+    let original = transaction_repo::find_all_ordered_by_date(&db1, None, None)
+        .await
+        .unwrap();
+    let roundtripped = transaction_repo::find_all_ordered_by_date(&db2, None, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        original
+            .iter()
+            .map(|tx| (&tx.tx_type, tx.quantity, tx.price_cents, tx.fees_cents))
+            .collect::<Vec<_>>(),
+        roundtripped
+            .iter()
+            .map(|tx| (&tx.tx_type, tx.quantity, tx.price_cents, tx.fees_cents))
+            .collect::<Vec<_>>()
+    );
 }
 
 #[tokio::test]
