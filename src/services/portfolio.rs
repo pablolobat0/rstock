@@ -205,7 +205,8 @@ async fn get_current_positions_inner(
             .await?;
     }
 
-    let projections = project_open_holdings(db, market_data, assets, transactions_by_asset).await?;
+    let projections =
+        project_open_holdings(db, market_data, assets, &prepare_scope.replays).await?;
     if projections.is_empty() {
         return Ok(empty_current_positions());
     }
@@ -290,6 +291,7 @@ struct PositionTotals {
 struct LedgerPrepareScope {
     assets: Vec<Asset>,
     start_date: String,
+    replays: HashMap<i32, ledger::LedgerReplay>,
 }
 
 /// Derives the open-holding asset set and earliest transaction date from the
@@ -302,6 +304,7 @@ fn ledger_prepare_scope(
     preparation_scope: LedgerPreparationScope,
 ) -> anyhow::Result<Option<LedgerPrepareScope>> {
     let mut prepare_assets = Vec::new();
+    let mut replays = HashMap::new();
     let mut earliest_transaction_date: Option<NaiveDate> = None;
     let mut has_open_holding = false;
     for asset in assets {
@@ -321,21 +324,21 @@ fn ledger_prepare_scope(
                     asset.is_monetary() || transactions.iter().any(|tx| tx.date.as_str() > end_date)
                 }
             };
-            if !needs_preparation {
-                continue;
+            if needs_preparation {
+                prepare_assets.push(asset.clone());
+                let earliest = NaiveDate::parse_from_str(
+                    replay
+                        .transitions
+                        .first()
+                        .map_or(end_date, |transition| transition.entry.date.as_str()),
+                    DATE_FORMAT,
+                )?;
+                earliest_transaction_date = Some(match earliest_transaction_date {
+                    Some(previous) => previous.min(earliest),
+                    None => earliest,
+                });
             }
-            prepare_assets.push(asset.clone());
-            let earliest = NaiveDate::parse_from_str(
-                replay
-                    .transitions
-                    .first()
-                    .map_or(end_date, |transition| transition.entry.date.as_str()),
-                DATE_FORMAT,
-            )?;
-            earliest_transaction_date = Some(match earliest_transaction_date {
-                Some(previous) => previous.min(earliest),
-                None => earliest,
-            });
+            replays.insert(asset.id, replay);
         }
     }
     if !has_open_holding {
@@ -348,6 +351,7 @@ fn ledger_prepare_scope(
     Ok(Some(LedgerPrepareScope {
         assets: prepare_assets,
         start_date,
+        replays,
     }))
 }
 
@@ -376,17 +380,17 @@ async fn project_open_holdings(
     db: &DatabaseConnection,
     market_data: &MarketData,
     assets: Vec<Asset>,
-    transactions_by_asset: HashMap<i32, Vec<Transaction>>,
+    replays: &HashMap<i32, ledger::LedgerReplay>,
 ) -> anyhow::Result<Vec<HoldingProjection>> {
     let mut projections = Vec::new();
     for asset in assets {
         if is_benchmark_ticker(&asset.ticker) {
             continue;
         }
-        let transactions = transactions_by_asset
-            .get(&asset.id)
-            .context("asset has no ordered transactions")?;
-        let projection = project_holding(db, market_data, asset, transactions).await?;
+        let Some(replay) = replays.get(&asset.id) else {
+            continue;
+        };
+        let projection = project_holding(db, market_data, asset, replay).await?;
         if projection.total_qty > FLOAT_EPSILON {
             projections.push(projection);
         }
@@ -398,10 +402,8 @@ async fn project_holding(
     db: &DatabaseConnection,
     market_data: &MarketData,
     asset: Asset,
-    transactions: &[Transaction],
+    replay: &ledger::LedgerReplay,
 ) -> anyhow::Result<HoldingProjection> {
-    let replay = ledger::replay_transactions(asset.id, transactions)
-        .map_err(|error| anyhow::anyhow!(error))?;
     let first_date = replay
         .transitions
         .first()
@@ -410,7 +412,7 @@ async fn project_holding(
     let rates = market_data
         .get_asset_exchange_rates(db, &asset, first_date, &format_date(market_data.today()))
         .await?;
-    let enriched = ledger::enrich_replay(&replay, &asset.currency, BASE_CURRENCY, &rates)
+    let enriched = ledger::enrich_replay(replay, &asset.currency, BASE_CURRENCY, &rates)
         .map_err(|error| anyhow::anyhow!(error))?;
     let mut market_data_limitations = Vec::new();
     if asset.currency != BASE_CURRENCY {

@@ -150,27 +150,31 @@ impl CanonicalLedger {
         asset_id: i32,
         transactions: &[Transaction],
     ) -> Result<Self, LedgerError> {
-        let mut transactions = transactions.to_vec();
-        transactions.sort_by(|left, right| left.date.cmp(&right.date).then(left.id.cmp(&right.id)));
-        Self::new(
-            asset_id,
-            transactions
-                .iter()
-                .map(LedgerEntry::from_transaction)
-                .collect::<Result<Vec<_>, _>>()?,
-        )
+        // Sort references before conversion so malformed-field errors retain
+        // canonical first-error ordering without cloning the transaction list.
+        let mut ordered: Vec<&Transaction> = transactions.iter().collect();
+        ordered.sort_by(|left, right| left.date.cmp(&right.date).then(left.id.cmp(&right.id)));
+        let entries = ordered
+            .into_iter()
+            .map(LedgerEntry::from_transaction)
+            .collect::<Result<Vec<_>, _>>()?;
+        Self::from_sorted_entries(asset_id, entries)
     }
 
     /// Validates identity integrity and establishes the only replay order.
+    #[allow(dead_code)]
     pub fn new(asset_id: i32, mut entries: Vec<LedgerEntry>) -> Result<Self, LedgerError> {
+        entries.sort_by(|left, right| left.date.cmp(&right.date).then(left.id.cmp(&right.id)));
+        Self::from_sorted_entries(asset_id, entries)
+    }
+
+    fn from_sorted_entries(asset_id: i32, entries: Vec<LedgerEntry>) -> Result<Self, LedgerError> {
         if asset_id <= 0 {
             return Err(LedgerError::for_ledger(
                 asset_id,
                 LedgerInvariant::PositiveAssetIdentity,
             ));
         }
-        entries.sort_by(|left, right| left.date.cmp(&right.date).then(left.id.cmp(&right.id)));
-
         let mut seen_ids = std::collections::HashSet::new();
         for entry in &entries {
             if entry.asset_id != asset_id {
