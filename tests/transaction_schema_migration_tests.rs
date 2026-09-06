@@ -33,6 +33,146 @@ async fn transaction_sequence(db: &sea_orm::DatabaseConnection) -> (i64, i64) {
     )
 }
 
+async fn table_columns(db: &sea_orm::DatabaseConnection) -> Vec<String> {
+    db.query_all(Statement::from_string(
+        DatabaseBackend::Sqlite,
+        "PRAGMA table_info('transactions')",
+    ))
+    .await
+    .unwrap()
+    .into_iter()
+    .map(|row| row.try_get("", "name").unwrap())
+    .collect()
+}
+
+async fn transaction_indexes(db: &sea_orm::DatabaseConnection) -> Vec<String> {
+    let mut indexes = db
+        .query_all(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "PRAGMA index_list('transactions')",
+        ))
+        .await
+        .unwrap()
+        .into_iter()
+        .filter_map(|row| row.try_get("", "name").ok())
+        .collect::<Vec<String>>();
+    indexes.sort_unstable();
+    indexes
+}
+
+async fn transaction_foreign_keys(
+    db: &sea_orm::DatabaseConnection,
+) -> Vec<(String, String, String)> {
+    db.query_all(Statement::from_string(
+        DatabaseBackend::Sqlite,
+        "PRAGMA foreign_key_list('transactions')",
+    ))
+    .await
+    .unwrap()
+    .into_iter()
+    .map(|row| {
+        (
+            row.try_get("", "table").unwrap(),
+            row.try_get("", "from").unwrap(),
+            row.try_get("", "to").unwrap(),
+        )
+    })
+    .collect()
+}
+
+async fn migration_versions(db: &sea_orm::DatabaseConnection) -> Vec<String> {
+    db.query_all(Statement::from_string(
+        DatabaseBackend::Sqlite,
+        "SELECT version FROM seaql_migrations ORDER BY version",
+    ))
+    .await
+    .unwrap()
+    .into_iter()
+    .map(|row| row.try_get("", "version").unwrap())
+    .collect()
+}
+
+async fn legacy_rows(
+    db: &sea_orm::DatabaseConnection,
+) -> Vec<(
+    i32,
+    i32,
+    String,
+    String,
+    f64,
+    i64,
+    i64,
+    Option<String>,
+    String,
+)> {
+    db.query_all(Statement::from_string(
+        DatabaseBackend::Sqlite,
+        "SELECT id, asset_id, tx_type, date, quantity, price_cents, fees_cents, notes, created_at
+         FROM transactions ORDER BY id",
+    ))
+    .await
+    .unwrap()
+    .into_iter()
+    .map(|row| {
+        (
+            row.try_get("", "id").unwrap(),
+            row.try_get("", "asset_id").unwrap(),
+            row.try_get("", "tx_type").unwrap(),
+            row.try_get("", "date").unwrap(),
+            row.try_get("", "quantity").unwrap(),
+            row.try_get("", "price_cents").unwrap(),
+            row.try_get("", "fees_cents").unwrap(),
+            row.try_get("", "notes").unwrap(),
+            row.try_get("", "created_at").unwrap(),
+        )
+    })
+    .collect()
+}
+
+async fn semantic_rows(
+    db: &sea_orm::DatabaseConnection,
+) -> Vec<(
+    i32,
+    i32,
+    String,
+    String,
+    Option<f64>,
+    Option<i64>,
+    Option<i64>,
+    Option<i64>,
+    Option<f64>,
+    Option<i64>,
+    Option<String>,
+    String,
+)> {
+    db.query_all(Statement::from_string(
+        DatabaseBackend::Sqlite,
+        "SELECT id, asset_id, tx_type, date, units, unit_price_cents, dividend_amount_cents,
+                dividend_deductions_cents, split_ratio, fees_cents, notes, created_at
+         FROM transactions ORDER BY id",
+    ))
+    .await
+    .unwrap()
+    .into_iter()
+    .map(|row| {
+        (
+            row.try_get("", "id").unwrap(),
+            row.try_get("", "asset_id").unwrap(),
+            row.try_get("", "tx_type").unwrap(),
+            row.try_get("", "date").unwrap(),
+            row.try_get("", "units").unwrap(),
+            row.try_get("", "unit_price_cents").unwrap(),
+            row.try_get("", "dividend_amount_cents").unwrap(),
+            row.try_get("", "dividend_deductions_cents").unwrap(),
+            row.try_get("", "split_ratio").unwrap(),
+            row.try_get("", "fees_cents").unwrap(),
+            row.try_get("", "notes").unwrap(),
+            row.try_get("", "created_at").unwrap(),
+        )
+    })
+    .collect()
+}
+
 #[tokio::test]
 async fn semantic_migration_round_trips_every_transaction_kind_and_identity() {
     let db = sea_orm::Database::connect("sqlite::memory:")
@@ -229,4 +369,99 @@ async fn migration_preserves_empty_table_sequence_through_up_and_down() {
     );
     let generated_after_down = db.execute_unprepared("INSERT INTO transactions (asset_id,tx_type,date,quantity,price_cents,fees_cents,created_at) VALUES (1,'buy','2025-01-03',1.0,100,0,'now')").await.unwrap().last_insert_id();
     assert!(generated_after_down > generated);
+}
+
+#[tokio::test]
+async fn failed_up_rolls_back_rebuild_and_bookkeeping_then_retries() {
+    let db = sea_orm::Database::connect("sqlite::memory:").await.unwrap();
+    let prefix = (Migrator::migrations().len() - 1) as u32;
+    Migrator::up(&db, Some(prefix)).await.unwrap();
+    db.execute_unprepared("INSERT INTO assets (id,ticker,name,asset_type,currency,created_at) VALUES (1,'XUPFAIL','Up failure','stock','EUR','now')").await.unwrap();
+    db.execute_unprepared("INSERT INTO transactions (id,asset_id,tx_type,date,quantity,price_cents,fees_cents,notes,created_at) VALUES (7,1,'buy','2025-01-01',1.0,100,0,'legacy note','legacy created'),(100,1,'sell','2025-01-02',1.0,110,1,NULL,'legacy sell')").await.unwrap();
+    db.execute_unprepared("DELETE FROM transactions WHERE id = 100")
+        .await
+        .unwrap();
+
+    let before = (
+        table_columns(&db).await,
+        legacy_rows(&db).await,
+        transaction_indexes(&db).await,
+        transaction_foreign_keys(&db).await,
+        transaction_sequence(&db).await,
+        migration_versions(&db).await,
+    );
+    db.execute_unprepared(
+        "CREATE TRIGGER fail_contract_up BEFORE INSERT ON seaql_migrations
+         WHEN NEW.version = 'm20260905_000001_contract_transaction_schema'
+         BEGIN SELECT RAISE(ABORT, 'injected bookkeeping failure'); END",
+    )
+    .await
+    .unwrap();
+
+    assert!(Migrator::up(&db, None).await.is_err());
+    db.execute_unprepared("DROP TRIGGER fail_contract_up")
+        .await
+        .unwrap();
+    assert_eq!(table_columns(&db).await, before.0);
+    assert_eq!(legacy_rows(&db).await, before.1);
+    assert_eq!(transaction_indexes(&db).await, before.2);
+    assert_eq!(transaction_foreign_keys(&db).await, before.3);
+    assert_eq!(transaction_sequence(&db).await, before.4);
+    assert_eq!(migration_versions(&db).await, before.5);
+
+    Migrator::up(&db, None).await.unwrap();
+    assert_eq!(semantic_rows(&db).await.len(), 1);
+    assert_eq!(transaction_sequence(&db).await, (1, 100));
+    assert!(migration_versions(&db)
+        .await
+        .iter()
+        .any(|version| version == "m20260905_000001_contract_transaction_schema"));
+}
+
+#[tokio::test]
+async fn failed_down_rolls_back_rebuild_and_bookkeeping_then_retries() {
+    let db = sea_orm::Database::connect("sqlite::memory:").await.unwrap();
+    let prefix = (Migrator::migrations().len() - 1) as u32;
+    Migrator::up(&db, Some(prefix)).await.unwrap();
+    db.execute_unprepared("INSERT INTO assets (id,ticker,name,asset_type,currency,created_at) VALUES (1,'XDOWNFAIL','Down failure','stock','EUR','now')").await.unwrap();
+    db.execute_unprepared("INSERT INTO transactions (id,asset_id,tx_type,date,quantity,price_cents,fees_cents,notes,created_at) VALUES (7,1,'buy','2025-01-01',1.0,100,0,'semantic note','semantic created'),(100,1,'sell','2025-01-02',1.0,110,1,NULL,'semantic sell')").await.unwrap();
+    db.execute_unprepared("DELETE FROM transactions WHERE id = 100")
+        .await
+        .unwrap();
+    Migrator::up(&db, None).await.unwrap();
+
+    let before = (
+        table_columns(&db).await,
+        semantic_rows(&db).await,
+        transaction_indexes(&db).await,
+        transaction_foreign_keys(&db).await,
+        transaction_sequence(&db).await,
+        migration_versions(&db).await,
+    );
+    db.execute_unprepared(
+        "CREATE TRIGGER fail_contract_down BEFORE DELETE ON seaql_migrations
+         WHEN OLD.version = 'm20260905_000001_contract_transaction_schema'
+         BEGIN SELECT RAISE(ABORT, 'injected bookkeeping failure'); END",
+    )
+    .await
+    .unwrap();
+
+    assert!(Migrator::down(&db, Some(1)).await.is_err());
+    db.execute_unprepared("DROP TRIGGER fail_contract_down")
+        .await
+        .unwrap();
+    assert_eq!(table_columns(&db).await, before.0);
+    assert_eq!(semantic_rows(&db).await, before.1);
+    assert_eq!(transaction_indexes(&db).await, before.2);
+    assert_eq!(transaction_foreign_keys(&db).await, before.3);
+    assert_eq!(transaction_sequence(&db).await, before.4);
+    assert_eq!(migration_versions(&db).await, before.5);
+
+    Migrator::down(&db, Some(1)).await.unwrap();
+    assert_eq!(legacy_rows(&db).await.len(), 1);
+    assert_eq!(transaction_sequence(&db).await, (1, 100));
+    assert!(!migration_versions(&db)
+        .await
+        .iter()
+        .any(|version| version == "m20260905_000001_contract_transaction_schema"));
 }

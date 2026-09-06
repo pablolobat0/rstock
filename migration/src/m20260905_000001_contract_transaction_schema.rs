@@ -1,3 +1,4 @@
+use sea_orm_migration::prelude::sea_orm::{DbBackend, Statement};
 use sea_orm_migration::prelude::*;
 
 /// Replaces the historical overloaded transaction columns with a semantic
@@ -11,7 +12,7 @@ pub struct Migration;
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         let db = manager.get_connection();
-        preserve_sequence(db).await?;
+        let sequence = preserve_sequence(db).await?;
         db.execute_unprepared("DROP INDEX IF EXISTS idx_transactions_date_id")
             .await?;
         db.execute_unprepared("DROP INDEX IF EXISTS idx_transactions_asset_date_id")
@@ -38,13 +39,13 @@ impl MigrationTrait for Migration {
         .await?;
         db.execute_unprepared("DROP TABLE transactions_legacy")
             .await?;
-        restore_sequence(db).await?;
+        restore_sequence(db, sequence).await?;
         create_indexes(db).await
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         let db = manager.get_connection();
-        preserve_sequence(db).await?;
+        let sequence = preserve_sequence(db).await?;
         db.execute_unprepared("DROP INDEX IF EXISTS idx_transactions_date_id")
             .await?;
         db.execute_unprepared("DROP INDEX IF EXISTS idx_transactions_asset_date_id")
@@ -79,7 +80,7 @@ impl MigrationTrait for Migration {
         .await?;
         db.execute_unprepared("DROP TABLE transactions_semantic")
             .await?;
-        restore_sequence(db).await?;
+        restore_sequence(db, sequence).await?;
         create_indexes(db).await
     }
 }
@@ -159,31 +160,31 @@ async fn create_indexes(db: &impl ConnectionTrait) -> Result<(), DbErr> {
     Ok(())
 }
 
-async fn preserve_sequence(db: &impl ConnectionTrait) -> Result<(), DbErr> {
-    db.execute_unprepared(
-        "CREATE TEMP TABLE transaction_schema_sequence AS
-         SELECT COALESCE(MAX(seq), 0) AS seq
-         FROM sqlite_sequence
-         WHERE name = 'transactions'",
-    )
-    .await
-    .map(|_| ())
+async fn preserve_sequence(db: &impl ConnectionTrait) -> Result<i64, DbErr> {
+    let row = db
+        .query_one(Statement::from_string(
+            DbBackend::Sqlite,
+            "SELECT COALESCE(MAX(seq), 0) AS seq
+             FROM sqlite_sequence
+             WHERE name = 'transactions'",
+        ))
+        .await?
+        .ok_or_else(|| DbErr::Custom("sqlite_sequence query returned no row".to_owned()))?;
+    row.try_get("", "seq")
 }
 
-async fn restore_sequence(db: &impl ConnectionTrait) -> Result<(), DbErr> {
+async fn restore_sequence(db: &impl ConnectionTrait, preserved_sequence: i64) -> Result<(), DbErr> {
     db.execute_unprepared("DELETE FROM sqlite_sequence WHERE name = 'transactions'")
         .await?;
-    db.execute_unprepared(
+    db.execute(Statement::from_sql_and_values(
+        DbBackend::Sqlite,
         "INSERT INTO sqlite_sequence (name, seq)
-         SELECT 'transactions',
-            CASE WHEN COALESCE((SELECT seq FROM transaction_schema_sequence), 0)
-                      > COALESCE((SELECT MAX(id) FROM transactions), 0)
-                 THEN COALESCE((SELECT seq FROM transaction_schema_sequence), 0)
-                 ELSE COALESCE((SELECT MAX(id) FROM transactions), 0)
-            END",
-    )
-    .await?;
-    db.execute_unprepared("DROP TABLE transaction_schema_sequence")
-        .await
-        .map(|_| ())
+         SELECT 'transactions', CASE WHEN ? > COALESCE((SELECT MAX(id) FROM transactions), 0)
+                                     THEN ?
+                                     ELSE COALESCE((SELECT MAX(id) FROM transactions), 0)
+                                END",
+        [preserved_sequence.into(), preserved_sequence.into()],
+    ))
+    .await
+    .map(|_| ())
 }

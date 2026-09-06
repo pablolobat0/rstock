@@ -1,5 +1,7 @@
 pub use sea_orm_migration::prelude::*;
 
+use sea_orm_migration::prelude::sea_orm::{TransactionError, TransactionTrait};
+
 mod m20220101_000001_create_table;
 mod m20250224_000001_add_price_history;
 mod m20250225_000001_portfolio_asset_history;
@@ -15,6 +17,17 @@ mod m20260815_000001_add_transaction_indexes;
 mod m20260905_000001_contract_transaction_schema;
 
 pub struct Migrator;
+
+// SQLite's default SeaORM migration runner does not open a transaction. Keep
+// the default implementation separate so the public runner can add one without
+// recursively calling its own override.
+struct RawMigrator;
+
+fn migration_error(error: TransactionError<DbErr>) -> DbErr {
+    match error {
+        TransactionError::Connection(error) | TransactionError::Transaction(error) => error,
+    }
+}
 
 #[async_trait::async_trait]
 impl MigratorTrait for Migrator {
@@ -34,5 +47,46 @@ impl MigratorTrait for Migrator {
             Box::new(m20260815_000001_add_transaction_indexes::Migration),
             Box::new(m20260905_000001_contract_transaction_schema::Migration),
         ]
+    }
+
+    async fn up<'c, C>(db: C, steps: Option<u32>) -> Result<(), DbErr>
+    where
+        C: IntoSchemaManagerConnection<'c>,
+    {
+        match db.into_schema_manager_connection() {
+            SchemaManagerConnection::Connection(db) => db
+                .transaction(|transaction| {
+                    Box::pin(async move { RawMigrator::up(transaction, steps).await })
+                })
+                .await
+                .map_err(migration_error),
+            SchemaManagerConnection::Transaction(transaction) => {
+                RawMigrator::up(transaction, steps).await
+            }
+        }
+    }
+
+    async fn down<'c, C>(db: C, steps: Option<u32>) -> Result<(), DbErr>
+    where
+        C: IntoSchemaManagerConnection<'c>,
+    {
+        match db.into_schema_manager_connection() {
+            SchemaManagerConnection::Connection(db) => db
+                .transaction(|transaction| {
+                    Box::pin(async move { RawMigrator::down(transaction, steps).await })
+                })
+                .await
+                .map_err(migration_error),
+            SchemaManagerConnection::Transaction(transaction) => {
+                RawMigrator::down(transaction, steps).await
+            }
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl MigratorTrait for RawMigrator {
+    fn migrations() -> Vec<Box<dyn MigrationTrait>> {
+        Migrator::migrations()
     }
 }
