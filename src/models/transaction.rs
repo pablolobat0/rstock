@@ -141,36 +141,6 @@ impl Transaction {
         }
     }
 
-    #[must_use]
-    pub fn ledger_units(&self) -> Option<f64> {
-        self.units
-    }
-
-    #[must_use]
-    pub fn ledger_unit_price_cents(&self) -> Option<i64> {
-        self.unit_price_cents
-    }
-
-    #[must_use]
-    pub fn ledger_fees_cents(&self) -> Option<i64> {
-        self.trade_fees_cents
-    }
-
-    #[must_use]
-    pub fn ledger_dividend_amount_cents(&self) -> Option<i64> {
-        self.dividend_amount_cents
-    }
-
-    #[must_use]
-    pub fn ledger_dividend_deductions_cents(&self) -> Option<i64> {
-        self.dividend_deductions_cents
-    }
-
-    #[must_use]
-    pub fn ledger_split_ratio(&self) -> Option<f64> {
-        self.split_ratio
-    }
-
     pub fn is_split(&self) -> bool {
         self.tx_type == TxType::Split
     }

@@ -61,7 +61,7 @@ async fn import_receipts_use_persisted_replay_precision_and_generated_ids() {
     let db = common::setup_test_db().await;
     let csv = write_csv(&format!(
         "{CSV_HEADER}\
-         01-01-2025,XFAKE1,Fake Stock,stock,EUR,,equity,blend,,,passive,buy,200,1.000049,0.000049\n\
+         01-01-2025,XFAKE1,Fake Stock,stock,EUR,,equity,blend,,,passive,buy,200,1.000049,0.000149\n\
          02-01-2025,XFAKE1,,,EUR,,,,,,,dividend,1,1.23456,0.12345\n"
     ));
 
@@ -82,7 +82,7 @@ async fn import_receipts_use_persisted_replay_precision_and_generated_ids() {
         transactions[1].id
     );
     assert_eq!(transactions[0].unit_price_cents, Some(10_000));
-    assert_eq!(transactions[0].trade_fees_cents, Some(0));
+    assert_eq!(transactions[0].trade_fees_cents, Some(1));
     assert_eq!(transactions[1].dividend_amount_cents, Some(12_346));
     assert_eq!(transactions[1].dividend_deductions_cents, Some(1_235));
     assert_eq!(
@@ -421,6 +421,43 @@ async fn test_import_rejects_non_positive_buy_price() {
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
     assert!(err.contains("price"), "error should mention price: {err}");
+}
+
+#[tokio::test]
+async fn test_import_rejects_positive_price_that_rounds_to_zero() {
+    let db = common::setup_test_db().await;
+    let csv = write_csv(&format!(
+        "{CSV_HEADER}{}",
+        classified_stock_row("buy", "1", "0.000049", "0.00")
+    ));
+
+    let result = import_transactions_csv(&db, csv.path().to_str().unwrap()).await;
+    let error = result.expect_err("positive sub-unit price must not be silently quantized away");
+    assert!(error.to_string().contains("supported cents precision"));
+    assert!(asset_repo::find_all(&db).await.unwrap().is_empty());
+    assert!(transaction_repo::find_all_ordered_by_date(&db, None, None)
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+async fn test_import_compares_dividend_fields_after_quantization() {
+    let db = common::setup_test_db().await;
+    let csv = write_csv(&format!(
+        "{CSV_HEADER}\
+         01-01-2025,XFAKE1,Fake Stock,stock,EUR,,equity,blend,,,passive,buy,1,100.00,0.00\n\
+         02-01-2025,XFAKE1,,,EUR,,,,,,,dividend,1,1.00004,1.000049\n"
+    ));
+
+    import_transactions_csv(&db, csv.path().to_str().unwrap())
+        .await
+        .expect("encoded-equal dividend fields should be accepted");
+    let transactions = transaction_repo::find_all_ordered_by_date(&db, None, None)
+        .await
+        .unwrap();
+    assert_eq!(transactions[1].dividend_amount_cents, Some(10_000));
+    assert_eq!(transactions[1].dividend_deductions_cents, Some(10_000));
 }
 
 #[tokio::test]
