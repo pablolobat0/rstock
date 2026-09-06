@@ -3,7 +3,7 @@ use migration::{Migrator, MigratorTrait};
 use rstock::db::entities::transaction;
 use sea_orm::{ConnectionTrait, DatabaseBackend, EntityTrait, QueryOrder, Set, Statement};
 
-mod common;
+pub mod common;
 
 #[tokio::test]
 async fn semantic_migration_round_trips_every_transaction_kind_and_identity() {

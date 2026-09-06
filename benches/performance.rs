@@ -5,6 +5,8 @@
 //! startup paths use low-work commands with unreachable source settings and
 //! fail if those commands unexpectedly try to fetch market data.
 
+#![allow(clippy::too_many_lines)]
+
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::fmt::Write as _;
 use std::fs;
@@ -512,7 +514,7 @@ fn rolling_return_fixture(days: usize) -> Vec<(String, f64, f64)> {
             let left = ((index * 17) % 23) as f64 / 100.0 - 0.1;
             let right = ((index * 11 + 3) % 19) as f64 / 100.0 - 0.08;
             (
-                (start + Duration::days(index as i64))
+                (start + Duration::days(i64::try_from(index).unwrap()))
                     .format("%Y-%m-%d")
                     .to_string(),
                 left,

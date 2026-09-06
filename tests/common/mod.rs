@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::collections::HashMap;
 
 use migration::{Migrator, MigratorTrait};
@@ -403,6 +401,12 @@ impl MockMarketDataSources {
             fund_data: HashMap::new(),
             fund_quote_metadata: HashMap::new(),
         }
+    }
+}
+
+impl Default for MockMarketDataSources {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

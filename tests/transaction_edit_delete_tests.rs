@@ -1,4 +1,6 @@
-mod common;
+#![allow(clippy::float_cmp)]
+
+pub mod common;
 
 use rstock::db::repos::transaction_repo;
 use rstock::models::{f64_to_cents, BuyOrder, DividendOrder, SellOrder, SplitOrder};

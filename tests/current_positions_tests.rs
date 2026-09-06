@@ -1,4 +1,6 @@
-mod common;
+#![allow(clippy::float_cmp)]
+
+pub mod common;
 
 use chrono::NaiveDate;
 use rstock::db::repos::portfolio_history_repo;
@@ -179,7 +181,7 @@ async fn focused_current_positions_report_remaining_cost_dividends_and_open_gain
     // Split doubles units without changing total cost; the sell removes 25% of it.
     assert!((position.total_qty - 9.0).abs() < 1e-9);
     assert!((position.total_invested.unwrap() - 59.25).abs() < 1e-9);
-    assert!((position.avg_cost.unwrap() - 6.5833333333).abs() < 1e-9);
+    assert!((position.avg_cost.unwrap() - 6.583_333_333_3).abs() < 1e-9);
     assert!((position.dividends_received.unwrap() - 9.0).abs() < 1e-9);
     assert!((position.current_value.unwrap() - 72.0).abs() < 1e-9);
     assert!((position.open_position_gain_loss.unwrap() - 12.75).abs() < 1e-9);

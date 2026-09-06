@@ -1,6 +1,6 @@
 //! Lightweight, deterministic checks supporting the offline performance gate.
 
-mod common;
+pub mod common;
 
 use common::{insert_asset, insert_transaction, setup_test_db};
 use migration::{Migrator, MigratorTrait};

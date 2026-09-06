@@ -1,4 +1,4 @@
-mod common;
+pub mod common;
 
 use chrono::NaiveDate;
 use common::{
@@ -7,7 +7,8 @@ use common::{
 };
 use rstock::services::nav;
 
-/// Cash dividend increases total_value (and therefore NAV) without changing outstanding_shares.
+/// Cash dividend increases `total_value` (and therefore NAV) without changing
+/// `outstanding_shares`.
 #[tokio::test]
 async fn test_cash_dividend_increases_nav() {
     let db = common::setup_test_db().await;

@@ -1,4 +1,6 @@
-mod common;
+#![allow(clippy::float_cmp)]
+
+pub mod common;
 
 use common::{
     insert_asset, insert_daily_price, insert_etf_asset, insert_exchange_rate, insert_fund_asset,
@@ -40,7 +42,7 @@ fn seed_benchmark_market_data(fetcher: &mut MockMarketDataSources, days: usize) 
     let benchmark_prices: Vec<(String, f64)> = (0..days)
         .map(|i| {
             let date = (chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap()
-                + chrono::Duration::days(i as i64))
+                + chrono::Duration::days(i64::try_from(i).unwrap()))
             .format("%Y-%m-%d")
             .to_string();
             (date, 200.0 + i as f64)
@@ -49,7 +51,7 @@ fn seed_benchmark_market_data(fetcher: &mut MockMarketDataSources, days: usize) 
     let benchmark_fx: Vec<(String, f64)> = (0..days)
         .map(|i| {
             let date = (chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap()
-                + chrono::Duration::days(i as i64))
+                + chrono::Duration::days(i64::try_from(i).unwrap()))
             .format("%Y-%m-%d")
             .to_string();
             (date, 0.92)
@@ -73,7 +75,7 @@ fn seed_source_prices(
     let prices: Vec<(String, f64)> = (0..days)
         .map(|i| {
             let date = (chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap()
-                + chrono::Duration::days(i as i64))
+                + chrono::Duration::days(i64::try_from(i).unwrap()))
             .format("%Y-%m-%d")
             .to_string();
             (date, base_price + i as f64)
@@ -147,15 +149,18 @@ async fn test_perfectly_correlated_assets() {
     .unwrap();
 
     // Find XFAKE1 and XFAKE2 indices
-    let idx_a = matrix.names.iter().position(|l| l == "Fake A").unwrap();
-    let idx_b = matrix.names.iter().position(|l| l == "Fake B").unwrap();
+    let left_index = matrix.names.iter().position(|l| l == "Fake A").unwrap();
+    let right_index = matrix.names.iter().position(|l| l == "Fake B").unwrap();
 
-    let corr = matrix.matrix[idx_a][idx_b].unwrap();
+    let corr = matrix.matrix[left_index][right_index].unwrap();
     assert!(
         (corr - 1.0).abs() < 0.01,
         "expected ~1.0 for perfectly correlated assets, got {corr}"
     );
-    assert_eq!(matrix.matrix[idx_b][idx_a], matrix.matrix[idx_a][idx_b]);
+    assert_eq!(
+        matrix.matrix[right_index][left_index],
+        matrix.matrix[left_index][right_index]
+    );
 }
 
 /// Two inversely correlated EUR assets should have correlation close to -1.0
@@ -199,10 +204,10 @@ async fn test_negatively_correlated_assets() {
     .await
     .unwrap();
 
-    let idx_a = matrix.names.iter().position(|l| l == "Fake A").unwrap();
-    let idx_b = matrix.names.iter().position(|l| l == "Fake B").unwrap();
+    let left_index = matrix.names.iter().position(|l| l == "Fake A").unwrap();
+    let right_index = matrix.names.iter().position(|l| l == "Fake B").unwrap();
 
-    let corr = matrix.matrix[idx_a][idx_b].unwrap();
+    let corr = matrix.matrix[left_index][right_index].unwrap();
     assert!(
         corr < -0.9,
         "expected strongly negative correlation, got {corr}"
@@ -221,7 +226,7 @@ async fn test_diagonal_is_one() {
 
     for i in 1..=25 {
         let date = format!("2025-01-{i:02}");
-        let price = 100.0 + (i as f64) * 0.5;
+        let price = 100.0 + f64::from(i) * 0.5;
         insert_daily_price(&db, id_a, &date, price, false).await;
     }
 
@@ -257,7 +262,7 @@ async fn test_usd_asset_uses_eur_conversion() {
     // Constant exchange rate = price moves are identical in EUR
     for i in 1..=25 {
         let date = format!("2025-01-{i:02}");
-        let price = 100.0 + (i as f64);
+        let price = 100.0 + f64::from(i);
         insert_daily_price(&db, id_eur, &date, price, false).await;
         insert_daily_price(&db, id_usd, &date, price, false).await;
         insert_exchange_rate(&db, "USD", "EUR", &date, 0.92).await;
@@ -272,11 +277,11 @@ async fn test_usd_asset_uses_eur_conversion() {
     .await
     .unwrap();
 
-    let idx_eur = matrix.names.iter().position(|l| l == "Fake EUR").unwrap();
-    let idx_usd = matrix.names.iter().position(|l| l == "Fake USD").unwrap();
+    let eur_index = matrix.names.iter().position(|l| l == "Fake EUR").unwrap();
+    let usd_index = matrix.names.iter().position(|l| l == "Fake USD").unwrap();
 
     // With constant FX, EUR-converted returns are identical → correlation ~1.0
-    let corr = matrix.matrix[idx_eur][idx_usd].unwrap();
+    let corr = matrix.matrix[eur_index][usd_index].unwrap();
     assert!(
         (corr - 1.0).abs() < 0.01,
         "expected ~1.0 with constant FX, got {corr}"
@@ -335,7 +340,7 @@ async fn test_insufficient_data_produces_warning() {
     // Only 5 days of data — below MIN_DATA_POINTS (20)
     for i in 1..=5 {
         let date = format!("2025-01-{i:02}");
-        insert_daily_price(&db, id_a, &date, 100.0 + i as f64, false).await;
+        insert_daily_price(&db, id_a, &date, 100.0 + f64::from(i), false).await;
     }
 
     let matrix = compute_correlation_data(
@@ -451,11 +456,11 @@ fn test_compute_rolling_correlation_perfect_positive() {
         .map(|i| {
             (
                 (chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap()
-                    + chrono::Duration::days(i as i64))
+                    + chrono::Duration::days(i64::from(i)))
                 .format("%Y-%m-%d")
                 .to_string(),
-                0.01 + (i as f64) * 0.0001,
-                0.01 + (i as f64) * 0.0001,
+                0.01 + f64::from(i) * 0.0001,
+                0.01 + f64::from(i) * 0.0001,
             )
         })
         .collect();
@@ -471,7 +476,7 @@ fn test_compute_rolling_correlation_constant_returns_are_zero() {
         .map(|i| {
             (
                 (chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap()
-                    + chrono::Duration::days(i as i64))
+                    + chrono::Duration::days(i64::from(i)))
                 .format("%Y-%m-%d")
                 .to_string(),
                 0.01,
@@ -493,11 +498,11 @@ fn test_compute_rolling_correlation_preserves_sparse_window_dates() {
         .map(|i| {
             (
                 (chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap()
-                    + chrono::Duration::days(i as i64 * 2))
+                    + chrono::Duration::days(i64::from(i) * 2))
                 .format("%Y-%m-%d")
                 .to_string(),
-                0.01 + i as f64 * 0.0001,
-                0.02 + i as f64 * 0.0002,
+                0.01 + f64::from(i) * 0.0001,
+                0.02 + f64::from(i) * 0.0002,
             )
         })
         .collect();
@@ -522,11 +527,11 @@ fn test_compute_rolling_correlation_preserves_sparse_window_dates() {
 fn test_compute_rolling_correlation_matches_windowed_pearson() {
     let aligned: Vec<(String, f64, f64)> = (0..90)
         .map(|i| {
-            let left = ((i * 17) % 23) as f64 / 100.0 - 0.1;
-            let right = ((i * 11 + 3) % 19) as f64 / 100.0 - 0.08;
+            let left = f64::from((i * 17) % 23) / 100.0 - 0.1;
+            let right = f64::from((i * 11 + 3) % 19) / 100.0 - 0.08;
             (
                 (chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap()
-                    + chrono::Duration::days(i as i64))
+                    + chrono::Duration::days(i64::from(i)))
                 .format("%Y-%m-%d")
                 .to_string(),
                 left,

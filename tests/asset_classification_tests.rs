@@ -1,4 +1,4 @@
-mod common;
+pub mod common;
 
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, Set};
 

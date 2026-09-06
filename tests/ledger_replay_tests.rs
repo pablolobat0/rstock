@@ -1,3 +1,5 @@
+#![allow(clippy::float_cmp)]
+
 use rstock::services::ledger::{
     CanonicalLedger, LedgerAttempt, LedgerEffect, LedgerEntry, LedgerEntryKind, LedgerInvariant,
 };

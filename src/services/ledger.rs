@@ -793,6 +793,7 @@ fn is_canonical_date(date: &str) -> bool {
 }
 
 #[cfg(test)]
+#[allow(clippy::float_cmp)]
 mod tests {
     use std::collections::BTreeMap;
 

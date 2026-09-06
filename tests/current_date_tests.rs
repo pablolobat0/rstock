@@ -1,4 +1,4 @@
-mod common;
+pub mod common;
 
 use chrono::NaiveDate;
 use rstock::db::repos::{asset_repo, portfolio_history_repo};
@@ -70,7 +70,12 @@ async fn fixed_clock_limits_historical_market_data_to_latest_completed_date() {
 
     let market_data = common::market_data_at(&sources, fixed_today());
     let prepared = market_data
-        .prepare_valuation_market_data(&db, &[asset.clone()], "2025-06-09", "2025-06-10")
+        .prepare_valuation_market_data(
+            &db,
+            std::slice::from_ref(&asset),
+            "2025-06-09",
+            "2025-06-10",
+        )
         .await
         .unwrap();
 

@@ -1,4 +1,6 @@
-mod common;
+#![allow(clippy::float_cmp, clippy::too_many_lines)]
+
+pub mod common;
 
 use sea_orm::{EntityTrait, QueryOrder, TransactionTrait};
 
