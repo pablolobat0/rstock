@@ -62,54 +62,46 @@ impl LedgerEntry {
     pub fn from_transaction(transaction: &Transaction) -> Result<Self, LedgerError> {
         let kind = match &transaction.tx_type {
             TxType::Buy => LedgerEntryKind::Buy {
-                units: required_field(
-                    transaction.ledger_units(),
-                    transaction,
-                    LedgerAttempt::Units,
-                )?,
+                units: required_field(transaction.units, transaction, LedgerAttempt::Units)?,
                 unit_price_cents: required_field(
-                    transaction.ledger_unit_price_cents(),
+                    transaction.unit_price_cents,
                     transaction,
                     LedgerAttempt::UnitPrice,
                 )?,
                 fees_cents: required_field(
-                    transaction.ledger_fees_cents(),
+                    transaction.trade_fees_cents,
                     transaction,
                     LedgerAttempt::Fees,
                 )?,
             },
             TxType::Sell => LedgerEntryKind::Sell {
-                units: required_field(
-                    transaction.ledger_units(),
-                    transaction,
-                    LedgerAttempt::Units,
-                )?,
+                units: required_field(transaction.units, transaction, LedgerAttempt::Units)?,
                 unit_price_cents: required_field(
-                    transaction.ledger_unit_price_cents(),
+                    transaction.unit_price_cents,
                     transaction,
                     LedgerAttempt::UnitPrice,
                 )?,
                 fees_cents: required_field(
-                    transaction.ledger_fees_cents(),
+                    transaction.trade_fees_cents,
                     transaction,
                     LedgerAttempt::Fees,
                 )?,
             },
             TxType::Dividend => LedgerEntryKind::Dividend {
                 gross_amount_cents: required_field(
-                    transaction.ledger_dividend_amount_cents(),
+                    transaction.dividend_amount_cents,
                     transaction,
                     LedgerAttempt::GrossDividend,
                 )?,
                 deductions_cents: required_field(
-                    transaction.ledger_dividend_deductions_cents(),
+                    transaction.dividend_deductions_cents,
                     transaction,
                     LedgerAttempt::DividendDeductions(0.0),
                 )?,
             },
             TxType::Split => LedgerEntryKind::Split {
                 ratio: required_field(
-                    transaction.ledger_split_ratio(),
+                    transaction.split_ratio,
                     transaction,
                     LedgerAttempt::SplitRatio,
                 )?,
@@ -230,16 +222,16 @@ impl CanonicalLedger {
                     fees_cents,
                 } => {
                     validate_positive(entry, quantity_before, *units, LedgerAttempt::Units)?;
-                    validate_positive(
+                    validate_positive_cents(
                         entry,
                         quantity_before,
-                        *unit_price_cents as f64,
+                        *unit_price_cents,
                         LedgerAttempt::UnitPrice,
                     )?;
-                    validate_non_negative(
+                    validate_non_negative_cents(
                         entry,
                         quantity_before,
-                        *fees_cents as f64,
+                        *fees_cents,
                         LedgerAttempt::Fees,
                     )?;
                     let contribution = units * *unit_price_cents as f64 + *fees_cents as f64;
@@ -261,16 +253,16 @@ impl CanonicalLedger {
                     fees_cents,
                 } => {
                     validate_positive(entry, quantity_before, *units, LedgerAttempt::Units)?;
-                    validate_positive(
+                    validate_positive_cents(
                         entry,
                         quantity_before,
-                        *unit_price_cents as f64,
+                        *unit_price_cents,
                         LedgerAttempt::UnitPrice,
                     )?;
-                    validate_non_negative(
+                    validate_non_negative_cents(
                         entry,
                         quantity_before,
-                        *fees_cents as f64,
+                        *fees_cents,
                         LedgerAttempt::Fees,
                     )?;
                     let raw_quantity_after = quantity_before - units;
@@ -314,16 +306,16 @@ impl CanonicalLedger {
                     gross_amount_cents,
                     deductions_cents,
                 } => {
-                    validate_positive(
+                    validate_positive_cents(
                         entry,
                         quantity_before,
-                        *gross_amount_cents as f64,
+                        *gross_amount_cents,
                         LedgerAttempt::GrossDividend,
                     )?;
-                    validate_non_negative(
+                    validate_non_negative_cents(
                         entry,
                         quantity_before,
-                        *deductions_cents as f64,
+                        *deductions_cents,
                         LedgerAttempt::DividendDeductions(*deductions_cents as f64),
                     )?;
                     require_open_quantity(entry, quantity_before, LedgerAttempt::GrossDividend)?;
@@ -716,20 +708,31 @@ fn validate_positive(
     }
 }
 
-fn validate_non_negative(
+fn validate_positive_cents(
     entry: &LedgerEntry,
     quantity_before: f64,
-    value: f64,
+    value: i64,
     attempted_effect: LedgerAttempt,
 ) -> Result<(), LedgerError> {
-    if !value.is_finite() {
+    if value <= 0 {
         Err(LedgerError::for_entry(
             entry,
             quantity_before,
             attempted_effect,
-            LedgerInvariant::FiniteValue,
+            LedgerInvariant::PositiveValue,
         ))
-    } else if value < 0.0 {
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_non_negative_cents(
+    entry: &LedgerEntry,
+    quantity_before: f64,
+    value: i64,
+    attempted_effect: LedgerAttempt,
+) -> Result<(), LedgerError> {
+    if value < 0 {
         Err(LedgerError::for_entry(
             entry,
             quantity_before,

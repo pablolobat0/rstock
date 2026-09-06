@@ -472,6 +472,39 @@ async fn recording_commands_validate_shapes_before_persistence() {
             },
         )
         .await,
+        services::transactions::buy(
+            &db,
+            "XFAKE1".to_owned(),
+            BuyOrder {
+                date: "2025-01-01".to_owned(),
+                quantity: 1.0,
+                price: 0.000_049,
+                fees: 0.0,
+            },
+        )
+        .await,
+        services::transactions::buy(
+            &db,
+            "XFAKE1".to_owned(),
+            BuyOrder {
+                date: "2025-01-01".to_owned(),
+                quantity: 1.0,
+                price: f64::MAX,
+                fees: 0.0,
+            },
+        )
+        .await,
+        services::transactions::buy(
+            &db,
+            "XFAKE1".to_owned(),
+            BuyOrder {
+                date: "2025-01-01".to_owned(),
+                quantity: 1.0,
+                price: 10.0,
+                fees: -0.000_049,
+            },
+        )
+        .await,
     ];
 
     assert!(invalid_results.into_iter().all(|result| result.is_err()));
@@ -479,6 +512,63 @@ async fn recording_commands_validate_shapes_before_persistence() {
         .await
         .unwrap()
         .is_empty());
+}
+
+#[tokio::test]
+async fn recording_and_editing_compare_encoded_dividend_amounts() {
+    let db = setup_test_db().await;
+    let asset_id = insert_asset(&db, "XFAKE1", "Fake Stock", "stock", "EUR").await;
+    insert_transaction(&db, asset_id, "2025-01-01", 1.0, 100.0, 0.0).await;
+
+    // Both values round to 10,000 at the persisted 4-decimal scale even
+    // though the input deduction is fractionally larger than the gross.
+    services::transactions::dividend(
+        &db,
+        "XFAKE1".to_owned(),
+        DividendOrder {
+            date: "2025-01-02".to_owned(),
+            amount: 1.00004,
+            fees: 1.000_049,
+        },
+    )
+    .await
+    .expect("encoded-equal dividend fields should be accepted");
+
+    let dividend = transaction_repo::find_by_id(&db, 2).await.unwrap().unwrap();
+    assert_eq!(dividend.dividend_amount_cents, Some(10_000));
+    assert_eq!(dividend.dividend_deductions_cents, Some(10_000));
+
+    services::transactions::edit(&db, 2, None, None, Some(1.000_049), None)
+        .await
+        .expect("partial edit should compare existing deductions as encoded cents");
+    assert_eq!(
+        transaction_repo::find_by_id(&db, 2)
+            .await
+            .unwrap()
+            .unwrap()
+            .dividend_amount_cents,
+        Some(10_000)
+    );
+}
+
+#[tokio::test]
+async fn editing_rejects_positive_monetary_values_that_round_to_zero() {
+    let db = setup_test_db().await;
+    let asset_id = insert_asset(&db, "XFAKE1", "Fake Stock", "stock", "EUR").await;
+    insert_transaction(&db, asset_id, "2025-01-01", 1.0, 100.0, 0.0).await;
+
+    let error = services::transactions::edit(&db, 1, None, None, Some(0.000_049), None)
+        .await
+        .expect_err("a positive price cannot quantize to zero cents");
+    assert!(error.to_string().contains("supported cents precision"));
+    assert_eq!(
+        transaction_repo::find_by_id(&db, 1)
+            .await
+            .unwrap()
+            .unwrap()
+            .unit_price_cents,
+        Some(f64_to_cents(100.0))
+    );
 }
 
 #[tokio::test]

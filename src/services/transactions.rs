@@ -9,7 +9,7 @@ use crate::db::repos::{
 };
 use crate::models::{
     cents_are_representable, f64_to_cents, BuyOrder, DividendOrder, SellOrder, SplitOrder,
-    Transaction, TransactionListItem,
+    Transaction, TransactionListItem, TxType,
 };
 use crate::services::ledger::{self, LedgerEffect, LedgerReplay, LedgerTransition};
 
@@ -381,42 +381,33 @@ fn validate_edit(
                 validate_positive(quantity, "quantity")?;
             }
             if let Some(price) = new_price {
-                validate_positive(price, "price")?;
-                validate_cents_representable(price, "price")?;
+                validate_positive_money(price, "price")?;
             }
             if let Some(fees) = new_fees {
-                validate_non_negative(fees, "fees")?;
-                validate_cents_representable(fees, "fees")?;
+                validate_non_negative_money(fees, "fees")?;
             }
         }
         crate::models::TxType::Dividend => {
             if new_quantity.is_some() {
                 anyhow::bail!("quantity cannot be edited for a dividend; use --price for amount")
             }
-            if let Some(price) = new_price {
-                validate_positive(price, "amount")?;
-                validate_cents_representable(price, "amount")?;
-            }
-            if let Some(fees) = new_fees {
-                validate_non_negative(fees, "fees")?;
-                validate_cents_representable(fees, "fees")?;
-            }
-
-            let gross_cents = new_price.map_or(
-                transaction
-                    .ledger_dividend_amount_cents()
-                    .unwrap_or_default(),
-                f64_to_cents,
-            );
-            let deductions_cents = new_fees.map_or(
-                transaction
-                    .ledger_dividend_deductions_cents()
-                    .unwrap_or_default(),
-                f64_to_cents,
-            );
-            if deductions_cents > gross_cents {
-                anyhow::bail!("fees must not exceed dividend amount");
-            }
+            let gross_cents = new_price.map_or_else(
+                || {
+                    transaction.dividend_amount_cents.ok_or_else(|| {
+                        anyhow::anyhow!("dividend transaction is missing its gross amount")
+                    })
+                },
+                |value| validate_positive_money(value, "amount"),
+            )?;
+            let deductions_cents = new_fees.map_or_else(
+                || {
+                    transaction.dividend_deductions_cents.ok_or_else(|| {
+                        anyhow::anyhow!("dividend transaction is missing its deductions")
+                    })
+                },
+                |value| validate_non_negative_money(value, "fees"),
+            )?;
+            validate_dividend_cents(gross_cents, deductions_cents)?;
         }
         crate::models::TxType::Split => {
             if new_quantity.is_none() && new_price.is_none() && new_fees.is_none() {
@@ -438,37 +429,82 @@ fn validate_edit(
 }
 
 fn validate_buy_order(order: &BuyOrder) -> anyhow::Result<()> {
-    validate_trade_shape(&order.date, order.quantity, order.price, order.fees)
+    validate_trade_shape(
+        &order.date,
+        &TxType::Buy,
+        order.quantity,
+        order.price,
+        order.fees,
+    )
 }
 
 fn validate_sell_order(order: &SellOrder) -> anyhow::Result<()> {
-    validate_trade_shape(&order.date, order.quantity, order.price, order.fees)
+    validate_trade_shape(
+        &order.date,
+        &TxType::Sell,
+        order.quantity,
+        order.price,
+        order.fees,
+    )
 }
 
-fn validate_trade_shape(date: &str, quantity: f64, price: f64, fees: f64) -> anyhow::Result<()> {
+fn validate_trade_shape(
+    date: &str,
+    tx_type: &TxType,
+    quantity: f64,
+    price: f64,
+    fees: f64,
+) -> anyhow::Result<()> {
     validate_date(date)?;
-    validate_positive(quantity, "quantity")?;
-    validate_positive(price, "price")?;
-    validate_cents_representable(price, "price")?;
-    validate_non_negative(fees, "fees")?;
-    validate_cents_representable(fees, "fees")
+    validate_transaction_values(tx_type, quantity, price, fees)
 }
 
 fn validate_dividend_order(order: &DividendOrder) -> anyhow::Result<()> {
     validate_date(&order.date)?;
-    validate_positive(order.amount, "amount")?;
-    validate_cents_representable(order.amount, "amount")?;
-    validate_non_negative(order.fees, "fees")?;
-    validate_cents_representable(order.fees, "fees")?;
-    if order.fees > order.amount {
-        anyhow::bail!("fees must not exceed dividend amount");
-    }
-    Ok(())
+    validate_transaction_values(&TxType::Dividend, 1.0, order.amount, order.fees)
 }
 
 fn validate_split_order(order: &SplitOrder) -> anyhow::Result<()> {
     validate_date(&order.date)?;
-    validate_positive(order.ratio, "ratio")
+    validate_transaction_values(&TxType::Split, order.ratio, 0.0, 0.0)
+}
+
+/// Validates the type-specific shape before a transaction is persisted.
+/// Monetary comparisons use the same integer cents values that persistence stores.
+pub(crate) fn validate_transaction_values(
+    tx_type: &TxType,
+    quantity: f64,
+    price: f64,
+    fees: f64,
+) -> anyhow::Result<()> {
+    if !quantity.is_finite() {
+        anyhow::bail!("quantity must be finite");
+    }
+    if !price.is_finite() {
+        anyhow::bail!("price must be finite");
+    }
+    if !fees.is_finite() {
+        anyhow::bail!("fees must be finite");
+    }
+    match tx_type {
+        TxType::Buy | TxType::Sell => {
+            validate_positive(quantity, "quantity")?;
+            validate_positive_money(price, "price")?;
+            validate_non_negative_money(fees, "fees")?;
+        }
+        TxType::Dividend => {
+            let gross_cents = validate_positive_money(price, "dividend amount")?;
+            let deductions_cents = validate_non_negative_money(fees, "fees")?;
+            validate_dividend_cents(gross_cents, deductions_cents)?;
+        }
+        TxType::Split => {
+            validate_positive(quantity, "split ratio")?;
+            if price != 0.0 || fees != 0.0 {
+                anyhow::bail!("split Price and Fees placeholders must both be zero");
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validate_date(date: &str) -> anyhow::Result<()> {
@@ -493,19 +529,52 @@ fn validate_positive(value: f64, field: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn validate_non_negative(value: f64, field: &str) -> anyhow::Result<()> {
-    if !value.is_finite() {
-        anyhow::bail!("{field} must be finite");
+fn validate_positive_money(value: f64, field: &str) -> anyhow::Result<i64> {
+    validate_finite(value, field)?;
+    if value <= 0.0 {
+        anyhow::bail!("{field} must be positive")
     }
+    let cents = f64_to_cents(value);
+    if !cents_are_representable(value) {
+        anyhow::bail!("{field} exceeds supported cents precision")
+    }
+    if cents <= 0 {
+        anyhow::bail!("{field} must be positive at supported cents precision")
+    }
+    Ok(cents)
+}
+
+fn validate_non_negative_money(value: f64, field: &str) -> anyhow::Result<i64> {
+    validate_finite(value, field)?;
     if value < 0.0 {
-        anyhow::bail!("{field} must be non-negative");
+        anyhow::bail!("{field} must be non-negative")
+    }
+    let cents = f64_to_cents(value);
+    if !cents_are_representable(value) {
+        anyhow::bail!("{field} exceeds supported cents precision")
+    }
+    if cents < 0 {
+        anyhow::bail!("{field} must be non-negative")
+    }
+    Ok(cents)
+}
+
+fn validate_dividend_cents(gross_cents: i64, deductions_cents: i64) -> anyhow::Result<()> {
+    if gross_cents <= 0 {
+        anyhow::bail!("amount must be positive at supported cents precision")
+    }
+    if deductions_cents < 0 {
+        anyhow::bail!("fees must be non-negative")
+    }
+    if deductions_cents > gross_cents {
+        anyhow::bail!("fees must not exceed dividend amount")
     }
     Ok(())
 }
 
-fn validate_cents_representable(value: f64, field: &str) -> anyhow::Result<()> {
-    if !cents_are_representable(value) {
-        anyhow::bail!("{field} exceeds supported cents precision")
+fn validate_finite(value: f64, field: &str) -> anyhow::Result<()> {
+    if !value.is_finite() {
+        anyhow::bail!("{field} must be finite")
     }
     Ok(())
 }

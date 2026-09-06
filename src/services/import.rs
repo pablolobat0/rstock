@@ -11,9 +11,9 @@ use crate::db::repos::{
     transaction_repo,
 };
 use crate::models::{
-    cents_are_representable, cents_to_f64, Asset, AssetClass, AssetClassification, AssetInfo,
-    AssetType, BondCredit, BondDuration, BuyOrder, CsvRow, DividendOrder, EquityStyle, Management,
-    SellOrder, SplitOrder, Transaction, TxType,
+    cents_to_f64, Asset, AssetClass, AssetClassification, AssetInfo, AssetType, BondCredit,
+    BondDuration, BuyOrder, CsvRow, DividendOrder, EquityStyle, Management, SellOrder, SplitOrder,
+    Transaction, TxType,
 };
 use crate::services::ledger::{self, LedgerEffect, LedgerEntryKind, LedgerTransition};
 use crate::services::transactions;
@@ -476,7 +476,8 @@ fn parse_row(record: &csv::StringRecord, row_num: usize) -> anyhow::Result<CsvRo
         .parse::<f64>()
         .with_context(|| format!("row {row_num}: invalid fees '{}'", &record[14]))?;
 
-    validate_numeric_fields(row_num, &tx_type, quantity, price, fees)?;
+    transactions::validate_transaction_values(&tx_type, quantity, price, fees)
+        .map_err(|error| anyhow::anyhow!("row {row_num}: {error}"))?;
 
     Ok(CsvRow {
         source_row: row_num,
@@ -492,55 +493,6 @@ fn parse_row(record: &csv::StringRecord, row_num: usize) -> anyhow::Result<CsvRo
         price,
         fees,
     })
-}
-
-fn validate_numeric_fields(
-    row_num: usize,
-    tx_type: &TxType,
-    quantity: f64,
-    price: f64,
-    fees: f64,
-) -> anyhow::Result<()> {
-    if !quantity.is_finite() || !price.is_finite() || !fees.is_finite() {
-        bail!("row {row_num}: numeric values must be finite");
-    }
-    if !matches!(tx_type, TxType::Split)
-        && (!cents_are_representable(price) || !cents_are_representable(fees))
-    {
-        bail!("row {row_num}: monetary values exceed supported precision");
-    }
-    if fees < 0.0 {
-        bail!("row {row_num}: fees must be non-negative");
-    }
-
-    match tx_type {
-        TxType::Buy | TxType::Sell => {
-            if quantity <= 0.0 {
-                bail!("row {row_num}: quantity must be positive");
-            }
-            if price <= 0.0 {
-                bail!("row {row_num}: price must be positive");
-            }
-        }
-        TxType::Dividend => {
-            if price <= 0.0 {
-                bail!("row {row_num}: dividend amount must be positive");
-            }
-            if fees > price {
-                bail!("row {row_num}: dividend deductions must not exceed gross amount");
-            }
-        }
-        TxType::Split => {
-            if quantity <= 0.0 {
-                bail!("row {row_num}: split ratio must be positive");
-            }
-            if price != 0.0 || fees != 0.0 {
-                bail!("row {row_num}: split Price and Fees placeholders must both be zero");
-            }
-        }
-    }
-
-    Ok(())
 }
 
 fn validate_headers(headers: &csv::StringRecord) -> anyhow::Result<()> {
