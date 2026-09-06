@@ -57,6 +57,45 @@ async fn test_import_buy_sell_dividend_split() {
 }
 
 #[tokio::test]
+async fn import_receipts_use_persisted_replay_precision_and_generated_ids() {
+    let db = common::setup_test_db().await;
+    let csv = write_csv(&format!(
+        "{CSV_HEADER}\
+         01-01-2025,XFAKE1,Fake Stock,stock,EUR,,equity,blend,,,passive,buy,200,1.000049,0.000049\n\
+         02-01-2025,XFAKE1,,,EUR,,,,,,,dividend,1,1.23456,0.12345\n"
+    ));
+
+    let result = import_transactions_csv(&db, csv.path().to_str().unwrap())
+        .await
+        .expect("sub-cent semantic amounts should import");
+    let transactions = transaction_repo::find_all_ordered_by_date(&db, None, None)
+        .await
+        .unwrap();
+
+    assert_eq!(result.transaction_receipts.len(), 2);
+    assert_eq!(
+        result.transaction_receipts[0].transaction_id,
+        transactions[0].id
+    );
+    assert_eq!(
+        result.transaction_receipts[1].transaction_id,
+        transactions[1].id
+    );
+    assert_eq!(transactions[0].unit_price_cents, Some(10_000));
+    assert_eq!(transactions[0].trade_fees_cents, Some(0));
+    assert_eq!(transactions[1].dividend_amount_cents, Some(12_346));
+    assert_eq!(transactions[1].dividend_deductions_cents, Some(1_235));
+    assert_eq!(
+        result.transaction_receipts[0].summary,
+        "Bought 200 units of Fake Stock (XFAKE1) at 1.00 EUR on 01-01-2025. Total: 200.00 EUR"
+    );
+    assert_eq!(
+        result.transaction_receipts[1].summary,
+        "Dividend for Fake Stock (XFAKE1): 1.23 (fees: 0.12, net: 1.11) on 02-01-2025"
+    );
+}
+
+#[tokio::test]
 async fn test_import_invalid_date() {
     let db = common::setup_test_db().await;
     let csv = write_csv(&format!(
@@ -416,6 +455,30 @@ async fn test_import_rejects_non_positive_split_ratio() {
         err.contains("split ratio"),
         "error should mention ratio: {err}"
     );
+}
+
+#[tokio::test]
+async fn import_rejects_nonzero_split_monetary_placeholders_atomically() {
+    for (price, fees, field) in [("0.01", "0.00", "Price"), ("0.00", "0.01", "Fees")] {
+        let db = common::setup_test_db().await;
+        let csv = write_csv(&format!(
+            "{CSV_HEADER}\
+             01-01-2025,XFAKE1,Fake Stock,stock,EUR,,equity,blend,,,passive,buy,1,100.00,0.00\n\
+             02-01-2025,XFAKE1,,,EUR,,,,,,,split,2,{price},{fees}\n"
+        ));
+
+        let error = import_transactions_csv(&db, csv.path().to_str().unwrap())
+            .await
+            .expect_err("noncanonical split monetary placeholders must be rejected");
+
+        assert!(error.to_string().contains("row 3"));
+        assert!(error.to_string().contains(field));
+        assert!(asset_repo::find_all(&db).await.unwrap().is_empty());
+        assert!(transaction_repo::find_all_ordered_by_date(&db, None, None)
+            .await
+            .unwrap()
+            .is_empty());
+    }
 }
 
 #[tokio::test]

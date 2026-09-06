@@ -122,6 +122,44 @@ async fn nav_readiness_rebuilds_through_fixed_clock_cutoff_before_portfolio_view
 }
 
 #[tokio::test]
+async fn first_portfolio_view_keeps_positions_visible_after_rebuilding_nav() {
+    let db = common::setup_test_db().await;
+    let asset_id = common::insert_asset(&db, "XFAKEVISIBLE", "Visible Stock", "stock", "EUR").await;
+    common::insert_transaction(&db, asset_id, "2025-06-08", 2.0, 100.0, 0.0).await;
+    common::insert_daily_price(&db, asset_id, "2025-06-08", 100.0, false).await;
+    common::insert_daily_price(&db, asset_id, "2025-06-09", 110.0, false).await;
+    let mut sources = common::MockMarketDataSources::new();
+    sources.historical_prices.insert(
+        rstock::constants::BENCHMARK_TICKER.to_owned(),
+        vec![
+            ("2025-06-08".to_owned(), 200.0),
+            ("2025-06-09".to_owned(), 201.0),
+        ],
+    );
+    sources.exchange_rates.insert(
+        "USDEUR".to_owned(),
+        vec![
+            ("2025-06-08".to_owned(), 0.9),
+            ("2025-06-09".to_owned(), 0.9),
+        ],
+    );
+    let market_data = common::market_data_at(&sources, fixed_today());
+
+    assert!(portfolio_history_repo::find_latest(&db)
+        .await
+        .unwrap()
+        .is_none());
+    let result = portfolio::get_portfolio(&db, &market_data).await.unwrap();
+
+    assert_eq!(result.rows.len(), 1);
+    assert_eq!(result.rows[0].ticker, "XFAKEVISIBLE");
+    assert!((result.rows[0].total_qty - 2.0).abs() < 1e-9);
+    assert_eq!(result.total_current_value, Some(220.0));
+    assert_eq!(result.total_value, Some(220.0));
+    assert!(result.nav.is_some());
+}
+
+#[tokio::test]
 async fn nav_chart_history_is_ready_without_portfolio_view_call_order() {
     let db = common::setup_test_db().await;
     let asset_id =

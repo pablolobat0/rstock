@@ -162,15 +162,19 @@ async fn create_indexes(db: &impl ConnectionTrait) -> Result<(), DbErr> {
 async fn preserve_sequence(db: &impl ConnectionTrait) -> Result<(), DbErr> {
     db.execute_unprepared(
         "CREATE TEMP TABLE transaction_schema_sequence AS
-         SELECT seq FROM sqlite_sequence WHERE name = 'transactions'",
+         SELECT COALESCE(MAX(seq), 0) AS seq
+         FROM sqlite_sequence
+         WHERE name = 'transactions'",
     )
     .await
     .map(|_| ())
 }
 
 async fn restore_sequence(db: &impl ConnectionTrait) -> Result<(), DbErr> {
+    db.execute_unprepared("DELETE FROM sqlite_sequence WHERE name = 'transactions'")
+        .await?;
     db.execute_unprepared(
-        "INSERT OR REPLACE INTO sqlite_sequence (name, seq)
+        "INSERT INTO sqlite_sequence (name, seq)
          SELECT 'transactions',
             CASE WHEN COALESCE((SELECT seq FROM transaction_schema_sequence), 0)
                       > COALESCE((SELECT MAX(id) FROM transactions), 0)

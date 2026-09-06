@@ -5,6 +5,34 @@ use sea_orm::{ConnectionTrait, DatabaseBackend, EntityTrait, QueryOrder, Set, St
 
 pub mod common;
 
+async fn assert_check_failure(db: &sea_orm::DatabaseConnection, sql: String) {
+    let result = db
+        .execute(Statement::from_string(DatabaseBackend::Sqlite, sql.clone()))
+        .await;
+    let Err(error) = result else {
+        panic!("invalid semantic shape succeeded: {sql}");
+    };
+    assert!(
+        error.to_string().contains("CHECK constraint failed"),
+        "expected CHECK constraint failure, got: {error}"
+    );
+}
+
+async fn transaction_sequence(db: &sea_orm::DatabaseConnection) -> (i64, i64) {
+    let row = db
+        .query_one(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "SELECT COUNT(*) AS count, COALESCE(MAX(seq), 0) AS seq FROM sqlite_sequence WHERE name = 'transactions'",
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    (
+        row.try_get("", "count").unwrap(),
+        row.try_get("", "seq").unwrap(),
+    )
+}
+
 #[tokio::test]
 async fn semantic_migration_round_trips_every_transaction_kind_and_identity() {
     let db = sea_orm::Database::connect("sqlite::memory:")
@@ -81,19 +109,30 @@ async fn semantic_constraints_reject_irrelevant_fields_and_invalid_signs() {
     let asset_id =
         common::insert_asset(&db, "XCONSTRAINT", "Constraint fixture", "stock", "EUR").await;
     let cases = [
-        format!("INSERT INTO transactions (asset_id,tx_type,date,units,unit_price_cents,fees_cents) VALUES ({asset_id},'buy','2025-01-01',0,100,0)"),
-        format!("INSERT INTO transactions (asset_id,tx_type,date,units,unit_price_cents,fees_cents) VALUES ({asset_id},'sell','2025-01-01',1,-1,0)"),
-        format!("INSERT INTO transactions (asset_id,tx_type,date,units,unit_price_cents,fees_cents) VALUES ({asset_id},'buy', '2025-01-01',1.5,100.5,0)"),
-        format!("INSERT INTO transactions (asset_id,tx_type,date,units,unit_price_cents,fees_cents) VALUES ({asset_id},'buy', '2025-01-01',1e999,100,0)"),
-        format!("INSERT INTO transactions (asset_id,tx_type,date,dividend_amount_cents,dividend_deductions_cents) VALUES ({asset_id},'dividend','2025-01-01',10,11)"),
-        format!("INSERT INTO transactions (asset_id,tx_type,date,split_ratio,fees_cents) VALUES ({asset_id},'split','2025-01-01',2,0)"),
-        format!("INSERT INTO transactions (asset_id,tx_type,date,units,unit_price_cents,fees_cents) VALUES ({asset_id},'unknown','2025-01-01',1,100,0)"),
+        format!("INSERT INTO transactions (asset_id,tx_type,date,unit_price_cents,fees_cents,created_at) VALUES ({asset_id},'buy','2025-01-01',100,0,'now')"),
+        format!("INSERT INTO transactions (asset_id,tx_type,date,units,fees_cents,created_at) VALUES ({asset_id},'buy','2025-01-01',1.0,0,'now')"),
+        format!("INSERT INTO transactions (asset_id,tx_type,date,units,unit_price_cents,created_at) VALUES ({asset_id},'buy','2025-01-01',1.0,100,'now')"),
+        format!("INSERT INTO transactions (asset_id,tx_type,date,units,unit_price_cents,fees_cents,dividend_amount_cents,created_at) VALUES ({asset_id},'buy','2025-01-01',1.0,100,0,10,'now')"),
+        format!("INSERT INTO transactions (asset_id,tx_type,date,units,unit_price_cents,fees_cents,created_at) VALUES ({asset_id},'buy','2025-01-01',0.0,100,0,'now')"),
+        format!("INSERT INTO transactions (asset_id,tx_type,date,units,unit_price_cents,fees_cents,created_at) VALUES ({asset_id},'sell','2025-01-01',1.0,-1,0,'now')"),
+        format!("INSERT INTO transactions (asset_id,tx_type,date,units,unit_price_cents,fees_cents,created_at) VALUES ({asset_id},'buy','2025-01-01',1.5,100.5,0,'now')"),
+        format!("INSERT INTO transactions (asset_id,tx_type,date,units,unit_price_cents,fees_cents,created_at) VALUES ({asset_id},'buy','2025-01-01',1.5,100,0.5,'now')"),
+        format!("INSERT INTO transactions (asset_id,tx_type,date,units,unit_price_cents,fees_cents,created_at) VALUES ({asset_id},'buy','2025-01-01',1.5,100,-1,'now')"),
+        format!("INSERT INTO transactions (asset_id,tx_type,date,units,unit_price_cents,fees_cents,created_at) VALUES ({asset_id},'buy','2025-01-01',1e999,100,0,'now')"),
+        format!("INSERT INTO transactions (asset_id,tx_type,date,dividend_deductions_cents,created_at) VALUES ({asset_id},'dividend','2025-01-01',0,'now')"),
+        format!("INSERT INTO transactions (asset_id,tx_type,date,dividend_amount_cents,created_at) VALUES ({asset_id},'dividend','2025-01-01',10,'now')"),
+        format!("INSERT INTO transactions (asset_id,tx_type,date,dividend_amount_cents,dividend_deductions_cents,created_at) VALUES ({asset_id},'dividend','2025-01-01',0,0,'now')"),
+        format!("INSERT INTO transactions (asset_id,tx_type,date,dividend_amount_cents,dividend_deductions_cents,created_at) VALUES ({asset_id},'dividend','2025-01-01',10,-1,'now')"),
+        format!("INSERT INTO transactions (asset_id,tx_type,date,dividend_amount_cents,dividend_deductions_cents,created_at) VALUES ({asset_id},'dividend','2025-01-01',10,11,'now')"),
+        format!("INSERT INTO transactions (asset_id,tx_type,date,units,dividend_amount_cents,dividend_deductions_cents,created_at) VALUES ({asset_id},'dividend','2025-01-01',1.0,10,0,'now')"),
+        format!("INSERT INTO transactions (asset_id,tx_type,date,created_at) VALUES ({asset_id},'split','2025-01-01','now')"),
+        format!("INSERT INTO transactions (asset_id,tx_type,date,split_ratio,created_at) VALUES ({asset_id},'split','2025-01-01',0.0,'now')"),
+        format!("INSERT INTO transactions (asset_id,tx_type,date,split_ratio,created_at) VALUES ({asset_id},'split','2025-01-01',1e999,'now')"),
+        format!("INSERT INTO transactions (asset_id,tx_type,date,split_ratio,fees_cents,created_at) VALUES ({asset_id},'split','2025-01-01',2.0,0,'now')"),
+        format!("INSERT INTO transactions (asset_id,tx_type,date,units,unit_price_cents,fees_cents,created_at) VALUES ({asset_id},'unknown','2025-01-01',1.0,100,0,'now')"),
     ];
     for statement in cases {
-        assert!(db
-            .execute(Statement::from_string(DatabaseBackend::Sqlite, statement))
-            .await
-            .is_err());
+        assert_check_failure(&db, statement).await;
     }
 
     let valid_buy = transaction::ActiveModel {
@@ -137,4 +176,57 @@ async fn semantic_constraints_reject_irrelevant_fields_and_invalid_signs() {
     assert!(index_names
         .iter()
         .any(|name| name == "idx_transactions_asset_date_id"));
+}
+
+#[tokio::test]
+async fn migration_preserves_deleted_highest_transaction_id_through_up_and_down() {
+    let db = sea_orm::Database::connect("sqlite::memory:").await.unwrap();
+    let prefix = (Migrator::migrations().len() - 1) as u32;
+    Migrator::up(&db, Some(prefix)).await.unwrap();
+    db.execute_unprepared("INSERT INTO assets (id,ticker,name,asset_type,currency,created_at) VALUES (1,'XSEQ','Sequence','stock','EUR','now')").await.unwrap();
+    db.execute_unprepared("INSERT INTO transactions (id,asset_id,tx_type,date,quantity,price_cents,fees_cents,created_at) VALUES (7,1,'buy','2025-01-01',1.0,100,0,'now'),(100,1,'buy','2025-01-02',1.0,100,0,'now')").await.unwrap();
+    db.execute_unprepared("DELETE FROM transactions WHERE id = 100")
+        .await
+        .unwrap();
+
+    Migrator::up(&db, None).await.unwrap();
+    assert_eq!(transaction_sequence(&db).await, (1, 100));
+    let generated = db.execute_unprepared("INSERT INTO transactions (asset_id,tx_type,date,units,unit_price_cents,fees_cents,created_at) VALUES (1,'buy','2025-01-03',1.0,100,0,'now')").await.unwrap().last_insert_id();
+    assert!(generated > 100);
+
+    Migrator::down(&db, Some(1)).await.unwrap();
+    assert_eq!(
+        transaction_sequence(&db).await,
+        (1, i64::try_from(generated).unwrap())
+    );
+    let generated_after_down = db.execute_unprepared("INSERT INTO transactions (asset_id,tx_type,date,quantity,price_cents,fees_cents,created_at) VALUES (1,'buy','2025-01-04',1.0,100,0,'now')").await.unwrap().last_insert_id();
+    assert!(generated_after_down > generated);
+}
+
+#[tokio::test]
+async fn migration_preserves_empty_table_sequence_through_up_and_down() {
+    let db = sea_orm::Database::connect("sqlite::memory:").await.unwrap();
+    let prefix = (Migrator::migrations().len() - 1) as u32;
+    Migrator::up(&db, Some(prefix)).await.unwrap();
+    db.execute_unprepared("INSERT INTO assets (id,ticker,name,asset_type,currency,created_at) VALUES (1,'XEMPTYSEQ','Empty Sequence','stock','EUR','now')").await.unwrap();
+    db.execute_unprepared("INSERT INTO transactions (id,asset_id,tx_type,date,quantity,price_cents,fees_cents,created_at) VALUES (50,1,'buy','2025-01-01',1.0,100,0,'now')").await.unwrap();
+    db.execute_unprepared("DELETE FROM transactions")
+        .await
+        .unwrap();
+
+    Migrator::up(&db, None).await.unwrap();
+    assert_eq!(transaction_sequence(&db).await, (1, 50));
+    let generated = db.execute_unprepared("INSERT INTO transactions (asset_id,tx_type,date,units,unit_price_cents,fees_cents,created_at) VALUES (1,'buy','2025-01-02',1.0,100,0,'now')").await.unwrap().last_insert_id();
+    assert!(generated > 50);
+    db.execute_unprepared("DELETE FROM transactions")
+        .await
+        .unwrap();
+
+    Migrator::down(&db, Some(1)).await.unwrap();
+    assert_eq!(
+        transaction_sequence(&db).await,
+        (1, i64::try_from(generated).unwrap())
+    );
+    let generated_after_down = db.execute_unprepared("INSERT INTO transactions (asset_id,tx_type,date,quantity,price_cents,fees_cents,created_at) VALUES (1,'buy','2025-01-03',1.0,100,0,'now')").await.unwrap().last_insert_id();
+    assert!(generated_after_down > generated);
 }

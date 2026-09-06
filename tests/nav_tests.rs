@@ -1087,6 +1087,74 @@ async fn incremental_rebuild_supports_reopening_after_prior_liquidation() {
 }
 
 #[tokio::test]
+async fn full_rebuild_uses_canonical_quantity_for_epsilon_split_closure_and_reopening() {
+    let db = common::setup_test_db().await;
+    let asset_id =
+        common::insert_asset(&db, "XFAKEFULLCLOSE", "Full Close Stock", "stock", "EUR").await;
+    common::insert_transaction(&db, asset_id, "2025-01-02", 1.0, 50.0, 0.0).await;
+    common::insert_split_transaction(&db, asset_id, "2025-01-03", 5e-10).await;
+    common::insert_transaction(&db, asset_id, "2025-01-04", 2.0, 50.0, 0.0).await;
+    for date in ["2025-01-02", "2025-01-03", "2025-01-04"] {
+        common::insert_daily_price(&db, asset_id, date, 50.0, false).await;
+    }
+
+    let sources = common::MockMarketDataSources::new();
+    nav::ensure_portfolio_history(
+        &db,
+        &common::market_data_at(&sources, NaiveDate::from_ymd_opt(2025, 1, 5).unwrap()),
+    )
+    .await
+    .unwrap();
+
+    assert!(common::get_asset_snapshots(&db, "2025-01-03")
+        .await
+        .is_empty());
+    let reopened = common::get_asset_snapshots(&db, "2025-01-04").await;
+    assert_eq!(reopened.len(), 1);
+    assert!((reopened[0].quantity - 2.0).abs() < 1e-12);
+}
+
+#[tokio::test]
+async fn incremental_rebuild_uses_canonical_quantity_for_epsilon_split_closure_and_reopening() {
+    let db = common::setup_test_db().await;
+    let asset_id = common::insert_asset(
+        &db,
+        "XFAKEINCCLOSE",
+        "Incremental Close Stock",
+        "stock",
+        "EUR",
+    )
+    .await;
+    common::insert_transaction(&db, asset_id, "2025-01-02", 1.0, 50.0, 0.0).await;
+    for date in ["2025-01-02", "2025-01-03", "2025-01-04"] {
+        common::insert_daily_price(&db, asset_id, date, 50.0, false).await;
+    }
+    let sources = common::MockMarketDataSources::new();
+    nav::ensure_portfolio_history(
+        &db,
+        &common::market_data_at(&sources, NaiveDate::from_ymd_opt(2025, 1, 3).unwrap()),
+    )
+    .await
+    .unwrap();
+
+    common::insert_split_transaction(&db, asset_id, "2025-01-03", 5e-10).await;
+    common::insert_transaction(&db, asset_id, "2025-01-04", 2.0, 50.0, 0.0).await;
+    nav::ensure_portfolio_history(
+        &db,
+        &common::market_data_at(&sources, NaiveDate::from_ymd_opt(2025, 1, 5).unwrap()),
+    )
+    .await
+    .unwrap();
+
+    assert!(common::get_asset_snapshots(&db, "2025-01-03")
+        .await
+        .is_empty());
+    let reopened = common::get_asset_snapshots(&db, "2025-01-04").await;
+    assert_eq!(reopened.len(), 1);
+    assert!((reopened[0].quantity - 2.0).abs() < 1e-12);
+}
+
+#[tokio::test]
 async fn same_day_full_liquidation_persists_a_complete_zero_snapshot() {
     let db = common::setup_test_db().await;
     let asset_id =

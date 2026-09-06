@@ -186,14 +186,20 @@ async fn find_first_incomplete_snapshot(
             .map_err(|error| anyhow::anyhow!(error))?;
         transitions_by_asset.insert(asset_id, replay.transitions);
     }
+    let mut transition_cursors = HashMap::<i32, usize>::new();
+    let mut quantities = HashMap::<i32, f64>::new();
     for date in snapshot_dates {
+        for (asset_id, transitions) in &transitions_by_asset {
+            let cursor = transition_cursors.entry(*asset_id).or_default();
+            while *cursor < transitions.len() && transitions[*cursor].entry.date <= date {
+                quantities.insert(*asset_id, transitions[*cursor].quantity_after);
+                *cursor += 1;
+            }
+        }
         let expected_holdings: HashMap<i32, f64> = transitions_by_asset
-            .iter()
-            .filter_map(|(asset_id, transitions)| {
-                let quantity = transitions
-                    .iter()
-                    .rfind(|transition| transition.entry.date <= date)
-                    .map_or(0.0, |transition| transition.quantity_after);
+            .keys()
+            .filter_map(|asset_id| {
+                let quantity = quantities.get(asset_id).copied().unwrap_or_default();
                 (quantity > FLOAT_EPSILON
                     && asset_map
                         .get(asset_id)
@@ -258,16 +264,9 @@ async fn nav_market_data_availability(
             holdings.insert(row.asset_id, row.quantity);
         }
     }
-    let raw_transactions = match prepared_transactions {
+    let all_transactions = match prepared_transactions {
         Some(transactions) => transactions,
-        None => {
-            transaction_repo::find_all_ordered_by_date(db, Some(&start_str), Some(&end_str)).await?
-        }
-    };
-    let all_transactions = if prev_snapshot.is_some() {
-        transaction_repo::find_all_ordered_by_date(db, None, Some(&end_str)).await?
-    } else {
-        raw_transactions
+        None => transaction_repo::find_all_ordered_by_date(db, None, Some(&end_str)).await?,
     };
     let transactions_by_asset = all_transactions.into_iter().fold(
         HashMap::<i32, Vec<Transaction>>::new(),
@@ -556,9 +555,7 @@ fn process_day_transactions(
         }
 
         match &transition.transition.effect {
-            LedgerEffect::Split { ratio } => {
-                *holdings.entry(tx.asset_id).or_insert(0.0) *= ratio;
-            }
+            LedgerEffect::Split { .. } => {}
             LedgerEffect::Dividend { .. } => {
                 // Dividend = income: accumulate cash, no holdings or shares change.
                 dividend_income += transition
@@ -576,8 +573,6 @@ fn process_day_transactions(
                         os = 0.0;
                     }
                 }
-                *holdings.entry(tx.asset_id).or_insert(0.0) -=
-                    transition.transition.quantity_before - transition.transition.quantity_after;
             }
             LedgerEffect::Buy { .. } => {
                 // Buy = deposit: contribution includes buy fees.
@@ -592,10 +587,9 @@ fn process_day_transactions(
                     let shares_issued = deposit_eur / current_nav;
                     os += shares_issued;
                 }
-                *holdings.entry(tx.asset_id).or_insert(0.0) +=
-                    transition.transition.quantity_after - transition.transition.quantity_before;
             }
         }
+        holdings.insert(tx.asset_id, transition.transition.quantity_after);
     }
 
     Ok((os, current_nav, dividend_income))

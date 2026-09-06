@@ -503,6 +503,11 @@ pub fn enrich_replay(
         } else if matches!(&transition.effect, LedgerEffect::Buy { .. }) {
             remaining_cost = None;
         }
+        if transition.quantity_after == 0.0 {
+            // Canonical replay owns epsilon closure for every transition type.
+            // A later opening must not inherit cost from closed inventory.
+            remaining_cost = Some(0.0);
+        }
 
         transitions.push(EnrichedLedgerTransition {
             transition: transition.clone(),

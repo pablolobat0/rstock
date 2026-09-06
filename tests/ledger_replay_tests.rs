@@ -1,7 +1,11 @@
 #![allow(clippy::float_cmp)]
 
+use std::collections::BTreeMap;
+
+use chrono::NaiveDate;
 use rstock::services::ledger::{
-    CanonicalLedger, LedgerAttempt, LedgerEffect, LedgerEntry, LedgerEntryKind, LedgerInvariant,
+    enrich_replay, CanonicalLedger, LedgerAttempt, LedgerEffect, LedgerEntry, LedgerEntryKind,
+    LedgerInvariant,
 };
 
 fn entry(id: i32, date: &str, kind: LedgerEntryKind) -> LedgerEntry {
@@ -178,4 +182,92 @@ fn public_constructor_requires_a_positive_identity_and_canonical_date() {
     )
     .unwrap_err();
     assert_eq!(error.violated_invariant, LedgerInvariant::ValidDate);
+}
+
+#[test]
+fn eur_enrichment_resets_cost_on_split_closure_and_keeps_lifetime_dividends() {
+    let ledger = CanonicalLedger::new(
+        42,
+        vec![
+            entry(
+                1,
+                "2025-01-01",
+                LedgerEntryKind::Buy {
+                    units: 1.0,
+                    unit_price_cents: 1_000,
+                    fees_cents: 100,
+                },
+            ),
+            entry(
+                2,
+                "2025-01-02",
+                LedgerEntryKind::Dividend {
+                    gross_amount_cents: 300,
+                    deductions_cents: 50,
+                },
+            ),
+            entry(3, "2025-01-03", LedgerEntryKind::Split { ratio: 5e-10 }),
+            entry(
+                4,
+                "2025-01-04",
+                LedgerEntryKind::Buy {
+                    units: 2.0,
+                    unit_price_cents: 500,
+                    fees_cents: 0,
+                },
+            ),
+        ],
+    )
+    .unwrap();
+
+    let enriched =
+        enrich_replay(&ledger.replay().unwrap(), "EUR", "EUR", &BTreeMap::new()).unwrap();
+
+    assert_eq!(enriched.transitions[2].transition.quantity_after, 0.0);
+    assert_eq!(enriched.remaining_cost, Some(0.1));
+    assert_eq!(enriched.dividends, Some(0.025));
+}
+
+#[test]
+fn missing_fx_cost_recovers_after_split_closure_and_reopening() {
+    let ledger = CanonicalLedger::new(
+        42,
+        vec![
+            entry(
+                1,
+                "2025-01-01",
+                LedgerEntryKind::Buy {
+                    units: 1.0,
+                    unit_price_cents: 1_000,
+                    fees_cents: 0,
+                },
+            ),
+            entry(
+                2,
+                "2025-01-02",
+                LedgerEntryKind::Dividend {
+                    gross_amount_cents: 100,
+                    deductions_cents: 0,
+                },
+            ),
+            entry(3, "2025-01-03", LedgerEntryKind::Split { ratio: 5e-10 }),
+            entry(
+                4,
+                "2025-01-04",
+                LedgerEntryKind::Buy {
+                    units: 2.0,
+                    unit_price_cents: 500,
+                    fees_cents: 0,
+                },
+            ),
+        ],
+    )
+    .unwrap();
+    let mut rates = BTreeMap::new();
+    rates.insert(NaiveDate::from_ymd_opt(2025, 1, 4).unwrap(), 0.8);
+
+    let enriched = enrich_replay(&ledger.replay().unwrap(), "USD", "EUR", &rates).unwrap();
+
+    assert_eq!(enriched.remaining_cost, Some(0.08));
+    assert_eq!(enriched.dividends, None);
 }
