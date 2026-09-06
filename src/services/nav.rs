@@ -298,7 +298,6 @@ async fn nav_market_data_availability(
                 .iter()
                 .flat_map(|(_, replay)| replay.transitions.iter())
                 .filter(|transition| transition.entry.date >= start_str)
-                .filter(|transition| transition.quantity_after > FLOAT_EPSILON)
                 .map(|transition| transition.entry.asset_id),
         )
         .collect();
@@ -498,6 +497,8 @@ async fn rebuild_portfolio_history(
             nav = total_value / outstanding_shares;
         }
 
+        validate_nav_state(&date_str, outstanding_shares, nav, asset_value, total_value)?;
+
         // First-ever transaction day: store a seed snapshot only after required valuations succeed.
         if is_fresh_portfolio && has_performance_transactions {
             let seed_date = format_date(current - chrono::Duration::days(1));
@@ -568,10 +569,23 @@ fn process_day_transactions(
                 })?;
                 if os > 0.0 && current_nav > 0.0 {
                     let shares_redeemed = withdrawal_eur / current_nav;
+                    anyhow::ensure!(
+                        shares_redeemed.is_finite(),
+                        "non-finite shares redeemed for NAV entry {} on {}",
+                        tx.id,
+                        tx.date
+                    );
                     os -= shares_redeemed;
                     if os < 0.0 {
                         os = 0.0;
                     }
+                } else if os > 0.0 {
+                    anyhow::bail!(
+                        "cannot process NAV sell entry {} on {} with non-positive or non-finite NAV {}",
+                        tx.id,
+                        tx.date,
+                        current_nav
+                    );
                 }
             }
             LedgerEffect::Buy { .. } => {
@@ -582,9 +596,28 @@ fn process_day_transactions(
                 if os == 0.0 {
                     current_nav = INITIAL_NAV;
                     let shares_issued = deposit_eur / INITIAL_NAV;
+                    anyhow::ensure!(
+                        shares_issued.is_finite(),
+                        "non-finite shares issued for NAV entry {} on {}",
+                        tx.id,
+                        tx.date
+                    );
                     os = shares_issued;
                 } else {
+                    anyhow::ensure!(
+                        current_nav.is_finite() && current_nav > 0.0,
+                        "cannot process NAV contribution for entry {} on {} with non-positive or non-finite NAV {}",
+                        tx.id,
+                        tx.date,
+                        current_nav
+                    );
                     let shares_issued = deposit_eur / current_nav;
+                    anyhow::ensure!(
+                        shares_issued.is_finite(),
+                        "non-finite shares issued for NAV entry {} on {}",
+                        tx.id,
+                        tx.date
+                    );
                     os += shares_issued;
                 }
             }
@@ -592,7 +625,32 @@ fn process_day_transactions(
         holdings.insert(tx.asset_id, transition.transition.quantity_after);
     }
 
+    anyhow::ensure!(
+        os.is_finite() && current_nav.is_finite() && dividend_income.is_finite(),
+        "non-finite NAV transaction state"
+    );
+
     Ok((os, current_nav, dividend_income))
+}
+
+fn validate_nav_state(
+    date: &str,
+    outstanding_shares: f64,
+    nav: f64,
+    asset_value: f64,
+    total_value: f64,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        outstanding_shares.is_finite()
+            && outstanding_shares >= 0.0
+            && nav.is_finite()
+            && asset_value.is_finite()
+            && asset_value >= 0.0
+            && total_value.is_finite()
+            && total_value >= 0.0,
+        "invalid non-finite or negative NAV state on {date}: shares={outstanding_shares}, nav={nav}, asset_value={asset_value}, total_value={total_value}"
+    );
+    Ok(())
 }
 
 fn compute_day_asset_values(
@@ -639,6 +697,29 @@ async fn persist_snapshot_batch(
 ) -> anyhow::Result<()> {
     if batch.portfolio_snapshots.is_empty() {
         return Ok(());
+    }
+
+    for snapshot in &batch.portfolio_snapshots {
+        validate_nav_state(
+            &snapshot.date,
+            snapshot.outstanding_shares,
+            snapshot.nav,
+            snapshot.asset_value,
+            snapshot.total_value,
+        )?;
+    }
+    for snapshot in &batch.asset_snapshots {
+        anyhow::ensure!(
+            snapshot.quantity.is_finite()
+                && snapshot.quantity >= 0.0
+                && snapshot.closing_price.is_finite()
+                && snapshot.market_value.is_finite()
+                && snapshot.market_value >= 0.0
+                && snapshot.exchange_rate.is_finite(),
+            "invalid non-finite or negative asset NAV state on {} for asset {}",
+            snapshot.date,
+            snapshot.asset_id
+        );
     }
 
     let transaction = db.begin().await?;
