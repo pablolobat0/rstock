@@ -1,13 +1,17 @@
+use anyhow::Context;
+use chrono::NaiveDate;
 use sea_orm::{ConnectionTrait, DatabaseConnection, TransactionTrait};
 
-use crate::constants::{display_date, FLOAT_EPSILON};
+use crate::constants::{display_date, DATE_FORMAT, MONETARY_MULTIPLIER};
 use crate::db::repos::{
     asset_repo, daily_price_repo, portfolio_asset_history_repo, portfolio_history_repo,
     transaction_repo,
 };
 use crate::models::{
-    f64_to_cents, BuyOrder, DividendOrder, SellOrder, SplitOrder, Transaction, TransactionListItem,
+    cents_are_representable, f64_to_cents, BuyOrder, DividendOrder, SellOrder, SplitOrder,
+    Transaction, TransactionListItem, TxType,
 };
+use crate::services::ledger::{self, LedgerEffect, LedgerReplay, LedgerTransition};
 
 #[derive(Debug)]
 pub struct TransactionReceipt {
@@ -40,6 +44,7 @@ pub async fn buy(
     ticker: String,
     order: BuyOrder,
 ) -> anyhow::Result<TransactionReceipt> {
+    validate_buy_order(&order)?;
     let mutation = db.begin().await?;
     let asset = asset_repo::find_by_ticker(&mutation, &ticker).await?.ok_or_else(|| {
         anyhow::anyhow!(
@@ -47,7 +52,12 @@ pub async fn buy(
         )
     })?;
 
-    let total = order.quantity * order.price + order.fees;
+    let tx_id = transaction_repo::insert_buy(&mutation, asset.id, &order).await?;
+    let replay = replay_asset_ledger(&mutation, asset.id).await?;
+    let total = match effect_for_entry(&replay, tx_id)? {
+        LedgerEffect::Buy { contribution } => contribution / MONETARY_MULTIPLIER,
+        _ => anyhow::bail!("inserted buy transaction {tx_id} has an unexpected replay effect"),
+    };
     let summary = format!(
         "Bought {} units of {} ({}) at {:.2} {} on {}. Total: {:.2} {}",
         order.quantity,
@@ -61,7 +71,6 @@ pub async fn buy(
     );
 
     let order_date = order.date.clone();
-    let tx_id = transaction_repo::insert_buy(&mutation, asset.id, &order).await?;
     invalidate_snapshots(&mutation, &order_date).await?;
     mutation.commit().await?;
 
@@ -83,29 +92,18 @@ pub async fn sell(
     ticker: String,
     order: SellOrder,
 ) -> anyhow::Result<TransactionReceipt> {
+    validate_sell_order(&order)?;
     let mutation = db.begin().await?;
     let asset = asset_repo::find_by_ticker(&mutation, &ticker)
         .await?
         .ok_or_else(|| anyhow::anyhow!("Asset with ticker '{ticker}' not found"))?;
 
-    // Validate holdings at the sell date (accounts for splits)
-    let transactions = transaction_repo::find_by_asset_id(&mutation, asset.id).await?;
-    let filtered_transactions: Vec<_> = transactions
-        .into_iter()
-        .filter(|t| t.date <= order.date)
-        .collect();
-    let net_qty = Transaction::compute_holdings(&filtered_transactions);
-
-    if order.quantity > net_qty + FLOAT_EPSILON {
-        anyhow::bail!(
-            "Insufficient holdings: you have {:.4} units of {} but tried to sell {:.4}",
-            net_qty,
-            ticker,
-            order.quantity
-        );
-    }
-
-    let proceeds = order.quantity * order.price - order.fees;
+    let tx_id = transaction_repo::insert_sell(&mutation, asset.id, &order).await?;
+    let replay = replay_asset_ledger(&mutation, asset.id).await?;
+    let proceeds = match effect_for_entry(&replay, tx_id)? {
+        LedgerEffect::Sell { withdrawal, .. } => withdrawal / MONETARY_MULTIPLIER,
+        _ => anyhow::bail!("inserted sell transaction {tx_id} has an unexpected replay effect"),
+    };
     let summary = format!(
         "Sold {} units of {} ({}) at {:.2} on {}. Proceeds: {:.2}",
         order.quantity,
@@ -117,7 +115,6 @@ pub async fn sell(
     );
 
     let order_date = order.date.clone();
-    let tx_id = transaction_repo::insert_sell(&mutation, asset.id, &order).await?;
     invalidate_snapshots(&mutation, &order_date).await?;
     mutation.commit().await?;
 
@@ -139,28 +136,18 @@ pub async fn dividend(
     ticker: String,
     order: DividendOrder,
 ) -> anyhow::Result<TransactionReceipt> {
+    validate_dividend_order(&order)?;
     let mutation = db.begin().await?;
     let asset = asset_repo::find_by_ticker(&mutation, &ticker)
         .await?
         .ok_or_else(|| anyhow::anyhow!("Asset with ticker '{ticker}' not found"))?;
 
-    // Validate holdings at dividend date (accounts for splits)
-    let transactions = transaction_repo::find_by_asset_id(&mutation, asset.id).await?;
-    let filtered_transactions: Vec<_> = transactions
-        .into_iter()
-        .filter(|t| t.date <= order.date)
-        .collect();
-    let net_qty = Transaction::compute_holdings(&filtered_transactions);
-
-    if net_qty <= FLOAT_EPSILON {
-        anyhow::bail!(
-            "No holdings of {} at date {}",
-            ticker,
-            display_date(&order.date)
-        );
-    }
-
-    let net_amount = order.amount - order.fees;
+    let tx_id = transaction_repo::insert_dividend(&mutation, asset.id, &order).await?;
+    let replay = replay_asset_ledger(&mutation, asset.id).await?;
+    let net_amount = match effect_for_entry(&replay, tx_id)? {
+        LedgerEffect::Dividend { net_income } => net_income / MONETARY_MULTIPLIER,
+        _ => anyhow::bail!("inserted dividend transaction {tx_id} has an unexpected replay effect"),
+    };
     let summary = format!(
         "Dividend for {} ({}): {:.2} (fees: {:.2}, net: {:.2}) on {}",
         asset.name,
@@ -172,7 +159,6 @@ pub async fn dividend(
     );
 
     let order_date = order.date.clone();
-    let tx_id = transaction_repo::insert_dividend(&mutation, asset.id, &order).await?;
     invalidate_snapshots(&mutation, &order_date).await?;
     mutation.commit().await?;
 
@@ -193,42 +179,27 @@ pub async fn split(
     ticker: String,
     order: SplitOrder,
 ) -> anyhow::Result<TransactionReceipt> {
+    validate_split_order(&order)?;
     let mutation = db.begin().await?;
     let asset = asset_repo::find_by_ticker(&mutation, &ticker)
         .await?
         .ok_or_else(|| anyhow::anyhow!("Asset with ticker '{ticker}' not found"))?;
 
-    // Validate holdings at split date (accounts for prior splits)
-    let transactions = transaction_repo::find_by_asset_id(&mutation, asset.id).await?;
-    let earliest_date = transactions
-        .first()
-        .map_or_else(|| order.date.clone(), |t| t.date.clone());
-    let filtered_transactions: Vec<_> = transactions
-        .into_iter()
-        .filter(|t| t.date <= order.date)
-        .collect();
-    let net_qty = Transaction::compute_holdings(&filtered_transactions);
-
-    if net_qty <= FLOAT_EPSILON {
-        anyhow::bail!(
-            "No holdings of {} at date {}",
-            ticker,
-            display_date(&order.date)
-        );
-    }
-
-    let post_split_qty = net_qty * order.ratio;
+    let tx_id = transaction_repo::insert_split(&mutation, asset.id, &order).await?;
+    let replay = replay_asset_ledger(&mutation, asset.id).await?;
+    let transition = transition_for_entry(&replay, tx_id)?;
     let summary = format!(
         "Split {} ({}): ratio {}, holdings {:.4} -> {:.4} on {}",
         asset.name,
         ticker,
         order.ratio,
-        net_qty,
-        post_split_qty,
+        transition.quantity_before,
+        transition.quantity_after,
         display_date(&order.date)
     );
 
-    let tx_id = transaction_repo::insert_split(&mutation, asset.id, &order).await?;
+    let transactions = transaction_repo::find_by_asset_id(&mutation, asset.id).await?;
+    let earliest_date = earliest_transaction_date(&transactions, None);
 
     // Price providers retroactively adjust all historical prices after a split,
     // so the entire price cache for this asset is stale.
@@ -256,16 +227,23 @@ pub async fn delete(db: &DatabaseConnection, id: i32) -> anyhow::Result<Transact
     let tx = transaction_repo::find_by_id(&mutation, id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("Transaction {id} not found"))?;
+
+    transaction_repo::delete_by_id(&mutation, id).await?;
+
+    // Deletion is a ledger mutation, not merely a row removal.  Replay the
+    // exact resulting asset ledger so that a deleted acquisition or split
+    // cannot leave a later entry with an invalid prefix.
+    replay_asset_ledger(&mutation, tx.asset_id).await?;
+
+    let remaining_transactions = transaction_repo::find_by_asset_id(&mutation, tx.asset_id).await?;
     let invalidation_date = if tx.is_split() {
-        earliest_transaction_date(
-            &transaction_repo::find_by_asset_id(&mutation, tx.asset_id).await?,
-            None,
-        )
+        // A split changes the interpretation of the complete historical
+        // price cache. Include the old date even when it was the first entry
+        // and is no longer present after deletion.
+        earliest_transaction_date(&remaining_transactions, Some(&tx.date))
     } else {
         tx.date.clone()
     };
-
-    transaction_repo::delete_by_id(&mutation, id).await?;
     invalidate_snapshots(&mutation, &invalidation_date).await?;
 
     if tx.is_split() {
@@ -288,6 +266,25 @@ pub async fn edit(
     new_price: Option<f64>,
     new_fees: Option<f64>,
 ) -> anyhow::Result<TransactionReceipt> {
+    let existing = transaction_repo::find_by_id(db, id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("Transaction {id} not found"))?;
+
+    if new_date.is_none() && new_quantity.is_none() && new_price.is_none() && new_fees.is_none() {
+        anyhow::bail!("at least one transaction field must be specified")
+    }
+
+    // Validate the request shape before opening the mutation transaction. The
+    // transaction below is reserved for tentative persistence, replay, and
+    // invalidation, all of which must roll back together.
+    validate_edit(
+        &existing,
+        new_date.as_deref(),
+        new_quantity,
+        new_price,
+        new_fees,
+    )?;
+
     let mutation = db.begin().await?;
     let tx = transaction_repo::find_by_id(&mutation, id)
         .await?
@@ -306,9 +303,15 @@ pub async fn edit(
     )
     .await?;
 
+    // Replaying after tentative persistence validates every later prefix,
+    // including entries whose meaning changed because this entry moved in
+    // chronological order. Any error rolls back the update and all
+    // invalidation work below with the caller-owned transaction.
+    replay_asset_ledger(&mutation, tx.asset_id).await?;
+
     let invalidation_date = if tx.is_split() {
         let transactions = transaction_repo::find_by_asset_id(&mutation, tx.asset_id).await?;
-        earliest_transaction_date(&transactions, new_date.as_deref())
+        earliest_transaction_date(&transactions, Some(&tx.date))
     } else {
         match &new_date {
             Some(d) if d < &tx.date => d.clone(),
@@ -333,6 +336,246 @@ pub async fn edit(
 async fn invalidate_snapshots(db: &impl ConnectionTrait, date: &str) -> anyhow::Result<()> {
     portfolio_history_repo::delete_from_date(db, date).await?;
     portfolio_asset_history_repo::delete_from_date(db, date).await?;
+    Ok(())
+}
+
+async fn replay_asset_ledger(
+    db: &impl ConnectionTrait,
+    asset_id: i32,
+) -> anyhow::Result<LedgerReplay> {
+    let transactions = transaction_repo::find_by_asset_id(db, asset_id).await?;
+    ledger::replay_transactions(asset_id, &transactions)
+        .map_err(anyhow::Error::from)
+        .context("transaction ledger replay failed")
+}
+
+fn effect_for_entry(replay: &LedgerReplay, transaction_id: i32) -> anyhow::Result<&LedgerEffect> {
+    Ok(&transition_for_entry(replay, transaction_id)?.effect)
+}
+
+fn transition_for_entry(
+    replay: &LedgerReplay,
+    transaction_id: i32,
+) -> anyhow::Result<&LedgerTransition> {
+    replay
+        .transitions
+        .iter()
+        .find(|transition| transition.entry.id == transaction_id)
+        .ok_or_else(|| anyhow::anyhow!("transaction {transaction_id} was not replayed"))
+}
+
+fn validate_edit(
+    transaction: &Transaction,
+    new_date: Option<&str>,
+    new_quantity: Option<f64>,
+    new_price: Option<f64>,
+    new_fees: Option<f64>,
+) -> anyhow::Result<()> {
+    if let Some(date) = new_date {
+        validate_date(date)?;
+    }
+
+    match &transaction.tx_type {
+        crate::models::TxType::Buy | crate::models::TxType::Sell => {
+            if let Some(quantity) = new_quantity {
+                validate_positive(quantity, "quantity")?;
+            }
+            if let Some(price) = new_price {
+                validate_positive_money(price, "price")?;
+            }
+            if let Some(fees) = new_fees {
+                validate_non_negative_money(fees, "fees")?;
+            }
+        }
+        crate::models::TxType::Dividend => {
+            if new_quantity.is_some() {
+                anyhow::bail!("quantity cannot be edited for a dividend; use --price for amount")
+            }
+            let gross_cents = new_price.map_or_else(
+                || {
+                    transaction.dividend_amount_cents.ok_or_else(|| {
+                        anyhow::anyhow!("dividend transaction is missing its gross amount")
+                    })
+                },
+                |value| validate_positive_money(value, "amount"),
+            )?;
+            let deductions_cents = new_fees.map_or_else(
+                || {
+                    transaction.dividend_deductions_cents.ok_or_else(|| {
+                        anyhow::anyhow!("dividend transaction is missing its deductions")
+                    })
+                },
+                |value| validate_non_negative_money(value, "fees"),
+            )?;
+            validate_dividend_cents(gross_cents, deductions_cents)?;
+        }
+        crate::models::TxType::Split => {
+            if new_quantity.is_none() && new_price.is_none() && new_fees.is_none() {
+                // Date-only split corrections are meaningful and valid.
+                return Ok(());
+            }
+            if let Some(quantity) = new_quantity {
+                validate_positive(quantity, "ratio")?;
+            }
+            if new_price.is_some() {
+                anyhow::bail!("price cannot be edited for a split; use --quantity for ratio")
+            }
+            if new_fees.is_some() {
+                anyhow::bail!("fees cannot be edited for a split")
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_buy_order(order: &BuyOrder) -> anyhow::Result<()> {
+    validate_trade_shape(
+        &order.date,
+        &TxType::Buy,
+        order.quantity,
+        order.price,
+        order.fees,
+    )
+}
+
+fn validate_sell_order(order: &SellOrder) -> anyhow::Result<()> {
+    validate_trade_shape(
+        &order.date,
+        &TxType::Sell,
+        order.quantity,
+        order.price,
+        order.fees,
+    )
+}
+
+fn validate_trade_shape(
+    date: &str,
+    tx_type: &TxType,
+    quantity: f64,
+    price: f64,
+    fees: f64,
+) -> anyhow::Result<()> {
+    validate_date(date)?;
+    validate_transaction_values(tx_type, quantity, price, fees)
+}
+
+fn validate_dividend_order(order: &DividendOrder) -> anyhow::Result<()> {
+    validate_date(&order.date)?;
+    validate_transaction_values(&TxType::Dividend, 1.0, order.amount, order.fees)
+}
+
+fn validate_split_order(order: &SplitOrder) -> anyhow::Result<()> {
+    validate_date(&order.date)?;
+    validate_transaction_values(&TxType::Split, order.ratio, 0.0, 0.0)
+}
+
+/// Validates the type-specific shape before a transaction is persisted.
+/// Monetary comparisons use the same integer cents values that persistence stores.
+pub(crate) fn validate_transaction_values(
+    tx_type: &TxType,
+    quantity: f64,
+    price: f64,
+    fees: f64,
+) -> anyhow::Result<()> {
+    if !quantity.is_finite() {
+        anyhow::bail!("quantity must be finite");
+    }
+    if !price.is_finite() {
+        anyhow::bail!("price must be finite");
+    }
+    if !fees.is_finite() {
+        anyhow::bail!("fees must be finite");
+    }
+    match tx_type {
+        TxType::Buy | TxType::Sell => {
+            validate_positive(quantity, "quantity")?;
+            validate_positive_money(price, "price")?;
+            validate_non_negative_money(fees, "fees")?;
+        }
+        TxType::Dividend => {
+            let gross_cents = validate_positive_money(price, "dividend amount")?;
+            let deductions_cents = validate_non_negative_money(fees, "fees")?;
+            validate_dividend_cents(gross_cents, deductions_cents)?;
+        }
+        TxType::Split => {
+            validate_positive(quantity, "split ratio")?;
+            if price != 0.0 || fees != 0.0 {
+                anyhow::bail!("split Price and Fees placeholders must both be zero");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_date(date: &str) -> anyhow::Result<()> {
+    let parsed = NaiveDate::parse_from_str(date, DATE_FORMAT)
+        .map_err(|_| anyhow::anyhow!("invalid date '{date}', expected YYYY-MM-DD format"))?;
+    if parsed.format(DATE_FORMAT).to_string() != date {
+        anyhow::bail!("invalid date '{date}', expected YYYY-MM-DD format");
+    }
+    if parsed > chrono::Local::now().date_naive() {
+        anyhow::bail!("date cannot be in the future: {date}");
+    }
+    Ok(())
+}
+
+fn validate_positive(value: f64, field: &str) -> anyhow::Result<()> {
+    if !value.is_finite() {
+        anyhow::bail!("{field} must be finite");
+    }
+    if value <= 0.0 {
+        anyhow::bail!("{field} must be positive");
+    }
+    Ok(())
+}
+
+fn validate_positive_money(value: f64, field: &str) -> anyhow::Result<i64> {
+    validate_finite(value, field)?;
+    if value <= 0.0 {
+        anyhow::bail!("{field} must be positive")
+    }
+    let cents = f64_to_cents(value);
+    if !cents_are_representable(value) {
+        anyhow::bail!("{field} exceeds supported cents precision")
+    }
+    if cents <= 0 {
+        anyhow::bail!("{field} must be positive at supported cents precision")
+    }
+    Ok(cents)
+}
+
+fn validate_non_negative_money(value: f64, field: &str) -> anyhow::Result<i64> {
+    validate_finite(value, field)?;
+    if value < 0.0 {
+        anyhow::bail!("{field} must be non-negative")
+    }
+    let cents = f64_to_cents(value);
+    if !cents_are_representable(value) {
+        anyhow::bail!("{field} exceeds supported cents precision")
+    }
+    if cents < 0 {
+        anyhow::bail!("{field} must be non-negative")
+    }
+    Ok(cents)
+}
+
+fn validate_dividend_cents(gross_cents: i64, deductions_cents: i64) -> anyhow::Result<()> {
+    if gross_cents <= 0 {
+        anyhow::bail!("amount must be positive at supported cents precision")
+    }
+    if deductions_cents < 0 {
+        anyhow::bail!("fees must be non-negative")
+    }
+    if deductions_cents > gross_cents {
+        anyhow::bail!("fees must not exceed dividend amount")
+    }
+    Ok(())
+}
+
+fn validate_finite(value: f64, field: &str) -> anyhow::Result<()> {
+    if !value.is_finite() {
+        anyhow::bail!("{field} must be finite")
+    }
     Ok(())
 }
 

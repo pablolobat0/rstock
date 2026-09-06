@@ -108,6 +108,14 @@ _Avoid_: Tax basis, FIFO cost
 The difference between a currently held position's current Base currency value and its remaining weighted-average cost; it excludes dividends and realized gains from sold units.
 _Avoid_: Total return, lifetime gain/loss
 
+**Gross dividend distribution**:
+The total dividend declared for a Tracked asset before transaction fees or deductions, recorded in the asset's native currency.
+_Avoid_: Per-share dividend rate, net dividend income
+
+**Net dividend income**:
+The Gross dividend distribution remaining after transaction fees or deductions.
+_Avoid_: Gross dividend distribution, per-share dividend rate
+
 ## Relationships
 
 - **NAV** is calculated at one **Effective valuation date**.
@@ -139,6 +147,7 @@ _Avoid_: Total return, lifetime gain/loss
 - **Forward-filled market data** is allowed only between source observations and never beyond the last date returned by the source.
 - The **Base currency** has an implicit FX rate of 1.0.
 - Transaction ledger cost and dividend facts in the **Base currency** use the latest FX rate on or before each transaction date; when no such rate exists, those facts and dependent gain/loss facts are unavailable rather than estimated with a current or later FX rate.
+- Every monetary component of a Transaction ledger entry, including unit price, buy or sell fees, **Gross dividend distribution**, and dividend deductions, is recorded in the **Tracked asset**'s native currency.
 - A **Market data limitation** for FX is described by the non-**Base currency** that could not support conversion, not by a provider-specific currency pair string.
 - **Acceptable Morningstar lag** affects whether a **Market data limitation** is returned, not **NAV** calculation.
 - Stock and FX stale-data warnings are based on **Completed weekday** cadence, not exchange-specific holiday calendars.
@@ -169,7 +178,9 @@ _Avoid_: Total return, lifetime gain/loss
 - A Transaction ledger CSV import is atomic: if any row cannot be accepted, none of that import's assets, entries, or snapshot invalidations are persisted.
 - Recording, editing, or deleting a **Transaction ledger** entry and invalidating every dependent **Complete NAV snapshot** form one atomic mutation.
 - **Transaction ledger** entries use positive quantities, prices, dividend amounts, and split ratios; fees are non-negative.
-- A dividend transaction records the total cash received for the asset, not the per-share dividend rate.
+- A dividend Transaction ledger entry records the **Gross dividend distribution**, not a per-share dividend rate; portfolio and NAV projections use the resulting **Net dividend income** after fees or deductions.
+- Dividend fees or deductions are non-negative and cannot exceed the **Gross dividend distribution**; **Net dividend income** may be zero but cannot be negative.
+- A dividend Transaction ledger entry is valid only when its **Tracked asset** has a positive open quantity at that entry's date-and-ID position in the ledger; rstock does not model a separate dividend entitlement date.
 - A split transaction records the new-units-per-old-unit ratio; the ratio multiplies existing quantity.
 - **Average cost** describes current portfolio inventory and does not perform tax-lot or realized-gain accounting.
 - A **Monetary holding** is displayed by the portfolio view but is excluded from aggregate portfolio value, allocation weights, gain/loss, NAV, returns, and risk metrics.
@@ -181,7 +192,7 @@ _Avoid_: Total return, lifetime gain/loss
 - The portfolio view's Total value may combine the latest available **Individual price** dates across holdings; it is an informational current estimate, not a synchronized NAV valuation.
 - Market data limitations for **Monetary holding** values are reported separately and do not imply a limitation on NAV or portfolio performance.
 - The **Portfolio view** reports **Market data limitation** values separately for NAV/history, current performance positions, and **Monetary holding** values; a limitation in one scope does not imply that another scope is invalid.
-- Dividends are reported as lifetime income for a **Tracked asset** and are not attributed to the units that remain after a partial sell.
+- **Net dividend income** is reported as lifetime income for a **Tracked asset** and is not attributed to the units that remain after a partial sell.
 - **Open-position gain/loss** uses only current value and remaining weighted-average cost; dividends and realized gains from sold units are separate facts and never contribute to it.
 
 ## Example Dialogue

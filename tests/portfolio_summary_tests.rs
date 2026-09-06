@@ -1,4 +1,6 @@
-mod common;
+#![allow(clippy::float_cmp)]
+
+pub mod common;
 
 use chrono::NaiveDate;
 use rstock::db::entities::portfolio_history;
@@ -32,7 +34,7 @@ async fn insert_snapshot(
         .unwrap();
 }
 
-/// No portfolio_history -> find_latest returns None.
+/// No `portfolio_history` -> `find_latest` returns None.
 #[tokio::test]
 async fn test_returns_none_when_no_history() {
     let db = common::setup_test_db().await;

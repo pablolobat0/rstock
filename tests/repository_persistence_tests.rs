@@ -1,4 +1,6 @@
-mod common;
+#![allow(clippy::float_cmp, clippy::too_many_lines)]
+
+pub mod common;
 
 use sea_orm::{EntityTrait, QueryOrder, TransactionTrait};
 
@@ -70,8 +72,14 @@ async fn repository_writes_commit_and_rollback_in_caller_owned_transactions() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(committed_transaction.price_cents, f64_to_cents(12.345));
-    assert_eq!(committed_transaction.fees_cents, f64_to_cents(0.125));
+    assert_eq!(
+        committed_transaction.unit_price_cents,
+        Some(f64_to_cents(12.345))
+    );
+    assert_eq!(
+        committed_transaction.trade_fees_cents,
+        Some(f64_to_cents(0.125))
+    );
     assert!(asset_repo::find_by_ticker(&db, "XFAKE3")
         .await
         .unwrap()
@@ -286,9 +294,9 @@ async fn bulk_writes_match_single_row_writes_for_ledger_market_data_and_nav() {
                     tx.id,
                     tx.tx_type,
                     tx.date,
-                    tx.quantity,
-                    tx.price_cents,
-                    tx.fees_cents,
+                    tx.units,
+                    tx.unit_price_cents,
+                    tx.trade_fees_cents,
                 )
             })
             .collect::<Vec<_>>()

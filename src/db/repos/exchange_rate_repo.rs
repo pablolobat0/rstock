@@ -22,37 +22,6 @@ struct DatedRate {
     value: f64,
 }
 
-pub async fn find_rate(
-    db: &impl ConnectionTrait,
-    from_currency: &str,
-    to_currency: &str,
-    date: &str,
-) -> anyhow::Result<Option<f64>> {
-    let result = daily_exchange_rate::Entity::find()
-        .filter(daily_exchange_rate::Column::FromCurrency.eq(from_currency))
-        .filter(daily_exchange_rate::Column::ToCurrency.eq(to_currency))
-        .filter(daily_exchange_rate::Column::Date.eq(date))
-        .one(db)
-        .await?;
-    Ok(result.map(|r| r.rate))
-}
-
-pub async fn find_rate_at_or_before(
-    db: &impl ConnectionTrait,
-    from_currency: &str,
-    to_currency: &str,
-    date: &str,
-) -> anyhow::Result<Option<f64>> {
-    let result = daily_exchange_rate::Entity::find()
-        .filter(daily_exchange_rate::Column::FromCurrency.eq(from_currency))
-        .filter(daily_exchange_rate::Column::ToCurrency.eq(to_currency))
-        .filter(daily_exchange_rate::Column::Date.lte(date))
-        .order_by_desc(daily_exchange_rate::Column::Date)
-        .one(db)
-        .await?;
-    Ok(result.map(|r| r.rate))
-}
-
 pub async fn find_rate_and_date_at_or_before(
     db: &impl ConnectionTrait,
     from_currency: &str,
