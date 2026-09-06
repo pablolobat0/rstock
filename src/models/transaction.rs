@@ -171,21 +171,6 @@ impl Transaction {
         self.split_ratio
     }
 
-    #[allow(dead_code)]
-    pub fn is_buy(&self) -> bool {
-        self.tx_type == TxType::Buy
-    }
-
-    #[allow(dead_code)]
-    pub fn is_sell(&self) -> bool {
-        self.tx_type == TxType::Sell
-    }
-
-    #[allow(dead_code)]
-    pub fn is_dividend(&self) -> bool {
-        self.tx_type == TxType::Dividend
-    }
-
     pub fn is_split(&self) -> bool {
         self.tx_type == TxType::Split
     }

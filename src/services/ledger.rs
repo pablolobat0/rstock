@@ -4,8 +4,6 @@
 //! chronological meaning. Monetary values are in the tracked asset's native
 //! currency and deliberately have no market-data or database dependency.
 
-#![allow(dead_code)] // Keep the pure replay surface available to downstream consumers and tests.
-
 use std::collections::BTreeMap;
 use std::fmt;
 
@@ -151,7 +149,6 @@ impl fmt::Display for LedgerEntryType {
 /// An opaque, canonical `(date, id)` ordering for a single asset ledger.
 #[derive(Clone, Debug)]
 pub struct CanonicalLedger {
-    asset_id: i32,
     entries: Vec<LedgerEntry>,
 }
 
@@ -213,17 +210,7 @@ impl CanonicalLedger {
             }
         }
 
-        Ok(Self { asset_id, entries })
-    }
-
-    #[must_use]
-    pub fn asset_id(&self) -> i32 {
-        self.asset_id
-    }
-
-    #[must_use]
-    pub fn entries(&self) -> &[LedgerEntry] {
-        &self.entries
+        Ok(Self { entries })
     }
 
     /// Replays every prefix, returning transitions only when the entire ledger is valid.
@@ -858,10 +845,10 @@ mod tests {
 
         let replay = ledger.replay().unwrap();
         assert_eq!(
-            ledger
-                .entries()
+            replay
+                .transitions
                 .iter()
-                .map(|entry| entry.id)
+                .map(|transition| transition.entry.id)
                 .collect::<Vec<_>>(),
             [1, 2, 3, 4]
         );

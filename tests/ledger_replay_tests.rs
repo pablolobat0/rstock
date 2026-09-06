@@ -49,10 +49,10 @@ fn public_replay_canonicalizes_mixed_same_day_entries_and_split_effects() {
 
     let replay = ledger.replay().unwrap();
     assert_eq!(
-        ledger
-            .entries()
+        replay
+            .transitions
             .iter()
-            .map(|entry| entry.id)
+            .map(|transition| transition.entry.id)
             .collect::<Vec<_>>(),
         [1, 2, 3, 4]
     );
