@@ -270,7 +270,7 @@ fn edit_and_delete_use_confirmation_and_leave_cancelled_transactions_unchanged()
         &["transaction", "delete", "1"],
     ];
     for args in confirmation_cases {
-        let output = run_with_input(home.path(), &args, b"n\n");
+        let output = run_with_input(home.path(), args, b"n\n");
         assert!(
             output.status.success(),
             "cancelled command failed: {}",
@@ -338,7 +338,7 @@ fn edit_replays_later_entries_and_reports_nonexistent_ids_without_mutation() {
         &["transaction", "delete", "999", "--yes", "--json"],
     ];
     for args in nonexistent_cases {
-        let output = run(home.path(), &args);
+        let output = run(home.path(), args);
         assert!(!output.status.success());
         assert!(String::from_utf8_lossy(&output.stderr).contains("not found"));
     }

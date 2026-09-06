@@ -1,15 +1,14 @@
-mod common;
+pub mod common;
 
 use chrono::NaiveDate;
 use common::{
     get_asset_snapshots, get_portfolio_snapshot, insert_asset, insert_daily_price,
     insert_dividend_transaction, insert_transaction, MockMarketDataSources,
 };
-use rstock::models::f64_to_cents;
-use rstock::models::{Transaction, TxType};
 use rstock::services::nav;
 
-/// Cash dividend increases total_value (and therefore NAV) without changing outstanding_shares.
+/// Cash dividend increases `total_value` (and therefore NAV) without changing
+/// `outstanding_shares`.
 #[tokio::test]
 async fn test_cash_dividend_increases_nav() {
     let db = common::setup_test_db().await;
@@ -138,19 +137,4 @@ async fn test_incremental_rebuild_preserves_cash_balance() {
     let snap_day3 = get_portfolio_snapshot(&db, "2025-01-06").await.unwrap();
     assert!((snap_day3.total_value - 1050.0).abs() < 0.01);
     assert!((snap_day3.nav - 105.0).abs() < 0.01);
-}
-
-/// Dividend signed_quantity returns 0.0 (no holdings change).
-#[test]
-fn test_dividend_signed_quantity_is_zero() {
-    let tx = Transaction {
-        id: 0,
-        asset_id: 1,
-        tx_type: TxType::Dividend,
-        date: "2025-01-03".to_owned(),
-        quantity: 1.0,
-        price_cents: f64_to_cents(50.0),
-        fees_cents: 0,
-    };
-    assert!((tx.signed_quantity()).abs() < f64::EPSILON);
 }

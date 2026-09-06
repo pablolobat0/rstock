@@ -1,4 +1,6 @@
-mod common;
+#![allow(clippy::too_many_arguments)]
+
+pub mod common;
 
 use std::path::Path;
 use std::process::Command;

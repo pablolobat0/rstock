@@ -1,4 +1,4 @@
-mod common;
+pub mod common;
 
 use std::io::Write;
 
@@ -48,12 +48,12 @@ async fn test_import_buy_sell_dividend_split() {
     assert_eq!(txns.len(), 4);
 
     assert_eq!(txns[0].tx_type, TxType::Buy);
-    assert_eq!(txns[0].quantity, 10.0);
+    assert_eq!(txns[0].units, Some(10.0));
     assert_eq!(txns[1].tx_type, TxType::Sell);
-    assert_eq!(txns[1].quantity, 2.0);
+    assert_eq!(txns[1].units, Some(2.0));
     assert_eq!(txns[2].tx_type, TxType::Dividend);
     assert_eq!(txns[3].tx_type, TxType::Split);
-    assert_eq!(txns[3].quantity, 2.0);
+    assert_eq!(txns[3].split_ratio, Some(2.0));
 }
 
 #[tokio::test]
@@ -504,9 +504,15 @@ async fn test_import_export_roundtrip_preserves_all_transaction_types() {
     assert_eq!(original.len(), roundtripped.len());
     for (original, roundtripped) in original.iter().zip(roundtripped.iter()) {
         assert_eq!(original.tx_type, roundtripped.tx_type);
-        assert!((original.quantity - roundtripped.quantity).abs() < 1e-12);
-        assert_eq!(original.price_cents, roundtripped.price_cents);
-        assert_eq!(original.fees_cents, roundtripped.fees_cents);
+        assert!((original.display_quantity() - roundtripped.display_quantity()).abs() < 1e-12);
+        assert_eq!(
+            original.display_price_cents(),
+            roundtripped.display_price_cents()
+        );
+        assert_eq!(
+            original.display_fees_cents(),
+            roundtripped.display_fees_cents()
+        );
     }
 }
 

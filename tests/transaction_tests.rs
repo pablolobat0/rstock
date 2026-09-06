@@ -1,3 +1,5 @@
+#![allow(clippy::float_cmp)]
+
 use rstock::models::{cents_to_f64, f64_to_cents};
 
 #[test]

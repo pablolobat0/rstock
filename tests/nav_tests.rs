@@ -1,4 +1,11 @@
-mod common;
+#![allow(
+    clippy::doc_markdown,
+    clippy::float_cmp,
+    clippy::uninlined_format_args,
+    clippy::useless_conversion
+)]
+
+pub mod common;
 
 use chrono::NaiveDate;
 use rstock::models::{

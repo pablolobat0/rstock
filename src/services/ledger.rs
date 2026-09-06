@@ -4,8 +4,6 @@
 //! chronological meaning. Monetary values are in the tracked asset's native
 //! currency and deliberately have no market-data or database dependency.
 
-#![allow(dead_code)] // Keep the pure replay surface available to downstream consumers and tests.
-
 use std::collections::BTreeMap;
 use std::fmt;
 
@@ -61,33 +59,68 @@ impl LedgerEntry {
     /// Converts the persisted transaction representation into the typed replay
     /// representation.  The database encoding is intentionally kept at this
     /// boundary; consumers never need to reinterpret dividend or split fields.
-    #[must_use]
-    pub fn from_transaction(transaction: &Transaction) -> Self {
-        let kind = match transaction.tx_type {
+    pub fn from_transaction(transaction: &Transaction) -> Result<Self, LedgerError> {
+        let kind = match &transaction.tx_type {
             TxType::Buy => LedgerEntryKind::Buy {
-                units: transaction.quantity,
-                unit_price_cents: transaction.price_cents,
-                fees_cents: transaction.fees_cents,
+                units: required_field(
+                    transaction.ledger_units(),
+                    transaction,
+                    LedgerAttempt::Units,
+                )?,
+                unit_price_cents: required_field(
+                    transaction.ledger_unit_price_cents(),
+                    transaction,
+                    LedgerAttempt::UnitPrice,
+                )?,
+                fees_cents: required_field(
+                    transaction.ledger_fees_cents(),
+                    transaction,
+                    LedgerAttempt::Fees,
+                )?,
             },
             TxType::Sell => LedgerEntryKind::Sell {
-                units: transaction.quantity,
-                unit_price_cents: transaction.price_cents,
-                fees_cents: transaction.fees_cents,
+                units: required_field(
+                    transaction.ledger_units(),
+                    transaction,
+                    LedgerAttempt::Units,
+                )?,
+                unit_price_cents: required_field(
+                    transaction.ledger_unit_price_cents(),
+                    transaction,
+                    LedgerAttempt::UnitPrice,
+                )?,
+                fees_cents: required_field(
+                    transaction.ledger_fees_cents(),
+                    transaction,
+                    LedgerAttempt::Fees,
+                )?,
             },
             TxType::Dividend => LedgerEntryKind::Dividend {
-                gross_amount_cents: transaction.price_cents,
-                deductions_cents: transaction.fees_cents,
+                gross_amount_cents: required_field(
+                    transaction.ledger_dividend_amount_cents(),
+                    transaction,
+                    LedgerAttempt::GrossDividend,
+                )?,
+                deductions_cents: required_field(
+                    transaction.ledger_dividend_deductions_cents(),
+                    transaction,
+                    LedgerAttempt::DividendDeductions(0.0),
+                )?,
             },
             TxType::Split => LedgerEntryKind::Split {
-                ratio: transaction.quantity,
+                ratio: required_field(
+                    transaction.ledger_split_ratio(),
+                    transaction,
+                    LedgerAttempt::SplitRatio,
+                )?,
             },
         };
-        Self {
+        Ok(Self {
             id: transaction.id,
             asset_id: transaction.asset_id,
             date: transaction.date.clone(),
             kind,
-        }
+        })
     }
 }
 
@@ -116,7 +149,6 @@ impl fmt::Display for LedgerEntryType {
 /// An opaque, canonical `(date, id)` ordering for a single asset ledger.
 #[derive(Clone, Debug)]
 pub struct CanonicalLedger {
-    asset_id: i32,
     entries: Vec<LedgerEntry>,
 }
 
@@ -126,12 +158,14 @@ impl CanonicalLedger {
         asset_id: i32,
         transactions: &[Transaction],
     ) -> Result<Self, LedgerError> {
+        let mut transactions = transactions.to_vec();
+        transactions.sort_by(|left, right| left.date.cmp(&right.date).then(left.id.cmp(&right.id)));
         Self::new(
             asset_id,
             transactions
                 .iter()
                 .map(LedgerEntry::from_transaction)
-                .collect(),
+                .collect::<Result<Vec<_>, _>>()?,
         )
     }
 
@@ -176,17 +210,7 @@ impl CanonicalLedger {
             }
         }
 
-        Ok(Self { asset_id, entries })
-    }
-
-    #[must_use]
-    pub fn asset_id(&self) -> i32 {
-        self.asset_id
-    }
-
-    #[must_use]
-    pub fn entries(&self) -> &[LedgerEntry] {
-        &self.entries
+        Ok(Self { entries })
     }
 
     /// Replays every prefix, returning transitions only when the entire ledger is valid.
@@ -555,6 +579,7 @@ pub enum LedgerInvariant {
     NonNegativeQuantity,
     OpenQuantityRequired,
     DeductionsDoNotExceedGrossDividend,
+    RequiredField,
 }
 
 /// Context for the first invalid canonical prefix.
@@ -570,6 +595,23 @@ pub struct LedgerError {
 }
 
 impl LedgerError {
+    fn missing_field(transaction: &Transaction, attempted_effect: LedgerAttempt) -> Self {
+        Self {
+            asset_id: transaction.asset_id,
+            entry_id: transaction.id,
+            date: transaction.date.clone(),
+            entry_type: match &transaction.tx_type {
+                TxType::Buy => LedgerEntryType::Buy,
+                TxType::Sell => LedgerEntryType::Sell,
+                TxType::Dividend => LedgerEntryType::Dividend,
+                TxType::Split => LedgerEntryType::Split,
+            },
+            quantity_before: 0.0,
+            attempted_effect,
+            violated_invariant: LedgerInvariant::RequiredField,
+        }
+    }
+
     fn for_ledger(asset_id: i32, violated_invariant: LedgerInvariant) -> Self {
         Self {
             asset_id,
@@ -616,6 +658,14 @@ impl LedgerError {
             violated_invariant,
         }
     }
+}
+
+fn required_field<T>(
+    value: Option<T>,
+    transaction: &Transaction,
+    attempted_effect: LedgerAttempt,
+) -> Result<T, LedgerError> {
+    value.ok_or_else(|| LedgerError::missing_field(transaction, attempted_effect))
 }
 
 impl fmt::Display for LedgerError {
@@ -743,6 +793,7 @@ fn is_canonical_date(date: &str) -> bool {
 }
 
 #[cfg(test)]
+#[allow(clippy::float_cmp)]
 mod tests {
     use std::collections::BTreeMap;
 
@@ -795,10 +846,10 @@ mod tests {
 
         let replay = ledger.replay().unwrap();
         assert_eq!(
-            ledger
-                .entries()
+            replay
+                .transitions
                 .iter()
-                .map(|entry| entry.id)
+                .map(|transition| transition.entry.id)
                 .collect::<Vec<_>>(),
             [1, 2, 3, 4]
         );
@@ -851,6 +902,25 @@ mod tests {
             result.unwrap_err().violated_invariant,
             LedgerInvariant::UniquePositiveEntryIdentity
         );
+    }
+
+    #[test]
+    fn rejects_missing_required_semantic_persistence_fields() {
+        let transaction = Transaction {
+            id: 1,
+            asset_id: 7,
+            tx_type: TxType::Buy,
+            date: "2025-01-01".to_owned(),
+            units: Some(1.0),
+            unit_price_cents: Some(100),
+            dividend_amount_cents: None,
+            dividend_deductions_cents: None,
+            split_ratio: None,
+            trade_fees_cents: None,
+        };
+        let error = LedgerEntry::from_transaction(&transaction).unwrap_err();
+        assert_eq!(error.violated_invariant, LedgerInvariant::RequiredField);
+        assert_eq!(error.attempted_effect, LedgerAttempt::Fees);
     }
 
     #[test]

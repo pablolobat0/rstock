@@ -1,3 +1,5 @@
+#![allow(clippy::stable_sort_primitive, clippy::too_many_lines)]
+
 use clap::{CommandFactory, Parser};
 use rstock::cli::{
     AnalyzeCommands, Cli, Commands, CompareCommands, CorrelationPeriod, PortfolioCommands,

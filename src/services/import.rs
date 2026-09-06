@@ -5,15 +5,15 @@ use chrono::NaiveDate;
 use clap::ValueEnum;
 use sea_orm::{DatabaseConnection, TransactionTrait};
 
-use crate::constants::{format_date, DISPLAY_DATE_FORMAT, MONETARY_MULTIPLIER};
+use crate::constants::{format_date, DISPLAY_DATE_FORMAT};
 use crate::db::repos::{
     asset_repo, daily_price_repo, portfolio_asset_history_repo, portfolio_history_repo,
     transaction_repo,
 };
 use crate::models::{
-    Asset, AssetClass, AssetClassification, AssetInfo, AssetType, BondCredit, BondDuration,
-    BuyOrder, CsvRow, DividendOrder, EquityStyle, Management, SellOrder, SplitOrder, Transaction,
-    TxType,
+    cents_are_representable, Asset, AssetClass, AssetClassification, AssetInfo, AssetType,
+    BondCredit, BondDuration, BuyOrder, CsvRow, DividendOrder, EquityStyle, Management, SellOrder,
+    SplitOrder, Transaction, TxType,
 };
 use crate::services::{ledger, transactions};
 
@@ -552,6 +552,9 @@ fn validate_numeric_fields(
             if price <= 0.0 {
                 bail!("row {row_num}: dividend amount must be positive");
             }
+            if fees > price {
+                bail!("row {row_num}: dividend deductions must not exceed gross amount");
+            }
         }
         TxType::Split => {
             if quantity <= 0.0 {
@@ -561,11 +564,6 @@ fn validate_numeric_fields(
     }
 
     Ok(())
-}
-
-fn cents_are_representable(value: f64) -> bool {
-    let scaled = value * MONETARY_MULTIPLIER;
-    scaled.is_finite() && scaled >= i64::MIN as f64 && scaled < 2.0_f64.powi(63)
 }
 
 fn validate_headers(headers: &csv::StringRecord) -> anyhow::Result<()> {

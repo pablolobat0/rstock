@@ -8,11 +8,10 @@ use crate::db::repos::{
     transaction_repo,
 };
 use crate::models::{
-    f64_to_cents, BuyOrder, DividendOrder, SellOrder, SplitOrder, Transaction, TransactionListItem,
+    cents_are_representable, f64_to_cents, BuyOrder, DividendOrder, SellOrder, SplitOrder,
+    Transaction, TransactionListItem,
 };
-use crate::services::ledger::{
-    CanonicalLedger, LedgerEffect, LedgerEntry, LedgerEntryKind, LedgerReplay, LedgerTransition,
-};
+use crate::services::ledger::{self, LedgerEffect, LedgerReplay, LedgerTransition};
 
 #[derive(Debug)]
 pub struct TransactionReceipt {
@@ -345,9 +344,7 @@ async fn replay_asset_ledger(
     asset_id: i32,
 ) -> anyhow::Result<LedgerReplay> {
     let transactions = transaction_repo::find_by_asset_id(db, asset_id).await?;
-    let entries = transactions.iter().map(ledger_entry).collect();
-    CanonicalLedger::new(asset_id, entries)
-        .and_then(|ledger| ledger.replay())
+    ledger::replay_transactions(asset_id, &transactions)
         .map_err(anyhow::Error::from)
         .context("transaction ledger replay failed")
 }
@@ -385,9 +382,11 @@ fn validate_edit(
             }
             if let Some(price) = new_price {
                 validate_positive(price, "price")?;
+                validate_cents_representable(price, "price")?;
             }
             if let Some(fees) = new_fees {
                 validate_non_negative(fees, "fees")?;
+                validate_cents_representable(fees, "fees")?;
             }
         }
         crate::models::TxType::Dividend => {
@@ -396,13 +395,25 @@ fn validate_edit(
             }
             if let Some(price) = new_price {
                 validate_positive(price, "amount")?;
+                validate_cents_representable(price, "amount")?;
             }
             if let Some(fees) = new_fees {
                 validate_non_negative(fees, "fees")?;
+                validate_cents_representable(fees, "fees")?;
             }
 
-            let gross_cents = new_price.map_or(transaction.price_cents, f64_to_cents);
-            let deductions_cents = new_fees.map_or(transaction.fees_cents, f64_to_cents);
+            let gross_cents = new_price.map_or(
+                transaction
+                    .ledger_dividend_amount_cents()
+                    .unwrap_or_default(),
+                f64_to_cents,
+            );
+            let deductions_cents = new_fees.map_or(
+                transaction
+                    .ledger_dividend_deductions_cents()
+                    .unwrap_or_default(),
+                f64_to_cents,
+            );
             if deductions_cents > gross_cents {
                 anyhow::bail!("fees must not exceed dividend amount");
             }
@@ -426,34 +437,6 @@ fn validate_edit(
     Ok(())
 }
 
-fn ledger_entry(transaction: &Transaction) -> LedgerEntry {
-    let kind = match &transaction.tx_type {
-        crate::models::TxType::Buy => LedgerEntryKind::Buy {
-            units: transaction.quantity,
-            unit_price_cents: transaction.price_cents,
-            fees_cents: transaction.fees_cents,
-        },
-        crate::models::TxType::Sell => LedgerEntryKind::Sell {
-            units: transaction.quantity,
-            unit_price_cents: transaction.price_cents,
-            fees_cents: transaction.fees_cents,
-        },
-        crate::models::TxType::Dividend => LedgerEntryKind::Dividend {
-            gross_amount_cents: transaction.price_cents,
-            deductions_cents: transaction.fees_cents,
-        },
-        crate::models::TxType::Split => LedgerEntryKind::Split {
-            ratio: transaction.quantity,
-        },
-    };
-    LedgerEntry {
-        id: transaction.id,
-        asset_id: transaction.asset_id,
-        date: transaction.date.clone(),
-        kind,
-    }
-}
-
 fn validate_buy_order(order: &BuyOrder) -> anyhow::Result<()> {
     validate_trade_shape(&order.date, order.quantity, order.price, order.fees)
 }
@@ -466,13 +449,17 @@ fn validate_trade_shape(date: &str, quantity: f64, price: f64, fees: f64) -> any
     validate_date(date)?;
     validate_positive(quantity, "quantity")?;
     validate_positive(price, "price")?;
-    validate_non_negative(fees, "fees")
+    validate_cents_representable(price, "price")?;
+    validate_non_negative(fees, "fees")?;
+    validate_cents_representable(fees, "fees")
 }
 
 fn validate_dividend_order(order: &DividendOrder) -> anyhow::Result<()> {
     validate_date(&order.date)?;
     validate_positive(order.amount, "amount")?;
+    validate_cents_representable(order.amount, "amount")?;
     validate_non_negative(order.fees, "fees")?;
+    validate_cents_representable(order.fees, "fees")?;
     if order.fees > order.amount {
         anyhow::bail!("fees must not exceed dividend amount");
     }
@@ -512,6 +499,13 @@ fn validate_non_negative(value: f64, field: &str) -> anyhow::Result<()> {
     }
     if value < 0.0 {
         anyhow::bail!("{field} must be non-negative");
+    }
+    Ok(())
+}
+
+fn validate_cents_representable(value: f64, field: &str) -> anyhow::Result<()> {
+    if !cents_are_representable(value) {
+        anyhow::bail!("{field} exceeds supported cents precision")
     }
     Ok(())
 }

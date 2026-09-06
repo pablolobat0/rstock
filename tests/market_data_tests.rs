@@ -1,4 +1,4 @@
-mod common;
+pub mod common;
 
 use chrono::{Duration, Local, NaiveDate};
 use rstock::constants::{format_date, BENCHMARK_NAME, BENCHMARK_TICKER};
