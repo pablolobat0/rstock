@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 
 use chrono::NaiveDate;
+use rstock::models::{Transaction, TxType};
 use rstock::services::ledger::{
     enrich_replay, CanonicalLedger, LedgerAttempt, LedgerEffect, LedgerEntry, LedgerEntryKind,
     LedgerInvariant,
@@ -182,6 +183,40 @@ fn public_constructor_requires_a_positive_identity_and_canonical_date() {
     )
     .unwrap_err();
     assert_eq!(error.violated_invariant, LedgerInvariant::ValidDate);
+}
+
+#[test]
+fn transaction_constructor_reports_first_malformed_entry_in_canonical_order() {
+    let later_valid = Transaction {
+        id: 2,
+        asset_id: 42,
+        tx_type: TxType::Buy,
+        date: "2025-01-02".to_owned(),
+        units: Some(1.0),
+        unit_price_cents: Some(100),
+        dividend_amount_cents: None,
+        dividend_deductions_cents: None,
+        split_ratio: None,
+        trade_fees_cents: Some(0),
+    };
+    let earlier_missing_fees = Transaction {
+        id: 1,
+        asset_id: 42,
+        tx_type: TxType::Buy,
+        date: "2025-01-01".to_owned(),
+        units: Some(1.0),
+        unit_price_cents: Some(100),
+        dividend_amount_cents: None,
+        dividend_deductions_cents: None,
+        split_ratio: None,
+        trade_fees_cents: None,
+    };
+
+    let error =
+        CanonicalLedger::from_transactions(42, &[later_valid, earlier_missing_fees]).unwrap_err();
+    assert_eq!(error.entry_id, 1);
+    assert_eq!(error.violated_invariant, LedgerInvariant::RequiredField);
+    assert_eq!(error.attempted_effect, LedgerAttempt::Fees);
 }
 
 #[test]
