@@ -7,6 +7,7 @@ mod portfolio;
 mod stock_info;
 mod transaction;
 
+pub(crate) use asset::normalize_currency;
 pub use asset::{Asset, AssetInfo, AssetType, CurrentPosition};
 pub use classification::{
     enum_to_db, AssetClass, AssetClassification, BondCredit, BondDuration, EquityStyle, Management,

@@ -6,7 +6,7 @@ pub mod sources;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 
-use anyhow::{bail, Context};
+use anyhow::Context;
 use chrono::NaiveDate;
 use futures::future::{BoxFuture, FutureExt, Shared};
 use sea_orm::DatabaseConnection;
@@ -14,9 +14,9 @@ use tokio::sync::Semaphore;
 
 use crate::db::repos::asset_repo;
 use crate::models::{
-    Asset, AssetClassification, CorrelationMarketData, CorrelationMarketDataSeries, FundData,
-    FundQuoteMetadata, IndividualPriceAvailability, MarketDataValuation, StockInfo,
-    ValuationMarketData, ValuationMarketDataAvailability,
+    normalize_currency, Asset, AssetClassification, CorrelationMarketData,
+    CorrelationMarketDataSeries, FundData, FundQuoteMetadata, IndividualPriceAvailability,
+    MarketDataValuation, StockInfo, ValuationMarketData, ValuationMarketDataAvailability,
 };
 use crate::services::clock::{Clock, SystemClock};
 use crate::services::metrics;
@@ -186,16 +186,31 @@ impl MarketData {
     ) -> anyhow::Result<Vec<SourceObservation>> {
         let from = normalize_currency(from)?;
         let to = normalize_currency(to)?;
+        let (from_currency, from_scale) = fx_currency(&from);
+        let (to_currency, to_scale) = fx_currency(&to);
+        let scale = from_scale / to_scale;
 
-        if from == to {
+        if from_currency == to_currency {
             return Ok(vec![SourceObservation {
                 date: start,
-                value: 1.0,
+                value: scale,
             }]);
         }
 
-        self.request_historical_data(HistoricalRequest::Fx(from, to, start, end))
-            .await
+        // Share the underlying GBP request with pound-denominated assets. Apply
+        // the denomination scale to a copy so the shared source result stays raw.
+        let mut observations = self
+            .request_historical_data(HistoricalRequest::Fx(
+                from_currency.to_owned(),
+                to_currency.to_owned(),
+                start,
+                end,
+            ))
+            .await?;
+        for observation in &mut observations {
+            observation.value *= scale;
+        }
+        Ok(observations)
     }
 
     pub async fn stock_info(&self, ticker: &str) -> anyhow::Result<StockInfo> {
@@ -419,10 +434,10 @@ fn correlation_series(
     }
 }
 
-fn normalize_currency(currency: &str) -> anyhow::Result<String> {
-    let normalized = currency.trim().to_ascii_uppercase();
-    if normalized.len() != 3 || !normalized.chars().all(|ch| ch.is_ascii_alphabetic()) {
-        bail!("currency must be a three-letter alphabetic code: {currency}");
+fn fx_currency(denomination: &str) -> (&str, f64) {
+    if denomination == "GBX" {
+        ("GBP", 0.01)
+    } else {
+        (denomination, 1.0)
     }
-    Ok(normalized)
 }

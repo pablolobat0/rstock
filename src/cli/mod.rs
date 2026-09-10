@@ -239,7 +239,7 @@ pub enum AssetCommands {
         #[arg(short = 'T', long = "type", value_enum)]
         asset_type: AssetType,
 
-        /// Trading currency code
+        /// Trading denomination (GBP = pounds; GBX or `GBp` = pence)
         #[arg(short, long, default_value = "EUR")]
         currency: String,
 
@@ -329,11 +329,11 @@ pub enum TransactionCommands {
         #[arg(short, long, value_parser = parse_positive_f64)]
         quantity: f64,
 
-        /// Price per unit (e.g. 150.25)
+        /// Price per unit in the asset denomination (GBX = pence)
         #[arg(short, long, value_parser = parse_positive_f64)]
         price: f64,
 
-        /// Broker commission and fees
+        /// Broker commission and fees in the asset denomination (GBX = pence)
         #[arg(short, long, default_value = "0", value_parser = parse_non_negative_f64)]
         fees: f64,
     },
@@ -352,11 +352,11 @@ pub enum TransactionCommands {
         #[arg(short, long, value_parser = parse_positive_f64)]
         quantity: f64,
 
-        /// Sale price per unit (e.g. 150.25)
+        /// Sale price per unit in the asset denomination (GBX = pence)
         #[arg(short, long, value_parser = parse_positive_f64)]
         price: f64,
 
-        /// Broker commission and fees
+        /// Broker commission and fees in the asset denomination (GBX = pence)
         #[arg(short, long, default_value = "0", value_parser = parse_non_negative_f64)]
         fees: f64,
     },
@@ -371,11 +371,11 @@ pub enum TransactionCommands {
         #[arg(short, long, value_parser = parse_date)]
         date: NaiveDate,
 
-        /// Total dividend amount received
+        /// Total dividend amount in the asset denomination (GBX = pence)
         #[arg(short, long, value_parser = parse_positive_f64)]
         amount: f64,
 
-        /// Withholding tax or fees
+        /// Withholding tax or fees in the asset denomination (GBX = pence)
         #[arg(short, long, default_value = "0", value_parser = parse_non_negative_f64)]
         fees: f64,
     },

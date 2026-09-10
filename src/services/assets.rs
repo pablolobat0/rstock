@@ -5,7 +5,7 @@ use crate::db::repos::{
     asset_repo, daily_price_repo, portfolio_asset_history_repo, portfolio_history_repo,
     transaction_repo,
 };
-use crate::models::{Asset, AssetClassification, AssetInfo};
+use crate::models::{normalize_currency, Asset, AssetClassification, AssetInfo};
 
 pub async fn create_tracked_asset(
     db: &DatabaseConnection,
@@ -14,7 +14,11 @@ pub async fn create_tracked_asset(
     morningstar_code: Option<&str>,
 ) -> anyhow::Result<i32> {
     classification.validate_for_asset(&info.asset_type, morningstar_code)?;
-    asset_repo::create(db, info, classification, morningstar_code).await
+    let info = AssetInfo {
+        currency: normalize_currency(&info.currency)?,
+        ..info.clone()
+    };
+    asset_repo::create(db, &info, classification, morningstar_code).await
 }
 
 pub async fn update_tracked_asset(

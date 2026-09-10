@@ -20,6 +20,33 @@ fn equity_info() -> AssetInfo {
 }
 
 #[tokio::test]
+async fn create_tracked_asset_normalizes_pence_without_changing_pounds() {
+    for (input, expected) in [("GBp", "GBX"), (" gbx ", "GBX"), ("GBP", "GBP")] {
+        let db = common::setup_test_db().await;
+        let info = AssetInfo {
+            currency: input.to_owned(),
+            asset_type: AssetType::Stock,
+            ..equity_info()
+        };
+        let classification = AssetClassification {
+            asset_class: Some(AssetClass::Equity),
+            ..Default::default()
+        };
+        assets::create_tracked_asset(&db, &info, &classification, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            asset_repo::find_by_ticker(&db, &info.ticker)
+                .await
+                .unwrap()
+                .unwrap()
+                .currency,
+            expected
+        );
+    }
+}
+
+#[tokio::test]
 async fn create_roundtrips_valid_classification_fields() {
     let db = common::setup_test_db().await;
     let info = equity_info();

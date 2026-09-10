@@ -9,6 +9,51 @@ fn fixed_today() -> NaiveDate {
 }
 
 #[tokio::test]
+async fn pence_prices_and_fees_value_portfolio_in_euros_and_survive_cache_reuse() {
+    let db = common::setup_test_db().await;
+    let id = common::insert_asset(&db, "XFAKEPENCE", "Pence Stock", "stock", "GBX").await;
+    common::insert_transaction(&db, id, "2025-06-08", 186.8131, 456.1, 100.0).await;
+    let mut sources = common::MockMarketDataSources::new();
+    sources.historical_prices.insert(
+        rstock::constants::BENCHMARK_TICKER.to_owned(),
+        vec![
+            ("2025-06-08".to_owned(), 200.0),
+            ("2025-06-09".to_owned(), 201.0),
+        ],
+    );
+    sources.exchange_rates.insert(
+        "USDEUR".to_owned(),
+        vec![
+            ("2025-06-08".to_owned(), 0.9),
+            ("2025-06-09".to_owned(), 0.9),
+        ],
+    );
+    sources.historical_prices.insert(
+        "XFAKEPENCE".to_owned(),
+        vec![
+            ("2025-06-08".to_owned(), 456.1),
+            ("2025-06-09".to_owned(), 500.0),
+        ],
+    );
+    sources.exchange_rates.insert(
+        "GBPEUR".to_owned(),
+        vec![
+            ("2025-06-08".to_owned(), 1.2),
+            ("2025-06-09".to_owned(), 1.2),
+        ],
+    );
+    let market_data = common::market_data_at(&sources, fixed_today());
+    let result = portfolio::get_portfolio(&db, &market_data).await.unwrap();
+    let expected = 186.8131 * 5.0 * 1.2;
+    assert!((result.total_value.unwrap() - expected).abs() < 1e-8);
+    assert!((result.total_current_value.unwrap() - expected).abs() < 1e-8);
+    assert!(result.nav.is_some());
+    let offline = common::market_data_at(&common::MockMarketDataSources::new(), fixed_today());
+    let cached = portfolio::get_portfolio(&db, &offline).await.unwrap();
+    assert!((cached.total_current_value.unwrap() - expected).abs() < 1e-8);
+}
+
+#[tokio::test]
 async fn fixed_clock_excludes_future_transactions_from_current_inventory() {
     let db = common::setup_test_db().await;
     let asset_id =

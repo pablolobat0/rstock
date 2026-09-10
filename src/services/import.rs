@@ -11,9 +11,9 @@ use crate::db::repos::{
     transaction_repo,
 };
 use crate::models::{
-    cents_to_f64, Asset, AssetClass, AssetClassification, AssetInfo, AssetType, BondCredit,
-    BondDuration, BuyOrder, CsvRow, DividendOrder, EquityStyle, Management, SellOrder, SplitOrder,
-    Transaction, TxType,
+    cents_to_f64, normalize_currency, Asset, AssetClass, AssetClassification, AssetInfo, AssetType,
+    BondCredit, BondDuration, BuyOrder, CsvRow, DividendOrder, EquityStyle, Management, SellOrder,
+    SplitOrder, Transaction, TxType,
 };
 use crate::services::ledger::{self, LedgerEffect, LedgerEntryKind, LedgerTransition};
 use crate::services::transactions;
@@ -168,6 +168,14 @@ pub async fn import_transactions_csv(
         let state = assets_by_ticker.get_mut(&row.ticker).ok_or_else(|| {
             anyhow::anyhow!("row {row_num}: asset '{}' was not resolved", row.ticker)
         })?;
+        if let Some(currency) = &row.currency {
+            if *currency != normalize_currency(&state.currency)? {
+                bail!(
+                    "row {row_num}: Currency {currency} does not match asset '{}' denomination {}; prices and fees must use the asset denomination",
+                    row.ticker, state.currency
+                );
+            }
+        }
         let row_invalidation_date = if row.tx_type == TxType::Split {
             state
                 .first_transaction_date
@@ -446,7 +454,10 @@ fn parse_row(record: &csv::StringRecord, row_num: usize) -> anyhow::Result<CsvRo
         .map(|s| s.parse::<AssetType>())
         .transpose()
         .with_context(|| format!("row {row_num}: invalid asset type '{}'", &record[3]))?;
-    let currency = parse_optional(&record[4]);
+    let currency = parse_optional(&record[4])
+        .map(|currency| normalize_currency(&currency))
+        .transpose()
+        .with_context(|| format!("row {row_num}: invalid Currency"))?;
     let morningstar_code = parse_optional(&record[5]);
     let classification = AssetClassification {
         asset_class: parse_optional_enum::<AssetClass>(&record[6], row_num, "AssetClass")?,

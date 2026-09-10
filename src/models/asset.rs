@@ -39,6 +39,7 @@ impl FromStr for AssetType {
     }
 }
 
+#[derive(Clone)]
 pub struct AssetInfo {
     pub ticker: String,
     pub name: String,
@@ -108,4 +109,19 @@ pub struct CurrentPosition {
     pub open_position_gain_loss: Option<f64>,
     pub open_position_gain_loss_pct: Option<f64>,
     pub market_data_limitations: Vec<MarketDataLimitation>,
+}
+
+/// Canonical denomination for asset amounts. `GBp` is case-sensitive: it denotes
+/// pence (GBX), whereas GBP denotes pounds.
+pub(crate) fn normalize_currency(currency: &str) -> anyhow::Result<String> {
+    let trimmed = currency.trim();
+    let normalized = if trimmed == "GBp" {
+        "GBX".to_owned()
+    } else {
+        trimmed.to_ascii_uppercase()
+    };
+    if normalized.len() != 3 || !normalized.chars().all(|ch| ch.is_ascii_alphabetic()) {
+        anyhow::bail!("currency must be a three-letter alphabetic code: {currency}");
+    }
+    Ok(normalized)
 }
