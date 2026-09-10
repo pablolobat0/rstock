@@ -4,7 +4,7 @@ use anyhow::{bail, Context};
 use chrono::NaiveDate;
 use sea_orm::DatabaseConnection;
 
-use super::{policy, MarketData, NavValuationData, SourceObservation};
+use super::{policy, MarketData, NavValuationData, NavValuationInterval, SourceObservation};
 use crate::constants::{format_date, BASE_CURRENCY, FUND_API_PADDING_DAYS};
 use crate::db::repos::{daily_price_repo, exchange_rate_repo};
 use crate::models::{Asset, AssetType, ValuationMarketData, ValuationMarketDataAvailability};
@@ -20,7 +20,6 @@ struct FilledValues {
 
 struct PreparedHistoricalMarketData {
     availability: ValuationMarketDataAvailability,
-    valuation_data: NavValuationData,
 }
 
 pub(crate) async fn prepare_valuation_market_data(
@@ -151,16 +150,9 @@ async fn prepare_historical_market_data(
     end_date: &str,
     market_data: &MarketData,
 ) -> anyhow::Result<ValuationMarketData> {
-    let prepared = prepare_historical_market_data_inner(
-        db,
-        assets,
-        start_date,
-        end_date,
-        market_data,
-        true,
-        false,
-    )
-    .await?;
+    let prepared =
+        prepare_historical_market_data_inner(db, assets, start_date, end_date, market_data, true)
+            .await?;
     Ok(ValuationMarketData {
         effective_end: prepared.availability.effective_end,
         limitations: prepared.availability.limitations,
@@ -178,37 +170,68 @@ pub(crate) async fn prepare_valuation_market_data_if_available(
     end_date: &str,
     market_data: &MarketData,
 ) -> anyhow::Result<ValuationMarketDataAvailability> {
-    let prepared = prepare_historical_market_data_inner(
-        db,
-        assets,
-        start_date,
-        end_date,
-        market_data,
-        false,
-        false,
-    )
-    .await?;
+    let prepared =
+        prepare_historical_market_data_inner(db, assets, start_date, end_date, market_data, false)
+            .await?;
     Ok(prepared.availability)
 }
 
-pub(crate) async fn prepare_valuation_market_data_for_nav(
+/// Prepares only the intervals and transaction-date FX range requested by NAV.
+/// The returned maps are complete in-memory inputs; execution must not query the
+/// cache again when an observation is absent.
+pub(crate) async fn prepare_nav_valuation_data(
     db: &DatabaseConnection,
     assets: &[Asset],
-    start_date: &str,
-    end_date: &str,
+    intervals: &[NavValuationInterval],
+    fx_currencies: &[String],
+    fx_start: Option<NaiveDate>,
+    end_date: NaiveDate,
     market_data: &MarketData,
-) -> anyhow::Result<(ValuationMarketDataAvailability, NavValuationData)> {
-    let prepared = prepare_historical_market_data_inner(
-        db,
-        assets,
-        start_date,
-        end_date,
-        market_data,
-        false,
-        true,
-    )
-    .await?;
-    Ok((prepared.availability, prepared.valuation_data))
+) -> anyhow::Result<NavValuationData> {
+    let asset_map: HashMap<i32, &Asset> = assets.iter().map(|asset| (asset.id, asset)).collect();
+    let mut asset_prices = HashMap::<i32, BTreeMap<NaiveDate, f64>>::new();
+    for interval in intervals {
+        let asset = asset_map.get(&interval.asset_id).with_context(|| {
+            format!(
+                "missing asset {} for NAV valuation interval",
+                interval.asset_id
+            )
+        })?;
+        let values = fill_historical_asset_prices(
+            db,
+            asset,
+            lookup_identifier(asset)?,
+            &format_date(interval.start),
+            &format_date(interval.end),
+            market_data,
+        )
+        .await?
+        .map(|values| values.values)
+        .unwrap_or_default();
+        asset_prices
+            .entry(interval.asset_id)
+            .or_default()
+            .extend(values);
+    }
+
+    let mut exchange_rates = HashMap::new();
+    if let Some(start) = fx_start {
+        for currency in fx_currencies {
+            let values = fill_historical_exchange_rates(
+                db,
+                currency,
+                &format_date(start),
+                &format_date(end_date),
+                market_data,
+            )
+            .await?
+            .map(|values| values.values)
+            .unwrap_or_default();
+            exchange_rates.insert(currency.clone(), values);
+        }
+    }
+
+    Ok(NavValuationData::from_maps(asset_prices, exchange_rates))
 }
 
 async fn prepare_historical_market_data_inner(
@@ -218,7 +241,6 @@ async fn prepare_historical_market_data_inner(
     end_date: &str,
     market_data: &MarketData,
     strict: bool,
-    preload: bool,
 ) -> anyhow::Result<PreparedHistoricalMarketData> {
     let requested_end =
         policy::parse_market_data_date(end_date, "historical market data end date")?;
@@ -291,20 +313,6 @@ async fn prepare_historical_market_data_inner(
             effective_end,
             limitations,
             data_available,
-        },
-        valuation_data: if preload {
-            NavValuationData::from_maps(
-                latest_asset_dates
-                    .into_iter()
-                    .map(|(asset_id, values)| (asset_id, values.values))
-                    .collect(),
-                latest_rate_dates
-                    .into_iter()
-                    .map(|(currency, values)| (currency, values.values))
-                    .collect(),
-            )
-        } else {
-            NavValuationData::from_maps(HashMap::new(), HashMap::new())
         },
     })
 }

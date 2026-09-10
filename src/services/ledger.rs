@@ -212,8 +212,20 @@ impl CanonicalLedger {
     /// Replays every prefix, returning transitions only when the entire ledger is valid.
     #[allow(clippy::too_many_lines)] // Keeping variant validation beside its transition preserves replay locality.
     pub fn replay(&self) -> Result<LedgerReplay, LedgerError> {
-        let mut quantity = 0.0;
-        let mut remaining_cost = 0.0;
+        self.replay_from_state(0.0, 0.0)
+    }
+
+    /// Replays a suffix from a trusted NAV checkpoint state. The ledger still
+    /// validates every suffix prefix; the seed only avoids rereading history
+    /// that the checkpoint already represents.
+    #[allow(clippy::too_many_lines)]
+    pub fn replay_from_state(
+        &self,
+        initial_quantity: f64,
+        initial_cost: f64,
+    ) -> Result<LedgerReplay, LedgerError> {
+        let mut quantity = normalize_quantity(initial_quantity);
+        let mut remaining_cost = normalize_cost(initial_cost);
         let mut transitions = Vec::with_capacity(self.entries.len());
 
         for entry in &self.entries {
@@ -395,6 +407,16 @@ pub fn replay_transactions(
     transactions: &[Transaction],
 ) -> Result<LedgerReplay, LedgerError> {
     CanonicalLedger::from_transactions(asset_id, transactions)?.replay()
+}
+
+/// Canonicalizes and replays a transaction suffix from a trusted quantity.
+pub fn replay_transactions_from_state(
+    asset_id: i32,
+    transactions: &[Transaction],
+    initial_quantity: f64,
+) -> Result<LedgerReplay, LedgerError> {
+    CanonicalLedger::from_transactions(asset_id, transactions)?
+        .replay_from_state(initial_quantity, 0.0)
 }
 
 /// Base-currency effects for one complete, valid ledger replay.  Missing FX
