@@ -1,4 +1,6 @@
-mod common;
+#![allow(clippy::float_cmp)]
+
+pub mod common;
 
 use chrono::NaiveDate;
 use rstock::services::market_data::MarketData;

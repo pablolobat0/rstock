@@ -1,8 +1,10 @@
-mod common;
+#![allow(clippy::float_cmp)]
+
+pub mod common;
 
 use rstock::db::repos::transaction_repo;
 use rstock::models::{f64_to_cents, BuyOrder, DividendOrder, SellOrder, SplitOrder};
-use rstock::services;
+use rstock::services::{self, ledger};
 use sea_orm::ConnectionTrait;
 
 use common::*;
@@ -18,7 +20,7 @@ async fn test_find_by_id() {
     let tx = tx.unwrap();
     assert_eq!(tx.id, 1);
     assert_eq!(tx.asset_id, asset_id);
-    assert_eq!(tx.quantity, 10.0);
+    assert_eq!(tx.units, Some(10.0));
 }
 
 #[tokio::test]
@@ -53,8 +55,8 @@ async fn test_update_by_id_partial() {
         .unwrap();
 
     let tx = transaction_repo::find_by_id(&db, 1).await.unwrap().unwrap();
-    assert_eq!(tx.price_cents, f64_to_cents(200.0));
-    assert_eq!(tx.quantity, 10.0); // unchanged
+    assert_eq!(tx.unit_price_cents, Some(f64_to_cents(200.0)));
+    assert_eq!(tx.units, Some(10.0)); // unchanged
     assert_eq!(tx.date, "2025-01-02"); // unchanged
 }
 
@@ -77,9 +79,9 @@ async fn test_update_by_id_all_fields() {
 
     let tx = transaction_repo::find_by_id(&db, 1).await.unwrap().unwrap();
     assert_eq!(tx.date, "2025-02-01");
-    assert_eq!(tx.quantity, 20.0);
-    assert_eq!(tx.price_cents, f64_to_cents(150.0));
-    assert_eq!(tx.fees_cents, f64_to_cents(2.0));
+    assert_eq!(tx.units, Some(20.0));
+    assert_eq!(tx.unit_price_cents, Some(f64_to_cents(150.0)));
+    assert_eq!(tx.trade_fees_cents, Some(f64_to_cents(2.0)));
 }
 
 #[tokio::test]
@@ -415,7 +417,415 @@ async fn same_day_ledger_reads_use_ascending_transaction_id() {
         all.iter().map(|tx| tx.id).collect::<Vec<_>>(),
         vec![1, 2, 3]
     );
-    assert!((rstock::models::Transaction::compute_holdings(&per_asset) - 5.0).abs() < f64::EPSILON);
+    assert_eq!(
+        ledger::replay_transactions(asset_id, &per_asset)
+            .unwrap()
+            .final_quantity,
+        5.0
+    );
+}
+
+#[tokio::test]
+async fn recording_commands_validate_shapes_before_persistence() {
+    let db = setup_test_db().await;
+    let asset_id = insert_asset(&db, "XFAKE1", "Fake Stock", "stock", "EUR").await;
+
+    let invalid_results = [
+        services::transactions::buy(
+            &db,
+            "XFAKE1".to_owned(),
+            BuyOrder {
+                date: "not-a-date".to_owned(),
+                quantity: 1.0,
+                price: 10.0,
+                fees: 0.0,
+            },
+        )
+        .await,
+        services::transactions::sell(
+            &db,
+            "XFAKE1".to_owned(),
+            SellOrder {
+                date: "2025-01-01".to_owned(),
+                quantity: f64::NAN,
+                price: 10.0,
+                fees: 0.0,
+            },
+        )
+        .await,
+        services::transactions::dividend(
+            &db,
+            "XFAKE1".to_owned(),
+            DividendOrder {
+                date: "2025-01-01".to_owned(),
+                amount: 1.0,
+                fees: 2.0,
+            },
+        )
+        .await,
+        services::transactions::split(
+            &db,
+            "XFAKE1".to_owned(),
+            SplitOrder {
+                date: "2025-01-01".to_owned(),
+                ratio: f64::INFINITY,
+            },
+        )
+        .await,
+        services::transactions::buy(
+            &db,
+            "XFAKE1".to_owned(),
+            BuyOrder {
+                date: "2025-01-01".to_owned(),
+                quantity: 1.0,
+                price: 0.000_049,
+                fees: 0.0,
+            },
+        )
+        .await,
+        services::transactions::buy(
+            &db,
+            "XFAKE1".to_owned(),
+            BuyOrder {
+                date: "2025-01-01".to_owned(),
+                quantity: 1.0,
+                price: f64::MAX,
+                fees: 0.0,
+            },
+        )
+        .await,
+        services::transactions::buy(
+            &db,
+            "XFAKE1".to_owned(),
+            BuyOrder {
+                date: "2025-01-01".to_owned(),
+                quantity: 1.0,
+                price: 10.0,
+                fees: -0.000_049,
+            },
+        )
+        .await,
+    ];
+
+    assert!(invalid_results.into_iter().all(|result| result.is_err()));
+    assert!(transaction_repo::find_by_asset_id(&db, asset_id)
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+async fn recording_and_editing_compare_encoded_dividend_amounts() {
+    let db = setup_test_db().await;
+    let asset_id = insert_asset(&db, "XFAKE1", "Fake Stock", "stock", "EUR").await;
+    insert_transaction(&db, asset_id, "2025-01-01", 1.0, 100.0, 0.0).await;
+
+    // Both values round to 10,000 at the persisted 4-decimal scale even
+    // though the input deduction is fractionally larger than the gross.
+    services::transactions::dividend(
+        &db,
+        "XFAKE1".to_owned(),
+        DividendOrder {
+            date: "2025-01-02".to_owned(),
+            amount: 1.00004,
+            fees: 1.000_049,
+        },
+    )
+    .await
+    .expect("encoded-equal dividend fields should be accepted");
+
+    let dividend = transaction_repo::find_by_id(&db, 2).await.unwrap().unwrap();
+    assert_eq!(dividend.dividend_amount_cents, Some(10_000));
+    assert_eq!(dividend.dividend_deductions_cents, Some(10_000));
+
+    services::transactions::edit(&db, 2, None, None, Some(1.000_049), None)
+        .await
+        .expect("partial edit should compare existing deductions as encoded cents");
+    assert_eq!(
+        transaction_repo::find_by_id(&db, 2)
+            .await
+            .unwrap()
+            .unwrap()
+            .dividend_amount_cents,
+        Some(10_000)
+    );
+}
+
+#[tokio::test]
+async fn editing_rejects_positive_monetary_values_that_round_to_zero() {
+    let db = setup_test_db().await;
+    let asset_id = insert_asset(&db, "XFAKE1", "Fake Stock", "stock", "EUR").await;
+    insert_transaction(&db, asset_id, "2025-01-01", 1.0, 100.0, 0.0).await;
+
+    let error = services::transactions::edit(&db, 1, None, None, Some(0.000_049), None)
+        .await
+        .expect_err("a positive price cannot quantize to zero cents");
+    assert!(error.to_string().contains("supported cents precision"));
+    assert_eq!(
+        transaction_repo::find_by_id(&db, 1)
+            .await
+            .unwrap()
+            .unwrap()
+            .unit_price_cents,
+        Some(f64_to_cents(100.0))
+    );
+}
+
+#[tokio::test]
+async fn recording_replays_the_complete_ledger_and_rolls_back_invalid_suffixes() {
+    let db = setup_test_db().await;
+    let asset_id = insert_asset(&db, "XFAKE1", "Fake Stock", "stock", "EUR").await;
+    insert_transaction(&db, asset_id, "2025-01-01", 1.0, 100.0, 0.0).await;
+    insert_sell_transaction(&db, asset_id, "2025-01-03", 1.0, 100.0, 0.0).await;
+    let before = transaction_repo::find_by_asset_id(&db, asset_id)
+        .await
+        .unwrap();
+
+    let result = services::transactions::sell(
+        &db,
+        "XFAKE1".to_owned(),
+        SellOrder {
+            date: "2025-01-02".to_owned(),
+            quantity: 1.0,
+            price: 100.0,
+            fees: 0.0,
+        },
+    )
+    .await;
+
+    assert!(result.is_err());
+    assert_eq!(
+        transaction_repo::find_by_asset_id(&db, asset_id)
+            .await
+            .unwrap()
+            .iter()
+            .map(|tx| tx.id)
+            .collect::<Vec<_>>(),
+        before.iter().map(|tx| tx.id).collect::<Vec<_>>()
+    );
+}
+
+#[tokio::test]
+async fn same_day_recording_uses_generated_id_order_for_split_effects() {
+    let db = setup_test_db().await;
+    let asset_id = insert_asset(&db, "XFAKE1", "Fake Stock", "stock", "EUR").await;
+    insert_transaction(&db, asset_id, "2025-01-01", 1.0, 100.0, 0.0).await;
+
+    let receipt = services::transactions::split(
+        &db,
+        "XFAKE1".to_owned(),
+        SplitOrder {
+            date: "2025-01-01".to_owned(),
+            ratio: 2.0,
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(receipt.transaction_id, 2);
+    let entries = transaction_repo::find_by_asset_id(&db, asset_id)
+        .await
+        .unwrap();
+    let replay = ledger::replay_transactions(asset_id, &entries).unwrap();
+    assert!((replay.final_quantity - 2.0).abs() < f64::EPSILON);
+}
+
+#[tokio::test]
+async fn editing_a_buy_replays_and_rejects_an_invalid_later_sell_atomically() {
+    let db = setup_test_db().await;
+    let asset_id = insert_asset(&db, "XFAKE1", "Fake Stock", "stock", "EUR").await;
+    insert_transaction(&db, asset_id, "2025-01-01", 10.0, 100.0, 1.0).await;
+    insert_sell_transaction(&db, asset_id, "2025-01-03", 10.0, 100.0, 0.0).await;
+
+    let result = services::transactions::edit(&db, 1, None, Some(9.0), None, None).await;
+
+    assert!(result.is_err());
+    let transactions = transaction_repo::find_by_asset_id(&db, asset_id)
+        .await
+        .unwrap();
+    assert!((transactions[0].units.unwrap_or_default() - 10.0).abs() < f64::EPSILON);
+    assert_eq!(transactions[0].id, 1);
+    assert_eq!(transactions[1].id, 2);
+}
+
+#[tokio::test]
+async fn editing_a_sell_replays_and_rejects_an_oversell_atomically() {
+    let db = setup_test_db().await;
+    let asset_id = insert_asset(&db, "XFAKE1", "Fake Stock", "stock", "EUR").await;
+    insert_transaction(&db, asset_id, "2025-01-01", 10.0, 100.0, 0.0).await;
+    insert_sell_transaction(&db, asset_id, "2025-01-02", 5.0, 100.0, 0.0).await;
+
+    let result = services::transactions::edit(&db, 2, None, Some(11.0), None, None).await;
+
+    assert!(result.is_err());
+    let quantity = transaction_repo::find_by_id(&db, 2)
+        .await
+        .unwrap()
+        .unwrap()
+        .units
+        .unwrap_or_default();
+    assert!((quantity - 5.0).abs() < f64::EPSILON);
+}
+
+#[tokio::test]
+async fn moving_a_sell_before_its_buy_is_rejected_without_reordering_identity() {
+    let db = setup_test_db().await;
+    let asset_id = insert_asset(&db, "XFAKE1", "Fake Stock", "stock", "EUR").await;
+    insert_transaction(&db, asset_id, "2025-01-02", 10.0, 100.0, 0.0).await;
+    insert_sell_transaction(&db, asset_id, "2025-01-03", 1.0, 100.0, 0.0).await;
+
+    let result =
+        services::transactions::edit(&db, 2, Some("2025-01-01".to_owned()), None, None, None).await;
+
+    assert!(result.is_err());
+    let transaction = transaction_repo::find_by_id(&db, 2).await.unwrap().unwrap();
+    assert_eq!(transaction.date, "2025-01-03");
+}
+
+#[tokio::test]
+async fn deleting_an_acquisition_required_by_later_entries_is_atomic() {
+    let db = setup_test_db().await;
+    let asset_id = insert_asset(&db, "XFAKE1", "Fake Stock", "stock", "EUR").await;
+    insert_transaction(&db, asset_id, "2025-01-01", 10.0, 100.0, 0.0).await;
+    insert_sell_transaction(&db, asset_id, "2025-01-02", 1.0, 100.0, 0.0).await;
+
+    let result = services::transactions::delete(&db, 1).await;
+
+    assert!(result.is_err());
+    assert_eq!(
+        transaction_repo::find_by_asset_id(&db, asset_id)
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn changing_a_split_that_supports_a_later_sell_is_rejected_atomically() {
+    let db = setup_test_db().await;
+    let asset_id = insert_asset(&db, "XFAKE1", "Fake Stock", "stock", "EUR").await;
+    insert_transaction(&db, asset_id, "2025-01-01", 10.0, 100.0, 0.0).await;
+    insert_split_transaction(&db, asset_id, "2025-01-02", 2.0).await;
+    insert_sell_transaction(&db, asset_id, "2025-01-03", 19.0, 100.0, 0.0).await;
+
+    let result = services::transactions::edit(&db, 2, None, Some(1.0), None, None).await;
+
+    assert!(result.is_err());
+    let quantity = transaction_repo::find_by_id(&db, 2)
+        .await
+        .unwrap()
+        .unwrap()
+        .split_ratio
+        .unwrap_or_default();
+    assert!((quantity - 2.0).abs() < f64::EPSILON);
+}
+
+#[tokio::test]
+async fn deleting_a_split_required_by_a_later_sell_is_atomic() {
+    let db = setup_test_db().await;
+    let asset_id = insert_asset(&db, "XFAKE1", "Fake Stock", "stock", "EUR").await;
+    insert_transaction(&db, asset_id, "2025-01-01", 10.0, 100.0, 0.0).await;
+    insert_split_transaction(&db, asset_id, "2025-01-02", 2.0).await;
+    insert_sell_transaction(&db, asset_id, "2025-01-03", 19.0, 100.0, 0.0).await;
+
+    let result = services::transactions::delete(&db, 2).await;
+
+    assert!(result.is_err());
+    assert_eq!(
+        transaction_repo::find_by_asset_id(&db, asset_id)
+            .await
+            .unwrap()
+            .len(),
+        3
+    );
+}
+
+#[tokio::test]
+async fn edits_reject_fields_that_are_not_meaningful_for_the_transaction_type() {
+    let db = setup_test_db().await;
+    let asset_id = insert_asset(&db, "XFAKE1", "Fake Stock", "stock", "EUR").await;
+    insert_transaction(&db, asset_id, "2025-01-01", 10.0, 100.0, 0.0).await;
+    insert_dividend_transaction(&db, asset_id, "2025-01-02", 5.0, 1.0).await;
+    insert_split_transaction(&db, asset_id, "2025-01-03", 2.0).await;
+
+    let dividend_result = services::transactions::edit(&db, 2, None, Some(2.0), None, None).await;
+    let split_result = services::transactions::edit(&db, 3, None, None, Some(100.0), None).await;
+    let split_fee_result = services::transactions::edit(&db, 3, None, None, None, Some(1.0)).await;
+
+    assert!(dividend_result.is_err());
+    assert!(split_result.is_err());
+    assert!(split_fee_result.is_err());
+    let dividend_amount = transaction_repo::find_by_id(&db, 2)
+        .await
+        .unwrap()
+        .unwrap()
+        .dividend_amount_cents
+        .unwrap_or_default();
+    let split_quantity = transaction_repo::find_by_id(&db, 3)
+        .await
+        .unwrap()
+        .unwrap()
+        .split_ratio
+        .unwrap_or_default();
+    assert_eq!(dividend_amount, f64_to_cents(5.0));
+    assert!((split_quantity - 2.0).abs() < f64::EPSILON);
+}
+
+#[tokio::test]
+async fn edits_accept_type_specific_dividend_and_split_fields() {
+    let db = setup_test_db().await;
+    let asset_id = insert_asset(&db, "XFAKE1", "Fake Stock", "stock", "EUR").await;
+    insert_transaction(&db, asset_id, "2025-01-01", 10.0, 100.0, 0.0).await;
+    insert_dividend_transaction(&db, asset_id, "2025-01-02", 5.0, 1.0).await;
+    insert_split_transaction(&db, asset_id, "2025-01-03", 2.0).await;
+
+    services::transactions::edit(&db, 2, None, None, Some(6.0), Some(2.0))
+        .await
+        .unwrap();
+    services::transactions::edit(&db, 3, Some("2025-01-04".to_owned()), Some(3.0), None, None)
+        .await
+        .unwrap();
+
+    let dividend = transaction_repo::find_by_id(&db, 2).await.unwrap().unwrap();
+    assert_eq!(dividend.dividend_amount_cents, Some(f64_to_cents(6.0)));
+    assert_eq!(dividend.dividend_deductions_cents, Some(f64_to_cents(2.0)));
+    let split = transaction_repo::find_by_id(&db, 3).await.unwrap().unwrap();
+    assert_eq!(split.date, "2025-01-04");
+    assert!((split.split_ratio.unwrap_or_default() - 3.0).abs() < f64::EPSILON);
+}
+
+#[tokio::test]
+async fn editing_preserves_id_and_uses_id_to_break_same_day_date_ties() {
+    let db = setup_test_db().await;
+    let asset_id = insert_asset(&db, "XFAKE1", "Fake Stock", "stock", "EUR").await;
+    insert_transaction(&db, asset_id, "2025-01-01", 10.0, 100.0, 0.0).await;
+    insert_split_transaction(&db, asset_id, "2025-01-03", 2.0).await;
+    insert_transaction(&db, asset_id, "2025-01-02", 3.0, 100.0, 0.0).await;
+
+    services::transactions::edit(&db, 2, Some("2025-01-02".to_owned()), None, None, None)
+        .await
+        .unwrap();
+
+    let transactions = transaction_repo::find_by_asset_id(&db, asset_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        transactions
+            .iter()
+            .map(|transaction| transaction.id)
+            .collect::<Vec<_>>(),
+        vec![1, 2, 3]
+    );
+    assert_eq!(transactions[1].date, "2025-01-02");
+    assert_eq!(transactions[2].date, "2025-01-02");
+    assert!(matches!(
+        transactions[1].tx_type,
+        rstock::models::TxType::Split
+    ));
+
+    let replay = ledger::replay_transactions(asset_id, &transactions).unwrap();
+    assert!((replay.final_quantity - 23.0).abs() < f64::EPSILON);
 }
 
 fn ledger_fields(
@@ -427,10 +837,10 @@ fn ledger_fields(
             (
                 tx.id,
                 tx.tx_type.to_string(),
-                tx.date,
-                tx.quantity,
-                tx.price_cents,
-                tx.fees_cents,
+                tx.date.clone(),
+                tx.display_quantity(),
+                tx.display_price_cents(),
+                tx.display_fees_cents(),
             )
         })
         .collect()

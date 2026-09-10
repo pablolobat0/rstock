@@ -7,6 +7,7 @@ pub mod fund_analysis;
 pub mod fund_comparison;
 pub mod fund_metrics;
 pub mod import;
+pub mod ledger;
 pub mod market_data;
 pub mod metrics;
 pub mod nav;

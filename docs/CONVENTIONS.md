@@ -65,8 +65,8 @@ Three categories of model structs:
 - **ORM**: SeaORM with derive macros for entities. Entities are in `src/db/entities/`, auto-generated
 - **Upsert**: `upsert()` uses SeaORM `on_conflict` directly; repositories must not perform a manual existence check before writing. `upsert_many()` is the bulk form for behaviorally equivalent writes and may execute bounded chunks inside the caller's connection or transaction. `insert_many_immutable()` is reserved for Historical market data, where successful completed-date observations are preserved and only failure markers may be replaced
 - **Date storage**: Strings in `YYYY-MM-DD` format internally (DB, services), `DD-MM-YYYY` for user-facing input/output. See `display_date()` and `parse_date()` in constants/cli.
-- **Monetary amounts**: Transactions use `i64` cents (`price_cents`, `fees_cents`). Daily prices use `f64` directly. Use `f64_to_cents()` before insertion and `cents_to_f64()` after retrieval
-- **Migrations**: SeaORM migration crate in `migration/`. Migrations run automatically on database connect. Files are in `migration/src/` with timestamp-based naming
+- **Monetary amounts**: Transaction ledger monetary fields use native-currency `i64` cents (`unit_price_cents`, `dividend_amount_cents`, `dividend_deductions_cents`, and trade `fees_cents`). Daily prices use `f64` directly. Use `f64_to_cents()` before insertion and `cents_to_f64()` after retrieval. The semantic schema leaves fields irrelevant to a transaction type null and enforces signs and dividend deduction bounds.
+- **Migrations**: SeaORM migration crate in `migration/`. Migrations run automatically on database connect. Files are in `migration/src/` with timestamp-based naming. SQLite table rebuilds must preserve IDs, creation timestamps, semantic meaning, foreign keys, and chronology indexes in both `up` and `down` directions. Raw SQL is acceptable for a SQLite rebuild when schema-builder operations cannot express an atomic data-preserving copy; keep the copy statements explicit and narrowly scoped.
 - **Connection**: Single SQLite connection created in `src/db/mod.rs`. Path: `~/.rstock/rstock.db`
 
 ## Testing Patterns
@@ -89,6 +89,7 @@ All test utilities are in `tests/common/mod.rs`:
 - **Test location**: Integration tests in `tests/` directory. Unit tests inline with `#[cfg(test)]` modules (e.g., `src/models/transaction.rs`)
 - **Fixed clock**: Date-sensitive portfolio tests inject `FixedClock` through `MarketData` (normally via `market_data_at()`) and assert behavior through `get_current_positions()` or `get_portfolio()`. Tests specifically covering NAV-readiness ownership may call `ensure_portfolio_history()`. Do not call private rebuild helpers or rely on the machine date for these contracts
 - **Nullable facts**: Test unavailable position facts independently and assert that aggregates are complete across their scope or `None`; do not accept partial sums as totals
+- **Ledger boundary**: Build typed entries through the authoritative pure ledger replay service. It owns `(date, id)` canonicalization, prefix validation, and semantic transitions; consumers must not reinterpret persistence columns or duplicate quantity/cost/dividend folds. Mutation paths validate before persistence, replay the complete affected ledger after tentative writes, and invalidate dependent history atomically.
 
 ### Test Files
 

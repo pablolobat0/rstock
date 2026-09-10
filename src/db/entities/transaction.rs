@@ -8,9 +8,13 @@ pub struct Model {
     pub asset_id: i32,
     pub tx_type: String,
     pub date: String,
-    pub quantity: f64,
-    pub price_cents: i64,
-    pub fees_cents: i64,
+    pub units: Option<f64>,
+    pub unit_price_cents: Option<i64>,
+    pub dividend_amount_cents: Option<i64>,
+    pub dividend_deductions_cents: Option<i64>,
+    pub split_ratio: Option<f64>,
+    pub fees_cents: Option<i64>,
+    pub notes: Option<String>,
     pub created_at: String,
 }
 

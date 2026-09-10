@@ -1,12 +1,14 @@
-mod common;
+#![allow(clippy::float_cmp)]
+
+pub mod common;
 
 use chrono::NaiveDate;
 use rstock::models::BuyOrder;
 use rstock::services::{nav, transactions};
 
 /// Full flow: insert asset + 2 transactions + daily prices -> ensure history ->
-/// verify portfolio_history rows and values for specific dates.
-/// Also verifies portfolio_asset_history rows are created.
+/// verify `portfolio_history` rows and values for specific dates.
+/// Also verifies `portfolio_asset_history` rows are created.
 #[tokio::test]
 async fn test_full_buy_history_summary_flow() {
     let db = common::setup_test_db().await;
@@ -90,7 +92,7 @@ async fn test_full_buy_history_summary_flow() {
 }
 
 /// Build history for buy 1, add buy 2 through the accepted interface ->
-/// verify outstanding_shares increased, NAV didn't jump.
+/// verify `outstanding_shares` increased, NAV didn't jump.
 #[tokio::test]
 async fn test_incremental_history_after_second_buy() {
     let db = common::setup_test_db().await;

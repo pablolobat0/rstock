@@ -1,5 +1,6 @@
+use std::io::Write;
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 
 use serde_json::{json, Value};
 
@@ -44,6 +45,23 @@ fn run_success(home: &Path, args: &[&str]) -> Output {
         String::from_utf8_lossy(&output.stderr)
     );
     output
+}
+
+fn run_with_input(home: &Path, args: &[&str], input: &[u8]) -> Output {
+    let mut child = command(home)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("rstock should start");
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin should be piped")
+        .write_all(input)
+        .expect("input should be written");
+    child.wait_with_output().expect("rstock should finish")
 }
 
 fn run_json(home: &Path, args: &[&str], command: &str) -> Value {
@@ -238,6 +256,99 @@ fn json_edit_and_delete_require_explicit_consent_without_mutating() {
         "transaction.list",
     );
     assert_eq!(list["data"]["count"], 1);
+    assert_eq!(list["data"]["transactions"][0]["quantity"], 10.0);
+}
+
+#[test]
+fn edit_and_delete_use_confirmation_and_leave_cancelled_transactions_unchanged() {
+    let home = tempfile::tempdir().expect("temporary HOME should be created");
+    add_asset(home.path());
+    buy(home.path(), false);
+
+    let confirmation_cases: &[&[&str]] = &[
+        &["transaction", "edit", "1", "--quantity", "99"],
+        &["transaction", "delete", "1"],
+    ];
+    for args in confirmation_cases {
+        let output = run_with_input(home.path(), args, b"n\n");
+        assert!(
+            output.status.success(),
+            "cancelled command failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("Cancelled."));
+    }
+
+    let list = run_json(
+        home.path(),
+        &["transaction", "list", "--json"],
+        "transaction.list",
+    );
+    assert_eq!(list["data"]["count"], 1);
+    assert_eq!(list["data"]["transactions"][0]["quantity"], 10.0);
+}
+
+#[test]
+fn edit_replays_later_entries_and_reports_nonexistent_ids_without_mutation() {
+    let home = tempfile::tempdir().expect("temporary HOME should be created");
+    add_asset(home.path());
+    buy(home.path(), true);
+    run_success(
+        home.path(),
+        &[
+            "transaction",
+            "sell",
+            "--ticker",
+            "XFAKE1",
+            "--date",
+            "03-01-2025",
+            "--quantity",
+            "10",
+            "--price",
+            "12",
+            "--json",
+        ],
+    );
+
+    let invalid_edit = run(
+        home.path(),
+        &[
+            "transaction",
+            "edit",
+            "1",
+            "--quantity",
+            "9",
+            "--yes",
+            "--json",
+        ],
+    );
+    assert!(!invalid_edit.status.success());
+    assert!(String::from_utf8_lossy(&invalid_edit.stderr).contains("ledger invariant"));
+
+    let nonexistent_cases: &[&[&str]] = &[
+        &[
+            "transaction",
+            "edit",
+            "999",
+            "--quantity",
+            "1",
+            "--yes",
+            "--json",
+        ],
+        &["transaction", "delete", "999", "--yes", "--json"],
+    ];
+    for args in nonexistent_cases {
+        let output = run(home.path(), args);
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("not found"));
+    }
+
+    let list = run_json(
+        home.path(),
+        &["transaction", "list", "--json"],
+        "transaction.list",
+    );
+    assert_eq!(list["data"]["count"], 2);
     assert_eq!(list["data"]["transactions"][0]["quantity"], 10.0);
 }
 

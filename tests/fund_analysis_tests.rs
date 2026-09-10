@@ -1,4 +1,6 @@
-mod common;
+#![allow(clippy::float_cmp, clippy::too_many_lines)]
+
+pub mod common;
 
 use chrono::Duration;
 use common::{
@@ -668,7 +670,7 @@ async fn test_fund_analysis_uses_quote_metadata_for_untracked_fund() {
         "XQUOTE1".to_owned(),
         FundQuoteMetadata {
             name: Some("Morningstar Fund Name".to_owned()),
-            aum: Some(1234567.89),
+            aum: Some(1_234_567.89),
             aum_currency: Some("USD".to_owned()),
             inception_date: Some("2010-02-03".to_owned()),
             quote_currency: Some("USD".to_owned()),
@@ -689,7 +691,7 @@ async fn test_fund_analysis_uses_quote_metadata_for_untracked_fund() {
 
     assert_eq!(result.name.as_deref(), Some("Morningstar Fund Name"));
     assert_eq!(result.fund_currency.as_deref(), Some("USD"));
-    assert_eq!(result.aum, Some(1234567.89));
+    assert_eq!(result.aum, Some(1_234_567.89));
     assert_eq!(result.aum_currency.as_deref(), Some("USD"));
     assert_eq!(result.inception_date.as_deref(), Some("2010-02-03"));
 }

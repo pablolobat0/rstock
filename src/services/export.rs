@@ -59,9 +59,9 @@ pub async fn export_transactions_csv(db: &DatabaseConnection, path: &str) -> any
             bond_duration,
             management,
             tx_type.as_str(),
-            &format!("{}", tx.quantity),
-            &format!("{:.decimals$}", cents_to_f64(tx.price_cents)),
-            &format!("{:.decimals$}", cents_to_f64(tx.fees_cents)),
+            &format!("{}", tx.display_quantity()),
+            &format!("{:.decimals$}", cents_to_f64(tx.display_price_cents())),
+            &format!("{:.decimals$}", cents_to_f64(tx.display_fees_cents())),
         ])?;
     }
 

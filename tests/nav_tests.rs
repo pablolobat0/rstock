@@ -1,11 +1,18 @@
-mod common;
+#![allow(
+    clippy::doc_markdown,
+    clippy::float_cmp,
+    clippy::uninlined_format_args,
+    clippy::useless_conversion
+)]
+
+pub mod common;
 
 use chrono::NaiveDate;
 use rstock::models::{
     BuyOrder, MarketDataLimitation, MarketDataLimitationClassification, MarketDataSubject,
 };
 use rstock::services::{nav, transactions};
-use sea_orm::ConnectionTrait;
+use sea_orm::{ConnectionTrait, DatabaseConnection};
 
 fn nav_market_data(
     sources: &common::MockMarketDataSources,
@@ -994,6 +1001,263 @@ async fn test_single_usd_asset_nav() {
     assert!((snap2.nav - (1012.0 / 9.0)).abs() < 0.01);
 }
 
+#[tokio::test]
+async fn nav_uses_transaction_date_fx_for_all_ledger_cash_flow_effects() {
+    let db = common::setup_test_db().await;
+    let asset_id = common::insert_asset(&db, "XFAKEFXNAV", "USD Stock", "stock", "USD").await;
+
+    common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 100.0, 0.0).await;
+    common::insert_dividend_transaction(&db, asset_id, "2025-01-03", 10.0, 0.0).await;
+    common::insert_sell_transaction(&db, asset_id, "2025-01-04", 5.0, 100.0, 0.0).await;
+    for date in ["2025-01-02", "2025-01-03", "2025-01-04"] {
+        common::insert_daily_price(&db, asset_id, date, 100.0, false).await;
+    }
+    for (date, rate) in [
+        ("2025-01-02", 0.8),
+        ("2025-01-03", 0.9),
+        ("2025-01-04", 1.0),
+    ] {
+        common::insert_exchange_rate(&db, "USD", "EUR", date, rate).await;
+    }
+
+    let mock = common::MockMarketDataSources::new();
+    nav::ensure_portfolio_history(&db, &nav_market_data(&mock))
+        .await
+        .unwrap();
+
+    let buy_day = common::get_portfolio_snapshot(&db, "2025-01-02")
+        .await
+        .unwrap();
+    assert!((buy_day.outstanding_shares - 8.0).abs() < 0.01);
+    assert!((buy_day.total_value - 800.0).abs() < 0.01);
+
+    let dividend_day = common::get_portfolio_snapshot(&db, "2025-01-03")
+        .await
+        .unwrap();
+    assert!((dividend_day.outstanding_shares - 8.0).abs() < 0.01);
+    assert!((dividend_day.total_value - 909.0).abs() < 0.01);
+
+    let sell_day = common::get_portfolio_snapshot(&db, "2025-01-04")
+        .await
+        .unwrap();
+    let expected_shares = 8.0 - 500.0 / (909.0 / 8.0);
+    assert!((sell_day.outstanding_shares - expected_shares).abs() < 0.01);
+    assert!((sell_day.total_value - 509.0).abs() < 0.01);
+}
+
+#[tokio::test]
+async fn incremental_rebuild_supports_reopening_after_prior_liquidation() {
+    let db = common::setup_test_db().await;
+    let asset_id =
+        common::insert_asset(&db, "XFAKEREOPEN", "Reopening Stock", "stock", "EUR").await;
+    common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
+    common::insert_sell_transaction(&db, asset_id, "2025-01-03", 10.0, 50.0, 0.0).await;
+    for date in ["2025-01-02", "2025-01-03", "2025-01-04", "2025-01-05"] {
+        common::insert_daily_price(&db, asset_id, date, 50.0, false).await;
+    }
+
+    let mock = common::MockMarketDataSources::new();
+    nav::ensure_portfolio_history(
+        &db,
+        &common::market_data_at(&mock, NaiveDate::from_ymd_opt(2025, 1, 4).unwrap()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        common::get_portfolio_snapshot(&db, "2025-01-03")
+            .await
+            .unwrap()
+            .outstanding_shares,
+        0.0
+    );
+
+    common::insert_transaction(&db, asset_id, "2025-01-04", 10.0, 50.0, 0.0).await;
+    nav::ensure_portfolio_history(
+        &db,
+        &common::market_data_at(&mock, NaiveDate::from_ymd_opt(2025, 1, 6).unwrap()),
+    )
+    .await
+    .unwrap();
+
+    let reopened = common::get_portfolio_snapshot(&db, "2025-01-04")
+        .await
+        .unwrap();
+    assert!((reopened.outstanding_shares - 5.0).abs() < 0.01);
+    assert!((reopened.nav - 100.0).abs() < 0.01);
+}
+
+#[tokio::test]
+async fn full_rebuild_rejects_reopening_after_epsilon_split_closure() {
+    let db = common::setup_test_db().await;
+    let asset_id =
+        common::insert_asset(&db, "XFAKEFULLCLOSE", "Full Close Stock", "stock", "EUR").await;
+    common::insert_transaction(&db, asset_id, "2025-01-02", 1.0, 50.0, 0.0).await;
+    common::insert_split_transaction(&db, asset_id, "2025-01-03", 5e-10).await;
+    common::insert_transaction(&db, asset_id, "2025-01-04", 2.0, 50.0, 0.0).await;
+    for date in ["2025-01-02", "2025-01-03", "2025-01-04"] {
+        common::insert_daily_price(&db, asset_id, date, 50.0, false).await;
+    }
+
+    let sources = common::MockMarketDataSources::new();
+    let error = nav::ensure_portfolio_history(
+        &db,
+        &common::market_data_at(&sources, NaiveDate::from_ymd_opt(2025, 1, 5).unwrap()),
+    )
+    .await
+    .expect_err("reopening after a zero NAV must be rejected");
+
+    assert!(error.to_string().contains("2025-01-04"));
+    assert!(common::get_all_snapshots(&db).await.is_empty());
+    assert!(common::get_asset_snapshots(&db, "2025-01-04")
+        .await
+        .is_empty());
+}
+
+#[tokio::test]
+async fn incremental_rebuild_rejects_reopening_after_epsilon_split_closure() {
+    let db = common::setup_test_db().await;
+    let asset_id = common::insert_asset(
+        &db,
+        "XFAKEINCCLOSE",
+        "Incremental Close Stock",
+        "stock",
+        "EUR",
+    )
+    .await;
+    common::insert_transaction(&db, asset_id, "2025-01-02", 1.0, 50.0, 0.0).await;
+    common::insert_split_transaction(&db, asset_id, "2025-01-03", 5e-10).await;
+    for date in ["2025-01-02", "2025-01-03", "2025-01-04"] {
+        common::insert_daily_price(&db, asset_id, date, 50.0, false).await;
+    }
+    let sources = common::MockMarketDataSources::new();
+    nav::ensure_portfolio_history(
+        &db,
+        &common::market_data_at(&sources, NaiveDate::from_ymd_opt(2025, 1, 4).unwrap()),
+    )
+    .await
+    .unwrap();
+
+    common::insert_transaction(&db, asset_id, "2025-01-04", 2.0, 50.0, 0.0).await;
+    let error = nav::ensure_portfolio_history(
+        &db,
+        &common::market_data_at(&sources, NaiveDate::from_ymd_opt(2025, 1, 5).unwrap()),
+    )
+    .await
+    .expect_err("reopening after a zero NAV must be rejected");
+
+    assert!(error.to_string().contains("2025-01-04"));
+    assert!(common::get_portfolio_snapshot(&db, "2025-01-02")
+        .await
+        .is_some());
+    let preserved_zero = common::get_portfolio_snapshot(&db, "2025-01-03")
+        .await
+        .expect("complete zero-value history must be preserved");
+    assert_eq!(preserved_zero.outstanding_shares, 0.5);
+    assert_eq!(preserved_zero.nav, 0.0);
+    assert!(common::get_portfolio_snapshot(&db, "2025-01-04")
+        .await
+        .is_none());
+    assert!(common::get_asset_snapshots(&db, "2025-01-04")
+        .await
+        .is_empty());
+}
+
+#[tokio::test]
+async fn same_day_full_liquidation_persists_a_complete_zero_snapshot() {
+    let db = common::setup_test_db().await;
+    let asset_id =
+        common::insert_asset(&db, "XFAKESAMEDAY", "Same Day Stock", "stock", "EUR").await;
+    common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
+    common::insert_sell_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
+    common::insert_daily_price(&db, asset_id, "2025-01-02", 50.0, false).await;
+
+    let mock = common::MockMarketDataSources::new();
+    nav::ensure_portfolio_history(&db, &nav_market_data(&mock))
+        .await
+        .unwrap();
+
+    let seed = common::get_portfolio_snapshot(&db, "2025-01-01")
+        .await
+        .expect("the pre-transaction seed must be complete");
+    assert_eq!(seed.outstanding_shares, 0.0);
+    let liquidated = common::get_portfolio_snapshot(&db, "2025-01-02")
+        .await
+        .expect("the fully liquidated transaction day must be complete");
+    assert_eq!(liquidated.outstanding_shares, 0.0);
+    assert_eq!(liquidated.asset_value, 0.0);
+    assert_eq!(liquidated.total_value, 0.0);
+}
+
+#[tokio::test]
+async fn incremental_readiness_extends_zero_history_after_liquidation() {
+    let db = common::setup_test_db().await;
+    let asset_id =
+        common::insert_asset(&db, "XFAKEZERO", "Zero History Stock", "stock", "EUR").await;
+    common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 50.0, 0.0).await;
+    common::insert_sell_transaction(&db, asset_id, "2025-01-03", 10.0, 50.0, 0.0).await;
+    for date in ["2025-01-02", "2025-01-03"] {
+        common::insert_daily_price(&db, asset_id, date, 50.0, false).await;
+    }
+
+    let mock = common::MockMarketDataSources::new();
+    nav::ensure_portfolio_history(
+        &db,
+        &common::market_data_at(&mock, NaiveDate::from_ymd_opt(2025, 1, 4).unwrap()),
+    )
+    .await
+    .unwrap();
+    nav::ensure_portfolio_history(
+        &db,
+        &common::market_data_at(&mock, NaiveDate::from_ymd_opt(2025, 1, 6).unwrap()),
+    )
+    .await
+    .unwrap();
+
+    for date in ["2025-01-04", "2025-01-05"] {
+        let snapshot = common::get_portfolio_snapshot(&db, date)
+            .await
+            .expect("zero-valued dates remain complete NAV snapshots");
+        assert_eq!(snapshot.outstanding_shares, 0.0);
+        assert_eq!(snapshot.asset_value, 0.0);
+        assert_eq!(snapshot.total_value, 0.0);
+    }
+}
+
+#[tokio::test]
+async fn incremental_rebuild_ignores_assets_liquidated_before_the_seed() {
+    let db = common::setup_test_db().await;
+    let closed_id = common::insert_asset(&db, "XFAKECLOSED", "Closed Stock", "stock", "EUR").await;
+    let open_id = common::insert_asset(&db, "XFAKEOPEN", "Open Stock", "stock", "EUR").await;
+    common::insert_transaction(&db, closed_id, "2025-01-02", 10.0, 50.0, 0.0).await;
+    common::insert_sell_transaction(&db, closed_id, "2025-01-03", 10.0, 50.0, 0.0).await;
+    common::insert_transaction(&db, open_id, "2025-01-02", 10.0, 50.0, 0.0).await;
+    for date in ["2025-01-02", "2025-01-03"] {
+        common::insert_daily_price(&db, closed_id, date, 50.0, false).await;
+    }
+    for date in ["2025-01-02", "2025-01-03", "2025-01-04", "2025-01-05"] {
+        common::insert_daily_price(&db, open_id, date, 50.0, false).await;
+    }
+
+    let mock = common::MockMarketDataSources::new();
+    nav::ensure_portfolio_history(
+        &db,
+        &common::market_data_at(&mock, NaiveDate::from_ymd_opt(2025, 1, 4).unwrap()),
+    )
+    .await
+    .unwrap();
+    nav::ensure_portfolio_history(
+        &db,
+        &common::market_data_at(&mock, NaiveDate::from_ymd_opt(2025, 1, 6).unwrap()),
+    )
+    .await
+    .unwrap();
+
+    let extended = common::get_portfolio_snapshot(&db, "2025-01-05")
+        .await
+        .expect("an old closed asset must not block open-asset history");
+    assert!((extended.asset_value - 500.0).abs() < 0.01);
+}
+
 /// A genuine readiness/preparation error is not swallowed into a readable NAV:
 /// a fund without its Morningstar code must propagate as an Err rather than be
 /// masked as an unavailable-NAV limitation.
@@ -1425,4 +1689,259 @@ async fn test_split_mid_history_nav_continuity() {
         .await
         .unwrap();
     assert!((snap_d4.nav - 180.0).abs() < 0.01);
+}
+
+#[tokio::test]
+async fn zero_quantity_split_persists_a_finite_zero_value_snapshot() {
+    let db = common::setup_test_db().await;
+    let asset_id =
+        common::insert_asset(&db, "XFAKEZEROVALUE", "Zero Value Stock", "stock", "EUR").await;
+    common::insert_transaction(&db, asset_id, "2025-01-02", 1.0, 50.0, 0.0).await;
+    common::insert_split_transaction(&db, asset_id, "2025-01-03", 5e-10).await;
+    for date in ["2025-01-02", "2025-01-03"] {
+        common::insert_daily_price(&db, asset_id, date, 50.0, false).await;
+    }
+
+    nav::ensure_portfolio_history(
+        &db,
+        &common::market_data_at(
+            &common::MockMarketDataSources::new(),
+            NaiveDate::from_ymd_opt(2025, 1, 4).unwrap(),
+        ),
+    )
+    .await
+    .unwrap();
+
+    let snapshot = common::get_portfolio_snapshot(&db, "2025-01-03")
+        .await
+        .expect("zero-value split day should remain a complete snapshot");
+    assert!(snapshot.nav.is_finite());
+    assert_eq!(snapshot.outstanding_shares, 0.5);
+    assert_eq!(snapshot.nav, 0.0);
+    assert_eq!(snapshot.asset_value, 0.0);
+    assert_eq!(snapshot.total_value, 0.0);
+    assert!(common::get_asset_snapshots(&db, "2025-01-03")
+        .await
+        .is_empty());
+}
+
+#[tokio::test]
+async fn full_rebuild_rejects_contribution_after_zero_nav_without_persisting_invalid_state() {
+    let db = common::setup_test_db().await;
+    let asset_id =
+        common::insert_asset(&db, "XFAKEFULLZERO", "Full Zero Stock", "stock", "EUR").await;
+    common::insert_transaction(&db, asset_id, "2025-01-02", 1.0, 50.0, 0.0).await;
+    common::insert_split_transaction(&db, asset_id, "2025-01-03", 5e-10).await;
+    common::insert_transaction(&db, asset_id, "2025-01-04", 2.0, 50.0, 0.0).await;
+    for date in ["2025-01-02", "2025-01-03", "2025-01-04"] {
+        common::insert_daily_price(&db, asset_id, date, 50.0, false).await;
+    }
+
+    let error = nav::ensure_portfolio_history(
+        &db,
+        &common::market_data_at(
+            &common::MockMarketDataSources::new(),
+            NaiveDate::from_ymd_opt(2025, 1, 5).unwrap(),
+        ),
+    )
+    .await
+    .expect_err("reopening from a zero NAV must be rejected");
+    assert!(error.to_string().contains("entry 3"));
+    assert!(error.to_string().contains("2025-01-04"));
+    assert!(error.to_string().contains("non-positive or non-finite NAV"));
+    assert!(common::get_all_snapshots(&db).await.is_empty());
+    assert!(common::get_asset_snapshots(&db, "2025-01-04")
+        .await
+        .is_empty());
+}
+
+#[tokio::test]
+async fn incremental_rebuild_rejects_contribution_after_zero_nav_and_keeps_complete_history() {
+    let db = common::setup_test_db().await;
+    let asset_id = common::insert_asset(
+        &db,
+        "XFAKEINCZERO",
+        "Incremental Zero Stock",
+        "stock",
+        "EUR",
+    )
+    .await;
+    common::insert_transaction(&db, asset_id, "2025-01-02", 1.0, 50.0, 0.0).await;
+    common::insert_split_transaction(&db, asset_id, "2025-01-03", 5e-10).await;
+    for date in ["2025-01-02", "2025-01-03", "2025-01-04"] {
+        common::insert_daily_price(&db, asset_id, date, 50.0, false).await;
+    }
+
+    let sources = common::MockMarketDataSources::new();
+    nav::ensure_portfolio_history(
+        &db,
+        &common::market_data_at(&sources, NaiveDate::from_ymd_opt(2025, 1, 4).unwrap()),
+    )
+    .await
+    .unwrap();
+    let before = common::get_all_snapshots(&db).await;
+    assert_eq!(
+        before.last().map(|snapshot| snapshot.date.as_str()),
+        Some("2025-01-03")
+    );
+    assert_eq!(before.last().unwrap().outstanding_shares, 0.5);
+    assert_eq!(before.last().unwrap().nav, 0.0);
+
+    common::insert_transaction(&db, asset_id, "2025-01-04", 2.0, 50.0, 0.0).await;
+    let error = nav::ensure_portfolio_history(
+        &db,
+        &common::market_data_at(&sources, NaiveDate::from_ymd_opt(2025, 1, 5).unwrap()),
+    )
+    .await
+    .expect_err("reopening from a zero NAV must be rejected");
+    assert!(error.to_string().contains("entry 3"));
+    assert!(error.to_string().contains("2025-01-04"));
+    assert!(error.to_string().contains("non-positive or non-finite NAV"));
+
+    let after = common::get_all_snapshots(&db).await;
+    assert_eq!(after.len(), before.len());
+    assert_eq!(
+        after.last().map(|snapshot| snapshot.date.as_str()),
+        Some("2025-01-03")
+    );
+    assert!(common::get_portfolio_snapshot(&db, "2025-01-04")
+        .await
+        .is_none());
+    assert!(common::get_asset_snapshots(&db, "2025-01-04")
+        .await
+        .is_empty());
+}
+
+#[tokio::test]
+async fn positive_subepsilon_quantity_buy_preserves_its_financial_contribution() {
+    let db = common::setup_test_db().await;
+    let asset_id =
+        common::insert_asset(&db, "XFAKESUBEPS", "Subepsilon Stock", "stock", "EUR").await;
+    common::insert_transaction(&db, asset_id, "2025-01-02", 5e-10, 1e12, 0.0).await;
+    common::insert_daily_price(&db, asset_id, "2025-01-02", 1e12, false).await;
+
+    nav::ensure_portfolio_history(&db, &nav_market_data(&common::MockMarketDataSources::new()))
+        .await
+        .unwrap();
+
+    let snapshot = common::get_portfolio_snapshot(&db, "2025-01-02")
+        .await
+        .expect("subepsilon contribution should produce a complete snapshot");
+    assert_eq!(snapshot.outstanding_shares, 5.0);
+    assert_eq!(snapshot.nav, 0.0);
+    assert_eq!(snapshot.asset_value, 0.0);
+    assert_eq!(snapshot.total_value, 0.0);
+    assert!(snapshot.nav.is_finite());
+}
+
+#[tokio::test]
+async fn mixed_subepsilon_and_normal_buys_keep_both_contributions() {
+    let db = common::setup_test_db().await;
+    let subepsilon_id =
+        common::insert_asset(&db, "XFAKESUBMIX", "Subepsilon Stock", "stock", "EUR").await;
+    let normal_id = common::insert_asset(&db, "XFAKENORMAL", "Normal Stock", "stock", "EUR").await;
+    common::insert_transaction(&db, subepsilon_id, "2025-01-02", 5e-10, 1e12, 0.0).await;
+    common::insert_transaction(&db, normal_id, "2025-01-02", 1.0, 100.0, 0.0).await;
+    common::insert_daily_price(&db, subepsilon_id, "2025-01-02", 1e12, false).await;
+    common::insert_daily_price(&db, normal_id, "2025-01-02", 100.0, false).await;
+
+    nav::ensure_portfolio_history(&db, &nav_market_data(&common::MockMarketDataSources::new()))
+        .await
+        .unwrap();
+
+    let snapshot = common::get_portfolio_snapshot(&db, "2025-01-02")
+        .await
+        .expect("mixed contribution day should produce a snapshot");
+    assert_eq!(snapshot.outstanding_shares, 6.0);
+    assert!((snapshot.asset_value - 100.0).abs() < 1e-9);
+    assert!((snapshot.total_value - 100.0).abs() < 1e-9);
+    assert!((snapshot.nav - (100.0 / 6.0)).abs() < 1e-9);
+    let asset_snapshots = common::get_asset_snapshots(&db, "2025-01-02").await;
+    assert_eq!(asset_snapshots.len(), 1);
+    assert_eq!(asset_snapshots[0].asset_id, normal_id);
+}
+
+#[tokio::test]
+async fn monetary_full_sale_has_equal_full_and_incremental_nav_history() {
+    let full_db = build_full_monetary_history().await;
+    let incremental_db = build_incremental_monetary_history().await;
+
+    let full_snapshots = common::get_all_snapshots(&full_db).await;
+    let incremental_snapshots = common::get_all_snapshots(&incremental_db).await;
+    assert_eq!(full_snapshots.len(), incremental_snapshots.len());
+    for (full, incremental) in full_snapshots.iter().zip(&incremental_snapshots) {
+        assert_eq!(full.date, incremental.date);
+        assert!((full.asset_value - incremental.asset_value).abs() < 1e-12);
+        assert!((full.total_value - incremental.total_value).abs() < 1e-12);
+        assert!((full.outstanding_shares - incremental.outstanding_shares).abs() < 1e-12);
+        assert!((full.nav - incremental.nav).abs() < 1e-12);
+    }
+    for date in ["2025-01-02", "2025-01-03", "2025-01-04"] {
+        let full_assets = common::get_asset_snapshots(&full_db, date).await;
+        let incremental_assets = common::get_asset_snapshots(&incremental_db, date).await;
+        assert_eq!(full_assets.len(), incremental_assets.len());
+        for (full, incremental) in full_assets.iter().zip(&incremental_assets) {
+            assert!((full.quantity - incremental.quantity).abs() < 1e-12);
+            assert!((full.market_value - incremental.market_value).abs() < 1e-12);
+        }
+    }
+}
+
+async fn build_full_monetary_history() -> DatabaseConnection {
+    let db = common::setup_test_db().await;
+    let performance_id =
+        common::insert_asset(&db, "XFAKEPERFFULL", "Performance Stock", "stock", "EUR").await;
+    let monetary_id = common::insert_monetary_fund_asset(
+        &db,
+        "XFAKEMONEYFULL",
+        "Monetary Fund",
+        "EUR",
+        "F000FULL",
+    )
+    .await;
+    common::insert_transaction(&db, performance_id, "2025-01-02", 2.0, 50.0, 0.0).await;
+    common::insert_transaction(&db, monetary_id, "2025-01-02", 10.0, 100.0, 0.0).await;
+    common::insert_sell_transaction(&db, monetary_id, "2025-01-03", 10.0, 100.0, 0.0).await;
+    for date in ["2025-01-02", "2025-01-03", "2025-01-04"] {
+        common::insert_daily_price(&db, performance_id, date, 50.0, false).await;
+    }
+    nav::ensure_portfolio_history(
+        &db,
+        &common::market_data_at(
+            &common::MockMarketDataSources::new(),
+            NaiveDate::from_ymd_opt(2025, 1, 5).unwrap(),
+        ),
+    )
+    .await
+    .unwrap();
+    db
+}
+
+async fn build_incremental_monetary_history() -> DatabaseConnection {
+    let db = common::setup_test_db().await;
+    let performance_id =
+        common::insert_asset(&db, "XFAKEPERFINC", "Performance Stock", "stock", "EUR").await;
+    let monetary_id =
+        common::insert_monetary_fund_asset(&db, "XFAKEMONEYINC", "Monetary Fund", "EUR", "F000INC")
+            .await;
+    common::insert_transaction(&db, performance_id, "2025-01-02", 2.0, 50.0, 0.0).await;
+    common::insert_transaction(&db, monetary_id, "2025-01-02", 10.0, 100.0, 0.0).await;
+    for date in ["2025-01-02", "2025-01-03", "2025-01-04"] {
+        common::insert_daily_price(&db, performance_id, date, 50.0, false).await;
+    }
+    let sources = common::MockMarketDataSources::new();
+    nav::ensure_portfolio_history(
+        &db,
+        &common::market_data_at(&sources, NaiveDate::from_ymd_opt(2025, 1, 3).unwrap()),
+    )
+    .await
+    .unwrap();
+    common::insert_sell_transaction(&db, monetary_id, "2025-01-03", 10.0, 100.0, 0.0).await;
+    nav::ensure_portfolio_history(
+        &db,
+        &common::market_data_at(&sources, NaiveDate::from_ymd_opt(2025, 1, 5).unwrap()),
+    )
+    .await
+    .unwrap();
+    db
 }

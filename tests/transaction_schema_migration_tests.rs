@@ -1,0 +1,467 @@
+use common::setup_test_db;
+use migration::{Migrator, MigratorTrait};
+use rstock::db::entities::transaction;
+use sea_orm::{ConnectionTrait, DatabaseBackend, EntityTrait, QueryOrder, Set, Statement};
+
+pub mod common;
+
+async fn assert_check_failure(db: &sea_orm::DatabaseConnection, sql: String) {
+    let result = db
+        .execute(Statement::from_string(DatabaseBackend::Sqlite, sql.clone()))
+        .await;
+    let Err(error) = result else {
+        panic!("invalid semantic shape succeeded: {sql}");
+    };
+    assert!(
+        error.to_string().contains("CHECK constraint failed"),
+        "expected CHECK constraint failure, got: {error}"
+    );
+}
+
+async fn transaction_sequence(db: &sea_orm::DatabaseConnection) -> (i64, i64) {
+    let row = db
+        .query_one(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "SELECT COUNT(*) AS count, COALESCE(MAX(seq), 0) AS seq FROM sqlite_sequence WHERE name = 'transactions'",
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    (
+        row.try_get("", "count").unwrap(),
+        row.try_get("", "seq").unwrap(),
+    )
+}
+
+async fn table_columns(db: &sea_orm::DatabaseConnection) -> Vec<String> {
+    db.query_all(Statement::from_string(
+        DatabaseBackend::Sqlite,
+        "PRAGMA table_info('transactions')",
+    ))
+    .await
+    .unwrap()
+    .into_iter()
+    .map(|row| row.try_get("", "name").unwrap())
+    .collect()
+}
+
+async fn transaction_indexes(db: &sea_orm::DatabaseConnection) -> Vec<String> {
+    let mut indexes = db
+        .query_all(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "PRAGMA index_list('transactions')",
+        ))
+        .await
+        .unwrap()
+        .into_iter()
+        .filter_map(|row| row.try_get("", "name").ok())
+        .collect::<Vec<String>>();
+    indexes.sort_unstable();
+    indexes
+}
+
+async fn transaction_foreign_keys(
+    db: &sea_orm::DatabaseConnection,
+) -> Vec<(String, String, String)> {
+    db.query_all(Statement::from_string(
+        DatabaseBackend::Sqlite,
+        "PRAGMA foreign_key_list('transactions')",
+    ))
+    .await
+    .unwrap()
+    .into_iter()
+    .map(|row| {
+        (
+            row.try_get("", "table").unwrap(),
+            row.try_get("", "from").unwrap(),
+            row.try_get("", "to").unwrap(),
+        )
+    })
+    .collect()
+}
+
+async fn migration_versions(db: &sea_orm::DatabaseConnection) -> Vec<String> {
+    db.query_all(Statement::from_string(
+        DatabaseBackend::Sqlite,
+        "SELECT version FROM seaql_migrations ORDER BY version",
+    ))
+    .await
+    .unwrap()
+    .into_iter()
+    .map(|row| row.try_get("", "version").unwrap())
+    .collect()
+}
+
+async fn legacy_rows(
+    db: &sea_orm::DatabaseConnection,
+) -> Vec<(
+    i32,
+    i32,
+    String,
+    String,
+    f64,
+    i64,
+    i64,
+    Option<String>,
+    String,
+)> {
+    db.query_all(Statement::from_string(
+        DatabaseBackend::Sqlite,
+        "SELECT id, asset_id, tx_type, date, quantity, price_cents, fees_cents, notes, created_at
+         FROM transactions ORDER BY id",
+    ))
+    .await
+    .unwrap()
+    .into_iter()
+    .map(|row| {
+        (
+            row.try_get("", "id").unwrap(),
+            row.try_get("", "asset_id").unwrap(),
+            row.try_get("", "tx_type").unwrap(),
+            row.try_get("", "date").unwrap(),
+            row.try_get("", "quantity").unwrap(),
+            row.try_get("", "price_cents").unwrap(),
+            row.try_get("", "fees_cents").unwrap(),
+            row.try_get("", "notes").unwrap(),
+            row.try_get("", "created_at").unwrap(),
+        )
+    })
+    .collect()
+}
+
+async fn semantic_rows(
+    db: &sea_orm::DatabaseConnection,
+) -> Vec<(
+    i32,
+    i32,
+    String,
+    String,
+    Option<f64>,
+    Option<i64>,
+    Option<i64>,
+    Option<i64>,
+    Option<f64>,
+    Option<i64>,
+    Option<String>,
+    String,
+)> {
+    db.query_all(Statement::from_string(
+        DatabaseBackend::Sqlite,
+        "SELECT id, asset_id, tx_type, date, units, unit_price_cents, dividend_amount_cents,
+                dividend_deductions_cents, split_ratio, fees_cents, notes, created_at
+         FROM transactions ORDER BY id",
+    ))
+    .await
+    .unwrap()
+    .into_iter()
+    .map(|row| {
+        (
+            row.try_get("", "id").unwrap(),
+            row.try_get("", "asset_id").unwrap(),
+            row.try_get("", "tx_type").unwrap(),
+            row.try_get("", "date").unwrap(),
+            row.try_get("", "units").unwrap(),
+            row.try_get("", "unit_price_cents").unwrap(),
+            row.try_get("", "dividend_amount_cents").unwrap(),
+            row.try_get("", "dividend_deductions_cents").unwrap(),
+            row.try_get("", "split_ratio").unwrap(),
+            row.try_get("", "fees_cents").unwrap(),
+            row.try_get("", "notes").unwrap(),
+            row.try_get("", "created_at").unwrap(),
+        )
+    })
+    .collect()
+}
+
+#[tokio::test]
+async fn semantic_migration_round_trips_every_transaction_kind_and_identity() {
+    let db = sea_orm::Database::connect("sqlite::memory:")
+        .await
+        .expect("in-memory database");
+    let prefix = (Migrator::migrations().len() - 1) as u32;
+    Migrator::up(&db, Some(prefix))
+        .await
+        .expect("legacy migration prefix");
+    db.execute(Statement::from_string(
+        DatabaseBackend::Sqlite,
+        "INSERT INTO assets (ticker, name, asset_type, currency, created_at) VALUES ('XSCHEMA', 'Schema fixture', 'stock', 'EUR', '2025-01-01T00:00:00')",
+    ))
+    .await
+    .expect("asset");
+    db.execute(Statement::from_string(
+        DatabaseBackend::Sqlite,
+        "INSERT INTO transactions (id, asset_id, tx_type, date, quantity, price_cents, fees_cents, created_at) VALUES
+         (11, 1, 'buy', '2025-01-01', 10.5, 1234, 5, 'created-buy'),
+         (12, 1, 'split', '2025-01-02', 2.0, 0, 0, 'created-split'),
+         (13, 1, 'dividend', '2025-01-02', 1.0, 700, 100, 'created-dividend'),
+         (14, 1, 'sell', '2025-01-03', 3.0, 1500, 7, 'created-sell')",
+    ))
+    .await
+    .expect("legacy transactions");
+
+    Migrator::up(&db, None).await.expect("semantic migration");
+    let rows = transaction::Entity::find()
+        .order_by_asc(transaction::Column::Id)
+        .all(&db)
+        .await
+        .expect("semantic rows");
+    assert_eq!(
+        rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+        [11, 12, 13, 14]
+    );
+    assert_eq!(rows[0].units, Some(10.5));
+    assert_eq!(rows[0].unit_price_cents, Some(1234));
+    assert_eq!(rows[0].fees_cents, Some(5));
+    assert_eq!(rows[1].split_ratio, Some(2.0));
+    assert_eq!(rows[2].dividend_amount_cents, Some(700));
+    assert_eq!(rows[2].dividend_deductions_cents, Some(100));
+    assert_eq!(rows[3].units, Some(3.0));
+    assert_eq!(rows[3].unit_price_cents, Some(1500));
+
+    Migrator::down(&db, Some(1))
+        .await
+        .expect("legacy down migration");
+    let legacy = db
+        .query_all(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "SELECT id, tx_type, date, quantity, price_cents, fees_cents, created_at FROM transactions ORDER BY date, id",
+        ))
+        .await
+        .expect("legacy rows");
+    assert_eq!(legacy.len(), 4);
+    assert_eq!(legacy[0].try_get::<i32>("", "id").unwrap(), 11);
+    assert!((legacy[0].try_get::<f64>("", "quantity").unwrap() - 10.5).abs() < 1e-12);
+    assert!((legacy[1].try_get::<f64>("", "quantity").unwrap() - 2.0).abs() < 1e-12);
+    assert_eq!(legacy[1].try_get::<i64>("", "price_cents").unwrap(), 0);
+    assert!((legacy[2].try_get::<f64>("", "quantity").unwrap() - 1.0).abs() < 1e-12);
+    assert_eq!(legacy[2].try_get::<i64>("", "price_cents").unwrap(), 700);
+    assert_eq!(legacy[2].try_get::<i64>("", "fees_cents").unwrap(), 100);
+    assert_eq!(legacy[3].try_get::<i64>("", "price_cents").unwrap(), 1500);
+    assert_eq!(
+        legacy[3].try_get::<String>("", "created_at").unwrap(),
+        "created-sell"
+    );
+}
+
+#[tokio::test]
+async fn semantic_constraints_reject_irrelevant_fields_and_invalid_signs() {
+    let db = setup_test_db().await;
+    let asset_id =
+        common::insert_asset(&db, "XCONSTRAINT", "Constraint fixture", "stock", "EUR").await;
+    let cases = [
+        format!("INSERT INTO transactions (asset_id,tx_type,date,unit_price_cents,fees_cents,created_at) VALUES ({asset_id},'buy','2025-01-01',100,0,'now')"),
+        format!("INSERT INTO transactions (asset_id,tx_type,date,units,fees_cents,created_at) VALUES ({asset_id},'buy','2025-01-01',1.0,0,'now')"),
+        format!("INSERT INTO transactions (asset_id,tx_type,date,units,unit_price_cents,created_at) VALUES ({asset_id},'buy','2025-01-01',1.0,100,'now')"),
+        format!("INSERT INTO transactions (asset_id,tx_type,date,units,unit_price_cents,fees_cents,dividend_amount_cents,created_at) VALUES ({asset_id},'buy','2025-01-01',1.0,100,0,10,'now')"),
+        format!("INSERT INTO transactions (asset_id,tx_type,date,units,unit_price_cents,fees_cents,created_at) VALUES ({asset_id},'buy','2025-01-01',0.0,100,0,'now')"),
+        format!("INSERT INTO transactions (asset_id,tx_type,date,units,unit_price_cents,fees_cents,created_at) VALUES ({asset_id},'sell','2025-01-01',1.0,-1,0,'now')"),
+        format!("INSERT INTO transactions (asset_id,tx_type,date,units,unit_price_cents,fees_cents,created_at) VALUES ({asset_id},'buy','2025-01-01',1.5,100.5,0,'now')"),
+        format!("INSERT INTO transactions (asset_id,tx_type,date,units,unit_price_cents,fees_cents,created_at) VALUES ({asset_id},'buy','2025-01-01',1.5,100,0.5,'now')"),
+        format!("INSERT INTO transactions (asset_id,tx_type,date,units,unit_price_cents,fees_cents,created_at) VALUES ({asset_id},'buy','2025-01-01',1.5,100,-1,'now')"),
+        format!("INSERT INTO transactions (asset_id,tx_type,date,units,unit_price_cents,fees_cents,created_at) VALUES ({asset_id},'buy','2025-01-01',1e999,100,0,'now')"),
+        format!("INSERT INTO transactions (asset_id,tx_type,date,dividend_deductions_cents,created_at) VALUES ({asset_id},'dividend','2025-01-01',0,'now')"),
+        format!("INSERT INTO transactions (asset_id,tx_type,date,dividend_amount_cents,created_at) VALUES ({asset_id},'dividend','2025-01-01',10,'now')"),
+        format!("INSERT INTO transactions (asset_id,tx_type,date,dividend_amount_cents,dividend_deductions_cents,created_at) VALUES ({asset_id},'dividend','2025-01-01',0,0,'now')"),
+        format!("INSERT INTO transactions (asset_id,tx_type,date,dividend_amount_cents,dividend_deductions_cents,created_at) VALUES ({asset_id},'dividend','2025-01-01',10,-1,'now')"),
+        format!("INSERT INTO transactions (asset_id,tx_type,date,dividend_amount_cents,dividend_deductions_cents,created_at) VALUES ({asset_id},'dividend','2025-01-01',10,11,'now')"),
+        format!("INSERT INTO transactions (asset_id,tx_type,date,units,dividend_amount_cents,dividend_deductions_cents,created_at) VALUES ({asset_id},'dividend','2025-01-01',1.0,10,0,'now')"),
+        format!("INSERT INTO transactions (asset_id,tx_type,date,created_at) VALUES ({asset_id},'split','2025-01-01','now')"),
+        format!("INSERT INTO transactions (asset_id,tx_type,date,split_ratio,created_at) VALUES ({asset_id},'split','2025-01-01',0.0,'now')"),
+        format!("INSERT INTO transactions (asset_id,tx_type,date,split_ratio,created_at) VALUES ({asset_id},'split','2025-01-01',1e999,'now')"),
+        format!("INSERT INTO transactions (asset_id,tx_type,date,split_ratio,fees_cents,created_at) VALUES ({asset_id},'split','2025-01-01',2.0,0,'now')"),
+        format!("INSERT INTO transactions (asset_id,tx_type,date,units,unit_price_cents,fees_cents,created_at) VALUES ({asset_id},'unknown','2025-01-01',1.0,100,0,'now')"),
+    ];
+    for statement in cases {
+        assert_check_failure(&db, statement).await;
+    }
+
+    let valid_buy = transaction::ActiveModel {
+        asset_id: Set(asset_id),
+        tx_type: Set("buy".to_owned()),
+        date: Set("2025-01-01".to_owned()),
+        units: Set(Some(1.0)),
+        unit_price_cents: Set(Some(100)),
+        fees_cents: Set(Some(0)),
+        created_at: Set("now".to_owned()),
+        ..Default::default()
+    };
+    transaction::Entity::insert(valid_buy)
+        .exec(&db)
+        .await
+        .expect("valid semantic buy");
+    for statement in [
+        format!("INSERT INTO transactions (asset_id,tx_type,date,units,unit_price_cents,fees_cents,created_at) VALUES ({asset_id},'sell','2025-01-02',1,100,0,'now')"),
+        format!("INSERT INTO transactions (asset_id,tx_type,date,dividend_amount_cents,dividend_deductions_cents,created_at) VALUES ({asset_id},'dividend','2025-01-02',10,0,'now')"),
+        format!("INSERT INTO transactions (asset_id,tx_type,date,split_ratio,created_at) VALUES ({asset_id},'split','2025-01-02',2,'now')"),
+    ] {
+        db.execute(Statement::from_string(DatabaseBackend::Sqlite, statement))
+            .await
+            .expect("valid semantic transaction variant");
+    }
+
+    let indexes = db
+        .query_all(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "PRAGMA index_list('transactions')",
+        ))
+        .await
+        .expect("transaction indexes");
+    let index_names = indexes
+        .iter()
+        .filter_map(|row| row.try_get::<String>("", "name").ok())
+        .collect::<Vec<_>>();
+    assert!(index_names
+        .iter()
+        .any(|name| name == "idx_transactions_date_id"));
+    assert!(index_names
+        .iter()
+        .any(|name| name == "idx_transactions_asset_date_id"));
+}
+
+#[tokio::test]
+async fn migration_preserves_deleted_highest_transaction_id_through_up_and_down() {
+    let db = sea_orm::Database::connect("sqlite::memory:").await.unwrap();
+    let prefix = (Migrator::migrations().len() - 1) as u32;
+    Migrator::up(&db, Some(prefix)).await.unwrap();
+    db.execute_unprepared("INSERT INTO assets (id,ticker,name,asset_type,currency,created_at) VALUES (1,'XSEQ','Sequence','stock','EUR','now')").await.unwrap();
+    db.execute_unprepared("INSERT INTO transactions (id,asset_id,tx_type,date,quantity,price_cents,fees_cents,created_at) VALUES (7,1,'buy','2025-01-01',1.0,100,0,'now'),(100,1,'buy','2025-01-02',1.0,100,0,'now')").await.unwrap();
+    db.execute_unprepared("DELETE FROM transactions WHERE id = 100")
+        .await
+        .unwrap();
+
+    Migrator::up(&db, None).await.unwrap();
+    assert_eq!(transaction_sequence(&db).await, (1, 100));
+    let generated = db.execute_unprepared("INSERT INTO transactions (asset_id,tx_type,date,units,unit_price_cents,fees_cents,created_at) VALUES (1,'buy','2025-01-03',1.0,100,0,'now')").await.unwrap().last_insert_id();
+    assert!(generated > 100);
+
+    Migrator::down(&db, Some(1)).await.unwrap();
+    assert_eq!(
+        transaction_sequence(&db).await,
+        (1, i64::try_from(generated).unwrap())
+    );
+    let generated_after_down = db.execute_unprepared("INSERT INTO transactions (asset_id,tx_type,date,quantity,price_cents,fees_cents,created_at) VALUES (1,'buy','2025-01-04',1.0,100,0,'now')").await.unwrap().last_insert_id();
+    assert!(generated_after_down > generated);
+}
+
+#[tokio::test]
+async fn migration_preserves_empty_table_sequence_through_up_and_down() {
+    let db = sea_orm::Database::connect("sqlite::memory:").await.unwrap();
+    let prefix = (Migrator::migrations().len() - 1) as u32;
+    Migrator::up(&db, Some(prefix)).await.unwrap();
+    db.execute_unprepared("INSERT INTO assets (id,ticker,name,asset_type,currency,created_at) VALUES (1,'XEMPTYSEQ','Empty Sequence','stock','EUR','now')").await.unwrap();
+    db.execute_unprepared("INSERT INTO transactions (id,asset_id,tx_type,date,quantity,price_cents,fees_cents,created_at) VALUES (50,1,'buy','2025-01-01',1.0,100,0,'now')").await.unwrap();
+    db.execute_unprepared("DELETE FROM transactions")
+        .await
+        .unwrap();
+
+    Migrator::up(&db, None).await.unwrap();
+    assert_eq!(transaction_sequence(&db).await, (1, 50));
+    let generated = db.execute_unprepared("INSERT INTO transactions (asset_id,tx_type,date,units,unit_price_cents,fees_cents,created_at) VALUES (1,'buy','2025-01-02',1.0,100,0,'now')").await.unwrap().last_insert_id();
+    assert!(generated > 50);
+    db.execute_unprepared("DELETE FROM transactions")
+        .await
+        .unwrap();
+
+    Migrator::down(&db, Some(1)).await.unwrap();
+    assert_eq!(
+        transaction_sequence(&db).await,
+        (1, i64::try_from(generated).unwrap())
+    );
+    let generated_after_down = db.execute_unprepared("INSERT INTO transactions (asset_id,tx_type,date,quantity,price_cents,fees_cents,created_at) VALUES (1,'buy','2025-01-03',1.0,100,0,'now')").await.unwrap().last_insert_id();
+    assert!(generated_after_down > generated);
+}
+
+#[tokio::test]
+async fn failed_up_rolls_back_rebuild_and_bookkeeping_then_retries() {
+    let db = sea_orm::Database::connect("sqlite::memory:").await.unwrap();
+    let prefix = (Migrator::migrations().len() - 1) as u32;
+    Migrator::up(&db, Some(prefix)).await.unwrap();
+    db.execute_unprepared("INSERT INTO assets (id,ticker,name,asset_type,currency,created_at) VALUES (1,'XUPFAIL','Up failure','stock','EUR','now')").await.unwrap();
+    db.execute_unprepared("INSERT INTO transactions (id,asset_id,tx_type,date,quantity,price_cents,fees_cents,notes,created_at) VALUES (7,1,'buy','2025-01-01',1.0,100,0,'legacy note','legacy created'),(100,1,'sell','2025-01-02',1.0,110,1,NULL,'legacy sell')").await.unwrap();
+    db.execute_unprepared("DELETE FROM transactions WHERE id = 100")
+        .await
+        .unwrap();
+
+    let before = (
+        table_columns(&db).await,
+        legacy_rows(&db).await,
+        transaction_indexes(&db).await,
+        transaction_foreign_keys(&db).await,
+        transaction_sequence(&db).await,
+        migration_versions(&db).await,
+    );
+    db.execute_unprepared(
+        "CREATE TRIGGER fail_contract_up BEFORE INSERT ON seaql_migrations
+         WHEN NEW.version = 'm20260905_000001_contract_transaction_schema'
+         BEGIN SELECT RAISE(ABORT, 'injected bookkeeping failure'); END",
+    )
+    .await
+    .unwrap();
+
+    assert!(Migrator::up(&db, None).await.is_err());
+    db.execute_unprepared("DROP TRIGGER fail_contract_up")
+        .await
+        .unwrap();
+    assert_eq!(table_columns(&db).await, before.0);
+    assert_eq!(legacy_rows(&db).await, before.1);
+    assert_eq!(transaction_indexes(&db).await, before.2);
+    assert_eq!(transaction_foreign_keys(&db).await, before.3);
+    assert_eq!(transaction_sequence(&db).await, before.4);
+    assert_eq!(migration_versions(&db).await, before.5);
+
+    Migrator::up(&db, None).await.unwrap();
+    assert_eq!(semantic_rows(&db).await.len(), 1);
+    assert_eq!(transaction_sequence(&db).await, (1, 100));
+    assert!(migration_versions(&db)
+        .await
+        .iter()
+        .any(|version| version == "m20260905_000001_contract_transaction_schema"));
+}
+
+#[tokio::test]
+async fn failed_down_rolls_back_rebuild_and_bookkeeping_then_retries() {
+    let db = sea_orm::Database::connect("sqlite::memory:").await.unwrap();
+    let prefix = (Migrator::migrations().len() - 1) as u32;
+    Migrator::up(&db, Some(prefix)).await.unwrap();
+    db.execute_unprepared("INSERT INTO assets (id,ticker,name,asset_type,currency,created_at) VALUES (1,'XDOWNFAIL','Down failure','stock','EUR','now')").await.unwrap();
+    db.execute_unprepared("INSERT INTO transactions (id,asset_id,tx_type,date,quantity,price_cents,fees_cents,notes,created_at) VALUES (7,1,'buy','2025-01-01',1.0,100,0,'semantic note','semantic created'),(100,1,'sell','2025-01-02',1.0,110,1,NULL,'semantic sell')").await.unwrap();
+    db.execute_unprepared("DELETE FROM transactions WHERE id = 100")
+        .await
+        .unwrap();
+    Migrator::up(&db, None).await.unwrap();
+
+    let before = (
+        table_columns(&db).await,
+        semantic_rows(&db).await,
+        transaction_indexes(&db).await,
+        transaction_foreign_keys(&db).await,
+        transaction_sequence(&db).await,
+        migration_versions(&db).await,
+    );
+    db.execute_unprepared(
+        "CREATE TRIGGER fail_contract_down BEFORE DELETE ON seaql_migrations
+         WHEN OLD.version = 'm20260905_000001_contract_transaction_schema'
+         BEGIN SELECT RAISE(ABORT, 'injected bookkeeping failure'); END",
+    )
+    .await
+    .unwrap();
+
+    assert!(Migrator::down(&db, Some(1)).await.is_err());
+    db.execute_unprepared("DROP TRIGGER fail_contract_down")
+        .await
+        .unwrap();
+    assert_eq!(table_columns(&db).await, before.0);
+    assert_eq!(semantic_rows(&db).await, before.1);
+    assert_eq!(transaction_indexes(&db).await, before.2);
+    assert_eq!(transaction_foreign_keys(&db).await, before.3);
+    assert_eq!(transaction_sequence(&db).await, before.4);
+    assert_eq!(migration_versions(&db).await, before.5);
+
+    Migrator::down(&db, Some(1)).await.unwrap();
+    assert_eq!(legacy_rows(&db).await.len(), 1);
+    assert_eq!(transaction_sequence(&db).await, (1, 100));
+    assert!(!migration_versions(&db)
+        .await
+        .iter()
+        .any(|version| version == "m20260905_000001_contract_transaction_schema"));
+}

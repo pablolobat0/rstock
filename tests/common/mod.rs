@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::collections::HashMap;
 
 use migration::{Migrator, MigratorTrait};
@@ -129,9 +127,9 @@ pub async fn insert_transaction(
         asset_id: Set(asset_id),
         tx_type: Set("buy".to_owned()),
         date: Set(date.to_owned()),
-        quantity: Set(quantity),
-        price_cents: Set(f64_to_cents(price)),
-        fees_cents: Set(f64_to_cents(fees)),
+        units: Set(Some(quantity)),
+        unit_price_cents: Set(Some(f64_to_cents(price))),
+        fees_cents: Set(Some(f64_to_cents(fees))),
 
         created_at: Set(format!("{date}T00:00:00")),
         ..Default::default()
@@ -154,9 +152,9 @@ pub async fn insert_sell_transaction(
         asset_id: Set(asset_id),
         tx_type: Set("sell".to_owned()),
         date: Set(date.to_owned()),
-        quantity: Set(quantity),
-        price_cents: Set(f64_to_cents(price)),
-        fees_cents: Set(f64_to_cents(fees)),
+        units: Set(Some(quantity)),
+        unit_price_cents: Set(Some(f64_to_cents(price))),
+        fees_cents: Set(Some(f64_to_cents(fees))),
 
         created_at: Set(format!("{date}T00:00:00")),
         ..Default::default()
@@ -178,9 +176,8 @@ pub async fn insert_dividend_transaction(
         asset_id: Set(asset_id),
         tx_type: Set("dividend".to_owned()),
         date: Set(date.to_owned()),
-        quantity: Set(1.0),
-        price_cents: Set(f64_to_cents(amount)),
-        fees_cents: Set(f64_to_cents(fees)),
+        dividend_amount_cents: Set(Some(f64_to_cents(amount))),
+        dividend_deductions_cents: Set(Some(f64_to_cents(fees))),
 
         created_at: Set(format!("{date}T00:00:00")),
         ..Default::default()
@@ -201,9 +198,7 @@ pub async fn insert_split_transaction(
         asset_id: Set(asset_id),
         tx_type: Set("split".to_owned()),
         date: Set(date.to_owned()),
-        quantity: Set(ratio),
-        price_cents: Set(0),
-        fees_cents: Set(0),
+        split_ratio: Set(Some(ratio)),
 
         created_at: Set(format!("{date}T00:00:00")),
         ..Default::default()
@@ -406,6 +401,12 @@ impl MockMarketDataSources {
             fund_data: HashMap::new(),
             fund_quote_metadata: HashMap::new(),
         }
+    }
+}
+
+impl Default for MockMarketDataSources {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

@@ -1,20 +1,21 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use anyhow::{bail, Context};
 use chrono::NaiveDate;
 use clap::ValueEnum;
 use sea_orm::{DatabaseConnection, TransactionTrait};
 
-use crate::constants::{format_date, DISPLAY_DATE_FORMAT, FLOAT_EPSILON};
+use crate::constants::{format_date, DISPLAY_DATE_FORMAT};
 use crate::db::repos::{
     asset_repo, daily_price_repo, portfolio_asset_history_repo, portfolio_history_repo,
     transaction_repo,
 };
 use crate::models::{
-    f64_to_cents, Asset, AssetClass, AssetClassification, AssetInfo, AssetType, BondCredit,
+    cents_to_f64, Asset, AssetClass, AssetClassification, AssetInfo, AssetType, BondCredit,
     BondDuration, BuyOrder, CsvRow, DividendOrder, EquityStyle, Management, SellOrder, SplitOrder,
     Transaction, TxType,
 };
+use crate::services::ledger::{self, LedgerEffect, LedgerEntryKind, LedgerTransition};
 use crate::services::transactions;
 
 const EXPECTED_HEADERS: [&str; 15] = [
@@ -47,7 +48,14 @@ pub async fn import_transactions_csv(
     path: &str,
 ) -> anyhow::Result<ImportResult> {
     let mut rows = read_rows(path)?;
-    rows.sort_by_key(|r| r.date);
+    // Generated IDs follow this write order.  Include the source row explicitly
+    // so same-date entries retain CSV order even if the sort implementation's
+    // stability ever changes.
+    rows.sort_by(|left, right| {
+        left.date
+            .cmp(&right.date)
+            .then(left.source_row.cmp(&right.source_row))
+    });
 
     let count = rows.len();
     if rows.is_empty() {
@@ -80,14 +88,12 @@ pub async fn import_transactions_csv(
                 asset,
                 transactions_by_asset
                     .get(&asset_id)
-                    .cloned()
-                    .unwrap_or_default(),
+                    .map_or(&[][..], Vec::as_slice),
             );
             (state.ticker.clone(), state)
         })
         .collect::<HashMap<_, _>>();
     let mut pending_assets = Vec::new();
-    let mut summaries = Vec::with_capacity(count);
     let mut split_tickers = HashSet::new();
     let mut invalidation_date = None;
 
@@ -162,7 +168,6 @@ pub async fn import_transactions_csv(
         let state = assets_by_ticker.get_mut(&row.ticker).ok_or_else(|| {
             anyhow::anyhow!("row {row_num}: asset '{}' was not resolved", row.ticker)
         })?;
-        state.advance_holdings(&date_str);
         let row_invalidation_date = if row.tx_type == TxType::Split {
             state
                 .first_transaction_date
@@ -172,84 +177,9 @@ pub async fn import_transactions_csv(
             date_str.clone()
         };
 
-        match row.tx_type {
-            TxType::Buy => {
-                let total = row.quantity * row.price + row.fees;
-                summaries.push(format!(
-                    "Bought {} units of {} ({}) at {:.2} {} on {}. Total: {:.2} {}",
-                    row.quantity,
-                    state.name,
-                    state.ticker,
-                    row.price,
-                    state.currency,
-                    crate::constants::display_date(&date_str),
-                    total,
-                    state.currency
-                ));
-            }
-            TxType::Sell => {
-                if row.quantity > state.holdings + FLOAT_EPSILON {
-                    anyhow::bail!(
-                        "row {row_num}: Insufficient holdings: you have {:.4} units of {} but tried to sell {:.4}",
-                        state.holdings,
-                        row.ticker,
-                        row.quantity
-                    );
-                }
-                let proceeds = row.quantity * row.price - row.fees;
-                summaries.push(format!(
-                    "Sold {} units of {} ({}) at {:.2} on {}. Proceeds: {:.2}",
-                    row.quantity,
-                    state.name,
-                    state.ticker,
-                    row.price,
-                    crate::constants::display_date(&date_str),
-                    proceeds
-                ));
-            }
-            TxType::Dividend => {
-                if state.holdings <= FLOAT_EPSILON {
-                    anyhow::bail!(
-                        "row {row_num}: No holdings of {} at date {}",
-                        row.ticker,
-                        crate::constants::display_date(&date_str)
-                    );
-                }
-                let net_amount = row.price - row.fees;
-                summaries.push(format!(
-                    "Dividend for {} ({}): {:.2} (fees: {:.2}, net: {:.2}) on {}",
-                    state.name,
-                    row.ticker,
-                    row.price,
-                    row.fees,
-                    net_amount,
-                    crate::constants::display_date(&date_str)
-                ));
-            }
-            TxType::Split => {
-                if state.holdings <= FLOAT_EPSILON {
-                    anyhow::bail!(
-                        "row {row_num}: No holdings of {} at date {}",
-                        row.ticker,
-                        crate::constants::display_date(&date_str)
-                    );
-                }
-                let post_split_qty = state.holdings * row.quantity;
-                summaries.push(format!(
-                    "Split {} ({}): ratio {}, holdings {:.4} -> {:.4} on {}",
-                    state.name,
-                    row.ticker,
-                    row.quantity,
-                    state.holdings,
-                    post_split_qty,
-                    crate::constants::display_date(&date_str)
-                ));
-                split_tickers.insert(row.ticker.clone());
-            }
+        if row.tx_type == TxType::Split {
+            split_tickers.insert(row.ticker.clone());
         }
-
-        let transaction = transaction_for_row(row, state.id, &date_str);
-        state.apply_imported_transaction(&transaction);
         if invalidation_date
             .as_ref()
             .is_none_or(|current| row_invalidation_date < *current)
@@ -271,6 +201,10 @@ pub async fn import_transactions_csv(
                 .ok_or_else(|| anyhow::anyhow!("asset '{}' was not persisted", state.ticker))?;
         }
     }
+    let tickers_by_asset_id = assets_by_ticker
+        .values()
+        .map(|asset| (asset.id, asset.ticker.as_str()))
+        .collect::<HashMap<_, _>>();
 
     let writes = rows
         .iter()
@@ -291,6 +225,79 @@ pub async fn import_transactions_csv(
         );
     }
 
+    let source_rows_by_transaction_id = transaction_ids
+        .iter()
+        .copied()
+        .zip(rows.iter().map(|row| row.source_row))
+        .collect::<HashMap<_, _>>();
+    let mut source_rows_by_asset = HashMap::<i32, Vec<usize>>::new();
+    for row in &rows {
+        let asset_id = assets_by_ticker
+            .get(&row.ticker)
+            .ok_or_else(|| anyhow::anyhow!("asset '{}' was not resolved", row.ticker))?
+            .id;
+        source_rows_by_asset
+            .entry(asset_id)
+            .or_default()
+            .push(row.source_row);
+    }
+
+    let affected_asset_ids: BTreeSet<i32> = rows
+        .iter()
+        .filter_map(|row| assets_by_ticker.get(&row.ticker).map(|asset| asset.id))
+        .collect();
+    let mut imported_transitions = HashMap::<i32, LedgerTransition>::with_capacity(count);
+    for asset_id in affected_asset_ids {
+        let transactions = transaction_repo::find_by_asset_id(&mutation, asset_id).await?;
+        match ledger::replay_transactions(asset_id, &transactions) {
+            Ok(replay) => {
+                for transition in replay.transitions {
+                    if source_rows_by_transaction_id.contains_key(&transition.entry.id) {
+                        imported_transitions.insert(transition.entry.id, transition);
+                    }
+                }
+            }
+            Err(error) => {
+                let source_row = source_row_for_replay_error(
+                    &error,
+                    &transactions,
+                    &source_rows_by_transaction_id,
+                    source_rows_by_asset.get(&asset_id).map(Vec::as_slice),
+                );
+                if let Some(source_row) = source_row {
+                    let ticker = tickers_by_asset_id
+                        .get(&asset_id)
+                        .copied()
+                        .unwrap_or("unknown");
+                    anyhow::bail!(
+                        "row {source_row}: transaction CSV import replay failed for asset {ticker} ({asset_id}): {error}"
+                    );
+                }
+                return Err(
+                    anyhow::Error::from(error).context("transaction CSV import replay failed")
+                );
+            }
+        }
+    }
+
+    let transaction_receipts = transaction_ids
+        .iter()
+        .copied()
+        .zip(&rows)
+        .map(|(transaction_id, row)| {
+            let asset = assets_by_ticker
+                .get(&row.ticker)
+                .ok_or_else(|| anyhow::anyhow!("asset '{}' was not resolved", row.ticker))?;
+            let transition = imported_transitions.get(&transaction_id).ok_or_else(|| {
+                anyhow::anyhow!("imported transaction {transaction_id} has no replay transition")
+            })?;
+            Ok(transactions::TransactionReceipt {
+                transaction_id,
+                summary: import_summary(asset, transition)?,
+            })
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+
     let split_asset_ids = split_tickers
         .into_iter()
         .map(|ticker| {
@@ -310,16 +317,7 @@ pub async fn import_transactions_csv(
     tracing::info!(count, "transaction CSV imported atomically");
     Ok(ImportResult {
         count,
-        transaction_receipts: transaction_ids
-            .into_iter()
-            .zip(summaries)
-            .map(
-                |(transaction_id, summary)| transactions::TransactionReceipt {
-                    transaction_id,
-                    summary,
-                },
-            )
-            .collect(),
+        transaction_receipts,
     })
 }
 
@@ -329,14 +327,11 @@ struct ImportAsset {
     name: String,
     currency: String,
     pending_asset: Option<usize>,
-    existing_transactions: Vec<Transaction>,
-    existing_cursor: usize,
-    holdings: f64,
     first_transaction_date: Option<String>,
 }
 
 impl ImportAsset {
-    fn from_existing(asset: Asset, existing_transactions: Vec<Transaction>) -> Self {
+    fn from_existing(asset: Asset, existing_transactions: &[Transaction]) -> Self {
         Self {
             id: asset.id,
             ticker: asset.ticker,
@@ -344,9 +339,6 @@ impl ImportAsset {
             currency: asset.currency,
             pending_asset: None,
             first_transaction_date: existing_transactions.first().map(|tx| tx.date.clone()),
-            existing_transactions,
-            existing_cursor: 0,
-            holdings: 0.0,
         }
     }
 
@@ -363,68 +355,8 @@ impl ImportAsset {
             name,
             currency,
             pending_asset: Some(pending_asset),
-            existing_transactions: Vec::new(),
-            existing_cursor: 0,
-            holdings: 0.0,
             first_transaction_date: None,
         }
-    }
-
-    fn advance_holdings(&mut self, date: &str) {
-        while self
-            .existing_transactions
-            .get(self.existing_cursor)
-            .is_some_and(|transaction| transaction.date.as_str() <= date)
-        {
-            let transaction = &self.existing_transactions[self.existing_cursor];
-            apply_transaction(
-                &mut self.holdings,
-                &transaction.tx_type,
-                transaction.quantity,
-            );
-            self.existing_cursor += 1;
-        }
-    }
-
-    fn apply_imported_transaction(&mut self, transaction: &Transaction) {
-        apply_transaction(
-            &mut self.holdings,
-            &transaction.tx_type,
-            transaction.quantity,
-        );
-        if self
-            .first_transaction_date
-            .as_ref()
-            .is_none_or(|date| transaction.date < *date)
-        {
-            self.first_transaction_date = Some(transaction.date.clone());
-        }
-    }
-}
-
-fn apply_transaction(holdings: &mut f64, tx_type: &TxType, quantity: f64) {
-    match tx_type {
-        TxType::Buy => *holdings += quantity,
-        TxType::Sell => *holdings -= quantity,
-        TxType::Dividend => {}
-        TxType::Split => *holdings *= quantity,
-    }
-}
-
-fn transaction_for_row(row: &CsvRow, asset_id: i32, date: &str) -> Transaction {
-    let (quantity, price, fees) = match row.tx_type {
-        TxType::Buy | TxType::Sell => (row.quantity, row.price, row.fees),
-        TxType::Dividend => (1.0, row.price, row.fees),
-        TxType::Split => (row.quantity, 0.0, 0.0),
-    };
-    Transaction {
-        id: 0,
-        asset_id,
-        tx_type: row.tx_type.clone(),
-        date: date.to_owned(),
-        quantity,
-        price_cents: f64_to_cents(price),
-        fees_cents: f64_to_cents(fees),
     }
 }
 
@@ -544,7 +476,8 @@ fn parse_row(record: &csv::StringRecord, row_num: usize) -> anyhow::Result<CsvRo
         .parse::<f64>()
         .with_context(|| format!("row {row_num}: invalid fees '{}'", &record[14]))?;
 
-    validate_numeric_fields(row_num, &tx_type, quantity, price, fees)?;
+    transactions::validate_transaction_values(&tx_type, quantity, price, fees)
+        .map_err(|error| anyhow::anyhow!("row {row_num}: {error}"))?;
 
     Ok(CsvRow {
         source_row: row_num,
@@ -560,41 +493,6 @@ fn parse_row(record: &csv::StringRecord, row_num: usize) -> anyhow::Result<CsvRo
         price,
         fees,
     })
-}
-
-fn validate_numeric_fields(
-    row_num: usize,
-    tx_type: &TxType,
-    quantity: f64,
-    price: f64,
-    fees: f64,
-) -> anyhow::Result<()> {
-    if fees < 0.0 {
-        bail!("row {row_num}: fees must be non-negative");
-    }
-
-    match tx_type {
-        TxType::Buy | TxType::Sell => {
-            if quantity <= 0.0 {
-                bail!("row {row_num}: quantity must be positive");
-            }
-            if price <= 0.0 {
-                bail!("row {row_num}: price must be positive");
-            }
-        }
-        TxType::Dividend => {
-            if price <= 0.0 {
-                bail!("row {row_num}: dividend amount must be positive");
-            }
-        }
-        TxType::Split => {
-            if quantity <= 0.0 {
-                bail!("row {row_num}: split ratio must be positive");
-            }
-        }
-    }
-
-    Ok(())
 }
 
 fn validate_headers(headers: &csv::StringRecord) -> anyhow::Result<()> {
@@ -615,6 +513,99 @@ fn parse_optional(s: &str) -> Option<String> {
     } else {
         Some(trimmed.to_string())
     }
+}
+
+fn import_summary(asset: &ImportAsset, transition: &LedgerTransition) -> anyhow::Result<String> {
+    let date = crate::constants::display_date(&transition.entry.date);
+    match (&transition.entry.kind, &transition.effect) {
+        (
+            LedgerEntryKind::Buy {
+                units,
+                unit_price_cents,
+                ..
+            },
+            LedgerEffect::Buy { contribution },
+        ) => Ok(format!(
+            "Bought {} units of {} ({}) at {:.2} {} on {}. Total: {:.2} {}",
+            units,
+            asset.name,
+            asset.ticker,
+            cents_to_f64(*unit_price_cents),
+            asset.currency,
+            date,
+            contribution / crate::constants::MONETARY_MULTIPLIER,
+            asset.currency
+        )),
+        (
+            LedgerEntryKind::Sell {
+                units,
+                unit_price_cents,
+                ..
+            },
+            LedgerEffect::Sell { withdrawal, .. },
+        ) => Ok(format!(
+            "Sold {} units of {} ({}) at {:.2} on {}. Proceeds: {:.2}",
+            units,
+            asset.name,
+            asset.ticker,
+            cents_to_f64(*unit_price_cents),
+            date,
+            withdrawal / crate::constants::MONETARY_MULTIPLIER
+        )),
+        (
+            LedgerEntryKind::Dividend {
+                gross_amount_cents,
+                deductions_cents,
+            },
+            LedgerEffect::Dividend { net_income },
+        ) => Ok(format!(
+            "Dividend for {} ({}): {:.2} (fees: {:.2}, net: {:.2}) on {}",
+            asset.name,
+            asset.ticker,
+            cents_to_f64(*gross_amount_cents),
+            cents_to_f64(*deductions_cents),
+            net_income / crate::constants::MONETARY_MULTIPLIER,
+            date
+        )),
+        (LedgerEntryKind::Split { ratio }, LedgerEffect::Split { .. }) => Ok(format!(
+            "Split {} ({}): ratio {} on {}",
+            asset.name, asset.ticker, ratio, date
+        )),
+        _ => bail!(
+            "imported transaction {} has inconsistent replay semantics",
+            transition.entry.id
+        ),
+    }
+}
+
+fn source_row_for_replay_error(
+    error: &ledger::LedgerError,
+    transactions: &[Transaction],
+    source_rows_by_transaction_id: &HashMap<i32, usize>,
+    source_rows: Option<&[usize]>,
+) -> Option<usize> {
+    source_rows_by_transaction_id
+        .get(&error.entry_id)
+        .copied()
+        .or_else(|| {
+            transactions
+                .iter()
+                .position(|transaction| transaction.id == error.entry_id)
+                .and_then(|error_index| {
+                    transactions[..error_index]
+                        .iter()
+                        .rev()
+                        .filter(|transaction| {
+                            matches!(
+                                &transaction.tx_type,
+                                TxType::Buy | TxType::Sell | TxType::Split
+                            )
+                        })
+                        .find_map(|transaction| source_rows_by_transaction_id.get(&transaction.id))
+                        .copied()
+                })
+        })
+        .or_else(|| source_rows.and_then(|rows| rows.first().copied()))
 }
 
 fn parse_optional_enum<E>(s: &str, row_num: usize, field: &str) -> anyhow::Result<Option<E>>

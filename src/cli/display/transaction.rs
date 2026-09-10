@@ -38,9 +38,9 @@ fn transaction_rows(items: &[TransactionListItem]) -> Vec<TransactionRow> {
             tx_type: item.transaction.tx_type.to_string(),
             ticker: item.ticker.clone(),
             asset_name: item.asset_name.clone(),
-            quantity: item.transaction.quantity,
-            price: cents_to_f64(item.transaction.price_cents),
-            fees: cents_to_f64(item.transaction.fees_cents),
+            quantity: item.transaction.display_quantity(),
+            price: cents_to_f64(item.transaction.display_price_cents()),
+            fees: cents_to_f64(item.transaction.display_fees_cents()),
         })
         .collect()
 }
@@ -52,8 +52,8 @@ pub fn format_transaction_detail(tx: &Transaction, ticker: &str) -> String {
         tx.tx_type,
         ticker,
         display_date(&tx.date),
-        tx.quantity,
-        cents_to_f64(tx.price_cents),
-        cents_to_f64(tx.fees_cents),
+        tx.display_quantity(),
+        cents_to_f64(tx.display_price_cents()),
+        cents_to_f64(tx.display_fees_cents()),
     )
 }
