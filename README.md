@@ -208,9 +208,9 @@ SQLite database at `~/.rstock/rstock.db`, created automatically on first run. Sc
 
 ```bash
 cd migration
-cargo run -- up              # Apply pending migrations
-cargo run -- down            # Rollback last migration
-cargo run -- generate NAME   # Create new migration file
+cargo run --features cli -- up              # Apply pending migrations
+cargo run --features cli -- down            # Rollback last migration
+cargo run --features cli -- generate NAME   # Create new migration file
 ```
 
 ## Development

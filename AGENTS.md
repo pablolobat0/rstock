@@ -4,7 +4,7 @@
 ## Execution & Quality
 * **Verification:** `cargo fmt && cargo clippy -- -D warnings`
 * **Tests:** `cargo test`. Never make network calls. Use `setup_test_db()` (in-memory SQLite) and dummy tickers (e.g., `XFAKE1`).
-* **Migrations:** `cd migration && cargo run -- [up|down|generate NAME]`
+* **Migrations:** `cd migration && cargo run --features cli -- [up|down|generate NAME]`
 * **Logging:** `tracing` macros for diagnostic output. Never convert `println!` (user-facing) to logging. Use structured fields: `tracing::warn!(ticker, error = %e, "message")`.
 
 ## Core Domain Rules

@@ -8,12 +8,21 @@ publish = false
 name = "migration"
 path = "src/lib.rs"
 
+[[bin]]
+name = "migration"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+cli = ["sea-orm-migration/cli", "dep:tokio"]
+
 [dependencies]
-tokio = { version = ">=1, <1.49", features = ["full"] }
+tokio = { version = "1.48", optional = true, features = ["macros", "rt-multi-thread"] }
 
 [dependencies.sea-orm-migration]
 version = "1.1.0"
+default-features = false
 features = [
-  "runtime-tokio-rustls",
+  "runtime-tokio",
   "sqlx-sqlite",
 ]

@@ -4,7 +4,7 @@
 
 - **Edition**: 2021, stable toolchain, no nightly features
 - **Error handling**: `anyhow::Result<T>` for all fallible functions. Use `?` for propagation, `.context("message")` to add context, `anyhow::bail!()` for validation failures
-- **Async**: All service and repository functions are `async`. Tokio runtime with full features. Use `async_trait` for async trait methods
+- **Async**: All service and repository functions are `async`. Tokio runtime with explicitly selected features. Use `async_trait` for async trait methods
 - **No unwrap in production code**: Use `.context()` or pattern matching for fallible operations. `unwrap()` is acceptable only in tests and for known-safe literal conversions (e.g., `NaiveDate::from_ymd_opt` with hardcoded values)
 - **Logging**: Uses `tracing` with `tracing-subscriber`. Initialized in `src/logging.rs`. Default level: `WARN`. CLI flag `-v`/`-vv`/`-vvv` increases verbosity; `RUST_LOG` env var is used as fallback when no `-v` flag is given. Logs are written to both stderr (colored, compact) and `~/.rstock/rstock.log` (daily rotation, no color). Use structured fields in tracing macros (e.g., `tracing::warn!(ticker, error = %e, "message")`) rather than string interpolation. Do NOT convert user-facing `println!` output to logging
 
@@ -122,7 +122,7 @@ Global `--json` is for successful application output only. New commands must not
 
 ## How To: Add a New Database Table
 
-1. **Generate migration** — Run `cd migration && cargo run -- generate <name>` to create a new migration file
+1. **Generate migration** — Run `cd migration && cargo run --features cli -- generate <name>` to create a new migration file
 2. **Implement migration** — Write the `up()` and `down()` methods in the generated file using SeaORM's schema builder
 3. **Register migration** — Add the new module to `migration/src/lib.rs` in the `Migrator` impl
 4. **Create entity** — Add a new file in `src/db/entities/` defining `Model`, `ActiveModel`, `Column`, `Relation`, and implement `ActiveModelBehavior`. Register it in `src/db/entities/mod.rs`
