@@ -69,9 +69,9 @@ All business logic lives here. Key modules:
 
 **`ledger.rs`** — Pure canonical transaction replay and native-currency effects, with separate in-memory FX enrichment. Owns `(date, id)` order and every-prefix validity; mutation and valuation services consume its transitions. See [ledger interface, operational boundaries, and PR77 closure](r77-ledger-closure.md) for the typed-data placement decision, precision, zero-NAV policy, and verification evidence.
 
-**`nav.rs`** — Core NAV unitization engine. The public `ensure_portfolio_history()` interface owns readiness for the latest completed date and returns the latest snapshot together with NAV-scoped Market data limitations; it invokes a private rebuild loop when history is absent or stale. The loop advances only through the Effective valuation date supported by required Historical market data, processes share issuance and redemption, and calculates end-of-day portfolio value through strict valuation reads.
+**`nav.rs`** — Core NAV unitization engine. The public `ensure_portfolio_history()` interface owns readiness for the latest completed date and returns the latest snapshot together with NAV-scoped Market data limitations; it prepares one private immutable `NavRebuildPlan` from the trusted latest Complete NAV snapshot, ordered ledger effects, Positive-holding intervals, and MarketData valuation series. Plan execution performs no database or MarketData reads, advances only through the contiguous Effective valuation date prefix, processes share issuance and redemption, and calculates end-of-day portfolio value through strict in-memory valuation reads.
 
-**`market_data/historical.rs`** — Private implementation for reproducible Historical market data used by NAV and benchmark analytics. It reads persisted coverage, requests only missing contiguous asset and FX intervals, bulk-persists successful observations without replacing covered dates, infers required FX from supplied assets, hides provider-specific FX pair construction from external callers, calculates the Effective valuation date, returns actionable Market data limitation values, and exposes strict valuation reads through the `market_data` Module root. A `MarketData` instance shares identical source attempts and their results for the lifetime of one command; a new command can retry failures.
+**`market_data/historical.rs`** — Private implementation for reproducible Historical market data used by NAV and benchmark analytics. It reads persisted coverage, requests only missing contiguous asset and FX intervals, bulk-persists successful observations without replacing covered dates, prepares NAV valuation series for NAV-owned Positive-holding intervals and transaction FX requirements, hides provider-specific FX pair construction from external callers, and exposes strict valuation reads through the `market_data` Module root. A `MarketData` instance shares identical source attempts and their results for the lifetime of one command; a new command can retry failures.
 
 **`market_data/individual_price.rs`** — Private implementation for display-time Individual price values for portfolio rows. Stocks request same-day observations, and ETFs request them through the fund-price capability already exposed by `MarketDataSources`; neither caller depends on a concrete source Adapter. A same-day observation is a Live quote. If an ETF source cannot supply one, the row falls back to the latest Historical market data. Mutual funds retain closing-price semantics and never use same-day Live quotes.
 
@@ -277,9 +277,9 @@ The NAV engine (`src/services/nav.rs`) uses the same valuation method as mutual 
 
    d. **Store snapshot**: Write the day's `portfolio_history` and `portfolio_asset_history` records.
 
-3. **Effective valuation date**: The rebuild never extends beyond yesterday, and further limits to the earliest latest-available date across all assets' prices and exchange rates. This prevents extrapolation when data sources lag.
+3. **Effective valuation date**: The rebuild never extends beyond yesterday and stops at the end of the contiguous prefix whose Positive-holding intervals and transaction-date FX requirements are present in the prepared series. This prevents extrapolation or skipping when data sources lag.
 
-4. **Readiness and incremental rebuild**: Callers use `ensure_portfolio_history()`. It starts the private rebuild loop on the day after the latest snapshot, or from the first required date when invalidation removed later snapshots.
+4. **Readiness and incremental rebuild**: Callers use `ensure_portfolio_history()`. It trusts the latest Complete NAV snapshot as the NAV rebuild checkpoint, then prepares and executes one complete private plan from the following day (or from the first transaction date for a new portfolio).
 
 ## NAV Return vs Open-Position G/L%
 
@@ -332,7 +332,8 @@ Historical market data preparation caches source observations and fills gaps bet
 main.rs
   └─> portfolio::get_portfolio()
         ├─> nav::ensure_portfolio_history()
-        │     └─> If stale: private day-by-day rebuild using strict valuation reads
+        │     ├─> Prepare one immutable NavRebuildPlan from the trusted checkpoint
+        │     └─> Execute the plan with strict in-memory valuation reads
         ├─> portfolio::get_current_positions()
         │     ├─> Project all open holdings once from the Transaction ledger
         │     ├─> Resolve each position's Individual price through MarketData

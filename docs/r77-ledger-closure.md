@@ -117,12 +117,13 @@ rolls back every imported asset, row, and invalidation.
 ### NAV And Incremental Readiness
 
 `nav::ensure_portfolio_history()` owns readiness through the latest completed
-Effective valuation date. It audits persisted history before resuming, starts
-from the last Complete NAV snapshot when available, and uses canonical replay
-transitions for the suffix. NAV alone owns Initial NAV, outstanding shares,
-share issuance/redemption, dividend cash, daily valuation, and snapshot
-persistence. Asset classification is applied outside replay so Monetary
-holdings use the same ledger arithmetic but are excluded from NAV.
+Effective valuation date. It trusts the latest Complete NAV snapshot as the
+checkpoint, prepares one immutable plan with canonical replay transitions and
+Positive-holding intervals, and executes the prepared suffix without database
+or MarketData reads. NAV alone owns Initial NAV, outstanding shares, share
+issuance/redemption, dividend cash, daily valuation, and snapshot persistence.
+Asset classification is applied outside replay so Monetary holdings use the
+same ledger arithmetic but are excluded from NAV.
 
 Snapshots are not sparse or lazy: a persisted portfolio row and all required
 per-asset rows for that date are the atomic rebuild unit. Rebuild writes are

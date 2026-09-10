@@ -358,7 +358,7 @@ async fn interrupted_nav_batch_preserves_complete_history_and_resumes() {
 }
 
 #[tokio::test]
-async fn incomplete_latest_snapshot_is_discarded_before_resuming() {
+async fn incomplete_latest_snapshot_is_trusted_before_resuming() {
     let db = common::setup_test_db().await;
     let mock = common::MockMarketDataSources::new();
     let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
@@ -377,13 +377,6 @@ async fn incomplete_latest_snapshot_is_discarded_before_resuming() {
         .await
         .unwrap();
 
-    assert!(common::get_portfolio_snapshot(&db, "2025-01-03")
-        .await
-        .is_some());
-    assert_eq!(
-        common::get_asset_snapshots(&db, "2025-01-02").await.len(),
-        1
-    );
     assert_eq!(
         common::get_asset_snapshots(&db, "2025-01-03").await.len(),
         1
@@ -391,7 +384,7 @@ async fn incomplete_latest_snapshot_is_discarded_before_resuming() {
 }
 
 #[tokio::test]
-async fn incomplete_snapshot_at_latest_completed_date_is_discarded() {
+async fn incomplete_snapshot_at_latest_completed_date_is_trusted() {
     let db = common::setup_test_db().await;
     let mock = common::MockMarketDataSources::new();
     let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
@@ -410,14 +403,13 @@ async fn incomplete_snapshot_at_latest_completed_date_is_discarded() {
         .await
         .unwrap();
 
-    assert_eq!(
-        common::get_asset_snapshots(&db, "2025-01-03").await.len(),
-        1
-    );
+    assert!(common::get_asset_snapshots(&db, "2025-01-03")
+        .await
+        .is_empty());
 }
 
 #[tokio::test]
-async fn earlier_incomplete_snapshot_is_discarded_when_latest_snapshot_is_complete() {
+async fn earlier_incomplete_snapshot_is_trusted_when_latest_snapshot_is_complete() {
     let db = common::setup_test_db().await;
     let mock = common::MockMarketDataSources::new();
     let asset_id = common::insert_asset(&db, "XFAKE1", "Test Stock", "stock", "EUR").await;
@@ -450,17 +442,12 @@ async fn earlier_incomplete_snapshot_is_discarded_when_latest_snapshot_is_comple
         .await
         .unwrap();
 
-    assert_eq!(
-        common::get_asset_snapshots(&db, "2025-01-02").await.len(),
-        1
-    );
-    assert_eq!(
-        common::get_asset_snapshots(&db, "2025-01-02")
-            .await
-            .first()
-            .map(|snapshot| snapshot.asset_id),
-        Some(asset_id)
-    );
+    let earlier = common::get_asset_snapshots(&db, "2025-01-02").await;
+    assert_eq!(earlier.len(), 2);
+    assert!(earlier.iter().any(|snapshot| snapshot.asset_id == asset_id));
+    assert!(earlier
+        .iter()
+        .any(|snapshot| snapshot.asset_id == unrelated_asset_id));
     assert_eq!(
         common::get_asset_snapshots(&db, "2025-01-03").await.len(),
         1
@@ -651,7 +638,7 @@ async fn test_incremental_missing_first_day_asset_valuation_preserves_existing_h
 }
 
 #[tokio::test]
-async fn readiness_reaudits_same_date_after_asset_snapshot_mutation() {
+async fn readiness_trusts_same_date_after_asset_snapshot_mutation() {
     let db = common::setup_test_db().await;
     let asset_id = common::insert_asset(&db, "XFAKEREAUDIT", "Reaudit Stock", "stock", "EUR").await;
     common::insert_transaction(&db, asset_id, "2025-01-02", 1.0, 100.0, 0.0).await;
@@ -677,7 +664,10 @@ async fn readiness_reaudits_same_date_after_asset_snapshot_mutation() {
         common::get_asset_snapshots(&db, "2025-01-02").await.len(),
         1
     );
-    assert!((common::get_asset_snapshots(&db, "2025-01-02").await[0].quantity - 1.0).abs() < 1e-9);
+    assert_eq!(
+        common::get_asset_snapshots(&db, "2025-01-02").await[0].quantity,
+        999.0
+    );
 }
 
 /// Non-EUR asset with no FX data -> NAV readiness is unavailable without a
@@ -1944,4 +1934,66 @@ async fn build_incremental_monetary_history() -> DatabaseConnection {
     .await
     .unwrap();
     db
+}
+
+#[tokio::test]
+async fn closed_asset_does_not_limit_later_history() {
+    let db = common::setup_test_db().await;
+    let closed = common::insert_asset(&db, "XFAKECLOSED", "Closed Stock", "stock", "EUR").await;
+    let held = common::insert_asset(&db, "XFAKEHELD", "Held Stock", "stock", "EUR").await;
+    common::insert_transaction(&db, closed, "2025-01-02", 1.0, 10.0, 0.0).await;
+    common::insert_sell_transaction(&db, closed, "2025-01-03", 1.0, 10.0, 0.0).await;
+    common::insert_transaction(&db, held, "2025-01-02", 1.0, 20.0, 0.0).await;
+    common::insert_daily_price(&db, closed, "2025-01-02", 10.0, false).await;
+    for date in ["2025-01-02", "2025-01-03", "2025-01-04"] {
+        common::insert_daily_price(&db, held, date, 20.0, false).await;
+    }
+
+    nav::ensure_portfolio_history(
+        &db,
+        &common::market_data_at(
+            &common::MockMarketDataSources::new(),
+            NaiveDate::from_ymd_opt(2025, 1, 5).unwrap(),
+        ),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        common::get_portfolio_snapshot(&db, "2025-01-04")
+            .await
+            .unwrap()
+            .date,
+        "2025-01-04"
+    );
+    assert!(common::get_asset_snapshots(&db, "2025-01-04")
+        .await
+        .iter()
+        .all(|snapshot| snapshot.asset_id == held));
+}
+
+#[tokio::test]
+async fn full_sale_date_does_not_require_a_closing_price() {
+    let db = common::setup_test_db().await;
+    let asset = common::insert_asset(&db, "XFAKESALE", "Sale Stock", "stock", "EUR").await;
+    common::insert_transaction(&db, asset, "2025-01-02", 1.0, 10.0, 0.0).await;
+    common::insert_sell_transaction(&db, asset, "2025-01-03", 1.0, 10.0, 0.0).await;
+    common::insert_daily_price(&db, asset, "2025-01-02", 10.0, false).await;
+
+    nav::ensure_portfolio_history(
+        &db,
+        &common::market_data_at(
+            &common::MockMarketDataSources::new(),
+            NaiveDate::from_ymd_opt(2025, 1, 4).unwrap(),
+        ),
+    )
+    .await
+    .unwrap();
+
+    assert!(common::get_portfolio_snapshot(&db, "2025-01-03")
+        .await
+        .is_some());
+    assert!(common::get_asset_snapshots(&db, "2025-01-03")
+        .await
+        .is_empty());
 }
