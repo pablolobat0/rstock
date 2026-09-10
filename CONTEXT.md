@@ -12,8 +12,12 @@ _Avoid_: Portfolio value, return
 The persisted NAV record for one date together with all per-asset snapshot records required to audit that date.
 _Avoid_: Partial snapshot, portfolio history row
 
+**NAV rebuild checkpoint**:
+The latest persisted Complete NAV snapshot, trusted as the starting state for extending NAV history.
+_Avoid_: Latest portfolio row, full-history audit
+
 **Effective valuation date**:
-The latest date for which NAV can be calculated using available prices and FX rates for every holding required by the portfolio.
+The last date in the contiguous calendar-date range for which NAV can be calculated after the NAV rebuild checkpoint using every required price and FX rate.
 _Avoid_: Latest price date, today
 
 **Individual price**:
@@ -92,6 +96,10 @@ _Avoid_: Holding, arbitrary ticker
 The chronological record of buys, sells, dividends, and splits used to derive holdings and NAV history.
 _Avoid_: Data import, portfolio table
 
+**Positive-holding interval**:
+A contiguous range of calendar dates on which a Tracked asset has a positive end-of-day quantity that contributes to NAV.
+_Avoid_: Transaction range, asset lifetime
+
 **Monetary holding**:
 A currently held Tracked asset with the Monetary Asset classification, shown as portfolio inventory but excluded from portfolio performance measurement.
 _Avoid_: Cash balance, performance asset
@@ -121,7 +129,9 @@ _Avoid_: Gross dividend distribution, per-share dividend rate
 - **NAV** is calculated at one **Effective valuation date**.
 - NAV history preserves one portfolio snapshot and its per-asset snapshots for every calculable calendar date; performance optimizations must not make that history sparse or lazy.
 - A **Complete NAV snapshot** is the atomic unit of rebuild progress: interruption may preserve complete dates, but a portfolio snapshot without all required per-asset snapshots is not valid history.
-- An **Effective valuation date** is constrained by the oldest latest-available market data needed across all holdings and FX rates.
+- Routine NAV readiness resumes from the **NAV rebuild checkpoint** without reauditing or repairing earlier history.
+- An **Effective valuation date** is constrained only by prices and FX rates required on each date by Positive-holding intervals and Transaction ledger entries.
+- When a required price or FX rate blocks a later date, NAV persists every Complete NAV snapshot in the calculable prefix and the day before the blocker becomes the **Effective valuation date**; history does not skip the blocked date to calculate later dates.
 - An **Individual price** may be newer than the **Effective valuation date**.
 - **NAV** cannot be calculated when any held asset or required FX rate has no market data for the valuation period.
 - **Stale market data** may move the **Effective valuation date** earlier.
@@ -145,6 +155,7 @@ _Avoid_: Gross dividend distribution, per-share dividend rate
 - Benchmark market data follows the same historical availability rules as holdings, but a benchmark is not a holding.
 - Market data can be represented as a native asset price, an FX rate, and a EUR valuation price for valuation and audit.
 - **Forward-filled market data** is allowed only between source observations and never beyond the last date returned by the source.
+- A **Positive-holding interval** may use the latest earlier Historical market data observation as its forward-fill seed; the interval does not permit filling beyond the last date returned by the source.
 - The **Base currency** has an implicit FX rate of 1.0.
 - Transaction ledger cost and dividend facts in the **Base currency** use the latest FX rate on or before each transaction date; when no such rate exists, those facts and dependent gain/loss facts are unavailable rather than estimated with a current or later FX rate.
 - Every monetary component of a Transaction ledger entry, including unit price, buy or sell fees, **Gross dividend distribution**, and dividend deductions, is recorded in the **Tracked asset**'s native currency.
@@ -175,6 +186,7 @@ _Avoid_: Gross dividend distribution, per-share dividend rate
 - Risk and correlation metric labels preserve their broad portfolio-analysis interpretation, but unspecified statistical details and cross-version numeric comparability are not compatibility contracts; explicit metric relationships in this glossary remain authoritative until deliberately revised.
 - The **Transaction ledger** is the source of truth for holdings and transaction CSV import/export.
 - **Transaction ledger** entries are ordered by date and then ascending transaction ID; insertion order determines the sequence of entries on the same date.
+- NAV requires an asset valuation price only within that asset's **Positive-holding interval**; transaction-date FX requirements for buys, sells, and dividends are separate from end-of-day holding valuation.
 - A Transaction ledger CSV import is atomic: if any row cannot be accepted, none of that import's assets, entries, or snapshot invalidations are persisted.
 - Recording, editing, or deleting a **Transaction ledger** entry and invalidating every dependent **Complete NAV snapshot** form one atomic mutation.
 - **Transaction ledger** entries use positive quantities, prices, dividend amounts, and split ratios; fees are non-negative.
