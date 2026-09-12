@@ -371,6 +371,7 @@ fn find_calculable_prefix(
     let mut current = start_date;
     while current <= end_date {
         let date = format_date(current);
+        let mut blocked = false;
         if let Some(day_transactions) = by_date.get(&date) {
             for transaction in day_transactions {
                 let asset = asset_map
@@ -398,7 +399,7 @@ fn find_calculable_prefix(
                     {
                         add_limitation(&mut limitations, limitation);
                     }
-                    return Ok((current - Duration::days(1), limitations));
+                    blocked = true;
                 }
                 holdings.insert(
                     transaction.transition.entry.asset_id,
@@ -406,7 +407,6 @@ fn find_calculable_prefix(
                 );
             }
         }
-        let mut blocked = false;
         for (asset_id, quantity) in &holdings {
             if *quantity <= FLOAT_EPSILON {
                 continue;

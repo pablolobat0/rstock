@@ -197,12 +197,13 @@ pub(crate) async fn prepare_nav_valuation_data(
                 interval.asset_id
             )
         })?;
+        let request_end = (interval.end + chrono::Duration::days(1)).min(end_date);
         let values = fill_historical_asset_prices(
             db,
             asset,
             lookup_identifier(asset)?,
             &format_date(interval.start),
-            &format_date(interval.end),
+            &format_date(request_end),
             market_data,
         )
         .await?
