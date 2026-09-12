@@ -190,29 +190,38 @@ pub(crate) async fn prepare_nav_valuation_data(
 ) -> anyhow::Result<NavValuationData> {
     let asset_map: HashMap<i32, &Asset> = assets.iter().map(|asset| (asset.id, asset)).collect();
     let mut asset_prices = HashMap::<i32, BTreeMap<NaiveDate, f64>>::new();
-    for interval in intervals {
-        let asset = asset_map.get(&interval.asset_id).with_context(|| {
-            format!(
-                "missing asset {} for NAV valuation interval",
-                interval.asset_id
-            )
-        })?;
+    for valuation_interval in intervals {
+        let asset = asset_map
+            .get(&valuation_interval.asset_id)
+            .with_context(|| {
+                format!(
+                    "missing asset {} for NAV valuation interval",
+                    valuation_interval.asset_id
+                )
+            })?;
         // Request a short look-ahead so a weekend or holiday immediately after
         // a closing interval can use the next source observation as its seed.
-        let request_end = (interval.end + chrono::Duration::days(7)).min(end_date);
+        let request_end = (valuation_interval.end + chrono::Duration::days(7)).min(end_date);
         let values = fill_historical_asset_prices(
             db,
             asset,
             lookup_identifier(asset)?,
-            &format_date(interval.start),
+            &format_date(valuation_interval.start),
             &format_date(request_end),
+            valuation_interval.end,
             market_data,
         )
         .await?
-        .map(|values| values.values)
+        .map(|values| {
+            values
+                .values
+                .into_iter()
+                .filter(|(date, _)| *date <= valuation_interval.end)
+                .collect::<BTreeMap<NaiveDate, f64>>()
+        })
         .unwrap_or_default();
         asset_prices
-            .entry(interval.asset_id)
+            .entry(valuation_interval.asset_id)
             .or_default()
             .extend(values);
     }
@@ -340,6 +349,7 @@ async fn fill_nav_asset_prices(
     market_data: &MarketData,
 ) -> anyhow::Result<HashMap<i32, FilledValues>> {
     tracing::debug!(asset_count = assets.len(), %start_date, %end_date, "filling NAV asset price cache");
+    let persist_end = policy::parse_market_data_date(end_date, "historical asset price end date")?;
 
     let mut requirements = Vec::with_capacity(assets.len());
     for asset in assets {
@@ -355,6 +365,7 @@ async fn fill_nav_asset_prices(
                 lookup_identifier,
                 start_date,
                 end_date,
+                persist_end,
                 market_data,
             )
             .await;
@@ -387,6 +398,7 @@ async fn fill_historical_asset_prices(
     lookup_identifier: &str,
     start_date: &str,
     end_date: &str,
+    persist_end: NaiveDate,
     market_data: &MarketData,
 ) -> anyhow::Result<Option<FilledValues>> {
     let start = policy::parse_market_data_date(start_date, "historical asset price start date")?;
@@ -429,6 +441,7 @@ async fn fill_historical_asset_prices(
             interval,
             observations,
             latest_completed_date,
+            persist_end,
             &mut known,
             &mut writes,
         );
@@ -613,12 +626,14 @@ fn append_asset_interval_writes(
     interval: DateInterval,
     observations: Vec<SourceObservation>,
     latest_completed_date: NaiveDate,
+    persist_end: NaiveDate,
     known: &mut BTreeMap<NaiveDate, f64>,
     writes: &mut Vec<daily_price_repo::DailyPriceWrite>,
 ) {
     writes.extend(
         forward_filled_interval(interval, observations, latest_completed_date, known)
             .into_iter()
+            .filter(|(date, _)| *date <= persist_end)
             .map(|(date, value)| daily_price_repo::DailyPriceWrite {
                 asset_id,
                 date: format_date(date),

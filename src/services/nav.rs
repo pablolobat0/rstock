@@ -368,6 +368,7 @@ fn find_calculable_prefix(
             .push(transaction);
     }
     let mut limitations = Vec::new();
+    let mut transaction_limitations = Vec::new();
     let mut first_blocked_date = None;
     let mut current = start_date;
     while current <= end_date {
@@ -388,17 +389,10 @@ fn find_calculable_prefix(
                     LedgerEffect::Split { .. } => false,
                 };
                 if missing_conversion {
-                    if transaction.transition.quantity_after > FLOAT_EPSILON {
-                        if let Some(limitation) =
-                            valuation_data.price_limitation(asset, current, end_date)
-                        {
-                            add_limitation(&mut limitations, limitation);
-                        }
-                    }
                     if let Some(limitation) =
                         conversion_limitation(asset, valuation_data, current, end_date)
                     {
-                        add_limitation(&mut limitations, limitation);
+                        transaction_limitations.push(limitation);
                     }
                     blocked = true;
                     first_blocked_date.get_or_insert(current);
@@ -439,6 +433,9 @@ fn find_calculable_prefix(
                 }
                 blocked = true;
             }
+        }
+        for limitation in transaction_limitations.drain(..) {
+            add_limitation(&mut limitations, limitation);
         }
         if blocked {
             first_blocked_date.get_or_insert(current);

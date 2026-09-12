@@ -658,7 +658,7 @@ async fn readiness_trusts_same_date_after_asset_snapshot_mutation() {
 
     let readiness = nav::ensure_portfolio_history(&db, &market_data)
         .await
-        .expect("readiness should re-audit after same-date mutation");
+        .expect("readiness should trust the same-date complete checkpoint");
     assert_eq!(readiness.latest_snapshot.unwrap().date, "2025-01-02");
     assert_eq!(
         common::get_asset_snapshots(&db, "2025-01-02").await.len(),
