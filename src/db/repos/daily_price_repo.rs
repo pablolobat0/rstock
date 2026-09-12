@@ -28,7 +28,6 @@ pub async fn find_price_and_date_at_or_before(
     asset_id: i32,
     date: &str,
 ) -> anyhow::Result<Option<(f64, String)>> {
-    super::record_nav_database_read();
     let result = daily_asset_price::Entity::find()
         .filter(daily_asset_price::Column::AssetId.eq(asset_id))
         .filter(daily_asset_price::Column::Date.lte(date))
@@ -45,7 +44,6 @@ pub async fn find_prices_between_assets(
     start_date: &str,
     end_date: &str,
 ) -> anyhow::Result<HashMap<i32, Vec<(String, f64)>>> {
-    super::record_nav_database_read();
     if asset_ids.is_empty() {
         return Ok(HashMap::new());
     }
@@ -76,7 +74,6 @@ pub async fn find_coverage_with_seed(
     start_date: &str,
     end_date: &str,
 ) -> anyhow::Result<Vec<(String, f64)>> {
-    super::record_nav_database_read();
     let rows = DatedPrice::find_by_statement(Statement::from_sql_and_values(
         db.get_database_backend(),
         r"

@@ -8,7 +8,6 @@ use crate::models::PortfolioSnapshot;
 const BULK_WRITE_SIZE: usize = 100;
 
 pub async fn find_latest(db: &impl ConnectionTrait) -> anyhow::Result<Option<PortfolioSnapshot>> {
-    super::record_nav_database_read();
     let result = portfolio_history::Entity::find()
         .order_by_desc(portfolio_history::Column::Date)
         .one(db)
@@ -17,7 +16,6 @@ pub async fn find_latest(db: &impl ConnectionTrait) -> anyhow::Result<Option<Por
 }
 
 pub async fn find_earliest(db: &impl ConnectionTrait) -> anyhow::Result<Option<PortfolioSnapshot>> {
-    super::record_nav_database_read();
     let result = portfolio_history::Entity::find()
         .order_by_asc(portfolio_history::Column::Date)
         .one(db)
@@ -29,7 +27,6 @@ pub async fn find_at_or_before(
     db: &impl ConnectionTrait,
     date: &str,
 ) -> anyhow::Result<Option<PortfolioSnapshot>> {
-    super::record_nav_database_read();
     let result = portfolio_history::Entity::find()
         .filter(portfolio_history::Column::Date.lte(date))
         .order_by_desc(portfolio_history::Column::Date)
@@ -56,7 +53,6 @@ pub async fn find_between(
     start_date: &str,
     end_date: &str,
 ) -> anyhow::Result<Vec<PortfolioSnapshot>> {
-    super::record_nav_database_read();
     let results = portfolio_history::Entity::find()
         .filter(portfolio_history::Column::Date.gte(start_date))
         .filter(portfolio_history::Column::Date.lte(end_date))

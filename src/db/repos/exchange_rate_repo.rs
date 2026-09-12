@@ -28,7 +28,6 @@ pub async fn find_rate_and_date_at_or_before(
     to_currency: &str,
     date: &str,
 ) -> anyhow::Result<Option<(f64, String)>> {
-    super::record_nav_database_read();
     let result = daily_exchange_rate::Entity::find()
         .filter(daily_exchange_rate::Column::FromCurrency.eq(from_currency))
         .filter(daily_exchange_rate::Column::ToCurrency.eq(to_currency))
@@ -46,7 +45,6 @@ pub async fn find_rates_between_currencies(
     start_date: &str,
     end_date: &str,
 ) -> anyhow::Result<HashMap<String, Vec<(String, f64)>>> {
-    super::record_nav_database_read();
     if from_currencies.is_empty() {
         return Ok(HashMap::new());
     }
@@ -78,7 +76,6 @@ pub async fn find_coverage_with_seed(
     start_date: &str,
     end_date: &str,
 ) -> anyhow::Result<Vec<(String, f64)>> {
-    super::record_nav_database_read();
     let rows = DatedRate::find_by_statement(Statement::from_sql_and_values(
         db.get_database_backend(),
         r"

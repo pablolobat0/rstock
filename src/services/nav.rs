@@ -113,8 +113,10 @@ pub async fn ensure_portfolio_history(
     )
     .await?;
     let limitations = plan.limitations.clone();
+    let execution_db = crate::db::repos::instrument_nav_execution_connection(db);
     let (execution, execution_database_reads) = crate::db::repos::with_nav_execution_probe(
-        execute_rebuild_plan(db, &plan).instrument(tracing::info_span!("nav_plan_execution")),
+        execute_rebuild_plan(&execution_db, &plan)
+            .instrument(tracing::info_span!("nav_plan_execution")),
     )
     .await;
     execution?;
