@@ -19,8 +19,8 @@ use crate::services::market_data::{MarketData, NavValuationData, NavValuationInt
 pub struct PortfolioHistoryReadiness {
     pub latest_snapshot: Option<PortfolioSnapshot>,
     pub market_data_limitations: Vec<MarketDataLimitation>,
-    #[allow(dead_code)]
-    execution_database_reads: usize,
+    /// Repository reads performed while executing the prepared plan.
+    pub execution_database_reads: usize,
     pub(crate) performance_market_data_prepared: bool,
 }
 
@@ -119,12 +119,17 @@ pub async fn ensure_portfolio_history(
     .await;
     execution?;
 
-    Ok(PortfolioHistoryReadiness {
+    let readiness = PortfolioHistoryReadiness {
         latest_snapshot: portfolio_history_repo::find_latest(db).await?,
         market_data_limitations: limitations,
         execution_database_reads,
         performance_market_data_prepared: true,
-    })
+    };
+    tracing::debug!(
+        execution_database_reads = readiness.execution_database_reads,
+        "prepared NAV execution completed"
+    );
+    Ok(readiness)
 }
 
 #[allow(clippy::too_many_lines)]

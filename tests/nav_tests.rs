@@ -2418,7 +2418,7 @@ async fn prepared_nav_execution_captures_zero_database_reads() {
     .await
     .unwrap();
 
-    assert!(format!("{readiness:?}").contains("execution_database_reads: 0"));
+    assert_eq!(readiness.execution_database_reads, 0);
 }
 
 #[tokio::test]
