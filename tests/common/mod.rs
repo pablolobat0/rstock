@@ -6,8 +6,8 @@ use std::sync::{
 
 use migration::{Migrator, MigratorTrait};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectOptions, Database, DatabaseConnection, EntityTrait,
-    QueryFilter, QueryOrder, Set,
+    ActiveModelTrait, ColumnTrait, Database, DatabaseConnection, EntityTrait, QueryFilter,
+    QueryOrder, Set,
 };
 
 use rstock::db::entities::{
@@ -19,9 +19,7 @@ use rstock::services::clock::Clock;
 use rstock::services::market_data::{MarketData, MarketDataSources, SourceObservation};
 
 pub async fn setup_test_db() -> DatabaseConnection {
-    let mut options = ConnectOptions::new("sqlite::memory:");
-    options.sqlx_logging(true);
-    let db = Database::connect(options)
+    let db = Database::connect("sqlite::memory:")
         .await
         .expect("failed to connect to in-memory SQLite");
     Migrator::up(&db, None)
@@ -579,6 +577,43 @@ impl MarketDataSources for MockMarketDataSources {
         ))
     }
 
+    async fn latest_stock_price_before(
+        &self,
+        ticker: &str,
+        before: chrono::NaiveDate,
+    ) -> anyhow::Result<Option<SourceObservation>> {
+        self.historical_source_calls.fetch_add(1, Ordering::Relaxed);
+        Ok(latest_configured_observation(
+            self.historical_prices.get(ticker),
+            before,
+        ))
+    }
+
+    async fn latest_fund_price_before(
+        &self,
+        code: &str,
+        before: chrono::NaiveDate,
+    ) -> anyhow::Result<Option<SourceObservation>> {
+        self.historical_source_calls.fetch_add(1, Ordering::Relaxed);
+        Ok(latest_configured_observation(
+            self.historical_prices.get(code),
+            before,
+        ))
+    }
+
+    async fn latest_exchange_rate_before(
+        &self,
+        from: &str,
+        to: &str,
+        before: chrono::NaiveDate,
+    ) -> anyhow::Result<Option<SourceObservation>> {
+        self.historical_source_calls.fetch_add(1, Ordering::Relaxed);
+        Ok(latest_configured_observation(
+            self.exchange_rates.get(&format!("{from}{to}")),
+            before,
+        ))
+    }
+
     async fn stock_info(&self, ticker: &str) -> anyhow::Result<StockInfo> {
         self.stock_info
             .get(ticker)
@@ -614,4 +649,21 @@ fn to_source_observations(
             (date >= start && date <= end).then_some(SourceObservation { date, value })
         })
         .collect()
+}
+
+fn latest_configured_observation(
+    values: Option<&Vec<(String, f64)>>,
+    before: chrono::NaiveDate,
+) -> Option<SourceObservation> {
+    values?
+        .iter()
+        .filter_map(|(date, value)| {
+            let date = chrono::NaiveDate::parse_from_str(date, rstock::constants::DATE_FORMAT)
+                .expect("mock source observation date should be valid");
+            (date < before).then_some(SourceObservation {
+                date,
+                value: *value,
+            })
+        })
+        .max_by_key(|observation| observation.date)
 }

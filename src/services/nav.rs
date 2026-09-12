@@ -439,10 +439,6 @@ fn find_calculable_prefix(
                 blocked = true;
             }
             if !valuation_data.has_fx_on(asset, current) {
-                if let Some(limitation) = valuation_data.price_limitation(asset, current, end_date)
-                {
-                    add_limitation(&mut limitations, limitation);
-                }
                 if let Some(limitation) =
                     valuation_data.fx_limitation(&asset.currency, current, end_date)
                 {

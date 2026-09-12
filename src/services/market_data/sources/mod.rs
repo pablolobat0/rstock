@@ -57,6 +57,33 @@ impl MarketDataSources for DefaultMarketDataSources {
         self.yahoo.exchange_rate_history(from, to, start, end).await
     }
 
+    async fn latest_stock_price_before(
+        &self,
+        ticker: &str,
+        before: NaiveDate,
+    ) -> anyhow::Result<Option<SourceObservation>> {
+        self.yahoo.latest_price_before(ticker, before).await
+    }
+
+    async fn latest_fund_price_before(
+        &self,
+        code: &str,
+        before: NaiveDate,
+    ) -> anyhow::Result<Option<SourceObservation>> {
+        self.morningstar.latest_price_before(code, before).await
+    }
+
+    async fn latest_exchange_rate_before(
+        &self,
+        from: &str,
+        to: &str,
+        before: NaiveDate,
+    ) -> anyhow::Result<Option<SourceObservation>> {
+        self.yahoo
+            .latest_exchange_rate_before(from, to, before)
+            .await
+    }
+
     async fn stock_info(&self, ticker: &str) -> anyhow::Result<StockInfo> {
         self.yahoo.stock_info(ticker).await
     }

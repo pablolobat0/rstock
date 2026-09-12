@@ -157,6 +157,9 @@ enum HistoricalRequest {
     Stock(String, NaiveDate, NaiveDate),
     Fund(String, NaiveDate, NaiveDate),
     Fx(String, String, NaiveDate, NaiveDate),
+    LatestStockBefore(String, NaiveDate),
+    LatestFundBefore(String, NaiveDate),
+    LatestFxBefore(String, String, NaiveDate),
 }
 
 type HistoricalRequestResult = Result<Arc<Vec<SourceObservation>>, Arc<String>>;
@@ -212,6 +215,33 @@ impl MarketData {
             .await
     }
 
+    pub(crate) async fn latest_stock_price_before(
+        &self,
+        ticker: &str,
+        before: NaiveDate,
+    ) -> anyhow::Result<Option<SourceObservation>> {
+        Ok(self
+            .request_historical_data(HistoricalRequest::LatestStockBefore(
+                ticker.to_owned(),
+                before,
+            ))
+            .await?
+            .into_iter()
+            .next())
+    }
+
+    pub(crate) async fn latest_fund_price_before(
+        &self,
+        code: &str,
+        before: NaiveDate,
+    ) -> anyhow::Result<Option<SourceObservation>> {
+        Ok(self
+            .request_historical_data(HistoricalRequest::LatestFundBefore(code.to_owned(), before))
+            .await?
+            .into_iter()
+            .next())
+    }
+
     pub async fn exchange_rate_history(
         &self,
         from: &str,
@@ -231,6 +261,25 @@ impl MarketData {
 
         self.request_historical_data(HistoricalRequest::Fx(from, to, start, end))
             .await
+    }
+
+    pub(crate) async fn latest_exchange_rate_before(
+        &self,
+        from: &str,
+        to: &str,
+        before: NaiveDate,
+    ) -> anyhow::Result<Option<SourceObservation>> {
+        let from = normalize_currency(from)?;
+        let to = normalize_currency(to)?;
+        if from == to {
+            return Ok(Some(SourceObservation {
+                date: before - chrono::Duration::days(1),
+                value: 1.0,
+            }));
+        }
+        self.request_historical_data(HistoricalRequest::LatestFxBefore(from, to, before))
+            .await
+            .map(|observations| observations.into_iter().next())
     }
 
     pub async fn stock_info(&self, ticker: &str) -> anyhow::Result<StockInfo> {
@@ -427,6 +476,18 @@ impl MarketData {
                             HistoricalRequest::Fx(from, to, start, end) => {
                                 sources.exchange_rate_history(&from, &to, start, end).await
                             }
+                            HistoricalRequest::LatestStockBefore(ticker, before) => sources
+                                .latest_stock_price_before(&ticker, before)
+                                .await
+                                .map(|observation| observation.into_iter().collect()),
+                            HistoricalRequest::LatestFundBefore(code, before) => sources
+                                .latest_fund_price_before(&code, before)
+                                .await
+                                .map(|observation| observation.into_iter().collect()),
+                            HistoricalRequest::LatestFxBefore(from, to, before) => sources
+                                .latest_exchange_rate_before(&from, &to, before)
+                                .await
+                                .map(|observation| observation.into_iter().collect()),
                         };
                         result
                             .map(Arc::new)

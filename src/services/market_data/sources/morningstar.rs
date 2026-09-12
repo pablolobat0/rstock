@@ -41,6 +41,45 @@ impl MorningstarAdapter {
         start: NaiveDate,
         end: NaiveDate,
     ) -> anyhow::Result<Vec<SourceObservation>> {
+        let observations = self
+            .price_history_with_start(code, Some(start), end)
+            .await?;
+        if observations.is_empty() {
+            bail!("No NAV data found for '{code}'");
+        }
+        Ok(observations)
+    }
+
+    pub(super) async fn latest_price_before(
+        &self,
+        code: &str,
+        before: NaiveDate,
+    ) -> anyhow::Result<Option<SourceObservation>> {
+        let observations = self
+            .price_history_with_start(code, None, before - chrono::Duration::days(1))
+            .await?;
+        Ok(observations
+            .into_iter()
+            .filter(|observation| observation.date < before)
+            .max_by_key(|observation| observation.date))
+    }
+
+    async fn price_history_with_start(
+        &self,
+        code: &str,
+        start: Option<NaiveDate>,
+        end: NaiveDate,
+    ) -> anyhow::Result<Vec<SourceObservation>> {
+        let mut query = vec![
+            ("query", format!("{code}:nav,totalReturn")),
+            ("frequency", "d".to_owned()),
+            ("trackMarketData", "3.6.5".to_owned()),
+            ("instid", "DOTCOM".to_owned()),
+            ("endDate", end.format(DATE_FORMAT).to_string()),
+        ];
+        if let Some(start) = start {
+            query.push(("startDate", start.format(DATE_FORMAT).to_string()));
+        }
         let body = self
             .get_with_token_refresh(code, |token| {
                 self.client
@@ -49,22 +88,12 @@ impl MorningstarAdapter {
                     .header("accept", "application/json, text/plain, */*")
                     .header("origin", "https://www.morningstar.com")
                     .header("referer", "https://www.morningstar.com/")
-                    .query(&[
-                        ("query", format!("{code}:nav,totalReturn")),
-                        ("frequency", "d".to_owned()),
-                        ("startDate", start.format(DATE_FORMAT).to_string()),
-                        ("endDate", end.format(DATE_FORMAT).to_string()),
-                        ("trackMarketData", "3.6.5".to_owned()),
-                        ("instid", "DOTCOM".to_owned()),
-                    ])
+                    .query(&query)
             })
             .await
             .context("Morningstar chartservice request failed")?;
 
         let observations = parse_timeseries(&body)?;
-        if observations.is_empty() {
-            bail!("No NAV data found for '{code}'");
-        }
         Ok(observations)
     }
 

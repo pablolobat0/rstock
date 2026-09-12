@@ -235,7 +235,7 @@ pub(crate) async fn prepare_nav_valuation_data(
                 currency,
                 &format_date(start),
                 &format_date(end_date),
-                7,
+                true,
                 market_data,
             )
             .await?
@@ -441,15 +441,7 @@ async fn fill_historical_asset_prices(
     }
     let mut writes = Vec::new();
     for interval in intervals {
-        let source_start = if scope.discover_boundary {
-            let predecessor_start = interval
-                .start
-                .checked_sub_signed(chrono::Duration::days(7))
-                .context("historical asset predecessor date underflow")?;
-            historical_source_start_date(asset, predecessor_start)?
-        } else {
-            historical_source_start_date(asset, interval.start)?
-        };
+        let source_start = historical_source_start_date(asset, interval.start)?;
         let observations = match fetch_asset_price_history_for_interval(
             market_data,
             asset,
@@ -529,9 +521,15 @@ async fn fill_nav_exchange_rates(
     let futures: Vec<_> = currencies
         .iter()
         .map(|currency| async move {
-            let result =
-                fill_historical_exchange_rates(db, currency, start_date, end_date, 0, market_data)
-                    .await;
+            let result = fill_historical_exchange_rates(
+                db,
+                currency,
+                start_date,
+                end_date,
+                false,
+                market_data,
+            )
+            .await;
             (currency, result)
         })
         .collect();
@@ -560,7 +558,7 @@ async fn fill_historical_exchange_rates(
     from_currency: &str,
     start_date: &str,
     end_date: &str,
-    predecessor_padding_days: i64,
+    discover_predecessor: bool,
     market_data: &MarketData,
 ) -> anyhow::Result<Option<FilledValues>> {
     let start = policy::parse_market_data_date(start_date, "historical FX start date")?;
@@ -587,12 +585,8 @@ async fn fill_historical_exchange_rates(
     let intervals = missing_intervals(start, requested_end, &cached_dates);
     let mut writes = Vec::new();
     for interval in intervals {
-        let source_start = interval
-            .start
-            .checked_sub_signed(chrono::Duration::days(predecessor_padding_days))
-            .context("historical FX predecessor date underflow")?;
         let observations = match market_data
-            .exchange_rate_history(from_currency, BASE_CURRENCY, source_start, interval.end)
+            .exchange_rate_history(from_currency, BASE_CURRENCY, interval.start, interval.end)
             .await
         {
             Ok(observations) => observations,
@@ -601,6 +595,26 @@ async fn fill_historical_exchange_rates(
                 continue;
             }
         };
+        let mut observations = observations;
+        if discover_predecessor
+            && !observations
+                .iter()
+                .any(|observation| observation.date < interval.start)
+        {
+            match market_data
+                .latest_exchange_rate_before(from_currency, BASE_CURRENCY, interval.start)
+                .await
+            {
+                Ok(Some(observation)) => observations.push(observation),
+                Ok(None) => {}
+                Err(error) => tracing::warn!(
+                    %from_currency,
+                    to_currency = BASE_CURRENCY,
+                    error = %format!("{error:#}"),
+                    "failed to fetch historical FX predecessor"
+                ),
+            }
+        }
         append_fx_interval_writes(
             from_currency,
             interval,
@@ -745,16 +759,18 @@ fn forward_filled_interval(
     } else {
         return Vec::new();
     };
-    let mut last_known = known
-        .range(..interval.start)
-        .next_back()
-        .map(|(_, value)| *value)
-        .or_else(|| {
-            source_values
-                .range(..interval.start)
-                .next_back()
-                .map(|(_, value)| *value)
-        });
+    let cached_predecessor = known.range(..interval.start).next_back();
+    let source_predecessor = source_values.range(..interval.start).next_back();
+    let mut last_known = match (cached_predecessor, source_predecessor) {
+        (Some((cached_date, cached_value)), Some((source_date, source_value)))
+            if source_date > cached_date =>
+        {
+            Some(*source_value)
+        }
+        (Some((_, cached_value)), _) => Some(*cached_value),
+        (None, Some((_, source_value))) => Some(*source_value),
+        (None, None) => None,
+    };
     let mut filled = Vec::new();
     let mut current = interval.start;
     while current <= fill_end {
@@ -819,6 +835,33 @@ async fn fetch_asset_price_history_for_interval(
         interval.end,
     )
     .await?;
+    if scope.discover_boundary
+        && !observations
+            .iter()
+            .any(|observation| observation.date < interval.start)
+    {
+        let predecessor = match asset.asset_type {
+            AssetType::Stock => {
+                market_data
+                    .latest_stock_price_before(lookup_identifier, interval.start)
+                    .await
+            }
+            AssetType::Fund | AssetType::Etf => {
+                market_data
+                    .latest_fund_price_before(lookup_identifier, interval.start)
+                    .await
+            }
+        };
+        match predecessor {
+            Ok(Some(observation)) => observations.push(observation),
+            Ok(None) => {}
+            Err(error) => tracing::warn!(
+                ticker = %asset.ticker,
+                error = %format!("{error:#}"),
+                "failed to fetch historical predecessor price"
+            ),
+        }
+    }
     if !scope.discover_boundary
         || interval.end != scope.required_end
         || observations
