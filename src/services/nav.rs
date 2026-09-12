@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use anyhow::Context;
 use chrono::{Duration, NaiveDate};
 use sea_orm::{DatabaseConnection, TransactionTrait};
+use tracing::Instrument;
 
 use crate::constants::{format_date, FLOAT_EPSILON, INITIAL_NAV};
 use crate::db::repos::{
@@ -18,6 +19,8 @@ use crate::services::market_data::{MarketData, NavValuationData, NavValuationInt
 pub struct PortfolioHistoryReadiness {
     pub latest_snapshot: Option<PortfolioSnapshot>,
     pub market_data_limitations: Vec<MarketDataLimitation>,
+    #[allow(dead_code)]
+    execution_database_reads: usize,
     pub(crate) performance_market_data_prepared: bool,
 }
 
@@ -65,6 +68,7 @@ pub async fn ensure_portfolio_history(
             return Ok(PortfolioHistoryReadiness {
                 latest_snapshot: Some(snapshot),
                 market_data_limitations: Vec::new(),
+                execution_database_reads: 0,
                 performance_market_data_prepared: false,
             });
         }
@@ -80,6 +84,7 @@ pub async fn ensure_portfolio_history(
                 return Ok(PortfolioHistoryReadiness {
                     latest_snapshot: None,
                     market_data_limitations: Vec::new(),
+                    execution_database_reads: 0,
                     performance_market_data_prepared: false,
                 });
             };
@@ -93,6 +98,7 @@ pub async fn ensure_portfolio_history(
         return Ok(PortfolioHistoryReadiness {
             latest_snapshot: checkpoint,
             market_data_limitations: Vec::new(),
+            execution_database_reads: 0,
             performance_market_data_prepared: false,
         });
     }
@@ -107,11 +113,16 @@ pub async fn ensure_portfolio_history(
     )
     .await?;
     let limitations = plan.limitations.clone();
-    execute_rebuild_plan(db, &plan).await?;
+    let (execution, execution_database_reads) = crate::db::repos::with_nav_execution_probe(
+        execute_rebuild_plan(db, &plan).instrument(tracing::info_span!("nav_plan_execution")),
+    )
+    .await;
+    execution?;
 
     Ok(PortfolioHistoryReadiness {
         latest_snapshot: portfolio_history_repo::find_latest(db).await?,
         market_data_limitations: limitations,
+        execution_database_reads,
         performance_market_data_prepared: true,
     })
 }
@@ -419,7 +430,6 @@ fn find_calculable_prefix(
                     add_limitation(&mut limitations, limitation);
                 }
                 blocked = true;
-                continue;
             }
             if !valuation_data.has_fx_on(asset, current) {
                 if let Some(limitation) = valuation_data.price_limitation(asset, current, end_date)

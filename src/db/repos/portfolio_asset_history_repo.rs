@@ -9,6 +9,7 @@ pub async fn find_by_date(
     db: &impl ConnectionTrait,
     date: &str,
 ) -> anyhow::Result<Vec<AssetSnapshot>> {
+    super::record_nav_database_read();
     let results = portfolio_asset_history::Entity::find()
         .filter(portfolio_asset_history::Column::Date.eq(date))
         .all(db)

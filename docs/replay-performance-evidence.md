@@ -6,12 +6,17 @@ SQLite implementation, deterministic cached-source fixture, and Criterion
 settings (`--sample-size 10 --measurement-time 0.05 --warm-up-time 0.05`).
 Fixture construction is outside timed closures; no network source is used.
 
+This is historical R77-D evidence, not the #68 prepared-NAV acceptance
+measurement. The patched-head column is intentionally identified by the
+commit that produced that run; it must not be read as evidence for the current
+uncommitted tree.
+
 ## Comparison
 
 The table reports Criterion's measured `[low, point, high]` interval. Values are
 wall-clock time per operation; `ms` and `s` are shown to keep the scale clear.
 
-| path | input scale | b007d2f | f2b00d7 corrected base | 6d3722e patched head |
+| path | input scale | b007d2f | f2b00d7 corrected base | 6d3722e historical patched head |
 | --- | --- | ---: | ---: | ---: |
 | `nav_readiness_warm_representative` | 50 assets / 10 years / 5,000 transactions | 416.05–426.26–439.54 ms | 407.38–415.37–423.59 ms | 407.07–417.97–429.30 ms |
 | `nav_rebuild_incremental` | 5 assets / 1 year / 100 transactions; rebuild suffix from 2015-06-01 | 14.063–14.954–16.012 ms | 13.270–13.609–13.992 ms | 13.962–16.641–20.817 ms |

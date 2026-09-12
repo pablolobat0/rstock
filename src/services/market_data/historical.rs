@@ -199,16 +199,17 @@ pub(crate) async fn prepare_nav_valuation_data(
                     valuation_interval.asset_id
                 )
             })?;
-        // Request a short look-ahead so a weekend or holiday immediately after
-        // a closing interval can use the next source observation as its seed.
-        let request_end = (valuation_interval.end + chrono::Duration::days(7)).min(end_date);
         let values = fill_historical_asset_prices(
             db,
             asset,
             lookup_identifier(asset)?,
             &format_date(valuation_interval.start),
-            &format_date(request_end),
-            valuation_interval.end,
+            AssetFillScope {
+                required_end: valuation_interval.end,
+                cache_end: end_date,
+                source_end: end_date,
+                discover_boundary: true,
+            },
             market_data,
         )
         .await?
@@ -234,6 +235,7 @@ pub(crate) async fn prepare_nav_valuation_data(
                 currency,
                 &format_date(start),
                 &format_date(end_date),
+                7,
                 market_data,
             )
             .await?
@@ -364,8 +366,12 @@ async fn fill_nav_asset_prices(
                 asset,
                 lookup_identifier,
                 start_date,
-                end_date,
-                persist_end,
+                AssetFillScope {
+                    required_end: persist_end,
+                    cache_end: persist_end,
+                    source_end: persist_end,
+                    discover_boundary: false,
+                },
                 market_data,
             )
             .await;
@@ -397,16 +403,19 @@ async fn fill_historical_asset_prices(
     asset: &Asset,
     lookup_identifier: &str,
     start_date: &str,
-    end_date: &str,
-    persist_end: NaiveDate,
+    scope: AssetFillScope,
     market_data: &MarketData,
 ) -> anyhow::Result<Option<FilledValues>> {
     let start = policy::parse_market_data_date(start_date, "historical asset price start date")?;
-    let requested_end =
-        policy::parse_market_data_date(end_date, "historical asset price end date")?;
+    let required_end = scope.required_end;
     let latest_completed_date = market_data.today() - chrono::Duration::days(1);
-    let cached =
-        daily_price_repo::find_coverage_with_seed(db, asset.id, start_date, end_date).await?;
+    let cached = daily_price_repo::find_coverage_with_seed(
+        db,
+        asset.id,
+        start_date,
+        &format_date(scope.cache_end),
+    )
+    .await?;
     let mut known: BTreeMap<NaiveDate, f64> = cached
         .iter()
         .map(|(date, value)| {
@@ -417,16 +426,37 @@ async fn fill_historical_asset_prices(
         })
         .collect::<anyhow::Result<_>>()?;
     let cached_dates = known.keys().copied().collect::<HashSet<_>>();
-    let intervals = missing_intervals(start, requested_end, &cached_dates);
+    let intervals = missing_intervals(start, required_end, &cached_dates);
+    if intervals.is_empty() {
+        let latest_date = known
+            .range(..=required_end)
+            .next_back()
+            .map(|(date, _)| *date);
+        return Ok(latest_date.map(|date| FilledValues {
+            latest: LatestMarketDataDate {
+                date: format_date(date),
+            },
+            values: known,
+        }));
+    }
     let mut writes = Vec::new();
     for interval in intervals {
-        let source_start = historical_source_start_date(asset, interval.start)?;
-        let observations = match fetch_asset_price_history(
+        let source_start = if scope.discover_boundary {
+            let predecessor_start = interval
+                .start
+                .checked_sub_signed(chrono::Duration::days(7))
+                .context("historical asset predecessor date underflow")?;
+            historical_source_start_date(asset, predecessor_start)?
+        } else {
+            historical_source_start_date(asset, interval.start)?
+        };
+        let observations = match fetch_asset_price_history_for_interval(
             market_data,
             asset,
             lookup_identifier,
             source_start,
-            interval.end,
+            interval,
+            scope,
         )
         .await
         {
@@ -441,7 +471,12 @@ async fn fill_historical_asset_prices(
             interval,
             observations,
             latest_completed_date,
-            persist_end,
+            required_end,
+            if scope.discover_boundary {
+                scope.source_end
+            } else {
+                interval.end
+            },
             &mut known,
             &mut writes,
         );
@@ -450,7 +485,7 @@ async fn fill_historical_asset_prices(
         daily_price_repo::insert_many_immutable(db, &writes).await?;
     }
     let latest_date = known
-        .range(..=requested_end)
+        .range(..=required_end)
         .next_back()
         .map(|(date, _)| *date);
     Ok(latest_date.map(|date| FilledValues {
@@ -495,7 +530,7 @@ async fn fill_nav_exchange_rates(
         .iter()
         .map(|currency| async move {
             let result =
-                fill_historical_exchange_rates(db, currency, start_date, end_date, market_data)
+                fill_historical_exchange_rates(db, currency, start_date, end_date, 0, market_data)
                     .await;
             (currency, result)
         })
@@ -525,6 +560,7 @@ async fn fill_historical_exchange_rates(
     from_currency: &str,
     start_date: &str,
     end_date: &str,
+    predecessor_padding_days: i64,
     market_data: &MarketData,
 ) -> anyhow::Result<Option<FilledValues>> {
     let start = policy::parse_market_data_date(start_date, "historical FX start date")?;
@@ -551,8 +587,12 @@ async fn fill_historical_exchange_rates(
     let intervals = missing_intervals(start, requested_end, &cached_dates);
     let mut writes = Vec::new();
     for interval in intervals {
+        let source_start = interval
+            .start
+            .checked_sub_signed(chrono::Duration::days(predecessor_padding_days))
+            .context("historical FX predecessor date underflow")?;
         let observations = match market_data
-            .exchange_rate_history(from_currency, BASE_CURRENCY, interval.start, interval.end)
+            .exchange_rate_history(from_currency, BASE_CURRENCY, source_start, interval.end)
             .await
         {
             Ok(observations) => observations,
@@ -591,6 +631,14 @@ struct DateInterval {
     end: NaiveDate,
 }
 
+#[derive(Clone, Copy)]
+struct AssetFillScope {
+    required_end: NaiveDate,
+    cache_end: NaiveDate,
+    source_end: NaiveDate,
+    discover_boundary: bool,
+}
+
 fn missing_intervals(
     start: NaiveDate,
     end: NaiveDate,
@@ -621,25 +669,33 @@ fn missing_intervals(
     intervals
 }
 
+#[allow(clippy::too_many_arguments)]
 fn append_asset_interval_writes(
     asset_id: i32,
     interval: DateInterval,
     observations: Vec<SourceObservation>,
     latest_completed_date: NaiveDate,
     persist_end: NaiveDate,
+    observation_end: NaiveDate,
     known: &mut BTreeMap<NaiveDate, f64>,
     writes: &mut Vec<daily_price_repo::DailyPriceWrite>,
 ) {
     writes.extend(
-        forward_filled_interval(interval, observations, latest_completed_date, known)
-            .into_iter()
-            .filter(|(date, _)| *date <= persist_end)
-            .map(|(date, value)| daily_price_repo::DailyPriceWrite {
-                asset_id,
-                date: format_date(date),
-                price: value,
-                is_api_failure: false,
-            }),
+        forward_filled_interval(
+            interval,
+            observations,
+            latest_completed_date,
+            observation_end,
+            known,
+        )
+        .into_iter()
+        .filter(|(date, _)| *date <= persist_end)
+        .map(|(date, value)| daily_price_repo::DailyPriceWrite {
+            asset_id,
+            date: format_date(date),
+            price: value,
+            is_api_failure: false,
+        }),
     );
 }
 
@@ -652,14 +708,20 @@ fn append_fx_interval_writes(
     writes: &mut Vec<exchange_rate_repo::ExchangeRateWrite>,
 ) {
     writes.extend(
-        forward_filled_interval(interval, observations, latest_completed_date, known)
-            .into_iter()
-            .map(|(date, value)| exchange_rate_repo::ExchangeRateWrite {
-                from_currency: from_currency.to_owned(),
-                to_currency: BASE_CURRENCY.to_owned(),
-                date: format_date(date),
-                rate: value,
-            }),
+        forward_filled_interval(
+            interval,
+            observations,
+            latest_completed_date,
+            interval.end,
+            known,
+        )
+        .into_iter()
+        .map(|(date, value)| exchange_rate_repo::ExchangeRateWrite {
+            from_currency: from_currency.to_owned(),
+            to_currency: BASE_CURRENCY.to_owned(),
+            date: format_date(date),
+            rate: value,
+        }),
     );
 }
 
@@ -667,9 +729,11 @@ fn forward_filled_interval(
     interval: DateInterval,
     observations: Vec<SourceObservation>,
     latest_completed_date: NaiveDate,
+    observation_end: NaiveDate,
     known: &mut BTreeMap<NaiveDate, f64>,
 ) -> Vec<(NaiveDate, f64)> {
-    let source_values = interval_source_values(interval, observations, latest_completed_date);
+    let source_values =
+        interval_source_values(observations, latest_completed_date, observation_end);
     let has_later_cached_value = known
         .range((interval.end + chrono::Duration::days(1))..)
         .next()
@@ -677,14 +741,20 @@ fn forward_filled_interval(
     let fill_end = if has_later_cached_value {
         interval.end
     } else if let Some(source_end) = source_values.keys().next_back().copied() {
-        source_end
+        source_end.min(interval.end)
     } else {
         return Vec::new();
     };
     let mut last_known = known
         .range(..interval.start)
         .next_back()
-        .map(|(_, value)| *value);
+        .map(|(_, value)| *value)
+        .or_else(|| {
+            source_values
+                .range(..interval.start)
+                .next_back()
+                .map(|(_, value)| *value)
+        });
     let mut filled = Vec::new();
     let mut current = interval.start;
     while current <= fill_end {
@@ -699,16 +769,14 @@ fn forward_filled_interval(
 }
 
 fn interval_source_values(
-    interval: DateInterval,
     observations: Vec<SourceObservation>,
     latest_completed_date: NaiveDate,
+    observation_end: NaiveDate,
 ) -> BTreeMap<NaiveDate, f64> {
     observations
         .into_iter()
         .filter(|observation| {
-            observation.date >= interval.start
-                && observation.date <= interval.end
-                && observation.date <= latest_completed_date
+            observation.date <= observation_end && observation.date <= latest_completed_date
         })
         .map(|observation| (observation.date, observation.value))
         .collect()
@@ -733,4 +801,52 @@ async fn fetch_asset_price_history(
                 .await
         }
     }
+}
+
+async fn fetch_asset_price_history_for_interval(
+    market_data: &MarketData,
+    asset: &Asset,
+    lookup_identifier: &str,
+    source_start: NaiveDate,
+    interval: DateInterval,
+    scope: AssetFillScope,
+) -> anyhow::Result<Vec<SourceObservation>> {
+    let mut observations = fetch_asset_price_history(
+        market_data,
+        asset,
+        lookup_identifier,
+        source_start,
+        interval.end,
+    )
+    .await?;
+    if !scope.discover_boundary
+        || interval.end != scope.required_end
+        || observations
+            .iter()
+            .any(|observation| observation.date >= interval.end)
+    {
+        return Ok(observations);
+    }
+
+    let boundary_start = interval.end + chrono::Duration::days(1);
+    if boundary_start > scope.source_end {
+        return Ok(observations);
+    }
+    match fetch_asset_price_history(
+        market_data,
+        asset,
+        lookup_identifier,
+        boundary_start,
+        scope.source_end,
+    )
+    .await
+    {
+        Ok(boundary_observations) => observations.extend(boundary_observations),
+        Err(error) => tracing::warn!(
+            ticker = %asset.ticker,
+            error = %format!("{error:#}"),
+            "failed to fetch historical boundary prices"
+        ),
+    }
+    Ok(observations)
 }

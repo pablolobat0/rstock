@@ -32,6 +32,7 @@ pub async fn find_all_ordered_by_date(
     start_date: Option<&str>,
     end_date: Option<&str>,
 ) -> anyhow::Result<Vec<Transaction>> {
+    super::record_nav_database_read();
     let mut query = transaction::Entity::find()
         .order_by_asc(transaction::Column::Date)
         .order_by_asc(transaction::Column::Id);
@@ -54,6 +55,7 @@ pub async fn find_by_asset_id(
     db: &impl ConnectionTrait,
     asset_id: i32,
 ) -> anyhow::Result<Vec<Transaction>> {
+    super::record_nav_database_read();
     let results = transaction::Entity::find()
         .filter(transaction::Column::AssetId.eq(asset_id))
         .order_by_asc(transaction::Column::Date)
@@ -113,6 +115,7 @@ pub async fn insert_many(
 }
 
 pub async fn find_by_id(db: &impl ConnectionTrait, id: i32) -> anyhow::Result<Option<Transaction>> {
+    super::record_nav_database_read();
     let result = transaction::Entity::find_by_id(id).one(db).await?;
     result.map(Transaction::try_from).transpose()
 }

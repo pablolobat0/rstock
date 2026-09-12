@@ -18,6 +18,7 @@ pub async fn find_by_ticker(
     db: &impl ConnectionTrait,
     ticker: &str,
 ) -> anyhow::Result<Option<Asset>> {
+    super::record_nav_database_read();
     let result = asset::Entity::find()
         .filter(asset::Column::Ticker.eq(ticker))
         .one(db)
@@ -29,6 +30,7 @@ pub async fn find_by_morningstar_code(
     db: &impl ConnectionTrait,
     code: &str,
 ) -> anyhow::Result<Option<Asset>> {
+    super::record_nav_database_read();
     let result = asset::Entity::find()
         .filter(asset::Column::MorningstarCode.eq(code))
         .one(db)
@@ -40,6 +42,7 @@ pub async fn find_by_ids(
     db: &impl ConnectionTrait,
     ids: impl IntoIterator<Item = i32>,
 ) -> anyhow::Result<Vec<Asset>> {
+    super::record_nav_database_read();
     let ids: Vec<i32> = ids.into_iter().collect();
     let results = asset::Entity::find()
         .filter(asset::Column::Id.is_in(ids))
@@ -49,6 +52,7 @@ pub async fn find_by_ids(
 }
 
 pub async fn find_all(db: &impl ConnectionTrait) -> anyhow::Result<Vec<Asset>> {
+    super::record_nav_database_read();
     let results = asset::Entity::find()
         .order_by_asc(asset::Column::Ticker)
         .all(db)

@@ -1,8 +1,13 @@
 use std::collections::HashMap;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
 
 use migration::{Migrator, MigratorTrait};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, Database, DatabaseConnection, EntityTrait, QueryFilter, Set,
+    ActiveModelTrait, ColumnTrait, ConnectOptions, Database, DatabaseConnection, EntityTrait,
+    QueryFilter, QueryOrder, Set,
 };
 
 use rstock::db::entities::{
@@ -14,13 +19,94 @@ use rstock::services::clock::Clock;
 use rstock::services::market_data::{MarketData, MarketDataSources, SourceObservation};
 
 pub async fn setup_test_db() -> DatabaseConnection {
-    let db = Database::connect("sqlite::memory:")
+    let mut options = ConnectOptions::new("sqlite::memory:");
+    options.sqlx_logging(true);
+    let db = Database::connect(options)
         .await
         .expect("failed to connect to in-memory SQLite");
     Migrator::up(&db, None)
         .await
         .expect("failed to run migrations");
     db
+}
+
+pub async fn clear_nav_history(db: &DatabaseConnection) {
+    portfolio_history::Entity::delete_many()
+        .exec(db)
+        .await
+        .expect("failed to clear portfolio history");
+    portfolio_asset_history::Entity::delete_many()
+        .exec(db)
+        .await
+        .expect("failed to clear portfolio asset history");
+}
+
+pub async fn insert_oversized_nav_checkpoint(db: &DatabaseConnection, count: usize) {
+    let assets: Vec<_> = (0..count)
+        .map(|index| asset::ActiveModel {
+            ticker: Set(format!("XFAKEOVERSIZED{index}")),
+            name: Set(format!("Oversized Stock {index}")),
+            asset_type: Set("stock".to_owned()),
+            currency: Set("EUR".to_owned()),
+            created_at: Set("2025-01-01T00:00:00".to_owned()),
+            ..Default::default()
+        })
+        .collect();
+    for chunk in assets.chunks(100) {
+        asset::Entity::insert_many(chunk.iter().cloned())
+            .exec(db)
+            .await
+            .expect("failed to insert oversized checkpoint assets");
+    }
+    let assets = asset::Entity::find()
+        .order_by_asc(asset::Column::Id)
+        .all(db)
+        .await
+        .expect("failed to load oversized checkpoint assets");
+    let prices: Vec<_> = assets
+        .iter()
+        .map(|record| daily_asset_price::ActiveModel {
+            asset_id: Set(record.id),
+            date: Set("2025-01-02".to_owned()),
+            closing_price: Set(10.0),
+            is_api_failure: Set(false),
+            ..Default::default()
+        })
+        .collect();
+    for chunk in prices.chunks(100) {
+        daily_asset_price::Entity::insert_many(chunk.iter().cloned())
+            .exec(db)
+            .await
+            .expect("failed to insert oversized checkpoint prices");
+    }
+    let snapshots: Vec<_> = assets
+        .iter()
+        .map(|record| portfolio_asset_history::ActiveModel {
+            date: Set("2025-01-01".to_owned()),
+            asset_id: Set(record.id),
+            quantity: Set(1.0),
+            closing_price: Set(10.0),
+            market_value: Set(10.0),
+            exchange_rate: Set(1.0),
+            ..Default::default()
+        })
+        .collect();
+    for chunk in snapshots.chunks(100) {
+        portfolio_asset_history::Entity::insert_many(chunk.iter().cloned())
+            .exec(db)
+            .await
+            .expect("failed to insert oversized checkpoint snapshots");
+    }
+    portfolio_history::Entity::insert(portfolio_history::ActiveModel {
+        date: Set("2025-01-01".to_owned()),
+        asset_value: Set(count as f64 * 10.0),
+        total_value: Set(count as f64 * 10.0),
+        outstanding_shares: Set(count as f64 / 10.0),
+        nav: Set(100.0),
+    })
+    .exec(db)
+    .await
+    .expect("failed to insert oversized checkpoint portfolio snapshot");
 }
 
 pub async fn insert_asset(
@@ -389,6 +475,7 @@ pub struct MockMarketDataSources {
     pub stock_info: HashMap<String, StockInfo>,
     pub fund_data: HashMap<String, FundData>,
     pub fund_quote_metadata: HashMap<String, FundQuoteMetadata>,
+    pub historical_source_calls: Arc<AtomicUsize>,
 }
 
 impl MockMarketDataSources {
@@ -400,7 +487,12 @@ impl MockMarketDataSources {
             stock_info: HashMap::new(),
             fund_data: HashMap::new(),
             fund_quote_metadata: HashMap::new(),
+            historical_source_calls: Arc::new(AtomicUsize::new(0)),
         }
+    }
+
+    pub fn historical_source_call_count(&self) -> usize {
+        self.historical_source_calls.load(Ordering::Relaxed)
     }
 }
 
@@ -442,6 +534,7 @@ impl MarketDataSources for MockMarketDataSources {
         start: chrono::NaiveDate,
         end: chrono::NaiveDate,
     ) -> anyhow::Result<Vec<SourceObservation>> {
+        self.historical_source_calls.fetch_add(1, Ordering::Relaxed);
         Ok(to_source_observations(
             self.historical_prices
                 .get(ticker)
@@ -459,6 +552,7 @@ impl MarketDataSources for MockMarketDataSources {
         end: chrono::NaiveDate,
     ) -> anyhow::Result<Vec<SourceObservation>> {
         assert!(!self.panic_on_fund_price_history);
+        self.historical_source_calls.fetch_add(1, Ordering::Relaxed);
         Ok(to_source_observations(
             self.historical_prices
                 .get(code)
@@ -477,6 +571,7 @@ impl MarketDataSources for MockMarketDataSources {
         end: chrono::NaiveDate,
     ) -> anyhow::Result<Vec<SourceObservation>> {
         let pair = format!("{from}{to}");
+        self.historical_source_calls.fetch_add(1, Ordering::Relaxed);
         Ok(to_source_observations(
             self.exchange_rates.get(&pair).cloned().unwrap_or_default(),
             start,
