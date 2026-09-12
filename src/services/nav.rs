@@ -368,6 +368,7 @@ fn find_calculable_prefix(
             .push(transaction);
     }
     let mut limitations = Vec::new();
+    let mut first_blocked_date = None;
     let mut current = start_date;
     while current <= end_date {
         let date = format_date(current);
@@ -400,6 +401,7 @@ fn find_calculable_prefix(
                         add_limitation(&mut limitations, limitation);
                     }
                     blocked = true;
+                    first_blocked_date.get_or_insert(current);
                 }
                 holdings.insert(
                     transaction.transition.entry.asset_id,
@@ -439,11 +441,14 @@ fn find_calculable_prefix(
             }
         }
         if blocked {
-            return Ok((current - Duration::days(1), limitations));
+            first_blocked_date.get_or_insert(current);
         }
         current += Duration::days(1);
     }
-    Ok((end_date, limitations))
+    Ok((
+        first_blocked_date.map_or(end_date, |date| date - Duration::days(1)),
+        limitations,
+    ))
 }
 
 fn conversion_limitation(

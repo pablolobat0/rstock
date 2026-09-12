@@ -197,7 +197,9 @@ pub(crate) async fn prepare_nav_valuation_data(
                 interval.asset_id
             )
         })?;
-        let request_end = (interval.end + chrono::Duration::days(1)).min(end_date);
+        // Request a short look-ahead so a weekend or holiday immediately after
+        // a closing interval can use the next source observation as its seed.
+        let request_end = (interval.end + chrono::Duration::days(7)).min(end_date);
         let values = fill_historical_asset_prices(
             db,
             asset,

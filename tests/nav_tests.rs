@@ -2002,25 +2002,25 @@ async fn full_sale_date_does_not_require_a_closing_price() {
 async fn liquidation_boundary_observation_supports_forward_filled_weekend() {
     let db = common::setup_test_db().await;
     let asset = common::insert_asset(&db, "XFAKEBOUNDARY", "Boundary Stock", "stock", "EUR").await;
-    common::insert_transaction(&db, asset, "2025-01-03", 1.0, 10.0, 0.0).await;
-    common::insert_sell_transaction(&db, asset, "2025-01-06", 1.0, 10.0, 0.0).await;
+    common::insert_transaction(&db, asset, "2025-01-02", 1.0, 10.0, 0.0).await;
+    common::insert_sell_transaction(&db, asset, "2025-01-03", 1.0, 10.0, 0.0).await;
     let mut sources = common::MockMarketDataSources::new();
     sources.historical_prices.insert(
         "XFAKEBOUNDARY".to_owned(),
         vec![
-            ("2025-01-03".to_owned(), 10.0),
-            ("2025-01-06".to_owned(), 10.0),
+            ("2025-01-02".to_owned(), 10.0),
+            ("2025-01-07".to_owned(), 10.0),
         ],
     );
 
     let readiness = nav::ensure_portfolio_history(
         &db,
-        &common::market_data_at(&sources, NaiveDate::from_ymd_opt(2025, 1, 7).unwrap()),
+        &common::market_data_at(&sources, NaiveDate::from_ymd_opt(2025, 1, 8).unwrap()),
     )
     .await
     .unwrap();
 
-    assert_eq!(readiness.latest_snapshot.unwrap().date, "2025-01-06");
+    assert_eq!(readiness.latest_snapshot.unwrap().date, "2025-01-07");
     assert!(common::get_portfolio_snapshot(&db, "2025-01-04")
         .await
         .is_some());
@@ -2058,7 +2058,7 @@ async fn missing_fx_reports_all_same_day_currency_limitations() {
         .iter()
         .filter_map(|limitation| match &limitation.subject {
             MarketDataSubject::FxRate { currency } => Some(currency.as_str()),
-            _ => None,
+            MarketDataSubject::Asset { .. } => None,
         })
         .collect();
     assert_eq!(currencies, ["GBP", "USD"].into_iter().collect());

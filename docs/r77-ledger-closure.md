@@ -229,13 +229,12 @@ timed closures. The corrected-head intervals are:
 | Stress full rebuild | 100 assets / 20 years / 20,000 transactions | 20.906–21.606–22.265 s |
 
 The artifact records low/point/high wall-clock intervals, not fabricated
-targets. Warm readiness remains dominated by the correctness-preserving
-complete-history audit; full rebuild remains dominated by calendar-day and
-per-asset snapshot work. No seeded replay interface, persisted read model,
-sparse snapshot, skipped audit, or market-fetch relocation is justified by the
-measurements. Cross-NAV/current-position replay sharing remains deferred because
-the required FX coverage and no-replay-payload seam would add complexity
-without measured benefit.
+targets. Prepared warm readiness trusts the latest Complete NAV checkpoint and
+uses a seeded ledger suffix; full rebuild remains dominated by calendar-day and
+per-asset snapshot work. Normalized snapshots and MarketData-owned preparation
+remain preferable to sparse history or market fetches during replay.
+Cross-NAV/current-position replay sharing remains separate because the required
+FX coverage and public contracts differ.
 
 ## Verification Record
 

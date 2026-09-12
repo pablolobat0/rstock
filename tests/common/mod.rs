@@ -439,22 +439,24 @@ impl MarketDataSources for MockMarketDataSources {
     async fn stock_price_history(
         &self,
         ticker: &str,
-        _start: chrono::NaiveDate,
-        _end: chrono::NaiveDate,
+        start: chrono::NaiveDate,
+        end: chrono::NaiveDate,
     ) -> anyhow::Result<Vec<SourceObservation>> {
         Ok(to_source_observations(
             self.historical_prices
                 .get(ticker)
                 .cloned()
                 .unwrap_or_default(),
+            start,
+            end,
         ))
     }
 
     async fn fund_price_history(
         &self,
         code: &str,
-        _start: chrono::NaiveDate,
-        _end: chrono::NaiveDate,
+        start: chrono::NaiveDate,
+        end: chrono::NaiveDate,
     ) -> anyhow::Result<Vec<SourceObservation>> {
         assert!(!self.panic_on_fund_price_history);
         Ok(to_source_observations(
@@ -462,6 +464,8 @@ impl MarketDataSources for MockMarketDataSources {
                 .get(code)
                 .cloned()
                 .unwrap_or_default(),
+            start,
+            end,
         ))
     }
 
@@ -469,12 +473,14 @@ impl MarketDataSources for MockMarketDataSources {
         &self,
         from: &str,
         to: &str,
-        _start: chrono::NaiveDate,
-        _end: chrono::NaiveDate,
+        start: chrono::NaiveDate,
+        end: chrono::NaiveDate,
     ) -> anyhow::Result<Vec<SourceObservation>> {
         let pair = format!("{from}{to}");
         Ok(to_source_observations(
             self.exchange_rates.get(&pair).cloned().unwrap_or_default(),
+            start,
+            end,
         ))
     }
 
@@ -500,13 +506,17 @@ impl MarketDataSources for MockMarketDataSources {
     }
 }
 
-fn to_source_observations(values: Vec<(String, f64)>) -> Vec<SourceObservation> {
+fn to_source_observations(
+    values: Vec<(String, f64)>,
+    start: chrono::NaiveDate,
+    end: chrono::NaiveDate,
+) -> Vec<SourceObservation> {
     values
         .into_iter()
-        .map(|(date, value)| SourceObservation {
-            date: chrono::NaiveDate::parse_from_str(&date, rstock::constants::DATE_FORMAT)
-                .expect("mock source observation date should be valid"),
-            value,
+        .filter_map(|(date, value)| {
+            let date = chrono::NaiveDate::parse_from_str(&date, rstock::constants::DATE_FORMAT)
+                .expect("mock source observation date should be valid");
+            (date >= start && date <= end).then_some(SourceObservation { date, value })
         })
         .collect()
 }

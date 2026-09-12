@@ -38,14 +38,13 @@ reuses the canonical replay produced during preparation rather than replaying
 each open holding a second time; enrichment and market-data policy remain
 separate from pure replay.
 
-The warm-readiness path remains dominated by its complete-history audit, and
-full rebuilds remain dominated by calendar-day and per-asset snapshot work.
-The measured results do not justify a seeded replay interface, persisted read
-models, sparse snapshots, skipped completeness audits, or moving market fetch
-into replay. Cross-NAV/current-position replay sharing is deferred because a
-warm readiness call has no replay payload and current-position enrichment needs
-full transaction-date FX coverage; forcing that seam would add cloning or
-change market-data boundaries without measured benefit.
+The prepared warm-readiness path trusts the latest Complete NAV snapshot and
+uses a seeded ledger suffix; full rebuilds remain dominated by calendar-day and
+per-asset snapshot work. These measurements continue to justify normalized
+snapshots and in-memory valuation preparation rather than sparse history or
+market fetches during replay. Cross-NAV/current-position replay sharing remains
+separate because current-position enrichment needs full transaction-date FX
+coverage and has a distinct public contract.
 
 Correctness remains covered by the existing full/seeded multi-date, same-day
 ordering, sell/dividend reopening, FX-availability, and monetary-effect tests.
