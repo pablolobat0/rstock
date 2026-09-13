@@ -18,7 +18,7 @@ The market data Module will own source coordination and cache policy. It will re
 
 `DefaultMarketDataSources` will be the public production source bundle. It will privately own Yahoo Finance and Morningstar source **Adapters**. Other Modules must not import or call Yahoo Finance or Morningstar **Adapters** directly.
 
-`MarketDataSources` returns raw source observations only. Cache writes, **Forward-filled market data**, **Effective valuation date**, **Market data limitation**, and Base currency conversion remain inside `MarketData`.
+`MarketDataSources` returns raw source observations only, including an optional strict-before predecessor lookup for a requested asset or FX series. Cache writes, **Forward-filled market data**, **Effective valuation date**, **Market data limitation**, and Base currency conversion remain inside `MarketData`.
 
 FX source requests and FX cache persistence use source-neutral currencies rather than provider-specific pair strings. `MarketDataSources::exchange_rate_history` receives normalized `from` and `to` currencies. The FX cache stores `from_currency`, `to_currency`, `date`, and `rate`, with uniqueness on `(from_currency, to_currency, date)`. Provider-specific formatting such as Yahoo's FX ticker shape remains inside the source **Adapter**.
 

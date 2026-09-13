@@ -1,7 +1,4 @@
-use sea_orm::{
-    sea_query::OnConflict, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder,
-    QuerySelect, Set,
-};
+use sea_orm::{sea_query::OnConflict, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, Set};
 
 use crate::db::entities::portfolio_asset_history;
 use crate::models::AssetSnapshot;
@@ -17,25 +14,6 @@ pub async fn find_by_date(
         .all(db)
         .await?;
     Ok(results.into_iter().map(AssetSnapshot::from).collect())
-}
-
-pub async fn find_holdings_at_or_before(
-    db: &impl ConnectionTrait,
-    end_date: &str,
-) -> anyhow::Result<Vec<(String, i32, f64)>> {
-    Ok(portfolio_asset_history::Entity::find()
-        .select_only()
-        .columns([
-            portfolio_asset_history::Column::Date,
-            portfolio_asset_history::Column::AssetId,
-            portfolio_asset_history::Column::Quantity,
-        ])
-        .filter(portfolio_asset_history::Column::Date.lte(end_date))
-        .order_by_asc(portfolio_asset_history::Column::Date)
-        .order_by_asc(portfolio_asset_history::Column::AssetId)
-        .into_tuple()
-        .all(db)
-        .await?)
 }
 
 pub async fn upsert_many(
