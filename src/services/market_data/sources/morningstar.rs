@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use anyhow::{bail, Context};
+use anyhow::Context;
 use base64::Engine;
 use chrono::{NaiveDate, TimeZone, Utc};
 use reqwest::{Client, StatusCode};
@@ -41,13 +41,7 @@ impl MorningstarAdapter {
         start: NaiveDate,
         end: NaiveDate,
     ) -> anyhow::Result<Vec<SourceObservation>> {
-        let observations = self
-            .price_history_with_start(code, Some(start), end)
-            .await?;
-        if observations.is_empty() {
-            bail!("No NAV data found for '{code}'");
-        }
-        Ok(observations)
+        self.price_history_with_start(code, Some(start), end).await
     }
 
     pub(super) async fn latest_price_before(

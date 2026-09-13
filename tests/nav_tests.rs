@@ -2318,6 +2318,155 @@ async fn non_eur_full_sale_requires_transaction_fx_but_not_end_of_day_price() {
 }
 
 #[tokio::test]
+async fn source_only_prior_fx_supports_checkpoint_full_sale_conversion() {
+    let db = common::setup_test_db().await;
+    let asset = common::insert_asset(
+        &db,
+        "XFAKECHECKPOINTSALEFX",
+        "Checkpoint Sale FX",
+        "stock",
+        "USD",
+    )
+    .await;
+    common::insert_transaction(&db, asset, "2025-01-02", 1.0, 10.0, 0.0).await;
+    let mut initial_sources = common::MockMarketDataSources::new();
+    initial_sources.historical_prices.insert(
+        "XFAKECHECKPOINTSALEFX".to_owned(),
+        vec![("2025-01-02".to_owned(), 10.0)],
+    );
+    initial_sources
+        .exchange_rates
+        .insert("USDEUR".to_owned(), vec![("2025-01-02".to_owned(), 0.9)]);
+    nav::ensure_portfolio_history(
+        &db,
+        &common::market_data_at(
+            &initial_sources,
+            NaiveDate::from_ymd_opt(2025, 1, 3).unwrap(),
+        ),
+    )
+    .await
+    .unwrap();
+    common::insert_sell_transaction(&db, asset, "2025-01-03", 1.0, 10.0, 0.0).await;
+    db.execute_unprepared("DELETE FROM daily_exchange_rates")
+        .await
+        .unwrap();
+
+    let mut retry_sources = common::MockMarketDataSources::new();
+    retry_sources
+        .exchange_rates
+        .insert("USDEUR".to_owned(), vec![("2025-01-02".to_owned(), 0.9)]);
+    let readiness = nav::ensure_portfolio_history(
+        &db,
+        &common::market_data_at(&retry_sources, NaiveDate::from_ymd_opt(2025, 1, 4).unwrap()),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(readiness.latest_snapshot.unwrap().date, "2025-01-03");
+    assert!(readiness.market_data_limitations.is_empty());
+    assert!(common::get_asset_snapshots(&db, "2025-01-03")
+        .await
+        .is_empty());
+}
+
+#[tokio::test]
+async fn failed_predecessor_discovery_does_not_freeze_an_older_cached_gap() {
+    let db = common::setup_test_db().await;
+    let asset =
+        common::insert_asset(&db, "XFAKEPREDRETRY", "Predecessor Retry", "stock", "EUR").await;
+    common::insert_transaction(&db, asset, "2025-01-04", 1.0, 10.0, 0.0).await;
+    common::insert_sell_transaction(&db, asset, "2025-01-06", 1.0, 10.0, 0.0).await;
+    common::insert_daily_price(&db, asset, "2025-01-02", 10.0, false).await;
+
+    let mut failing_sources = common::MockMarketDataSources::new();
+    failing_sources.fail_latest_predecessor = true;
+    failing_sources.historical_prices.insert(
+        "XFAKEPREDRETRY".to_owned(),
+        vec![
+            ("2025-01-02".to_owned(), 10.0),
+            ("2025-01-06".to_owned(), 10.0),
+        ],
+    );
+    nav::ensure_portfolio_history(
+        &db,
+        &common::market_data_at(
+            &failing_sources,
+            NaiveDate::from_ymd_opt(2025, 1, 7).unwrap(),
+        ),
+    )
+    .await
+    .unwrap();
+    assert!(common::get_asset_snapshots(&db, "2025-01-04")
+        .await
+        .is_empty());
+    assert!(common::get_asset_snapshots(&db, "2025-01-05")
+        .await
+        .is_empty());
+
+    let mut retry_sources = common::MockMarketDataSources::new();
+    retry_sources.historical_prices.insert(
+        "XFAKEPREDRETRY".to_owned(),
+        vec![
+            ("2025-01-02".to_owned(), 10.0),
+            ("2025-01-06".to_owned(), 10.0),
+        ],
+    );
+    nav::ensure_portfolio_history(
+        &db,
+        &common::market_data_at(&retry_sources, NaiveDate::from_ymd_opt(2025, 1, 7).unwrap()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        common::get_asset_snapshots(&db, "2025-01-04").await.len(),
+        1
+    );
+    assert_eq!(
+        common::get_asset_snapshots(&db, "2025-01-05").await.len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn fund_empty_bounded_history_still_discovers_predecessor_and_successor() {
+    let db = common::setup_test_db().await;
+    let asset = common::insert_fund_asset(
+        &db,
+        "IE00XFAKEFUND",
+        "Long Closure Fund",
+        "EUR",
+        "XFAKEMSTAR",
+    )
+    .await;
+    common::insert_transaction(&db, asset, "2025-01-13", 1.0, 10.0, 0.0).await;
+    common::insert_sell_transaction(&db, asset, "2025-01-14", 1.0, 10.0, 0.0).await;
+    let mut sources = common::MockMarketDataSources::new();
+    sources.historical_prices.insert(
+        "XFAKEMSTAR".to_owned(),
+        vec![
+            ("2025-01-02".to_owned(), 10.0),
+            ("2025-01-14".to_owned(), 10.0),
+        ],
+    );
+
+    let readiness = nav::ensure_portfolio_history(
+        &db,
+        &common::market_data_at(&sources, NaiveDate::from_ymd_opt(2025, 1, 15).unwrap()),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(readiness.latest_snapshot.unwrap().date, "2025-01-14");
+    assert_eq!(
+        common::get_asset_snapshots(&db, "2025-01-13").await.len(),
+        1
+    );
+    assert!(common::get_asset_snapshots(&db, "2025-01-14")
+        .await
+        .is_empty());
+}
+
+#[tokio::test]
 async fn checkpoint_resume_reports_missing_price_and_fx_independently() {
     let db = common::setup_test_db().await;
     let asset =

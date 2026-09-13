@@ -442,7 +442,7 @@ async fn fill_historical_asset_prices(
     let mut writes = Vec::new();
     for interval in intervals {
         let source_start = historical_source_start_date(asset, interval.start)?;
-        let observations = match fetch_asset_price_history_for_interval(
+        let (observations, predecessor_fetch_failed) = match fetch_asset_price_history_for_interval(
             market_data,
             asset,
             lookup_identifier,
@@ -469,6 +469,7 @@ async fn fill_historical_asset_prices(
             } else {
                 interval.end
             },
+            !predecessor_fetch_failed,
             &mut known,
             &mut writes,
         );
@@ -596,6 +597,7 @@ async fn fill_historical_exchange_rates(
             }
         };
         let mut observations = observations;
+        let mut predecessor_fetch_failed = false;
         if discover_predecessor
             && !observations
                 .iter()
@@ -607,19 +609,26 @@ async fn fill_historical_exchange_rates(
             {
                 Ok(Some(observation)) => observations.push(observation),
                 Ok(None) => {}
-                Err(error) => tracing::warn!(
-                    %from_currency,
-                    to_currency = BASE_CURRENCY,
-                    error = %format!("{error:#}"),
-                    "failed to fetch historical FX predecessor"
-                ),
+                Err(error) => {
+                    predecessor_fetch_failed = true;
+                    tracing::warn!(
+                        %from_currency,
+                        to_currency = BASE_CURRENCY,
+                        error = %format!("{error:#}"),
+                        "failed to fetch historical FX predecessor"
+                    );
+                }
             }
+        }
+        if !predecessor_fetch_failed {
+            preserve_source_predecessor(&observations, interval, latest_completed_date, &mut known);
         }
         append_fx_interval_writes(
             from_currency,
             interval,
             observations,
             latest_completed_date,
+            !predecessor_fetch_failed,
             &mut known,
             &mut writes,
         );
@@ -691,6 +700,7 @@ fn append_asset_interval_writes(
     latest_completed_date: NaiveDate,
     persist_end: NaiveDate,
     observation_end: NaiveDate,
+    allow_cached_predecessor: bool,
     known: &mut BTreeMap<NaiveDate, f64>,
     writes: &mut Vec<daily_price_repo::DailyPriceWrite>,
 ) {
@@ -700,6 +710,7 @@ fn append_asset_interval_writes(
             observations,
             latest_completed_date,
             observation_end,
+            allow_cached_predecessor,
             known,
         )
         .into_iter()
@@ -718,6 +729,7 @@ fn append_fx_interval_writes(
     interval: DateInterval,
     observations: Vec<SourceObservation>,
     latest_completed_date: NaiveDate,
+    allow_cached_predecessor: bool,
     known: &mut BTreeMap<NaiveDate, f64>,
     writes: &mut Vec<exchange_rate_repo::ExchangeRateWrite>,
 ) {
@@ -727,6 +739,7 @@ fn append_fx_interval_writes(
             observations,
             latest_completed_date,
             interval.end,
+            allow_cached_predecessor,
             known,
         )
         .into_iter()
@@ -744,6 +757,7 @@ fn forward_filled_interval(
     observations: Vec<SourceObservation>,
     latest_completed_date: NaiveDate,
     observation_end: NaiveDate,
+    allow_cached_predecessor: bool,
     known: &mut BTreeMap<NaiveDate, f64>,
 ) -> Vec<(NaiveDate, f64)> {
     let source_values =
@@ -759,7 +773,9 @@ fn forward_filled_interval(
     } else {
         return Vec::new();
     };
-    let cached_predecessor = known.range(..interval.start).next_back();
+    let cached_predecessor = allow_cached_predecessor
+        .then(|| known.range(..interval.start).next_back())
+        .flatten();
     let source_predecessor = source_values.range(..interval.start).next_back();
     let mut last_known = match (cached_predecessor, source_predecessor) {
         (Some((cached_date, cached_value)), Some((source_date, source_value)))
@@ -826,7 +842,7 @@ async fn fetch_asset_price_history_for_interval(
     source_start: NaiveDate,
     interval: DateInterval,
     scope: AssetFillScope,
-) -> anyhow::Result<Vec<SourceObservation>> {
+) -> anyhow::Result<(Vec<SourceObservation>, bool)> {
     let mut observations = fetch_asset_price_history(
         market_data,
         asset,
@@ -835,6 +851,7 @@ async fn fetch_asset_price_history_for_interval(
         interval.end,
     )
     .await?;
+    let mut predecessor_fetch_failed = false;
     if scope.discover_boundary
         && !observations
             .iter()
@@ -855,11 +872,14 @@ async fn fetch_asset_price_history_for_interval(
         match predecessor {
             Ok(Some(observation)) => observations.push(observation),
             Ok(None) => {}
-            Err(error) => tracing::warn!(
-                ticker = %asset.ticker,
-                error = %format!("{error:#}"),
-                "failed to fetch historical predecessor price"
-            ),
+            Err(error) => {
+                predecessor_fetch_failed = true;
+                tracing::warn!(
+                    ticker = %asset.ticker,
+                    error = %format!("{error:#}"),
+                    "failed to fetch historical predecessor price"
+                );
+            }
         }
     }
     if !scope.discover_boundary
@@ -868,12 +888,12 @@ async fn fetch_asset_price_history_for_interval(
             .iter()
             .any(|observation| observation.date >= interval.end)
     {
-        return Ok(observations);
+        return Ok((observations, predecessor_fetch_failed));
     }
 
     let boundary_start = interval.end + chrono::Duration::days(1);
     if boundary_start > scope.source_end {
-        return Ok(observations);
+        return Ok((observations, predecessor_fetch_failed));
     }
     match fetch_asset_price_history(
         market_data,
@@ -891,5 +911,28 @@ async fn fetch_asset_price_history_for_interval(
             "failed to fetch historical boundary prices"
         ),
     }
-    Ok(observations)
+    Ok((observations, predecessor_fetch_failed))
+}
+
+fn preserve_source_predecessor(
+    observations: &[SourceObservation],
+    interval: DateInterval,
+    latest_completed_date: NaiveDate,
+    known: &mut BTreeMap<NaiveDate, f64>,
+) {
+    let Some((source_date, source_value)) =
+        interval_source_values(observations.to_vec(), latest_completed_date, interval.end)
+            .range(..interval.start)
+            .next_back()
+            .map(|(date, value)| (*date, *value))
+    else {
+        return;
+    };
+    let cached_date = known
+        .range(..interval.start)
+        .next_back()
+        .map(|(date, _)| *date);
+    if cached_date.is_none_or(|date| source_date > date) {
+        known.insert(source_date, source_value);
+    }
 }

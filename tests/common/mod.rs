@@ -470,6 +470,7 @@ pub struct MockMarketDataSources {
     pub historical_prices: HashMap<String, Vec<(String, f64)>>,
     pub exchange_rates: HashMap<String, Vec<(String, f64)>>,
     pub panic_on_fund_price_history: bool,
+    pub fail_latest_predecessor: bool,
     pub stock_info: HashMap<String, StockInfo>,
     pub fund_data: HashMap<String, FundData>,
     pub fund_quote_metadata: HashMap<String, FundQuoteMetadata>,
@@ -482,6 +483,7 @@ impl MockMarketDataSources {
             historical_prices: HashMap::new(),
             exchange_rates: HashMap::new(),
             panic_on_fund_price_history: false,
+            fail_latest_predecessor: false,
             stock_info: HashMap::new(),
             fund_data: HashMap::new(),
             fund_quote_metadata: HashMap::new(),
@@ -583,6 +585,9 @@ impl MarketDataSources for MockMarketDataSources {
         before: chrono::NaiveDate,
     ) -> anyhow::Result<Option<SourceObservation>> {
         self.historical_source_calls.fetch_add(1, Ordering::Relaxed);
+        if self.fail_latest_predecessor {
+            anyhow::bail!("mock predecessor lookup failed for {ticker}");
+        }
         Ok(latest_configured_observation(
             self.historical_prices.get(ticker),
             before,
@@ -595,6 +600,9 @@ impl MarketDataSources for MockMarketDataSources {
         before: chrono::NaiveDate,
     ) -> anyhow::Result<Option<SourceObservation>> {
         self.historical_source_calls.fetch_add(1, Ordering::Relaxed);
+        if self.fail_latest_predecessor {
+            anyhow::bail!("mock predecessor lookup failed for {code}");
+        }
         Ok(latest_configured_observation(
             self.historical_prices.get(code),
             before,
@@ -608,6 +616,9 @@ impl MarketDataSources for MockMarketDataSources {
         before: chrono::NaiveDate,
     ) -> anyhow::Result<Option<SourceObservation>> {
         self.historical_source_calls.fetch_add(1, Ordering::Relaxed);
+        if self.fail_latest_predecessor {
+            anyhow::bail!("mock predecessor lookup failed for {from}{to}");
+        }
         Ok(latest_configured_observation(
             self.exchange_rates.get(&format!("{from}{to}")),
             before,
