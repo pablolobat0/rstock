@@ -2328,11 +2328,18 @@ async fn source_only_prior_fx_supports_checkpoint_full_sale_conversion() {
         "USD",
     )
     .await;
+    let remaining_asset =
+        common::insert_asset(&db, "XFAKEREMAINEUR", "Remaining EUR Asset", "stock", "EUR").await;
     common::insert_transaction(&db, asset, "2025-01-02", 1.0, 10.0, 0.0).await;
+    common::insert_transaction(&db, remaining_asset, "2025-01-02", 1.0, 100.0, 0.0).await;
     let mut initial_sources = common::MockMarketDataSources::new();
     initial_sources.historical_prices.insert(
         "XFAKECHECKPOINTSALEFX".to_owned(),
         vec![("2025-01-02".to_owned(), 10.0)],
+    );
+    initial_sources.historical_prices.insert(
+        "XFAKEREMAINEUR".to_owned(),
+        vec![("2025-01-02".to_owned(), 100.0)],
     );
     initial_sources
         .exchange_rates
@@ -2346,12 +2353,23 @@ async fn source_only_prior_fx_supports_checkpoint_full_sale_conversion() {
     )
     .await
     .unwrap();
+    let initial_snapshot = common::get_portfolio_snapshot(&db, "2025-01-02")
+        .await
+        .expect("initial converted NAV snapshot should exist");
+    assert_eq!(initial_snapshot.asset_value, 109.0);
+    assert_eq!(initial_snapshot.total_value, 109.0);
+    assert!((initial_snapshot.outstanding_shares - 1.09).abs() < 1e-12);
+    assert!((initial_snapshot.nav - 100.0).abs() < 1e-12);
     common::insert_sell_transaction(&db, asset, "2025-01-03", 1.0, 10.0, 0.0).await;
     db.execute_unprepared("DELETE FROM daily_exchange_rates")
         .await
         .unwrap();
 
     let mut retry_sources = common::MockMarketDataSources::new();
+    retry_sources.historical_prices.insert(
+        "XFAKEREMAINEUR".to_owned(),
+        vec![("2025-01-03".to_owned(), 100.0)],
+    );
     retry_sources
         .exchange_rates
         .insert("USDEUR".to_owned(), vec![("2025-01-02".to_owned(), 0.9)]);
@@ -2364,9 +2382,18 @@ async fn source_only_prior_fx_supports_checkpoint_full_sale_conversion() {
 
     assert_eq!(readiness.latest_snapshot.unwrap().date, "2025-01-03");
     assert!(readiness.market_data_limitations.is_empty());
-    assert!(common::get_asset_snapshots(&db, "2025-01-03")
+    let sale_snapshot = common::get_portfolio_snapshot(&db, "2025-01-03")
         .await
-        .is_empty());
+        .expect("full sale snapshot should exist");
+    assert_eq!(sale_snapshot.asset_value, 100.0);
+    assert_eq!(sale_snapshot.total_value, 100.0);
+    assert!((sale_snapshot.outstanding_shares - 1.0).abs() < 1e-12);
+    assert!((sale_snapshot.nav - 100.0).abs() < 1e-12);
+    let asset_snapshot = common::get_asset_snapshots(&db, "2025-01-03").await;
+    assert_eq!(asset_snapshot.len(), 1);
+    assert_eq!(asset_snapshot[0].closing_price, 100.0);
+    assert_eq!(asset_snapshot[0].asset_id, remaining_asset);
+    assert_eq!(asset_snapshot[0].market_value, 100.0);
 }
 
 #[tokio::test]
@@ -2375,23 +2402,16 @@ async fn failed_predecessor_discovery_does_not_freeze_an_older_cached_gap() {
     let asset =
         common::insert_asset(&db, "XFAKEPREDRETRY", "Predecessor Retry", "stock", "EUR").await;
     common::insert_transaction(&db, asset, "2025-01-04", 1.0, 10.0, 0.0).await;
-    common::insert_sell_transaction(&db, asset, "2025-01-06", 1.0, 10.0, 0.0).await;
+    common::insert_sell_transaction(&db, asset, "2025-01-07", 1.0, 10.0, 0.0).await;
     common::insert_daily_price(&db, asset, "2025-01-02", 10.0, false).await;
 
     let mut failing_sources = common::MockMarketDataSources::new();
     failing_sources.fail_latest_predecessor = true;
-    failing_sources.historical_prices.insert(
-        "XFAKEPREDRETRY".to_owned(),
-        vec![
-            ("2025-01-02".to_owned(), 10.0),
-            ("2025-01-06".to_owned(), 10.0),
-        ],
-    );
     nav::ensure_portfolio_history(
         &db,
         &common::market_data_at(
             &failing_sources,
-            NaiveDate::from_ymd_opt(2025, 1, 7).unwrap(),
+            NaiveDate::from_ymd_opt(2025, 1, 8).unwrap(),
         ),
     )
     .await
@@ -2407,13 +2427,13 @@ async fn failed_predecessor_discovery_does_not_freeze_an_older_cached_gap() {
     retry_sources.historical_prices.insert(
         "XFAKEPREDRETRY".to_owned(),
         vec![
-            ("2025-01-02".to_owned(), 10.0),
-            ("2025-01-06".to_owned(), 10.0),
+            ("2025-01-03".to_owned(), 12.0),
+            ("2025-01-06".to_owned(), 20.0),
         ],
     );
     nav::ensure_portfolio_history(
         &db,
-        &common::market_data_at(&retry_sources, NaiveDate::from_ymd_opt(2025, 1, 7).unwrap()),
+        &common::market_data_at(&retry_sources, NaiveDate::from_ymd_opt(2025, 1, 8).unwrap()),
     )
     .await
     .unwrap();
@@ -2425,6 +2445,56 @@ async fn failed_predecessor_discovery_does_not_freeze_an_older_cached_gap() {
         common::get_asset_snapshots(&db, "2025-01-05").await.len(),
         1
     );
+    assert_eq!(
+        common::find_daily_price(&db, asset, "2025-01-02")
+            .await
+            .unwrap(),
+        Some(10.0)
+    );
+    assert_eq!(
+        common::find_daily_price(&db, asset, "2025-01-04")
+            .await
+            .unwrap(),
+        Some(12.0)
+    );
+    assert_eq!(
+        common::find_daily_price(&db, asset, "2025-01-05")
+            .await
+            .unwrap(),
+        Some(12.0)
+    );
+    assert_eq!(
+        common::find_daily_price(&db, asset, "2025-01-06")
+            .await
+            .unwrap(),
+        Some(20.0)
+    );
+    for date in ["2025-01-04", "2025-01-05"] {
+        let asset_snapshot = common::get_asset_snapshots(&db, date).await;
+        assert_eq!(asset_snapshot[0].closing_price, 12.0);
+        assert_eq!(asset_snapshot[0].market_value, 12.0);
+        let portfolio_snapshot = common::get_portfolio_snapshot(&db, date)
+            .await
+            .expect("portfolio snapshot should exist after retry");
+        assert_eq!(portfolio_snapshot.asset_value, 12.0);
+        assert_eq!(portfolio_snapshot.total_value, 12.0);
+        assert!((portfolio_snapshot.outstanding_shares - 0.1).abs() < 1e-12);
+        assert!((portfolio_snapshot.nav - 120.0).abs() < 1e-12);
+    }
+    let successor_snapshot = common::get_asset_snapshots(&db, "2025-01-06").await;
+    assert_eq!(successor_snapshot.len(), 1);
+    assert_eq!(successor_snapshot[0].closing_price, 20.0);
+    assert_eq!(successor_snapshot[0].market_value, 20.0);
+    let successor_portfolio_snapshot = common::get_portfolio_snapshot(&db, "2025-01-06")
+        .await
+        .expect("successor valuation snapshot should exist after retry");
+    assert_eq!(successor_portfolio_snapshot.asset_value, 20.0);
+    assert_eq!(successor_portfolio_snapshot.total_value, 20.0);
+    assert!((successor_portfolio_snapshot.outstanding_shares - 0.1).abs() < 1e-12);
+    assert!((successor_portfolio_snapshot.nav - 200.0).abs() < 1e-12);
+    assert!(common::get_asset_snapshots(&db, "2025-01-07")
+        .await
+        .is_empty());
 }
 
 #[tokio::test]

@@ -2,12 +2,13 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::Context;
 use chrono::{Duration, NaiveDate};
-use sea_orm::{DatabaseConnection, TransactionTrait};
+use sea_orm::DatabaseConnection;
 use tracing::Instrument;
 
 use crate::constants::{format_date, FLOAT_EPSILON, INITIAL_NAV};
 use crate::db::repos::{
     asset_repo, portfolio_asset_history_repo, portfolio_history_repo, transaction_repo,
+    NavSnapshotSink,
 };
 use crate::models::{Asset, AssetSnapshot, MarketDataLimitation, PortfolioSnapshot, Transaction};
 use crate::services::ledger::{self, EnrichedLedgerTransition, LedgerEffect, LedgerReplay};
@@ -113,9 +114,9 @@ pub async fn ensure_portfolio_history(
     )
     .await?;
     let limitations = plan.limitations.clone();
-    let execution_db = crate::db::repos::instrument_nav_execution_connection(db);
+    let execution_sink = NavSnapshotSink::new(db);
     let (execution, execution_database_reads) = crate::db::repos::with_nav_execution_probe(
-        execute_rebuild_plan(&execution_db, &plan)
+        execute_rebuild_plan(&execution_sink, &plan)
             .instrument(tracing::info_span!("nav_plan_execution")),
     )
     .await;
@@ -480,10 +481,7 @@ fn add_limitation(limitations: &mut Vec<MarketDataLimitation>, limitation: Marke
     }
 }
 
-async fn execute_rebuild_plan(
-    db: &DatabaseConnection,
-    plan: &NavRebuildPlan,
-) -> anyhow::Result<()> {
+async fn execute_rebuild_plan(sink: &NavSnapshotSink, plan: &NavRebuildPlan) -> anyhow::Result<()> {
     tracing::debug!(
         interval_count = plan.intervals.len(),
         "executing prepared NAV valuation intervals"
@@ -569,7 +567,7 @@ async fn execute_rebuild_plan(
                     + asset_values.len()
                     > SNAPSHOT_BATCH_ROW_TARGET)
         {
-            persist_snapshot_batch(db, &mut batch).await?;
+            persist_snapshot_batch(sink, &mut batch).await?;
         }
         batch.portfolio_snapshots.push(PortfolioSnapshot {
             date,
@@ -581,7 +579,7 @@ async fn execute_rebuild_plan(
         batch.asset_snapshots.extend(asset_values);
         current += Duration::days(1);
     }
-    persist_snapshot_batch(db, &mut batch).await
+    persist_snapshot_batch(sink, &mut batch).await
 }
 
 fn process_day_transactions(
@@ -700,7 +698,7 @@ fn compute_day_asset_values(
 }
 
 async fn persist_snapshot_batch(
-    db: &DatabaseConnection,
+    sink: &NavSnapshotSink,
     batch: &mut SnapshotBatch,
 ) -> anyhow::Result<()> {
     if batch.portfolio_snapshots.is_empty() {
@@ -728,10 +726,8 @@ async fn persist_snapshot_batch(
             snapshot.asset_id
         );
     }
-    let transaction = db.begin().await?;
-    portfolio_history_repo::upsert_many(&transaction, &batch.portfolio_snapshots).await?;
-    portfolio_asset_history_repo::upsert_many(&transaction, &batch.asset_snapshots).await?;
-    transaction.commit().await?;
+    sink.persist(&batch.portfolio_snapshots, &batch.asset_snapshots)
+        .await?;
     batch.portfolio_snapshots.clear();
     batch.asset_snapshots.clear();
     Ok(())
