@@ -28,6 +28,15 @@ pub(crate) struct NavValuationData {
     exchange_rates: HashMap<String, BTreeMap<NaiveDate, f64>>,
 }
 
+/// One NAV-owned positive-holding interval that `MarketData` must prepare.
+/// Keeping this shape private prevents source/cache policy from leaking into NAV.
+#[derive(Clone, Copy)]
+pub(crate) struct NavValuationInterval {
+    pub asset_id: i32,
+    pub start: NaiveDate,
+    pub end: NaiveDate,
+}
+
 impl NavValuationData {
     pub(crate) fn from_maps(
         asset_prices: HashMap<i32, BTreeMap<NaiveDate, f64>>,
@@ -64,6 +73,56 @@ impl NavValuationData {
         })
     }
 
+    pub(crate) fn has_price_on(&self, asset_id: i32, date: NaiveDate) -> bool {
+        self.asset_prices
+            .get(&asset_id)
+            .is_some_and(|prices| prices.contains_key(&date))
+    }
+
+    pub(crate) fn has_fx_on(&self, asset: &Asset, date: NaiveDate) -> bool {
+        asset.currency == crate::constants::BASE_CURRENCY
+            || self
+                .exchange_rates
+                .get(&asset.currency)
+                .is_some_and(|rates| rates.contains_key(&date))
+    }
+
+    pub(crate) fn latest_price_date(&self, asset_id: i32, end: NaiveDate) -> Option<NaiveDate> {
+        self.asset_prices
+            .get(&asset_id)
+            .and_then(|prices| prices.range(..=end).next_back().map(|(date, _)| *date))
+    }
+
+    pub(crate) fn latest_fx_date(&self, currency: &str, end: NaiveDate) -> Option<NaiveDate> {
+        self.exchange_rates
+            .get(currency)
+            .and_then(|rates| rates.range(..=end).next_back().map(|(date, _)| *date))
+    }
+
+    pub(crate) fn price_limitation(
+        &self,
+        asset: &Asset,
+        date: NaiveDate,
+        requested_end: NaiveDate,
+    ) -> Option<crate::models::MarketDataLimitation> {
+        self.latest_price_date(asset.id, date).map_or_else(
+            || Some(policy::missing_asset_limitation(asset, requested_end)),
+            |latest| policy::classify_asset_limitation(asset, latest, requested_end),
+        )
+    }
+
+    pub(crate) fn fx_limitation(
+        &self,
+        currency: &str,
+        date: NaiveDate,
+        requested_end: NaiveDate,
+    ) -> Option<crate::models::MarketDataLimitation> {
+        self.latest_fx_date(currency, date).map_or_else(
+            || Some(policy::missing_fx_limitation(currency, requested_end)),
+            |latest| policy::classify_fx_limitation(currency, latest, requested_end),
+        )
+    }
+
     pub(crate) fn exchange_rate_for_asset(
         &self,
         asset: &Asset,
@@ -91,30 +150,6 @@ impl NavValuationData {
     ) -> Option<&BTreeMap<NaiveDate, f64>> {
         self.exchange_rates.get(currency)
     }
-
-    pub(crate) fn valuation_limitations(
-        &self,
-        asset: &Asset,
-        date: NaiveDate,
-    ) -> Vec<crate::models::MarketDataLimitation> {
-        let mut limitations = Vec::new();
-        if self
-            .asset_prices
-            .get(&asset.id)
-            .is_none_or(|prices| prices.range(..=date).next_back().is_none())
-        {
-            limitations.push(policy::missing_asset_limitation(asset, date));
-        }
-        if asset.currency != crate::constants::BASE_CURRENCY
-            && self
-                .exchange_rates
-                .get(&asset.currency)
-                .is_none_or(|rates| rates.range(..=date).next_back().is_none())
-        {
-            limitations.push(policy::missing_fx_limitation(&asset.currency, date));
-        }
-        limitations
-    }
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -122,6 +157,9 @@ enum HistoricalRequest {
     Stock(String, NaiveDate, NaiveDate),
     Fund(String, NaiveDate, NaiveDate),
     Fx(String, String, NaiveDate, NaiveDate),
+    LatestStockBefore(String, NaiveDate),
+    LatestFundBefore(String, NaiveDate),
+    LatestFxBefore(String, String, NaiveDate),
 }
 
 type HistoricalRequestResult = Result<Arc<Vec<SourceObservation>>, Arc<String>>;
@@ -177,6 +215,33 @@ impl MarketData {
             .await
     }
 
+    pub(crate) async fn latest_stock_price_before(
+        &self,
+        ticker: &str,
+        before: NaiveDate,
+    ) -> anyhow::Result<Option<SourceObservation>> {
+        Ok(self
+            .request_historical_data(HistoricalRequest::LatestStockBefore(
+                ticker.to_owned(),
+                before,
+            ))
+            .await?
+            .into_iter()
+            .next())
+    }
+
+    pub(crate) async fn latest_fund_price_before(
+        &self,
+        code: &str,
+        before: NaiveDate,
+    ) -> anyhow::Result<Option<SourceObservation>> {
+        Ok(self
+            .request_historical_data(HistoricalRequest::LatestFundBefore(code.to_owned(), before))
+            .await?
+            .into_iter()
+            .next())
+    }
+
     pub async fn exchange_rate_history(
         &self,
         from: &str,
@@ -196,6 +261,25 @@ impl MarketData {
 
         self.request_historical_data(HistoricalRequest::Fx(from, to, start, end))
             .await
+    }
+
+    pub(crate) async fn latest_exchange_rate_before(
+        &self,
+        from: &str,
+        to: &str,
+        before: NaiveDate,
+    ) -> anyhow::Result<Option<SourceObservation>> {
+        let from = normalize_currency(from)?;
+        let to = normalize_currency(to)?;
+        if from == to {
+            return Ok(Some(SourceObservation {
+                date: before - chrono::Duration::days(1),
+                value: 1.0,
+            }));
+        }
+        self.request_historical_data(HistoricalRequest::LatestFxBefore(from, to, before))
+            .await
+            .map(|observations| observations.into_iter().next())
     }
 
     pub async fn stock_info(&self, ticker: &str) -> anyhow::Result<StockInfo> {
@@ -233,15 +317,25 @@ impl MarketData {
         .await
     }
 
-    pub(crate) async fn prepare_valuation_market_data_for_nav(
+    pub(crate) async fn prepare_nav_valuation_data(
         &self,
         db: &DatabaseConnection,
         assets: &[Asset],
-        start_date: &str,
-        end_date: &str,
-    ) -> anyhow::Result<(ValuationMarketDataAvailability, NavValuationData)> {
-        historical::prepare_valuation_market_data_for_nav(db, assets, start_date, end_date, self)
-            .await
+        intervals: &[NavValuationInterval],
+        fx_currencies: &[String],
+        fx_start: Option<NaiveDate>,
+        end_date: NaiveDate,
+    ) -> anyhow::Result<NavValuationData> {
+        historical::prepare_nav_valuation_data(
+            db,
+            assets,
+            intervals,
+            fx_currencies,
+            fx_start,
+            end_date,
+            self,
+        )
+        .await
     }
 
     /// Returns prepared historical FX observations for transaction enrichment.
@@ -382,6 +476,18 @@ impl MarketData {
                             HistoricalRequest::Fx(from, to, start, end) => {
                                 sources.exchange_rate_history(&from, &to, start, end).await
                             }
+                            HistoricalRequest::LatestStockBefore(ticker, before) => sources
+                                .latest_stock_price_before(&ticker, before)
+                                .await
+                                .map(|observation| observation.into_iter().collect()),
+                            HistoricalRequest::LatestFundBefore(code, before) => sources
+                                .latest_fund_price_before(&code, before)
+                                .await
+                                .map(|observation| observation.into_iter().collect()),
+                            HistoricalRequest::LatestFxBefore(from, to, before) => sources
+                                .latest_exchange_rate_before(&from, &to, before)
+                                .await
+                                .map(|observation| observation.into_iter().collect()),
                         };
                         result
                             .map(Arc::new)

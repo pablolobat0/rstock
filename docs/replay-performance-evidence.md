@@ -6,12 +6,17 @@ SQLite implementation, deterministic cached-source fixture, and Criterion
 settings (`--sample-size 10 --measurement-time 0.05 --warm-up-time 0.05`).
 Fixture construction is outside timed closures; no network source is used.
 
+This is historical R77-D evidence, not the #68 prepared-NAV acceptance
+measurement. The patched-head column is intentionally identified by the
+commit that produced that run; it must not be read as evidence for the current
+uncommitted tree.
+
 ## Comparison
 
 The table reports Criterion's measured `[low, point, high]` interval. Values are
 wall-clock time per operation; `ms` and `s` are shown to keep the scale clear.
 
-| path | input scale | b007d2f | f2b00d7 corrected base | 6d3722e patched head |
+| path | input scale | b007d2f | f2b00d7 corrected base | 6d3722e historical patched head |
 | --- | --- | ---: | ---: | ---: |
 | `nav_readiness_warm_representative` | 50 assets / 10 years / 5,000 transactions | 416.05–426.26–439.54 ms | 407.38–415.37–423.59 ms | 407.07–417.97–429.30 ms |
 | `nav_rebuild_incremental` | 5 assets / 1 year / 100 transactions; rebuild suffix from 2015-06-01 | 14.063–14.954–16.012 ms | 13.270–13.609–13.992 ms | 13.962–16.641–20.817 ms |
@@ -38,14 +43,13 @@ reuses the canonical replay produced during preparation rather than replaying
 each open holding a second time; enrichment and market-data policy remain
 separate from pure replay.
 
-The warm-readiness path remains dominated by its complete-history audit, and
-full rebuilds remain dominated by calendar-day and per-asset snapshot work.
-The measured results do not justify a seeded replay interface, persisted read
-models, sparse snapshots, skipped completeness audits, or moving market fetch
-into replay. Cross-NAV/current-position replay sharing is deferred because a
-warm readiness call has no replay payload and current-position enrichment needs
-full transaction-date FX coverage; forcing that seam would add cloning or
-change market-data boundaries without measured benefit.
+The prepared warm-readiness path trusts the latest Complete NAV snapshot and
+uses a seeded ledger suffix; full rebuilds remain dominated by calendar-day and
+per-asset snapshot work. These measurements continue to justify normalized
+snapshots and in-memory valuation preparation rather than sparse history or
+market fetches during replay. Cross-NAV/current-position replay sharing remains
+separate because current-position enrichment needs full transaction-date FX
+coverage and has a distinct public contract.
 
 Correctness remains covered by the existing full/seeded multi-date, same-day
 ordering, sell/dividend reopening, FX-availability, and monetary-effect tests.

@@ -117,12 +117,13 @@ rolls back every imported asset, row, and invalidation.
 ### NAV And Incremental Readiness
 
 `nav::ensure_portfolio_history()` owns readiness through the latest completed
-Effective valuation date. It audits persisted history before resuming, starts
-from the last Complete NAV snapshot when available, and uses canonical replay
-transitions for the suffix. NAV alone owns Initial NAV, outstanding shares,
-share issuance/redemption, dividend cash, daily valuation, and snapshot
-persistence. Asset classification is applied outside replay so Monetary
-holdings use the same ledger arithmetic but are excluded from NAV.
+Effective valuation date. It trusts the latest Complete NAV snapshot as the
+checkpoint, prepares one immutable plan with canonical replay transitions and
+Positive-holding intervals, and executes the prepared suffix without database
+or MarketData reads. NAV alone owns Initial NAV, outstanding shares, share
+issuance/redemption, dividend cash, daily valuation, and snapshot persistence.
+Asset classification is applied outside replay so Monetary holdings use the
+same ledger arithmetic but are excluded from NAV.
 
 Snapshots are not sparse or lazy: a persisted portfolio row and all required
 per-asset rows for that date are the atomic rebuild unit. Rebuild writes are
@@ -173,7 +174,7 @@ standard CLI's separate `fresh`, `refresh`, or `reset` operations.
 | Root cause | Corrective implementation | Evidence/status |
 | --- | --- | --- |
 | Epsilon split closure left zero NAV with outstanding shares, then a new buy issued infinite shares | Reject impossible issuance explicitly and validate finite state before persistence; preserve valid zero-value history | PR #80; `src/services/nav.rs`; full/incremental rejected-contribution and zero-snapshot tests in `tests/nav_tests.rs` |
-| Suffix effects lacked metadata for fully sold Monetary assets and positive subepsilon buys | Include every suffix effect asset in metadata scope independently of open valuation holdings | PR #80; `nav_market_data_availability()`; Monetary full/incremental equality and subepsilon contribution tests |
+| Suffix effects lacked metadata for fully sold Monetary assets and positive subepsilon buys | Include every suffix effect asset in prepared valuation scope independently of open valuation holdings | PR #80; prepared NAV valuation data; Monetary full/incremental equality and subepsilon contribution tests |
 | Standard SQLite migration CLI did not wrap destructive rebuilds and bookkeeping atomically | Public Migrator up/down adds a bare-connection transaction and reuses caller transactions | PR #79; `migration/src/lib.rs`; failed-up/down rollback-and-retry tests in `tests/transaction_schema_migration_tests.rs` |
 
 ### Eight `b007d2f` Correction Areas
@@ -186,7 +187,7 @@ standard CLI's separate `fresh`, `refresh`, or `reset` operations.
 | Cost closure | Full liquidation resets remaining cost, including after epsilon split closure, and reopening starts fresh: `src/services/ledger.rs:464-506`; `tests/ledger_replay_tests.rs:185-227`, `tests/current_positions_tests.rs:493-514` | No defect found |
 | Position visibility | Current positions are projected independently of NAV readiness and retain known quantity/current value: `src/services/portfolio.rs:30-55,154-268`; `tests/current_date_tests.rs:121-159`, `tests/portfolio_summary_tests.rs` | No defect found |
 | Canonical NAV quantity | NAV inserts each transition's canonical `quantity_after` and does not reapply split/sell arithmetic: `src/services/nav.rs:549-626`; `tests/nav_tests.rs:1089-1163` | No defect found |
-| Audit scans | Audit uses ordered snapshot dates, canonical transitions/cursors, and indexed query-plan checks; `src/services/nav.rs:141-230`, `tests/performance_harness.rs:81-137` | Financial-field scope is intentionally limited; see residual |
+| Prepared-plan readiness | Readiness trusts the latest Complete NAV checkpoint, prepares the ledger suffix and valuation inputs, then executes without repository or MarketData reads; `src/services/nav.rs:52-135,244-733`, `tests/nav_tests.rs` | Financial-field scope is intentionally limited; see residual |
 | Constraint/assertion specificity | Semantic checks are type-specific and tests assert SQLite CHECK failures rather than generic errors: `migration/src/m20260905_000001_contract_transaction_schema.rs:103-134`, `tests/transaction_schema_migration_tests.rs:8-160` | No defect found |
 
 ### Findings And Residuals
@@ -197,16 +198,15 @@ independent FX facts, Monetary exclusion, complete-or-unavailable aggregates,
 and full/seeded NAV behavior were all exercised.
 
 **Optional integrity-hardening limitation:**
-`find_first_incomplete_snapshot()` checks expected per-asset identity and
-canonical quantity, while rebuild writers validate finite/non-negative state.
-It does not recalculate arbitrary persisted `portfolio_history` financial
-fields or per-asset price/value/FX fields during warm resume. No reachable
-normal-path defect was demonstrated by this finding; snapshot writes are
-generated and transactional. Arbitrary manual database corruption is outside
-the approved audit scope. The current tests intentionally cover missing/wrong asset
-rows and quantities (`tests/nav_tests.rs:361-475`), not arbitrary financial
-field tampering. Do not claim the warm audit repairs such tampering unless a
-future decision expands its scope.
+The prepared-plan path trusts the latest Complete NAV checkpoint rather than
+recalculating arbitrary persisted `portfolio_history` financial fields or
+per-asset price/value/FX fields during warm resume. No reachable normal-path
+defect was demonstrated by this finding; snapshot writes are generated and
+transactional. Arbitrary manual database corruption is outside the approved
+checkpoint-trust scope. The current tests cover missing/wrong asset rows and
+quantities (`tests/nav_tests.rs:361-475`), not arbitrary financial-field
+tampering. Do not claim warm readiness repairs such tampering unless a future
+decision expands its scope.
 
 The implementation also intentionally assumes pre-existing persisted ledgers
 are valid; migration does not grandfather, clean up, or automatically repair
@@ -228,13 +228,12 @@ timed closures. The corrected-head intervals are:
 | Stress full rebuild | 100 assets / 20 years / 20,000 transactions | 20.906–21.606–22.265 s |
 
 The artifact records low/point/high wall-clock intervals, not fabricated
-targets. Warm readiness remains dominated by the correctness-preserving
-complete-history audit; full rebuild remains dominated by calendar-day and
-per-asset snapshot work. No seeded replay interface, persisted read model,
-sparse snapshot, skipped audit, or market-fetch relocation is justified by the
-measurements. Cross-NAV/current-position replay sharing remains deferred because
-the required FX coverage and no-replay-payload seam would add complexity
-without measured benefit.
+targets. Prepared warm readiness trusts the latest Complete NAV checkpoint and
+uses a seeded ledger suffix; full rebuild remains dominated by calendar-day and
+per-asset snapshot work. Normalized snapshots and MarketData-owned preparation
+remain preferable to sparse history or market fetches during replay.
+Cross-NAV/current-position replay sharing remains separate because the required
+FX coverage and public contracts differ.
 
 ## Verification Record
 
@@ -249,6 +248,7 @@ cargo fmt --all --check
 git diff --check
 ```
 
-All passed. Subsequent closure changes are documentation-only; they do not
-change the verified source tree. The worker's interrupted publication was
-completed by the coordinator after a reboot.
+All passed. The final follow-up commit `3a154e3` additionally fixes
+range-sensitive boundary coverage, reports later independent blockers, and
+updates the related documentation. Public-readiness SQL-read capture and
+large-fixture memory evidence remain explicit follow-up validation gaps.

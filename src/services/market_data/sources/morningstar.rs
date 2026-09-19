@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use anyhow::{bail, Context};
+use anyhow::Context;
 use base64::Engine;
 use chrono::{NaiveDate, TimeZone, Utc};
 use reqwest::{Client, StatusCode};
@@ -17,6 +17,8 @@ use super::SourceObservation;
 pub(super) struct MorningstarAdapter {
     client: Client,
     settings: Settings,
+    #[cfg(test)]
+    test_chart_response: Option<String>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -32,6 +34,25 @@ impl MorningstarAdapter {
                 .build()
                 .expect("reqwest client configuration should be valid"),
             settings,
+            #[cfg(test)]
+            test_chart_response: None,
+        }
+    }
+
+    #[cfg(test)]
+    fn with_chart_response(body: &str) -> Self {
+        Self {
+            client: Client::new(),
+            settings: Settings {
+                token_page_url: String::new(),
+                chartservice_url: String::new(),
+                holdings_url: String::new(),
+                quote_url: String::new(),
+                sal_api_key: String::new(),
+                user_agent: String::new(),
+                token_cache_path: Path::new("test-token-cache").to_path_buf(),
+            },
+            test_chart_response: Some(body.to_owned()),
         }
     }
 
@@ -41,31 +62,67 @@ impl MorningstarAdapter {
         start: NaiveDate,
         end: NaiveDate,
     ) -> anyhow::Result<Vec<SourceObservation>> {
-        let body = self
-            .get_with_token_refresh(code, |token| {
-                self.client
-                    .get(&self.settings.chartservice_url)
-                    .bearer_auth(token)
-                    .header("accept", "application/json, text/plain, */*")
-                    .header("origin", "https://www.morningstar.com")
-                    .header("referer", "https://www.morningstar.com/")
-                    .query(&[
-                        ("query", format!("{code}:nav,totalReturn")),
-                        ("frequency", "d".to_owned()),
-                        ("startDate", start.format(DATE_FORMAT).to_string()),
-                        ("endDate", end.format(DATE_FORMAT).to_string()),
-                        ("trackMarketData", "3.6.5".to_owned()),
-                        ("instid", "DOTCOM".to_owned()),
-                    ])
-            })
-            .await
-            .context("Morningstar chartservice request failed")?;
+        self.price_history_with_start(code, Some(start), end).await
+    }
 
-        let observations = parse_timeseries(&body)?;
-        if observations.is_empty() {
-            bail!("No NAV data found for '{code}'");
+    pub(super) async fn latest_price_before(
+        &self,
+        code: &str,
+        before: NaiveDate,
+    ) -> anyhow::Result<Option<SourceObservation>> {
+        let observations = self
+            .price_history_with_start(code, None, before - chrono::Duration::days(1))
+            .await?;
+        Ok(observations
+            .into_iter()
+            .filter(|observation| observation.date < before)
+            .max_by_key(|observation| observation.date))
+    }
+
+    async fn price_history_with_start(
+        &self,
+        code: &str,
+        start: Option<NaiveDate>,
+        end: NaiveDate,
+    ) -> anyhow::Result<Vec<SourceObservation>> {
+        let mut query = vec![
+            ("query", format!("{code}:nav,totalReturn")),
+            ("frequency", "d".to_owned()),
+            ("trackMarketData", "3.6.5".to_owned()),
+            ("instid", "DOTCOM".to_owned()),
+            ("endDate", end.format(DATE_FORMAT).to_string()),
+        ];
+        if let Some(start) = start {
+            query.push(("startDate", start.format(DATE_FORMAT).to_string()));
         }
-        Ok(observations)
+        #[cfg(test)]
+        let body = if let Some(body) = &self.test_chart_response {
+            body.clone()
+        } else {
+            self.fetch_chart_response(code, &query).await?
+        };
+        #[cfg(not(test))]
+        let body = self.fetch_chart_response(code, &query).await?;
+
+        parse_price_history_response(&body)
+    }
+
+    async fn fetch_chart_response(
+        &self,
+        code: &str,
+        query: &[(&str, String)],
+    ) -> anyhow::Result<String> {
+        self.get_with_token_refresh(code, |token| {
+            self.client
+                .get(&self.settings.chartservice_url)
+                .bearer_auth(token)
+                .header("accept", "application/json, text/plain, */*")
+                .header("origin", "https://www.morningstar.com")
+                .header("referer", "https://www.morningstar.com/")
+                .query(query)
+        })
+        .await
+        .context("Morningstar chartservice request failed")
     }
 
     pub(super) async fn fund_data(&self, code: &str, limit: u32) -> anyhow::Result<FundData> {
@@ -204,6 +261,10 @@ fn parse_timeseries(body: &str) -> anyhow::Result<Vec<SourceObservation>> {
         })
         .collect();
     Ok(sort_and_dedup_observations(observations))
+}
+
+fn parse_price_history_response(body: &str) -> anyhow::Result<Vec<SourceObservation>> {
+    parse_timeseries(body)
 }
 
 fn parse_fund_data(body: &str, limit: u32) -> anyhow::Result<FundData> {
@@ -346,4 +407,25 @@ async fn write_cached_token(path: &Path, token: &CachedMorningstarToken) -> anyh
     tokio::fs::write(path, serde_json::to_string(token)?)
         .await
         .context("failed to write Morningstar token cache")
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::NaiveDate;
+
+    use super::MorningstarAdapter;
+
+    #[tokio::test]
+    async fn empty_bounded_history_is_a_successful_empty_result() {
+        let observations = MorningstarAdapter::with_chart_response(r#"[{"series":[]}]"#)
+            .price_history(
+                "XFAKEMSTAR",
+                NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2025, 1, 2).unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert!(observations.is_empty());
+    }
 }
