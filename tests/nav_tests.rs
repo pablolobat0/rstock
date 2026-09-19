@@ -5,6 +5,11 @@
     clippy::useless_conversion
 )]
 
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
+
 pub mod common;
 
 use chrono::NaiveDate;
@@ -2763,6 +2768,45 @@ async fn prepared_nav_execution_captures_zero_database_reads() {
     .unwrap();
 
     assert_eq!(readiness.execution_database_reads, 0);
+}
+
+#[tokio::test]
+async fn warm_readiness_query_work_does_not_scale_with_prior_history() {
+    async fn build_history(snapshot_count: usize) -> usize {
+        let mut db = common::setup_test_db().await;
+        let asset =
+            common::insert_asset(&db, "XFAKECHECKPOINT", "Checkpoint Stock", "stock", "EUR").await;
+        let last_date = NaiveDate::from_ymd_opt(2025, 1, 31).unwrap();
+        let first_date = last_date - chrono::Duration::days(snapshot_count as i64 - 1);
+        common::insert_transaction(&db, asset, &first_date.to_string(), 1.0, 10.0, 0.0).await;
+        for offset in 0..snapshot_count {
+            let date = first_date + chrono::Duration::days(offset as i64);
+            common::insert_daily_price(&db, asset, &date.to_string(), 10.0, false).await;
+        }
+
+        let sources = common::MockMarketDataSources::new();
+        let market_data =
+            common::market_data_at(&sources, NaiveDate::from_ymd_opt(2025, 2, 1).unwrap());
+        nav::ensure_portfolio_history(&db, &market_data)
+            .await
+            .unwrap();
+
+        let reads = Arc::new(AtomicUsize::new(0));
+        let callback_reads = Arc::clone(&reads);
+        db.set_metric_callback(move |_| {
+            callback_reads.fetch_add(1, Ordering::Relaxed);
+        });
+        nav::ensure_portfolio_history(&db, &market_data)
+            .await
+            .unwrap();
+        reads.load(Ordering::Relaxed)
+    }
+
+    let short_history_reads = build_history(5).await;
+    let long_history_reads = build_history(30).await;
+
+    assert_eq!(short_history_reads, 1);
+    assert_eq!(long_history_reads, short_history_reads);
 }
 
 #[tokio::test]
