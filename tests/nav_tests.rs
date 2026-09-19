@@ -1363,6 +1363,124 @@ async fn incremental_rebuild_ignores_assets_liquidated_before_the_seed() {
     assert!((extended.asset_value - 500.0).abs() < 0.01);
 }
 
+#[tokio::test]
+async fn source_prices_are_required_only_during_positive_holding_intervals() {
+    let db = common::setup_test_db().await;
+    let asset_id =
+        common::insert_asset(&db, "XFAKEINTERVAL", "Interval Stock", "stock", "EUR").await;
+    let anchor_id = common::insert_asset(&db, "XFAKEANCHOR", "Anchor Stock", "stock", "EUR").await;
+    common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 10.0, 0.0).await;
+    common::insert_sell_transaction(&db, asset_id, "2025-01-04", 10.0, 10.0, 0.0).await;
+    common::insert_transaction(&db, asset_id, "2025-01-07", 5.0, 20.0, 0.0).await;
+    common::insert_transaction(&db, anchor_id, "2025-01-02", 1.0, 100.0, 0.0).await;
+
+    let mut sources = common::MockMarketDataSources::new();
+    sources.historical_prices.insert(
+        "XFAKEINTERVAL".to_owned(),
+        [
+            ("2025-01-02".to_owned(), 11.0),
+            ("2025-01-03".to_owned(), 12.0),
+            ("2025-01-07".to_owned(), 21.0),
+            ("2025-01-08".to_owned(), 22.0),
+            ("2025-01-09".to_owned(), 23.0),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    sources.historical_prices.insert(
+        "XFAKEANCHOR".to_owned(),
+        [
+            ("2025-01-02".to_owned(), 100.0),
+            ("2025-01-03".to_owned(), 100.0),
+            ("2025-01-04".to_owned(), 100.0),
+            ("2025-01-05".to_owned(), 100.0),
+            ("2025-01-06".to_owned(), 100.0),
+            ("2025-01-07".to_owned(), 100.0),
+            ("2025-01-08".to_owned(), 100.0),
+            ("2025-01-09".to_owned(), 100.0),
+        ]
+        .into_iter()
+        .collect(),
+    );
+
+    let readiness = nav::ensure_portfolio_history(
+        &db,
+        &common::market_data_at(&sources, NaiveDate::from_ymd_opt(2025, 1, 10).unwrap()),
+    )
+    .await
+    .unwrap();
+
+    assert!(readiness.market_data_limitations.is_empty());
+    for date in [
+        "2025-01-02",
+        "2025-01-03",
+        "2025-01-07",
+        "2025-01-08",
+        "2025-01-09",
+    ] {
+        assert!(
+            common::get_asset_snapshots(&db, date)
+                .await
+                .iter()
+                .any(|snapshot| snapshot.asset_id == asset_id),
+            "{date}"
+        );
+    }
+    for date in ["2025-01-04", "2025-01-05", "2025-01-06"] {
+        assert!(
+            common::get_asset_snapshots(&db, date)
+                .await
+                .iter()
+                .all(|snapshot| snapshot.asset_id != asset_id),
+            "closed holding gap must not create an asset snapshot on {date}"
+        );
+    }
+
+    let first_interval = common::get_asset_snapshots(&db, "2025-01-02")
+        .await
+        .into_iter()
+        .find(|snapshot| snapshot.asset_id == asset_id)
+        .unwrap();
+    assert!((first_interval.closing_price - 11.0).abs() < f64::EPSILON);
+    let second_interval = common::get_asset_snapshots(&db, "2025-01-07")
+        .await
+        .into_iter()
+        .find(|snapshot| snapshot.asset_id == asset_id)
+        .unwrap();
+    assert!((second_interval.closing_price - 21.0).abs() < f64::EPSILON);
+}
+
+#[tokio::test]
+async fn same_day_buy_then_sale_needs_no_closing_price() {
+    let db = common::setup_test_db().await;
+    let asset_id = common::insert_asset(
+        &db,
+        "XFAKESAMEDAYINTERVAL",
+        "Same Day Stock",
+        "stock",
+        "EUR",
+    )
+    .await;
+    common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 10.0, 0.0).await;
+    common::insert_sell_transaction(&db, asset_id, "2025-01-02", 10.0, 10.0, 0.0).await;
+
+    let sources = common::MockMarketDataSources::new();
+    let readiness = nav::ensure_portfolio_history(
+        &db,
+        &common::market_data_at(&sources, NaiveDate::from_ymd_opt(2025, 1, 4).unwrap()),
+    )
+    .await
+    .unwrap();
+
+    assert!(readiness.market_data_limitations.is_empty());
+    assert!(common::get_portfolio_snapshot(&db, "2025-01-02")
+        .await
+        .is_some());
+    assert!(common::get_asset_snapshots(&db, "2025-01-02")
+        .await
+        .is_empty());
+}
+
 /// A genuine readiness/preparation error is not swallowed into a readable NAV:
 /// a fund without its Morningstar code must propagate as an Err rather than be
 /// masked as an unavailable-NAV limitation.
