@@ -42,28 +42,10 @@ struct CompleteNavSnapshot {
     assets: Vec<AssetSnapshot>,
 }
 
+#[derive(Default)]
 struct SnapshotBatch {
     snapshots: Vec<CompleteNavSnapshot>,
     generated_rows: usize,
-}
-
-impl SnapshotBatch {
-    fn would_exceed_targets(&self, asset_count: usize) -> bool {
-        !self.snapshots.is_empty()
-            && (self.snapshots.len() >= SNAPSHOT_BATCH_DATE_TARGET
-                || self.generated_rows + 1 + asset_count > SNAPSHOT_BATCH_ROW_TARGET)
-    }
-
-    fn push(&mut self, portfolio: PortfolioSnapshot, assets: Vec<AssetSnapshot>) {
-        self.generated_rows += 1 + assets.len();
-        self.snapshots
-            .push(CompleteNavSnapshot { portfolio, assets });
-    }
-
-    fn clear(&mut self) {
-        self.snapshots.clear();
-        self.generated_rows = 0;
-    }
 }
 
 const SNAPSHOT_BATCH_DATE_TARGET: usize = 100;
@@ -587,7 +569,7 @@ async fn execute_rebuild_plan(sink: &NavSnapshotSink, plan: &NavRebuildPlan) -> 
             fresh = false;
         }
         if batch.would_exceed_targets(asset_values.len()) {
-            persist_snapshot_batch(sink, &mut batch).await?;
+            persist_snapshot_batch(sink, std::mem::take(&mut batch)).await?;
         }
         batch.push(
             PortfolioSnapshot {
@@ -601,7 +583,7 @@ async fn execute_rebuild_plan(sink: &NavSnapshotSink, plan: &NavRebuildPlan) -> 
         );
         current += Duration::days(1);
     }
-    persist_snapshot_batch(sink, &mut batch).await
+    persist_snapshot_batch(sink, batch).await
 }
 
 fn process_day_transactions(
@@ -721,7 +703,7 @@ fn compute_day_asset_values(
 
 async fn persist_snapshot_batch(
     sink: &NavSnapshotSink,
-    batch: &mut SnapshotBatch,
+    batch: SnapshotBatch,
 ) -> anyhow::Result<()> {
     if batch.snapshots.is_empty() {
         return Ok(());
@@ -748,32 +730,29 @@ async fn persist_snapshot_batch(
             );
         }
     }
-    let portfolio_snapshots = batch
-        .snapshots
-        .iter()
-        .map(|snapshot| PortfolioSnapshot {
-            date: snapshot.portfolio.date.clone(),
-            asset_value: snapshot.portfolio.asset_value,
-            total_value: snapshot.portfolio.total_value,
-            outstanding_shares: snapshot.portfolio.outstanding_shares,
-            nav: snapshot.portfolio.nav,
-        })
-        .collect::<Vec<_>>();
-    let asset_snapshots = batch
-        .snapshots
-        .iter()
-        .flat_map(|snapshot| {
-            snapshot.assets.iter().map(|asset| AssetSnapshot {
-                date: asset.date.clone(),
-                asset_id: asset.asset_id,
-                quantity: asset.quantity,
-                closing_price: asset.closing_price,
-                market_value: asset.market_value,
-                exchange_rate: asset.exchange_rate,
-            })
-        })
-        .collect::<Vec<_>>();
-    sink.persist(&portfolio_snapshots, &asset_snapshots).await?;
-    batch.clear();
-    Ok(())
+    let SnapshotBatch {
+        snapshots,
+        generated_rows,
+    } = batch;
+    let mut portfolio_snapshots = Vec::with_capacity(snapshots.len());
+    let mut asset_snapshots = Vec::with_capacity(generated_rows.saturating_sub(snapshots.len()));
+    for CompleteNavSnapshot { portfolio, assets } in snapshots {
+        portfolio_snapshots.push(portfolio);
+        asset_snapshots.extend(assets);
+    }
+    sink.persist(&portfolio_snapshots, &asset_snapshots).await
+}
+
+impl SnapshotBatch {
+    fn would_exceed_targets(&self, asset_count: usize) -> bool {
+        !self.snapshots.is_empty()
+            && (self.snapshots.len() >= SNAPSHOT_BATCH_DATE_TARGET
+                || self.generated_rows + 1 + asset_count > SNAPSHOT_BATCH_ROW_TARGET)
+    }
+
+    fn push(&mut self, portfolio: PortfolioSnapshot, assets: Vec<AssetSnapshot>) {
+        self.generated_rows += 1 + assets.len();
+        self.snapshots
+            .push(CompleteNavSnapshot { portfolio, assets });
+    }
 }
