@@ -131,6 +131,19 @@ fn with_statement_is_read(sql: &str) -> bool {
             continue;
         }
 
+        // Comments separate SQL tokens just like whitespace. Finish a pending
+        // outer keyword before skipping a comment adjacent to that keyword.
+        if matches!(bytes.get(index..index + 2), Some(b"--" | b"/*")) {
+            if depth == 0 {
+                match token.as_str() {
+                    "SELECT" => return true,
+                    "INSERT" | "UPDATE" | "DELETE" | "REPLACE" => return false,
+                    _ => {}
+                }
+            }
+            token.clear();
+        }
+
         if bytes.get(index..index + 2) == Some(b"--") {
             index += 2;
             while bytes.get(index).is_some_and(|byte| *byte != b'\n') {
@@ -276,5 +289,45 @@ mod tests {
         })
         .await;
         assert_eq!(commented_cte_write_reads, 0);
+    }
+
+    #[tokio::test]
+    async fn execution_probe_treats_adjacent_cte_comments_as_token_separators() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        db.execute(Statement::from_string(
+            DbBackend::Sqlite,
+            "CREATE TABLE probe (value INTEGER)",
+        ))
+        .await
+        .unwrap();
+        let instrumented = instrument_nav_execution_connection(&db);
+
+        for sql in [
+            "WITH rows AS (SELECT 1 AS value) SELECT/* UPDATE */value FROM rows",
+            "WITH rows AS (SELECT 1 AS value) SELECT-- UPDATE\nvalue FROM rows",
+        ] {
+            let (result, reads) = with_nav_execution_probe(async {
+                instrumented
+                    .query_one(Statement::from_string(DbBackend::Sqlite, sql))
+                    .await
+            })
+            .await;
+            assert!(result.unwrap().is_some(), "{sql}");
+            assert_eq!(reads, 1, "{sql}");
+        }
+
+        for sql in [
+            "WITH rows AS (SELECT 2) INSERT/* SELECT */INTO probe (value) SELECT * FROM rows",
+            "WITH rows AS (SELECT 2) INSERT-- SELECT\nINTO probe (value) SELECT * FROM rows",
+        ] {
+            let (result, reads) = with_nav_execution_probe(async {
+                instrumented
+                    .execute(Statement::from_string(DbBackend::Sqlite, sql))
+                    .await
+            })
+            .await;
+            assert_eq!(result.unwrap().rows_affected(), 1, "{sql}");
+            assert_eq!(reads, 0, "{sql}");
+        }
     }
 }
