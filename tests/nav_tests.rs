@@ -2772,15 +2772,15 @@ async fn prepared_nav_execution_captures_zero_database_reads() {
 
 #[tokio::test]
 async fn warm_readiness_query_work_does_not_scale_with_prior_history() {
-    async fn build_history(snapshot_count: usize) -> usize {
+    async fn build_history(snapshot_count: i64) -> usize {
         let mut db = common::setup_test_db().await;
         let asset =
             common::insert_asset(&db, "XFAKECHECKPOINT", "Checkpoint Stock", "stock", "EUR").await;
         let last_date = NaiveDate::from_ymd_opt(2025, 1, 31).unwrap();
-        let first_date = last_date - chrono::Duration::days(snapshot_count as i64 - 1);
+        let first_date = last_date - chrono::Duration::days(snapshot_count - 1);
         common::insert_transaction(&db, asset, &first_date.to_string(), 1.0, 10.0, 0.0).await;
         for offset in 0..snapshot_count {
-            let date = first_date + chrono::Duration::days(offset as i64);
+            let date = first_date + chrono::Duration::days(offset);
             common::insert_daily_price(&db, asset, &date.to_string(), 10.0, false).await;
         }
 
