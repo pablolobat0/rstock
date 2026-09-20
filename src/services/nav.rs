@@ -308,6 +308,7 @@ async fn prepare_rebuild_plan(
         &enriched_transactions,
         &assets,
         &valuation_data,
+        &intervals,
     )?;
 
     Ok(NavRebuildPlan {
@@ -382,6 +383,7 @@ fn find_calculable_prefix(
     transactions: &[EnrichedLedgerTransition],
     assets: &[Asset],
     valuation_data: &NavValuationData,
+    intervals: &[NavValuationInterval],
 ) -> anyhow::Result<(NaiveDate, Vec<MarketDataLimitation>)> {
     let asset_map: HashMap<i32, &Asset> = assets.iter().map(|asset| (asset.id, asset)).collect();
     let mut holdings = checkpoint_holdings.clone();
@@ -393,8 +395,6 @@ fn find_calculable_prefix(
             .push(transaction);
     }
     let mut limitations = Vec::new();
-    let mut transaction_limitations = Vec::new();
-    let mut first_blocked_date = None;
     let mut current = start_date;
     while current <= end_date {
         let date = format_date(current);
@@ -417,10 +417,9 @@ fn find_calculable_prefix(
                     if let Some(limitation) =
                         conversion_limitation(asset, valuation_data, current, end_date)
                     {
-                        transaction_limitations.push(limitation);
+                        add_limitation(&mut limitations, limitation);
                     }
                     blocked = true;
-                    first_blocked_date.get_or_insert(current);
                 }
                 holdings.insert(
                     transaction.transition.entry.asset_id,
@@ -428,18 +427,12 @@ fn find_calculable_prefix(
                 );
             }
         }
-        for (asset_id, quantity) in &holdings {
-            if *quantity <= FLOAT_EPSILON {
-                continue;
-            }
-            let asset = asset_map
-                .get(asset_id)
-                .context("missing asset for NAV valuation")?;
-            if asset.is_monetary() {
-                continue;
-            }
-            if !valuation_data.has_price_on(*asset_id, current) {
-                if let Some(limitation) = valuation_data.price_limitation(asset, current, end_date)
+        for_each_performance_holding(&holdings, &asset_map, |asset_id, asset| {
+            let limitation_end =
+                positive_holding_interval_end(intervals, asset_id, current).unwrap_or(end_date);
+            if !valuation_data.has_price_on(asset_id, current) {
+                if let Some(limitation) =
+                    valuation_data.price_limitation(asset, current, limitation_end)
                 {
                     add_limitation(&mut limitations, limitation);
                 }
@@ -447,25 +440,81 @@ fn find_calculable_prefix(
             }
             if !valuation_data.has_fx_on(asset, current) {
                 if let Some(limitation) =
-                    valuation_data.fx_limitation(&asset.currency, current, end_date)
+                    valuation_data.fx_limitation(&asset.currency, current, limitation_end)
                 {
                     add_limitation(&mut limitations, limitation);
                 }
                 blocked = true;
             }
-        }
-        for limitation in transaction_limitations.drain(..) {
-            add_limitation(&mut limitations, limitation);
-        }
+            Ok(())
+        })?;
         if blocked {
-            first_blocked_date.get_or_insert(current);
+            // Preserve the prepared market-data limitations for holdings that
+            // are already known at this date. A transaction-date blocker may
+            // occur while the current holding's own series is still present,
+            // while its known Positive-holding interval ends earlier.
+            for_each_performance_holding(&holdings, &asset_map, |asset_id, asset| {
+                if let Some(interval_end) =
+                    positive_holding_interval_end(intervals, asset_id, current)
+                {
+                    if let Some(limitation) =
+                        valuation_data.price_limitation(asset, interval_end, interval_end)
+                    {
+                        add_limitation(&mut limitations, limitation);
+                    }
+                    if asset.currency != crate::constants::BASE_CURRENCY {
+                        if let Some(limitation) = valuation_data.fx_limitation(
+                            &asset.currency,
+                            interval_end,
+                            interval_end,
+                        ) {
+                            add_limitation(&mut limitations, limitation);
+                        }
+                    }
+                }
+                Ok(())
+            })?;
+            // The ledger state after this date depends on an unavailable
+            // input. Do not inspect or calculate later dates, even if their
+            // market data happens to be available.
+            return Ok((current - Duration::days(1), limitations));
         }
         current += Duration::days(1);
     }
-    Ok((
-        first_blocked_date.map_or(end_date, |date| date - Duration::days(1)),
-        limitations,
-    ))
+    Ok((end_date, limitations))
+}
+
+fn positive_holding_interval_end(
+    intervals: &[NavValuationInterval],
+    asset_id: i32,
+    date: NaiveDate,
+) -> Option<NaiveDate> {
+    intervals
+        .iter()
+        .find(|interval| {
+            interval.asset_id == asset_id && interval.start <= date && date <= interval.end
+        })
+        .map(|interval| interval.end)
+}
+
+fn for_each_performance_holding(
+    holdings: &HashMap<i32, f64>,
+    asset_map: &HashMap<i32, &Asset>,
+    mut visit: impl FnMut(i32, &Asset) -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    for (asset_id, quantity) in holdings {
+        if *quantity <= FLOAT_EPSILON {
+            continue;
+        }
+        let asset = asset_map
+            .get(asset_id)
+            .context("missing asset for NAV valuation")?;
+        if asset.is_monetary() {
+            continue;
+        }
+        visit(*asset_id, asset)?;
+    }
+    Ok(())
 }
 
 fn conversion_limitation(
