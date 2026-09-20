@@ -2885,8 +2885,7 @@ async fn checkpoint_resume_reports_later_buy_sell_and_dividend_fx_blockers() {
 #[tokio::test]
 async fn later_market_data_cannot_skip_a_missing_transaction_fx_blocker() {
     let db = common::setup_test_db().await;
-    let anchor =
-        common::insert_asset(&db, "XFAKEANCHORFX", "Anchor Stock", "stock", "EUR").await;
+    let anchor = common::insert_asset(&db, "XFAKEANCHORFX", "Anchor Stock", "stock", "EUR").await;
     let later_buy =
         common::insert_asset(&db, "XFAKELATERFX", "Later USD Stock", "stock", "USD").await;
     common::insert_transaction(&db, anchor, "2025-01-02", 1.0, 10.0, 0.0).await;

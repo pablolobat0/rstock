@@ -425,17 +425,8 @@ fn find_calculable_prefix(
                 );
             }
         }
-        for (asset_id, quantity) in &holdings {
-            if *quantity <= FLOAT_EPSILON {
-                continue;
-            }
-            let asset = asset_map
-                .get(asset_id)
-                .context("missing asset for NAV valuation")?;
-            if asset.is_monetary() {
-                continue;
-            }
-            if !valuation_data.has_price_on(*asset_id, current) {
+        for_each_performance_holding(&holdings, &asset_map, |asset_id, asset| {
+            if !valuation_data.has_price_on(asset_id, current) {
                 if let Some(limitation) = valuation_data.price_limitation(asset, current, end_date)
                 {
                     add_limitation(&mut limitations, limitation);
@@ -450,24 +441,15 @@ fn find_calculable_prefix(
                 }
                 blocked = true;
             }
-        }
+            Ok(())
+        })?;
         if blocked {
             // Preserve the prepared market-data limitations for holdings that
             // are already known at this date. A transaction-date blocker may
             // occur while the current holding's own series is still present
             // on this date but stale for the requested end.
-            for (asset_id, quantity) in &holdings {
-                if *quantity <= FLOAT_EPSILON {
-                    continue;
-                }
-                let asset = asset_map
-                    .get(asset_id)
-                    .context("missing asset for NAV valuation")?;
-                if asset.is_monetary() {
-                    continue;
-                }
-                if let Some(limitation) =
-                    valuation_data.price_limitation(asset, end_date, end_date)
+            for_each_performance_holding(&holdings, &asset_map, |_asset_id, asset| {
+                if let Some(limitation) = valuation_data.price_limitation(asset, end_date, end_date)
                 {
                     add_limitation(&mut limitations, limitation);
                 }
@@ -478,7 +460,8 @@ fn find_calculable_prefix(
                         add_limitation(&mut limitations, limitation);
                     }
                 }
-            }
+                Ok(())
+            })?;
             // The ledger state after this date depends on an unavailable
             // input. Do not inspect or calculate later dates, even if their
             // market data happens to be available.
@@ -487,6 +470,26 @@ fn find_calculable_prefix(
         current += Duration::days(1);
     }
     Ok((end_date, limitations))
+}
+
+fn for_each_performance_holding(
+    holdings: &HashMap<i32, f64>,
+    asset_map: &HashMap<i32, &Asset>,
+    mut visit: impl FnMut(i32, &Asset) -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    for (asset_id, quantity) in holdings {
+        if *quantity <= FLOAT_EPSILON {
+            continue;
+        }
+        let asset = asset_map
+            .get(asset_id)
+            .context("missing asset for NAV valuation")?;
+        if asset.is_monetary() {
+            continue;
+        }
+        visit(*asset_id, asset)?;
+    }
+    Ok(())
 }
 
 fn conversion_limitation(
