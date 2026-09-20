@@ -3006,6 +3006,7 @@ async fn missing_transaction_fx_on_full_sale_stops_at_trusted_checkpoint() {
     .unwrap();
 
     assert_eq!(readiness.latest_snapshot.unwrap().date, "2025-01-02");
+    assert_eq!(readiness.market_data_limitations.len(), 1);
     assert!(readiness.market_data_limitations.iter().any(|limitation| {
         matches!(
             limitation.subject,
@@ -3021,6 +3022,22 @@ async fn missing_transaction_fx_on_full_sale_stops_at_trusted_checkpoint() {
     assert!(common::get_portfolio_snapshot(&db, "2025-01-03")
         .await
         .is_none());
+
+    common::insert_exchange_rate(&db, "USD", "EUR", "2025-01-03", 0.9).await;
+    let retry = nav::ensure_portfolio_history(
+        &db,
+        &common::market_data_at(
+            &common::MockMarketDataSources::new(),
+            NaiveDate::from_ymd_opt(2025, 1, 4).unwrap(),
+        ),
+    )
+    .await
+    .unwrap();
+    assert!(retry.market_data_limitations.is_empty());
+    assert_eq!(retry.latest_snapshot.unwrap().date, "2025-01-03");
+    assert!(common::get_asset_snapshots(&db, "2025-01-03")
+        .await
+        .is_empty());
 }
 
 #[tokio::test]
@@ -3065,15 +3082,38 @@ async fn missing_transaction_fx_on_dividend_stops_at_trusted_checkpoint() {
     .unwrap();
 
     assert_eq!(readiness.latest_snapshot.unwrap().date, "2025-01-02");
+    assert_eq!(readiness.market_data_limitations.len(), 1);
     assert!(readiness.market_data_limitations.iter().any(|limitation| {
         matches!(
             limitation.subject,
             MarketDataSubject::FxRate { ref currency } if currency == "USD"
         )
     }));
+    assert!(!readiness.market_data_limitations.iter().any(|limitation| {
+        matches!(
+            limitation.subject,
+            MarketDataSubject::Asset { ref ticker, .. } if ticker == "XFAKEDIVFXONLY"
+        )
+    }));
     assert!(common::get_portfolio_snapshot(&db, "2025-01-03")
         .await
         .is_none());
+
+    common::insert_exchange_rate(&db, "USD", "EUR", "2025-01-03", 0.9).await;
+    let retry = nav::ensure_portfolio_history(
+        &db,
+        &common::market_data_at(
+            &common::MockMarketDataSources::new(),
+            NaiveDate::from_ymd_opt(2025, 1, 4).unwrap(),
+        ),
+    )
+    .await
+    .unwrap();
+    assert!(retry.market_data_limitations.is_empty());
+    assert_eq!(retry.latest_snapshot.unwrap().date, "2025-01-03");
+    assert!(common::get_portfolio_snapshot(&db, "2025-01-03")
+        .await
+        .is_some());
 }
 
 #[tokio::test]

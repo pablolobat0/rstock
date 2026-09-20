@@ -428,8 +428,11 @@ fn find_calculable_prefix(
             }
         }
         for_each_performance_holding(&holdings, &asset_map, |asset_id, asset| {
+            let limitation_end =
+                positive_holding_interval_end(intervals, asset_id, current).unwrap_or(end_date);
             if !valuation_data.has_price_on(asset_id, current) {
-                if let Some(limitation) = valuation_data.price_limitation(asset, current, end_date)
+                if let Some(limitation) =
+                    valuation_data.price_limitation(asset, current, limitation_end)
                 {
                     add_limitation(&mut limitations, limitation);
                 }
@@ -437,7 +440,7 @@ fn find_calculable_prefix(
             }
             if !valuation_data.has_fx_on(asset, current) {
                 if let Some(limitation) =
-                    valuation_data.fx_limitation(&asset.currency, current, end_date)
+                    valuation_data.fx_limitation(&asset.currency, current, limitation_end)
                 {
                     add_limitation(&mut limitations, limitation);
                 }
@@ -450,15 +453,9 @@ fn find_calculable_prefix(
             // are already known at this date. A transaction-date blocker may
             // occur while the current holding's own series is still present,
             // while its known Positive-holding interval ends earlier.
-            for_each_performance_holding(&holdings, &asset_map, |_asset_id, asset| {
-                if let Some(interval_end) = intervals
-                    .iter()
-                    .find(|interval| {
-                        interval.asset_id == asset.id
-                            && interval.start <= current
-                            && current <= interval.end
-                    })
-                    .map(|interval| interval.end)
+            for_each_performance_holding(&holdings, &asset_map, |asset_id, asset| {
+                if let Some(interval_end) =
+                    positive_holding_interval_end(intervals, asset_id, current)
                 {
                     if let Some(limitation) =
                         valuation_data.price_limitation(asset, interval_end, interval_end)
@@ -485,6 +482,19 @@ fn find_calculable_prefix(
         current += Duration::days(1);
     }
     Ok((end_date, limitations))
+}
+
+fn positive_holding_interval_end(
+    intervals: &[NavValuationInterval],
+    asset_id: i32,
+    date: NaiveDate,
+) -> Option<NaiveDate> {
+    intervals
+        .iter()
+        .find(|interval| {
+            interval.asset_id == asset_id && interval.start <= date && date <= interval.end
+        })
+        .map(|interval| interval.end)
 }
 
 fn for_each_performance_holding(
