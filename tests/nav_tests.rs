@@ -20,6 +20,29 @@ fn nav_market_data(
     common::market_data_at(sources, NaiveDate::from_ymd_opt(2025, 2, 1).unwrap())
 }
 
+async fn assert_complete_interval_day(
+    db: &DatabaseConnection,
+    date: &str,
+    target_id: i32,
+    anchor_id: i32,
+    target_is_held: bool,
+) -> f64 {
+    let portfolio = common::get_portfolio_snapshot(db, date)
+        .await
+        .expect("portfolio snapshot should be complete");
+    let asset_snapshots = common::get_asset_snapshots(db, date).await;
+    assert!(asset_snapshots
+        .iter()
+        .any(|snapshot| snapshot.asset_id == anchor_id));
+    assert_eq!(
+        asset_snapshots
+            .iter()
+            .any(|snapshot| snapshot.asset_id == target_id),
+        target_is_held
+    );
+    portfolio.asset_value
+}
+
 /// No transactions -> readiness returns Ok, no portfolio_history rows.
 #[tokio::test]
 async fn test_empty_portfolio() {
@@ -1371,15 +1394,14 @@ async fn source_prices_are_required_only_during_positive_holding_intervals() {
     let anchor_id = common::insert_asset(&db, "XFAKEANCHOR", "Anchor Stock", "stock", "EUR").await;
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 10.0, 0.0).await;
     common::insert_sell_transaction(&db, asset_id, "2025-01-04", 10.0, 10.0, 0.0).await;
-    common::insert_transaction(&db, asset_id, "2025-01-07", 5.0, 20.0, 0.0).await;
+    common::insert_transaction(&db, asset_id, "2025-01-06", 5.0, 20.0, 0.0).await;
     common::insert_transaction(&db, anchor_id, "2025-01-02", 1.0, 100.0, 0.0).await;
 
     let mut sources = common::MockMarketDataSources::new();
     sources.historical_prices.insert(
         "XFAKEINTERVAL".to_owned(),
         [
-            ("2025-01-02".to_owned(), 11.0),
-            ("2025-01-03".to_owned(), 12.0),
+            ("2025-01-01".to_owned(), 10.0),
             ("2025-01-07".to_owned(), 21.0),
             ("2025-01-08".to_owned(), 22.0),
             ("2025-01-09".to_owned(), 23.0),
@@ -1411,28 +1433,41 @@ async fn source_prices_are_required_only_during_positive_holding_intervals() {
     .unwrap();
 
     assert!(readiness.market_data_limitations.is_empty());
+    let requested_ranges = sources.historical_price_request_ranges();
+    assert!(requested_ranges.iter().any(|(ticker, start, end)| {
+        ticker == "XFAKEINTERVAL"
+            && *start == NaiveDate::from_ymd_opt(2025, 1, 2).unwrap()
+            && *end == NaiveDate::from_ymd_opt(2025, 1, 3).unwrap()
+    }));
+    assert!(requested_ranges.iter().any(|(ticker, start, end)| {
+        ticker == "XFAKEINTERVAL"
+            && *start == NaiveDate::from_ymd_opt(2025, 1, 4).unwrap()
+            && *end == NaiveDate::from_ymd_opt(2025, 1, 9).unwrap()
+    }));
+    assert!(sources.historical_predecessor_request_dates().contains(&(
+        "XFAKEINTERVAL".to_owned(),
+        NaiveDate::from_ymd_opt(2025, 1, 2).unwrap()
+    )));
+    assert!(!requested_ranges.iter().any(|(ticker, start, end)| {
+        ticker == "XFAKEINTERVAL"
+            && *start <= NaiveDate::from_ymd_opt(2025, 1, 2).unwrap()
+            && *end >= NaiveDate::from_ymd_opt(2025, 1, 7).unwrap()
+    }));
     for date in [
         "2025-01-02",
         "2025-01-03",
+        "2025-01-06",
         "2025-01-07",
         "2025-01-08",
         "2025-01-09",
     ] {
-        assert!(
-            common::get_asset_snapshots(&db, date)
-                .await
-                .iter()
-                .any(|snapshot| snapshot.asset_id == asset_id),
-            "{date}"
-        );
+        assert_complete_interval_day(&db, date, asset_id, anchor_id, true).await;
     }
-    for date in ["2025-01-04", "2025-01-05", "2025-01-06"] {
+    for date in ["2025-01-04", "2025-01-05"] {
         assert!(
-            common::get_asset_snapshots(&db, date)
-                .await
-                .iter()
-                .all(|snapshot| snapshot.asset_id != asset_id),
-            "closed holding gap must not create an asset snapshot on {date}"
+            (assert_complete_interval_day(&db, date, asset_id, anchor_id, false).await - 100.0)
+                .abs()
+                < f64::EPSILON
         );
     }
 
@@ -1441,17 +1476,19 @@ async fn source_prices_are_required_only_during_positive_holding_intervals() {
         .into_iter()
         .find(|snapshot| snapshot.asset_id == asset_id)
         .unwrap();
-    assert!((first_interval.closing_price - 11.0).abs() < f64::EPSILON);
+    assert!((first_interval.closing_price - 10.0).abs() < f64::EPSILON);
     let second_interval = common::get_asset_snapshots(&db, "2025-01-07")
         .await
         .into_iter()
         .find(|snapshot| snapshot.asset_id == asset_id)
         .unwrap();
     assert!((second_interval.closing_price - 21.0).abs() < f64::EPSILON);
+    assert!((second_interval.quantity - 5.0).abs() < f64::EPSILON);
+    assert!((second_interval.market_value - 105.0).abs() < f64::EPSILON);
 }
 
 #[tokio::test]
-async fn same_day_buy_then_sale_needs_no_closing_price() {
+async fn same_day_split_dividend_then_sale_preserves_order_and_cash() {
     let db = common::setup_test_db().await;
     let asset_id = common::insert_asset(
         &db,
@@ -1462,21 +1499,39 @@ async fn same_day_buy_then_sale_needs_no_closing_price() {
     )
     .await;
     common::insert_transaction(&db, asset_id, "2025-01-02", 10.0, 10.0, 0.0).await;
-    common::insert_sell_transaction(&db, asset_id, "2025-01-02", 10.0, 10.0, 0.0).await;
+    common::insert_split_transaction(&db, asset_id, "2025-01-03", 2.0).await;
+    common::insert_dividend_transaction(&db, asset_id, "2025-01-03", 20.0, 0.0).await;
+    common::insert_sell_transaction(&db, asset_id, "2025-01-03", 20.0, 10.0, 0.0).await;
 
-    let sources = common::MockMarketDataSources::new();
+    let mut sources = common::MockMarketDataSources::new();
+    sources.historical_prices.insert(
+        "XFAKESAMEDAYINTERVAL".to_owned(),
+        [("2025-01-02".to_owned(), 10.0)].into_iter().collect(),
+    );
     let readiness = nav::ensure_portfolio_history(
         &db,
-        &common::market_data_at(&sources, NaiveDate::from_ymd_opt(2025, 1, 4).unwrap()),
+        &common::market_data_at(&sources, NaiveDate::from_ymd_opt(2025, 1, 5).unwrap()),
     )
     .await
     .unwrap();
 
     assert!(readiness.market_data_limitations.is_empty());
-    assert!(common::get_portfolio_snapshot(&db, "2025-01-02")
+    let buy_day = common::get_portfolio_snapshot(&db, "2025-01-02")
         .await
-        .is_some());
+        .expect("the buy date must remain complete");
+    assert!((buy_day.total_value - 100.0).abs() < f64::EPSILON);
+    assert!((buy_day.outstanding_shares - 1.0).abs() < f64::EPSILON);
+    let liquidation_day = common::get_portfolio_snapshot(&db, "2025-01-03")
+        .await
+        .expect("the split/dividend/full-sale date must remain complete");
+    assert!((liquidation_day.asset_value - 0.0).abs() < f64::EPSILON);
+    assert!((liquidation_day.total_value - 20.0).abs() < f64::EPSILON);
+    assert!((liquidation_day.outstanding_shares - 0.0).abs() < f64::EPSILON);
     assert!(common::get_asset_snapshots(&db, "2025-01-02")
+        .await
+        .iter()
+        .any(|snapshot| snapshot.asset_id == asset_id));
+    assert!(common::get_asset_snapshots(&db, "2025-01-03")
         .await
         .is_empty());
 }

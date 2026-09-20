@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
-    Arc,
+    Arc, Mutex,
 };
 
 use migration::{Migrator, MigratorTrait};
@@ -475,6 +475,8 @@ pub struct MockMarketDataSources {
     pub fund_data: HashMap<String, FundData>,
     pub fund_quote_metadata: HashMap<String, FundQuoteMetadata>,
     pub historical_source_calls: Arc<AtomicUsize>,
+    pub historical_price_requests: Arc<Mutex<Vec<(String, chrono::NaiveDate, chrono::NaiveDate)>>>,
+    pub historical_predecessor_requests: Arc<Mutex<Vec<(String, chrono::NaiveDate)>>>,
 }
 
 impl MockMarketDataSources {
@@ -488,11 +490,29 @@ impl MockMarketDataSources {
             fund_data: HashMap::new(),
             fund_quote_metadata: HashMap::new(),
             historical_source_calls: Arc::new(AtomicUsize::new(0)),
+            historical_price_requests: Arc::new(Mutex::new(Vec::new())),
+            historical_predecessor_requests: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
     pub fn historical_source_call_count(&self) -> usize {
         self.historical_source_calls.load(Ordering::Relaxed)
+    }
+
+    pub fn historical_price_request_ranges(
+        &self,
+    ) -> Vec<(String, chrono::NaiveDate, chrono::NaiveDate)> {
+        self.historical_price_requests
+            .lock()
+            .expect("historical price request mutex poisoned")
+            .clone()
+    }
+
+    pub fn historical_predecessor_request_dates(&self) -> Vec<(String, chrono::NaiveDate)> {
+        self.historical_predecessor_requests
+            .lock()
+            .expect("historical predecessor request mutex poisoned")
+            .clone()
     }
 }
 
@@ -535,6 +555,10 @@ impl MarketDataSources for MockMarketDataSources {
         end: chrono::NaiveDate,
     ) -> anyhow::Result<Vec<SourceObservation>> {
         self.historical_source_calls.fetch_add(1, Ordering::Relaxed);
+        self.historical_price_requests
+            .lock()
+            .expect("historical price request mutex poisoned")
+            .push((ticker.to_owned(), start, end));
         Ok(to_source_observations(
             self.historical_prices
                 .get(ticker)
@@ -553,6 +577,10 @@ impl MarketDataSources for MockMarketDataSources {
     ) -> anyhow::Result<Vec<SourceObservation>> {
         assert!(!self.panic_on_fund_price_history);
         self.historical_source_calls.fetch_add(1, Ordering::Relaxed);
+        self.historical_price_requests
+            .lock()
+            .expect("historical price request mutex poisoned")
+            .push((code.to_owned(), start, end));
         Ok(to_source_observations(
             self.historical_prices
                 .get(code)
@@ -585,6 +613,10 @@ impl MarketDataSources for MockMarketDataSources {
         before: chrono::NaiveDate,
     ) -> anyhow::Result<Option<SourceObservation>> {
         self.historical_source_calls.fetch_add(1, Ordering::Relaxed);
+        self.historical_predecessor_requests
+            .lock()
+            .expect("historical predecessor request mutex poisoned")
+            .push((ticker.to_owned(), before));
         if self.fail_latest_predecessor {
             anyhow::bail!("mock predecessor lookup failed for {ticker}");
         }
@@ -600,6 +632,10 @@ impl MarketDataSources for MockMarketDataSources {
         before: chrono::NaiveDate,
     ) -> anyhow::Result<Option<SourceObservation>> {
         self.historical_source_calls.fetch_add(1, Ordering::Relaxed);
+        self.historical_predecessor_requests
+            .lock()
+            .expect("historical predecessor request mutex poisoned")
+            .push((code.to_owned(), before));
         if self.fail_latest_predecessor {
             anyhow::bail!("mock predecessor lookup failed for {code}");
         }
