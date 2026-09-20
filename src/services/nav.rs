@@ -393,8 +393,6 @@ fn find_calculable_prefix(
             .push(transaction);
     }
     let mut limitations = Vec::new();
-    let mut transaction_limitations = Vec::new();
-    let mut first_blocked_date = None;
     let mut current = start_date;
     while current <= end_date {
         let date = format_date(current);
@@ -417,10 +415,9 @@ fn find_calculable_prefix(
                     if let Some(limitation) =
                         conversion_limitation(asset, valuation_data, current, end_date)
                     {
-                        transaction_limitations.push(limitation);
+                        add_limitation(&mut limitations, limitation);
                     }
                     blocked = true;
-                    first_blocked_date.get_or_insert(current);
                 }
                 holdings.insert(
                     transaction.transition.entry.asset_id,
@@ -454,18 +451,42 @@ fn find_calculable_prefix(
                 blocked = true;
             }
         }
-        for limitation in transaction_limitations.drain(..) {
-            add_limitation(&mut limitations, limitation);
-        }
         if blocked {
-            first_blocked_date.get_or_insert(current);
+            // Preserve the prepared market-data limitations for holdings that
+            // are already known at this date. A transaction-date blocker may
+            // occur while the current holding's own series is still present
+            // on this date but stale for the requested end.
+            for (asset_id, quantity) in &holdings {
+                if *quantity <= FLOAT_EPSILON {
+                    continue;
+                }
+                let asset = asset_map
+                    .get(asset_id)
+                    .context("missing asset for NAV valuation")?;
+                if asset.is_monetary() {
+                    continue;
+                }
+                if let Some(limitation) =
+                    valuation_data.price_limitation(asset, end_date, end_date)
+                {
+                    add_limitation(&mut limitations, limitation);
+                }
+                if asset.currency != crate::constants::BASE_CURRENCY {
+                    if let Some(limitation) =
+                        valuation_data.fx_limitation(&asset.currency, end_date, end_date)
+                    {
+                        add_limitation(&mut limitations, limitation);
+                    }
+                }
+            }
+            // The ledger state after this date depends on an unavailable
+            // input. Do not inspect or calculate later dates, even if their
+            // market data happens to be available.
+            return Ok((current - Duration::days(1), limitations));
         }
         current += Duration::days(1);
     }
-    Ok((
-        first_blocked_date.map_or(end_date, |date| date - Duration::days(1)),
-        limitations,
-    ))
+    Ok((end_date, limitations))
 }
 
 fn conversion_limitation(

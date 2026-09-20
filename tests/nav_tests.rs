@@ -2883,6 +2883,47 @@ async fn checkpoint_resume_reports_later_buy_sell_and_dividend_fx_blockers() {
 }
 
 #[tokio::test]
+async fn later_market_data_cannot_skip_a_missing_transaction_fx_blocker() {
+    let db = common::setup_test_db().await;
+    let anchor =
+        common::insert_asset(&db, "XFAKEANCHORFX", "Anchor Stock", "stock", "EUR").await;
+    let later_buy =
+        common::insert_asset(&db, "XFAKELATERFX", "Later USD Stock", "stock", "USD").await;
+    common::insert_transaction(&db, anchor, "2025-01-02", 1.0, 10.0, 0.0).await;
+    common::insert_transaction(&db, later_buy, "2025-01-03", 1.0, 20.0, 0.0).await;
+    for (asset, price) in [(anchor, 10.0), (later_buy, 20.0)] {
+        for date in ["2025-01-02", "2025-01-03", "2025-01-04"] {
+            common::insert_daily_price(&db, asset, date, price, false).await;
+        }
+    }
+
+    let mut sources = common::MockMarketDataSources::new();
+    sources
+        .exchange_rates
+        .insert("USDEUR".to_owned(), vec![("2025-01-04".to_owned(), 0.9)]);
+    let readiness = nav::ensure_portfolio_history(
+        &db,
+        &common::market_data_at(&sources, NaiveDate::from_ymd_opt(2025, 1, 5).unwrap()),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(readiness.latest_snapshot.unwrap().date, "2025-01-02");
+    assert!(readiness.market_data_limitations.iter().any(|limitation| {
+        matches!(
+            limitation.subject,
+            MarketDataSubject::FxRate { ref currency } if currency == "USD"
+        )
+    }));
+    assert!(common::get_portfolio_snapshot(&db, "2025-01-03")
+        .await
+        .is_none());
+    assert!(common::get_portfolio_snapshot(&db, "2025-01-04")
+        .await
+        .is_none());
+}
+
+#[tokio::test]
 async fn warm_nav_preparation_makes_no_source_calls_after_cache_is_complete() {
     let db = common::setup_test_db().await;
     let asset = common::insert_asset(&db, "XFAKEWARM", "Warm Stock", "stock", "USD").await;
