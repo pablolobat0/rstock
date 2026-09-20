@@ -2990,6 +2990,9 @@ async fn missing_transaction_fx_on_full_sale_stops_at_trusted_checkpoint() {
     )
     .await
     .unwrap();
+    let checkpoint = common::get_portfolio_snapshot(&db, "2025-01-02")
+        .await
+        .expect("trusted checkpoint should exist");
 
     common::insert_sell_transaction(&db, asset, "2025-01-03", 1.0, 10.0, 0.0).await;
     db.execute_unprepared("DELETE FROM daily_exchange_rates")
@@ -3035,6 +3038,22 @@ async fn missing_transaction_fx_on_full_sale_stops_at_trusted_checkpoint() {
     .unwrap();
     assert!(retry.market_data_limitations.is_empty());
     assert_eq!(retry.latest_snapshot.unwrap().date, "2025-01-03");
+    let checkpoint_after_retry = common::get_portfolio_snapshot(&db, "2025-01-02")
+        .await
+        .expect("trusted checkpoint should remain");
+    assert_eq!(checkpoint_after_retry.asset_value, checkpoint.asset_value);
+    assert_eq!(checkpoint_after_retry.total_value, checkpoint.total_value);
+    assert_eq!(
+        checkpoint_after_retry.outstanding_shares,
+        checkpoint.outstanding_shares
+    );
+    assert_eq!(checkpoint_after_retry.nav, checkpoint.nav);
+    let sale_snapshot = common::get_portfolio_snapshot(&db, "2025-01-03")
+        .await
+        .expect("full sale snapshot should resume");
+    assert_eq!(sale_snapshot.asset_value, 0.0);
+    assert_eq!(sale_snapshot.total_value, 0.0);
+    assert_eq!(sale_snapshot.outstanding_shares, 0.0);
     assert!(common::get_asset_snapshots(&db, "2025-01-03")
         .await
         .is_empty());
@@ -3066,6 +3085,9 @@ async fn missing_transaction_fx_on_dividend_stops_at_trusted_checkpoint() {
     )
     .await
     .unwrap();
+    let checkpoint = common::get_portfolio_snapshot(&db, "2025-01-02")
+        .await
+        .expect("trusted checkpoint should exist");
 
     common::insert_dividend_transaction(&db, asset, "2025-01-03", 1.0, 0.0).await;
     db.execute_unprepared("DELETE FROM daily_exchange_rates")
@@ -3111,9 +3133,21 @@ async fn missing_transaction_fx_on_dividend_stops_at_trusted_checkpoint() {
     .unwrap();
     assert!(retry.market_data_limitations.is_empty());
     assert_eq!(retry.latest_snapshot.unwrap().date, "2025-01-03");
-    assert!(common::get_portfolio_snapshot(&db, "2025-01-03")
+    let checkpoint_after_retry = common::get_portfolio_snapshot(&db, "2025-01-02")
         .await
-        .is_some());
+        .expect("trusted checkpoint should remain");
+    assert_eq!(checkpoint_after_retry.asset_value, checkpoint.asset_value);
+    assert_eq!(checkpoint_after_retry.total_value, checkpoint.total_value);
+    assert_eq!(
+        checkpoint_after_retry.outstanding_shares,
+        checkpoint.outstanding_shares
+    );
+    assert_eq!(checkpoint_after_retry.nav, checkpoint.nav);
+    let dividend_snapshot = common::get_portfolio_snapshot(&db, "2025-01-03")
+        .await
+        .expect("dividend snapshot should resume");
+    assert!((dividend_snapshot.total_value - 9.9).abs() < 1e-9);
+    assert!((dividend_snapshot.nav - 110.0).abs() < 1e-9);
 }
 
 #[tokio::test]
