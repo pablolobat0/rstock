@@ -308,6 +308,7 @@ async fn prepare_rebuild_plan(
         &enriched_transactions,
         &assets,
         &valuation_data,
+        &intervals,
     )?;
 
     Ok(NavRebuildPlan {
@@ -382,6 +383,7 @@ fn find_calculable_prefix(
     transactions: &[EnrichedLedgerTransition],
     assets: &[Asset],
     valuation_data: &NavValuationData,
+    intervals: &[NavValuationInterval],
 ) -> anyhow::Result<(NaiveDate, Vec<MarketDataLimitation>)> {
     let asset_map: HashMap<i32, &Asset> = assets.iter().map(|asset| (asset.id, asset)).collect();
     let mut holdings = checkpoint_holdings.clone();
@@ -446,18 +448,31 @@ fn find_calculable_prefix(
         if blocked {
             // Preserve the prepared market-data limitations for holdings that
             // are already known at this date. A transaction-date blocker may
-            // occur while the current holding's own series is still present
-            // on this date but stale for the requested end.
+            // occur while the current holding's own series is still present,
+            // while its known Positive-holding interval ends earlier.
             for_each_performance_holding(&holdings, &asset_map, |_asset_id, asset| {
-                if let Some(limitation) = valuation_data.price_limitation(asset, end_date, end_date)
+                if let Some(interval_end) = intervals
+                    .iter()
+                    .find(|interval| {
+                        interval.asset_id == asset.id
+                            && interval.start <= current
+                            && current <= interval.end
+                    })
+                    .map(|interval| interval.end)
                 {
-                    add_limitation(&mut limitations, limitation);
-                }
-                if asset.currency != crate::constants::BASE_CURRENCY {
                     if let Some(limitation) =
-                        valuation_data.fx_limitation(&asset.currency, end_date, end_date)
+                        valuation_data.price_limitation(asset, interval_end, interval_end)
                     {
                         add_limitation(&mut limitations, limitation);
+                    }
+                    if asset.currency != crate::constants::BASE_CURRENCY {
+                        if let Some(limitation) = valuation_data.fx_limitation(
+                            &asset.currency,
+                            interval_end,
+                            interval_end,
+                        ) {
+                            add_limitation(&mut limitations, limitation);
+                        }
                     }
                 }
                 Ok(())
