@@ -91,6 +91,20 @@ All test utilities are in `tests/common/mod.rs`:
 - **Nullable facts**: Test unavailable position facts independently and assert that aggregates are complete across their scope or `None`; do not accept partial sums as totals
 - **Ledger boundary**: Build typed entries through the authoritative pure ledger replay service. It owns `(date, id)` canonicalization, prefix validation, and semantic transitions; consumers must not reinterpret persistence columns or duplicate quantity/cost/dividend folds. Mutation paths validate before persistence, replay the complete affected ledger after tentative writes, and invalidate dependent history atomically.
 
+### NAV Performance Evidence
+
+Public NAV readiness prepares one immutable NAV-owned plan from the trusted latest
+Complete NAV snapshot, ordered Transaction ledger effects, Positive-holding
+intervals, and MarketData valuation series. Execution performs strict in-memory
+valuation reads and only atomic Complete NAV snapshot writes; it must not issue
+database reads or fallback MarketData calls. Performance evidence uses the
+fixed-clock Criterion fixtures with temporary or in-memory SQLite, dummy
+identities, and fake or unreachable sources. Preparation read work is measured
+separately from generated-row writes, and a deterministic allocation proxy records
+complete-plan memory behavior on the representative and 100-asset, 20-year stress
+fixtures. Timing reports preserve immutable targets and provenance; incomplete
+collections or regressions remain explicit decision-gate failures.
+
 ### Test Files
 
 | File | Coverage |

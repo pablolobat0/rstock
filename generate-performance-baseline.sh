@@ -92,6 +92,8 @@ rolling_work_pattern = re.compile(
     r"optimized_total_allocations=(\d+)"
 )
 rolling_work = {}
+nav_plan_allocations = {}
+nav_preparation_reads = None
 for line in benchmark_output:
     if match := rolling_work_pattern.search(line):
         (
@@ -113,11 +115,47 @@ for line in benchmark_output:
             "optimized_window_allocations": int(optimized_allocations),
             "optimized_total_allocations": int(optimized_total_allocations),
         }
+    if match := re.search(
+        r"nav_plan_allocation_proxy (representative|stress)_assets=(\d+) "
+        r"(?:representative|stress)_years=(\d+) "
+        r"(?:representative|stress)_transactions=(\d+) allocations=(\d+)",
+        line,
+    ):
+        label, assets, years, transactions, allocations = match.groups()
+        nav_plan_allocations[label] = {
+            "assets": int(assets),
+            "years": int(years),
+            "transactions": int(transactions),
+            "allocations": int(allocations),
+        }
+    if match := re.search(
+        r"nav_preparation_read_proxy short_years=(\d+) long_years=(\d+) "
+        r"short_reads=(\d+) long_reads=(\d+)",
+        line,
+    ):
+        short_years, long_years, short_reads, long_reads = match.groups()
+        nav_preparation_reads = {
+            "short_years": int(short_years),
+            "long_years": int(long_years),
+            "short_reads": int(short_reads),
+            "long_reads": int(long_reads),
+        }
     if match := candidate_pattern.search(line):
         limit, calls, peak = map(int, match.groups())
         candidates[str(limit)] = {"calls": calls, "peak": peak}
 if set(rolling_work) != {"representative", "stress"}:
     raise SystemExit(f"Rolling work proxies do not match harness: {sorted(rolling_work)}")
+if set(nav_plan_allocations) != {"representative", "stress"}:
+    raise SystemExit(
+        f"NAV plan allocation proxies do not match harness: {sorted(nav_plan_allocations)}"
+    )
+if nav_preparation_reads is None:
+    raise SystemExit("NAV preparation read proxy is missing from benchmark output")
+if nav_preparation_reads["short_reads"] != nav_preparation_reads["long_reads"]:
+    raise SystemExit(
+        "NAV preparation reads scaled with calendar years: "
+        f"{nav_preparation_reads}"
+    )
 warm_source_calls = next(
     int(match.group(1))
     for line in benchmark_output
@@ -221,6 +259,8 @@ report = {
             None,
         ),
         "rolling_work_proxy": rolling_work,
+        "nav_plan_allocation_proxy": nav_plan_allocations,
+        "nav_preparation_read_proxy": nav_preparation_reads,
         "query_count": {
             "approved_numeric_target": None,
             "measured_explain_statements": 5,
