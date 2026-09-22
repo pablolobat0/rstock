@@ -2,9 +2,16 @@
 
 pub mod common;
 
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
+
+use chrono::{Duration, NaiveDate};
 use common::{insert_asset, insert_transaction, setup_test_db};
 use migration::{Migrator, MigratorTrait};
 use rstock::db::repos::transaction_repo;
+use rstock::services::nav;
 use sea_orm::{ConnectionTrait, Database, DbBackend, Statement};
 
 #[tokio::test]
@@ -135,6 +142,46 @@ async fn representative_transaction_plans_are_available_for_baselining() {
             .count(),
         0
     );
+}
+
+#[tokio::test]
+async fn nav_preparation_read_work_does_not_scale_with_calendar_days() {
+    async fn preparation_reads(years: i64) -> usize {
+        let mut db = setup_test_db().await;
+        let asset = insert_asset(&db, "XPREPREADS", "Preparation Read Stock", "stock", "EUR").await;
+        let start = NaiveDate::from_ymd_opt(2025, 1, 2).expect("valid fixture start");
+        insert_transaction(&db, asset, &start.to_string(), 1.0, 10.0, 0.0).await;
+        let end = start + Duration::days(years * 365 - 1);
+        let mut date = start;
+        while date <= end {
+            common::insert_daily_price(&db, asset, &date.to_string(), 10.0, false).await;
+            date += Duration::days(1);
+        }
+
+        let reads = Arc::new(AtomicUsize::new(0));
+        let callback_reads = Arc::clone(&reads);
+        db.set_metric_callback(move |info| {
+            if info
+                .statement
+                .sql
+                .trim_start()
+                .to_ascii_uppercase()
+                .starts_with("SELECT")
+            {
+                callback_reads.fetch_add(1, Ordering::Relaxed);
+            }
+        });
+        let sources = common::MockMarketDataSources::new();
+        let market_data = common::market_data_at(&sources, end + Duration::days(1));
+        nav::ensure_portfolio_history(&db, &market_data)
+            .await
+            .expect("prepared NAV fixture should rebuild");
+        reads.load(Ordering::Relaxed)
+    }
+
+    let short_reads = preparation_reads(1).await;
+    let long_reads = preparation_reads(20).await;
+    assert_eq!(short_reads, long_reads);
 }
 
 #[tokio::test]

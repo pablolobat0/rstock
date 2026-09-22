@@ -245,6 +245,40 @@ struct PortfolioWorkEvidence {
     elapsed: std::time::Duration,
 }
 
+async fn measure_nav_plan_allocation_proxy(
+    asset_count: usize,
+    years: usize,
+    transaction_count: usize,
+) -> usize {
+    let fixture = build_fixture(asset_count, years, transaction_count).await;
+    ALLOCATIONS.store(0, Ordering::Relaxed);
+    nav::ensure_portfolio_history(&fixture.db, &fixture.market_data)
+        .await
+        .expect("NAV plan allocation fixture should rebuild");
+    ALLOCATIONS.load(Ordering::Relaxed)
+}
+
+async fn measure_nav_preparation_read_proxy(years: usize) -> usize {
+    let mut fixture = build_fixture(1, years, 1).await;
+    let reads = Arc::new(AtomicUsize::new(0));
+    let callback_reads = Arc::clone(&reads);
+    fixture.db.set_metric_callback(move |info| {
+        if info
+            .statement
+            .sql
+            .trim_start()
+            .to_ascii_uppercase()
+            .starts_with("SELECT")
+        {
+            callback_reads.fetch_add(1, Ordering::Relaxed);
+        }
+    });
+    nav::ensure_portfolio_history(&fixture.db, &fixture.market_data)
+        .await
+        .expect("NAV preparation query fixture should rebuild");
+    reads.load(Ordering::Relaxed)
+}
+
 impl PortfolioWorkEvidence {
     fn print(&self, label: &str, commands: u64) {
         println!(
@@ -555,6 +589,24 @@ fn benchmark_performance(c: &mut Criterion) {
     assert_eq!(FIXTURE_MATRIX.len(), 3);
     print_rolling_work_proxy("representative", &rolling_representative);
     print_rolling_work_proxy("stress", &rolling_stress);
+    let representative_plan_allocations =
+        runtime.block_on(measure_nav_plan_allocation_proxy(50, 10, 5_000));
+    let stress_plan_allocations =
+        runtime.block_on(measure_nav_plan_allocation_proxy(100, 20, 20_000));
+    let short_preparation_reads = runtime.block_on(measure_nav_preparation_read_proxy(1));
+    let long_preparation_reads = runtime.block_on(measure_nav_preparation_read_proxy(20));
+    println!(
+        "nav_plan_allocation_proxy representative_assets=50 representative_years=10 \
+         representative_transactions=5000 allocations={representative_plan_allocations}"
+    );
+    println!(
+        "nav_plan_allocation_proxy stress_assets=100 stress_years=20 \
+         stress_transactions=20000 allocations={stress_plan_allocations}"
+    );
+    println!(
+        "nav_preparation_read_proxy short_years=1 long_years=20 short_reads={short_preparation_reads} \
+         long_reads={long_preparation_reads}"
+    );
     let mut group = c.benchmark_group("performance-baseline");
     group.bench_function("transaction_listing", |b| {
         b.to_async(&runtime).iter(|| async {

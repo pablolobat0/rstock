@@ -1,6 +1,7 @@
 # Performance 01 baseline and decision gate
 
-This is the baseline artifact for issue #20 / PRD #19.  The executable harness
+This is the baseline artifact for issue #20 / PRD #19 and the direct prepared-NAV
+rollout gate for issue #68 / PRD #62. The executable harness
 is `benches/performance.rs`; it uses deterministic `XPERF###` identities, a
 fixed clock, temporary file-backed SQLite, and an injected source. Fixture
 construction is outside each Criterion timing closure, and no benchmark can
@@ -37,9 +38,9 @@ The final issue #32 rerun also includes the full representative and stress NAV
 rebuild paths.
 
 Transaction listing is immaterial at small scale but grows substantially at
-5,000 and 20,000 rows. Representative NAV readiness now always audits persisted
-history for completeness; the current measurement misses its approved target,
-while startup remains a separate measurable path.
+5,000 and 20,000 rows. Prepared NAV readiness trusts the latest Complete NAV
+snapshot as its NAV rebuild checkpoint and does not audit earlier history.
+Startup remains a separate measurable path.
 The unindexed transaction plan shapes are evidence for later index work, but
 their expected improvement is a hypothesis until that work is measured; no
 bottleneck claim is inferred from a plan alone.
@@ -74,6 +75,33 @@ makes one real delayed source call and one real cache write. The partial final
 rerun did not retain candidate work output, so the generated report leaves that
 section empty rather than inferring results. The previously approved production
 limit of **4** remains in force.
+
+## Prepared-NAV rollout evidence
+
+The #68 gate adds two deterministic work proxies to the same offline Criterion
+harness. `nav_plan_allocation_proxy` resets the benchmark's counting global
+allocator after constructing the fixture, then records allocations for one
+complete representative and stress rebuild. `nav_preparation_read_proxy` counts
+only SQL `SELECT` statements during public NAV readiness for one and twenty
+calendar years; persistence writes are intentionally excluded because generated
+rows necessarily scale with history. The performance generator rejects missing
+proxy output or unequal read counts, and stores both records in
+`decision_gate.work_and_plan_output` without converting them into timing claims.
+
+The benchmark stdout and Criterion artifacts are the provenance for every timing
+value. If a full collection is interrupted, the report records the incomplete
+collection and does not infer missing samples or pass status. Fixed targets remain
+the approved issue #20 values, including their recorded provenance; a target
+regression is a decision-gate failure, not a target change.
+
+For the #68 direct rollout gate, two complete full runs failed the immutable
+`transaction_listing`-family targets on code paths untouched by the rollout (and
+one `rolling_metric_representative` run); every NAV-specific target and the
+startup target passed in both. The exact run-to-run record and blocked
+decision-gate status live in `docs/nav-rollout-performance-evidence.md`; the
+committed `docs/performance-baseline-results.json` reflects the final full run
+and records the concrete failing paths. Target changes or rejecting the
+regression require explicit user approval, not a harness edit.
 
 ## Verification
 
