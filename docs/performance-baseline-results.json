@@ -4,177 +4,177 @@
     "measurement_time_seconds": 0.1,
     "warm_up_time_seconds": 0.1,
     "command": "./generate-performance-baseline.sh",
-    "generation_mode": "full benchmark and verification",
+    "generation_mode": "results-only from existing Criterion artifacts",
     "note": null
   },
   "criterion_estimates": {
     "correlation_matrix": {
-      "mean_ns": 13602378.1,
-      "median_ns": 12164769.0,
-      "std_dev_ns": 3896023.5566423493,
-      "p95_ns": 24007509.0
+      "mean_ns": 11898813.8,
+      "median_ns": 11583468.0,
+      "std_dev_ns": 731386.7850738227,
+      "p95_ns": 13224454.0
     },
     "correlation_matrix_representative": {
-      "mean_ns": 1834070626.5,
-      "median_ns": 1825722681.0,
-      "std_dev_ns": 75716977.8604202,
-      "p95_ns": 1965269296.0
+      "mean_ns": 1696373390.2,
+      "median_ns": 1672799277.5,
+      "std_dev_ns": 47864005.259564474,
+      "p95_ns": 1773553011.0
     },
     "delayed_source_limit_1": {
-      "mean_ns": 41537189.4,
-      "median_ns": 41029593.5,
-      "std_dev_ns": 1345693.8078705554,
-      "p95_ns": 43855710.0
+      "mean_ns": 40946139.9,
+      "median_ns": 40993554.5,
+      "std_dev_ns": 1648478.6709668234,
+      "p95_ns": 43260833.0
     },
     "delayed_source_limit_2": {
-      "mean_ns": 24735813.3,
-      "median_ns": 23679330.5,
-      "std_dev_ns": 5569661.010940573,
-      "p95_ns": 39569694.0
+      "mean_ns": 23500233.2,
+      "median_ns": 23389787.5,
+      "std_dev_ns": 1414359.8146217407,
+      "p95_ns": 25539773.0
     },
     "delayed_source_limit_4": {
-      "mean_ns": 17761249.6,
-      "median_ns": 14487403.5,
-      "std_dev_ns": 7187209.3558924245,
-      "p95_ns": 31698530.0
+      "mean_ns": 17724279.5,
+      "median_ns": 14444134.5,
+      "std_dev_ns": 7653770.3996427115,
+      "p95_ns": 35467240.0
     },
     "delayed_source_limit_8": {
-      "mean_ns": 7881737.3,
-      "median_ns": 7595251.0,
-      "std_dev_ns": 845096.7231433138,
-      "p95_ns": 9282966.0
+      "mean_ns": 9972980.2,
+      "median_ns": 8320553.5,
+      "std_dev_ns": 5623044.407483287,
+      "p95_ns": 25921709.0
     },
     "historical_market_data_preparation_cold": {
-      "mean_ns": 53890943.2,
-      "median_ns": 52474195.0,
-      "std_dev_ns": 2872082.9134492003,
-      "p95_ns": 59966737.0
+      "mean_ns": 53013955.5,
+      "median_ns": 52803914.0,
+      "std_dev_ns": 1741764.7513927585,
+      "p95_ns": 56233662.0
     },
     "historical_market_data_preparation_partial": {
-      "mean_ns": 45673338.1,
-      "median_ns": 45877331.0,
-      "std_dev_ns": 2059817.0517536234,
-      "p95_ns": 49675901.0
+      "mean_ns": 44787375.4,
+      "median_ns": 44750946.0,
+      "std_dev_ns": 1052902.6768313923,
+      "p95_ns": 46230592.0
     },
     "historical_market_data_preparation_warm": {
-      "mean_ns": 2869407.4856349207,
-      "median_ns": 2853083.7976190476,
-      "std_dev_ns": 116075.05870911555,
-      "p95_ns": 3087834.5
+      "mean_ns": 2738055.2170634917,
+      "median_ns": 2719941.7333333334,
+      "std_dev_ns": 66270.1181976877,
+      "p95_ns": 2891334.0
     },
     "market_data_preparation_representative": {
-      "mean_ns": 285803794.5,
-      "median_ns": 284608878.0,
-      "std_dev_ns": 8124275.412612011,
-      "p95_ns": 300281583.0
+      "mean_ns": 255592443.3,
+      "median_ns": 252271398.0,
+      "std_dev_ns": 16324759.91349253,
+      "p95_ns": 295233045.0
     },
     "nav_readiness_warm_representative": {
-      "mean_ns": 36343.897165421724,
-      "median_ns": 35403.604575163394,
-      "std_dev_ns": 2602.6784558014883,
-      "p95_ns": 42987.79215686274
+      "mean_ns": 36385.06973000311,
+      "median_ns": 36106.39128540305,
+      "std_dev_ns": 1941.153357701361,
+      "p95_ns": 40835.64705882353
     },
     "nav_rebuild_full": {
-      "mean_ns": 71284960.9,
-      "median_ns": 67749306.0,
-      "std_dev_ns": 8160167.286015614,
-      "p95_ns": 87723087.0
+      "mean_ns": 73234026.4,
+      "median_ns": 70706979.0,
+      "std_dev_ns": 7844145.383588001,
+      "p95_ns": 89359451.0
     },
     "nav_rebuild_full_representative": {
-      "mean_ns": 4629294085.3,
-      "median_ns": 4593346519.0,
-      "std_dev_ns": 352030100.4045331,
-      "p95_ns": 5260176347.0
+      "mean_ns": 4583578768.5,
+      "median_ns": 4702714833.0,
+      "std_dev_ns": 277302695.95452017,
+      "p95_ns": 4947075192.0
     },
     "nav_rebuild_full_stress": {
-      "mean_ns": 20133238716.7,
-      "median_ns": 19521936261.5,
-      "std_dev_ns": 4125639016.541752,
-      "p95_ns": 31339435698.0
+      "mean_ns": 18699934926.1,
+      "median_ns": 18805418431.5,
+      "std_dev_ns": 732911311.4924111,
+      "p95_ns": 19399449666.0
     },
     "nav_rebuild_incremental": {
-      "mean_ns": 12302171.3,
-      "median_ns": 12033957.5,
-      "std_dev_ns": 950432.0174992995,
-      "p95_ns": 14924908.0
+      "mean_ns": 15028804.3,
+      "median_ns": 12502745.0,
+      "std_dev_ns": 8377361.656647411,
+      "p95_ns": 38706114.0
     },
     "portfolio_retrieval_cold": {
-      "mean_ns": 85277786.9,
-      "median_ns": 85916650.5,
-      "std_dev_ns": 2316311.6194848535,
-      "p95_ns": 87820821.0
+      "mean_ns": 91844041.8,
+      "median_ns": 89788490.5,
+      "std_dev_ns": 9816462.197004102,
+      "p95_ns": 109662568.0
     },
     "portfolio_retrieval_representative": {
-      "mean_ns": 312258860.6,
-      "median_ns": 316195629.5,
-      "std_dev_ns": 13096688.269265769,
-      "p95_ns": 335422145.0
+      "mean_ns": 281448185.5,
+      "median_ns": 280137755.5,
+      "std_dev_ns": 19216143.971084125,
+      "p95_ns": 318694039.0
     },
     "portfolio_retrieval_warm": {
-      "mean_ns": 11555034.8,
-      "median_ns": 11355779.0,
-      "std_dev_ns": 529577.4585641734,
-      "p95_ns": 12520976.0
+      "mean_ns": 11039619.6,
+      "median_ns": 10916411.5,
+      "std_dev_ns": 551636.8503993265,
+      "p95_ns": 12515281.0
     },
     "rolling_correlation": {
-      "mean_ns": 5075030.366666666,
-      "median_ns": 5093489.833333334,
-      "std_dev_ns": 228663.64912237742,
-      "p95_ns": 5533906.666666667
+      "mean_ns": 3730149.4333333327,
+      "median_ns": 3717092.0,
+      "std_dev_ns": 45715.24486927771,
+      "p95_ns": 3854993.6666666665
     },
     "rolling_correlation_representative": {
-      "mean_ns": 42064445.3,
-      "median_ns": 42047619.0,
-      "std_dev_ns": 3069021.564745207,
-      "p95_ns": 48517399.0
+      "mean_ns": 36372398.0,
+      "median_ns": 35937600.0,
+      "std_dev_ns": 1113900.382052682,
+      "p95_ns": 38507564.0
     },
     "rolling_correlation_stress": {
-      "mean_ns": 89682191.4,
-      "median_ns": 86597174.5,
-      "std_dev_ns": 7878235.672544107,
-      "p95_ns": 105639393.0
+      "mean_ns": 75813729.7,
+      "median_ns": 75346904.0,
+      "std_dev_ns": 2694136.6540936446,
+      "p95_ns": 81312894.0
     },
     "rolling_metric_representative": {
-      "mean_ns": 212286.96470017638,
-      "median_ns": 209807.20555555556,
-      "std_dev_ns": 6182.419224266067,
-      "p95_ns": 227675.42592592593
+      "mean_ns": 205814.04062169313,
+      "median_ns": 204464.71759259258,
+      "std_dev_ns": 3099.570728932741,
+      "p95_ns": 213205.22222222222
     },
     "rolling_metric_stress": {
-      "mean_ns": 421417.430436508,
-      "median_ns": 417748.1111111111,
-      "std_dev_ns": 6938.0509544402685,
-      "p95_ns": 433845.45
+      "mean_ns": 426575.6509523809,
+      "median_ns": 426628.6214285714,
+      "std_dev_ns": 11772.766381778318,
+      "p95_ns": 448177.3
     },
     "startup_and_migration": {
-      "mean_ns": 6143318.9,
-      "median_ns": 5597508.0,
-      "std_dev_ns": 1607722.2343071925,
-      "p95_ns": 10591039.5
+      "mean_ns": 7190738.05,
+      "median_ns": 6259638.0,
+      "std_dev_ns": 2905458.862104195,
+      "p95_ns": 15262813.0
     },
     "transaction_import_representative": {
-      "mean_ns": 73444481.5,
-      "median_ns": 73655866.5,
-      "std_dev_ns": 4691008.754691853,
-      "p95_ns": 79665576.0
+      "mean_ns": 67907367.9,
+      "median_ns": 65509227.0,
+      "std_dev_ns": 5928653.882484688,
+      "p95_ns": 78665383.0
     },
     "transaction_listing": {
-      "mean_ns": 441286.4809285714,
-      "median_ns": 443605.85,
-      "std_dev_ns": 16343.202609886177,
-      "p95_ns": 468339.5
+      "mean_ns": 414355.7341825397,
+      "median_ns": 415018.9428571429,
+      "std_dev_ns": 2584.9583291079157,
+      "p95_ns": 418601.86666666664
     },
     "transaction_listing_representative": {
-      "mean_ns": 28208210.1,
-      "median_ns": 29632137.0,
-      "std_dev_ns": 2560905.650688116,
-      "p95_ns": 31015634.0
+      "mean_ns": 21166663.0,
+      "median_ns": 21337035.5,
+      "std_dev_ns": 859370.3617595074,
+      "p95_ns": 22607817.0
     },
     "transaction_listing_stress": {
-      "mean_ns": 105192714.6,
-      "median_ns": 104636822.0,
-      "std_dev_ns": 4686806.408235148,
-      "p95_ns": 111915912.0
+      "mean_ns": 95695188.8,
+      "median_ns": 96647613.5,
+      "std_dev_ns": 3194547.5755903837,
+      "p95_ns": 100651388.0
     }
   },
   "decision_gate": {
@@ -218,123 +218,123 @@
     },
     "fixed_target_results": {
       "correlation_matrix": {
-        "observed_p95_ns": 24007509.0,
+        "observed_p95_ns": 13224454.0,
         "target_p95_ns": 445531056,
         "passed": true
       },
       "correlation_matrix_representative": {
-        "observed_p95_ns": 1965269296.0,
+        "observed_p95_ns": 1773553011.0,
         "target_p95_ns": 29509919239,
         "passed": true
       },
       "historical_market_data_preparation_cold": {
-        "observed_p95_ns": 59966737.0,
+        "observed_p95_ns": 56233662.0,
         "target_p95_ns": 6877801668,
         "passed": true
       },
       "historical_market_data_preparation_partial": {
-        "observed_p95_ns": 49675901.0,
+        "observed_p95_ns": 46230592.0,
         "target_p95_ns": 4283927161,
         "passed": true
       },
       "historical_market_data_preparation_warm": {
-        "observed_p95_ns": 3087834.5,
+        "observed_p95_ns": 2891334.0,
         "target_p95_ns": 373421051,
         "passed": true
       },
       "market_data_preparation_representative": {
-        "observed_p95_ns": 300281583.0,
+        "observed_p95_ns": 295233045.0,
         "target_p95_ns": 25443133881,
         "passed": true
       },
       "nav_readiness_warm_representative": {
-        "observed_p95_ns": 42987.79215686274,
+        "observed_p95_ns": 40835.64705882353,
         "target_p95_ns": 20338526,
         "passed": true
       },
       "nav_rebuild_full": {
-        "observed_p95_ns": 87723087.0,
+        "observed_p95_ns": 89359451.0,
         "target_p95_ns": 11640612859,
         "passed": true
       },
       "nav_rebuild_full_representative": {
-        "observed_p95_ns": 5260176347.0,
+        "observed_p95_ns": 4947075192.0,
         "target_p95_ns": 6429392418,
         "passed": true
       },
       "nav_rebuild_full_stress": {
-        "observed_p95_ns": 31339435698.0,
+        "observed_p95_ns": 19399449666.0,
         "target_p95_ns": 34716733645,
         "passed": true
       },
       "nav_rebuild_incremental": {
-        "observed_p95_ns": 14924908.0,
+        "observed_p95_ns": 38706114.0,
         "target_p95_ns": 973815198,
         "passed": true
       },
       "portfolio_retrieval_cold": {
-        "observed_p95_ns": 87820821.0,
+        "observed_p95_ns": 109662568.0,
         "target_p95_ns": 13402702363,
         "passed": true
       },
       "portfolio_retrieval_representative": {
-        "observed_p95_ns": 335422145.0,
+        "observed_p95_ns": 318694039.0,
         "target_p95_ns": 25542912866,
         "passed": true
       },
       "portfolio_retrieval_warm": {
-        "observed_p95_ns": 12520976.0,
+        "observed_p95_ns": 12515281.0,
         "target_p95_ns": 374044380,
         "passed": true
       },
       "rolling_correlation": {
-        "observed_p95_ns": 5533906.666666667,
+        "observed_p95_ns": 3854993.6666666665,
         "target_p95_ns": 141698194,
         "passed": true
       },
       "rolling_correlation_representative": {
-        "observed_p95_ns": 48517399.0,
+        "observed_p95_ns": 38507564.0,
         "target_p95_ns": 1722112598,
         "passed": true
       },
       "rolling_metric_representative": {
-        "observed_p95_ns": 227675.42592592593,
+        "observed_p95_ns": 213205.22222222222,
         "target_p95_ns": 260907,
         "passed": true
       },
       "rolling_metric_stress": {
-        "observed_p95_ns": 433845.45,
+        "observed_p95_ns": 448177.3,
         "target_p95_ns": 722292,
         "passed": true
       },
       "startup_and_migration": {
-        "observed_p95_ns": 10591039.5,
+        "observed_p95_ns": 15262813.0,
         "target_p95_ns": 115259889,
         "passed": true
       },
       "transaction_listing": {
-        "observed_p95_ns": 468339.5,
+        "observed_p95_ns": 418601.86666666664,
         "target_p95_ns": 486397,
         "passed": true
       },
       "transaction_listing_representative": {
-        "observed_p95_ns": 31015634.0,
+        "observed_p95_ns": 22607817.0,
         "target_p95_ns": 21554013,
         "passed": false
       },
       "transaction_listing_stress": {
-        "observed_p95_ns": 111915912.0,
+        "observed_p95_ns": 100651388.0,
         "target_p95_ns": 98552625,
         "passed": false
       }
     },
     "fixed_target_failures": {
       "transaction_listing_representative": [
-        31015634.0,
+        22607817.0,
         21554013
       ],
       "transaction_listing_stress": [
-        111915912.0,
+        100651388.0,
         98552625
       ]
     },
@@ -369,7 +369,7 @@
       "transaction_query_plans=[(\"scan\", true, false), (\"search\", true, false), (\"search\", true, false), (\"search\", true, false), (\"search\", true, false)]"
     ],
     "baseline_work": {
-      "source_calls": 363,
+      "source_calls": 307,
       "peak": 1
     },
     "rolling_work_proxy": {
@@ -397,13 +397,13 @@
         "assets": 50,
         "years": 10,
         "transactions": 5000,
-        "allocations": 2467983
+        "allocations": 2467214
       },
       "stress": {
         "assets": 100,
         "years": 20,
         "transactions": 20000,
-        "allocations": 9659060
+        "allocations": 9656752
       }
     },
     "nav_preparation_read_proxy": {
@@ -424,7 +424,7 @@
       "cargo clippy --offline -- -D warnings",
       "cargo test --offline"
     ],
-    "status": "passed",
+    "status": "not run by results-only generation",
     "decision_gate_status": "failed"
   }
 }

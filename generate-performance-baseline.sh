@@ -149,8 +149,16 @@ if set(nav_plan_allocations) != {"representative", "stress"}:
     raise SystemExit(
         f"NAV plan allocation proxies do not match harness: {sorted(nav_plan_allocations)}"
     )
+for label, record in nav_plan_allocations.items():
+    if record["allocations"] <= 0:
+        raise SystemExit(f"NAV plan allocation proxy is vacuous for {label}: {record}")
 if nav_preparation_reads is None:
     raise SystemExit("NAV preparation read proxy is missing from benchmark output")
+if nav_preparation_reads["short_reads"] <= 0:
+    raise SystemExit(
+        "NAV preparation read proxy is vacuous (no reads counted): "
+        f"{nav_preparation_reads}"
+    )
 if nav_preparation_reads["short_reads"] != nav_preparation_reads["long_reads"]:
     raise SystemExit(
         "NAV preparation reads scaled with calendar years: "

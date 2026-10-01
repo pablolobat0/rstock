@@ -49,10 +49,10 @@ bottleneck claim is inferred from a plan alone.
 
 The committed report is generated from actual Criterion estimate and sample
 files by `generate-performance-baseline.sh`; no timing numbers are hand-authored.
-The final full rerun timed out while collecting the stress NAV benchmark. The
-report was therefore refreshed in results-only mode from the available
-Criterion artifacts and records that provenance explicitly. It must not be
-read as evidence that every path completed in one final run.
+(The #32-era provenance note about a timed-out stress rerun refreshed in
+results-only mode does not apply to the committed run-4 report: it was
+generated in full benchmark-and-verification mode with candidate work output
+retained.)
 The issue #20 decision gate approved immutable p95 targets for the named paths;
 the one exception is `nav_readiness_warm_representative`, whose original
 `12,847,958 ns` target was explicitly user-approved as `20,338,526 ns` for the
@@ -71,10 +71,9 @@ refresh policy was introduced by issue #32.
 
 The concurrency candidates each run eight independent one-day Stock/EUR
 preparations against separate file-backed SQLite fixtures. Every operation
-makes one real delayed source call and one real cache write. The partial final
-rerun did not retain candidate work output, so the generated report leaves that
-section empty rather than inferring results. The previously approved production
-limit of **4** remains in force.
+makes one real delayed source call and one real cache write. Candidate work
+output was retained in the committed run-4 report. The previously approved
+production limit of **4** remains in force.
 
 ## Prepared-NAV rollout evidence
 
@@ -94,14 +93,20 @@ collection and does not infer missing samples or pass status. Fixed targets rema
 the approved issue #20 values, including their recorded provenance; a target
 regression is a decision-gate failure, not a target change.
 
-For the #68 direct rollout gate, two complete full runs failed the immutable
-`transaction_listing`-family targets on code paths untouched by the rollout (and
-one `rolling_metric_representative` run); every NAV-specific target and the
-startup target passed in both. The exact run-to-run record and blocked
-decision-gate status live in `docs/nav-rollout-performance-evidence.md`; the
-committed `docs/performance-baseline-results.json` reflects the final full run
-and records the concrete failing paths. Target changes or rejecting the
-regression require explicit user approval, not a harness edit.
+For the #68 direct rollout gate, four complete full runs (2026-09-22 and
+2026-10-01) failed the immutable `transaction_listing_representative` and
+`transaction_listing_stress` targets on code paths untouched by the rollout
+(earlier runs additionally recorded `transaction_listing` and
+`rolling_metric_representative` misses); every NAV-specific target and the
+startup target passed in all runs. The exact run-to-run record and decision-gate
+status live in `docs/nav-rollout-performance-evidence.md`; the committed
+`docs/performance-baseline-results.json` reflects the final full run and records
+the concrete failing paths. On 2026-10-01 the user explicitly accepted the
+latest listed misses as a documented rollout exception (~4.9% representative /
+~2.1% stress above the immutable p95 targets), conditional on PR review and
+checks. The generated measurements and report continue to show the actual
+failed comparisons; this human acceptance is provenance recorded next to the
+results, not a pass, and does not infer any cause or change any target.
 
 ## Verification
 

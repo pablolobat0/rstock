@@ -100,10 +100,15 @@ valuation reads and only atomic Complete NAV snapshot writes; it must not issue
 database reads or fallback MarketData calls. Performance evidence uses the
 fixed-clock Criterion fixtures with temporary or in-memory SQLite, dummy
 identities, and fake or unreachable sources. Preparation read work is measured
-separately from generated-row writes, and a deterministic allocation proxy records
+separately from generated-row writes, and a fixed-input counting-allocator
+proxy records complete-plan memory behavior on the representative and
+100-asset, 20-year stress fixtures.
 complete-plan memory behavior on the representative and 100-asset, 20-year stress
 fixtures. Timing reports preserve immutable targets and provenance; incomplete
 collections or regressions remain explicit decision-gate failures.
+Allocation-proxy counts may drift slightly between runs (small async/runtime
+allocations inside the measured window) and are recorded as bounds, not exact
+pinned values.
 
 ### Test Files
 

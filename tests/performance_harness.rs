@@ -181,6 +181,10 @@ async fn nav_preparation_read_work_does_not_scale_with_calendar_days() {
 
     let short_reads = preparation_reads(1).await;
     let long_reads = preparation_reads(20).await;
+    assert!(
+        short_reads > 0,
+        "SELECT metric callback recorded no reads; counted work evidence must be non-vacuous"
+    );
     assert_eq!(short_reads, long_reads);
 }
 
