@@ -275,7 +275,7 @@ The NAV engine (`src/services/nav.rs`) uses the same valuation method as mutual 
 
    c. **Calculate NAV**: `nav = total_value / outstanding_shares`
 
-   d. **Store snapshot**: Write the day's `portfolio_history` and `portfolio_asset_history` records.
+   d. **Store snapshot**: Write the day's `portfolio_history` and `portfolio_asset_history` records, persisted in writes bounded by both date and row targets so a persisted snapshot is never split (see ADR-0003).
 
 3. **Effective valuation date**: The rebuild never extends beyond yesterday and stops at the end of the contiguous prefix whose Positive-holding intervals and transaction-date FX requirements are present in the prepared series. This prevents extrapolation or skipping when data sources lag.
 

@@ -1,6 +1,7 @@
 # Performance 01 baseline and decision gate
 
-This is the baseline artifact for issue #20 / PRD #19.  The executable harness
+This is the baseline artifact for issue #20 / PRD #19 and the direct prepared-NAV
+rollout gate for issue #68 / PRD #62. The executable harness
 is `benches/performance.rs`; it uses deterministic `XPERF###` identities, a
 fixed clock, temporary file-backed SQLite, and an injected source. Fixture
 construction is outside each Criterion timing closure, and no benchmark can
@@ -37,9 +38,9 @@ The final issue #32 rerun also includes the full representative and stress NAV
 rebuild paths.
 
 Transaction listing is immaterial at small scale but grows substantially at
-5,000 and 20,000 rows. Representative NAV readiness now always audits persisted
-history for completeness; the current measurement misses its approved target,
-while startup remains a separate measurable path.
+5,000 and 20,000 rows. Prepared NAV readiness trusts the latest Complete NAV
+snapshot as its NAV rebuild checkpoint and does not audit earlier history.
+Startup remains a separate measurable path.
 The unindexed transaction plan shapes are evidence for later index work, but
 their expected improvement is a hypothesis until that work is measured; no
 bottleneck claim is inferred from a plan alone.
@@ -48,10 +49,17 @@ bottleneck claim is inferred from a plan alone.
 
 The committed report is generated from actual Criterion estimate and sample
 files by `generate-performance-baseline.sh`; no timing numbers are hand-authored.
-The final full rerun timed out while collecting the stress NAV benchmark. The
-report was therefore refreshed in results-only mode from the available
-Criterion artifacts and records that provenance explicitly. It must not be
-read as evidence that every path completed in one final run.
+The run-4 numbers in this report came from a complete
+full-benchmark-and-verification generation on 2026-10-01 (benchmark collection
+plus the fmt/clippy/test commands executed inside that generation). The
+committed JSON also records a later results-only re-derivation that was used to
+re-verify identical numbers after a generator hardening fix
+(`PERFORMANCE_RESULTS_ONLY=1 ./generate-performance-baseline.sh`): that mode
+re-derives the report from existing run-4 Criterion artifacts without any
+new benchmark collection and does NOT execute the fmt/clippy/test commands;
+those checks were run separately on the branch. The JSON's
+`verification.status` field states whether the recorded commands were executed
+by that derivation (`not run by results-only generation` for the re-derivation).
 The issue #20 decision gate approved immutable p95 targets for the named paths;
 the one exception is `nav_readiness_warm_representative`, whose original
 `12,847,958 ns` target was explicitly user-approved as `20,338,526 ns` for the
@@ -70,10 +78,56 @@ refresh policy was introduced by issue #32.
 
 The concurrency candidates each run eight independent one-day Stock/EUR
 preparations against separate file-backed SQLite fixtures. Every operation
-makes one real delayed source call and one real cache write. The partial final
-rerun did not retain candidate work output, so the generated report leaves that
-section empty rather than inferring results. The previously approved production
-limit of **4** remains in force.
+makes one real delayed source call and one real cache write. Candidate work
+output was retained in the committed run-4 report. The previously approved
+production limit of **4** remains in force.
+
+## Prepared-NAV rollout evidence
+
+The #68 gate adds three deterministic work proxies to the same offline Criterion
+harness. `nav_plan_allocation_proxy` resets the benchmark's counting global
+allocator after constructing the fixture, then records allocation-call counts
+for one complete representative and stress rebuild; these are allocation-work
+evidence, not memory measurements.
+`nav_plan_memory_proxy` records the byte-aware allocator profile of one
+complete end-to-end stress rebuild measured in a dedicated window: scoped
+allocation calls, allocated and deallocated bytes, and the running balance
+peak and final live bytes; its scope and exclusions are stated in
+`docs/nav-rollout-performance-evidence.md`.
+`nav_preparation_read_proxy` counts
+only SQL `SELECT` statements during public NAV readiness for one and twenty
+calendar years; persistence writes are intentionally excluded because generated
+rows necessarily scale with history. The performance generator rejects missing
+proxy output, unequal read counts, and vacuous zero-valued work or memory
+fields, and stores all records in
+`decision_gate.work_and_plan_output` without converting them into timing claims.
+Memory-evidence source selection is mode-accurate: a full generation must find
+the memory line in the current benchmark stdout it just produced, while
+results-only mode may explicitly choose the focused memory-only collection
+file, which must carry its own `memory_collection_provenance` tokens (true
+collection revision/date/command) so the older measurement is never attributed
+to a newer revision or time.
+
+The benchmark stdout and Criterion artifacts are the provenance for every timing
+value. If a full collection is interrupted, the report records the incomplete
+collection and does not infer missing samples or pass status. Fixed targets remain
+the approved issue #20 values, including their recorded provenance; a target
+regression is a decision-gate failure, not a target change.
+
+For the #68 direct rollout gate, four complete full runs (2026-09-22 and
+2026-10-01) failed the immutable `transaction_listing_representative` and
+`transaction_listing_stress` targets on code paths untouched by the rollout
+(earlier runs additionally recorded `transaction_listing` and
+`rolling_metric_representative` misses); every NAV-specific target and the
+startup target passed in all runs. The exact run-to-run record and decision-gate
+status live in `docs/nav-rollout-performance-evidence.md`; the committed
+`docs/performance-baseline-results.json` reflects the final full run and records
+the concrete failing paths. On 2026-10-01 the user explicitly accepted the
+latest listed misses as a documented rollout exception (~4.9% representative /
+~2.1% stress above the immutable p95 targets), conditional on PR review and
+checks. The generated measurements and report continue to show the actual
+failed comparisons; this human acceptance is provenance recorded next to the
+results, not a pass, and does not infer any cause or change any target.
 
 ## Verification
 
