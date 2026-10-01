@@ -101,14 +101,15 @@ database reads or fallback MarketData calls. Performance evidence uses the
 fixed-clock Criterion fixtures with temporary or in-memory SQLite, dummy
 identities, and fake or unreachable sources. Preparation read work is measured
 separately from generated-row writes, and a fixed-input counting-allocator
-proxy records complete-plan memory behavior on the representative and
-100-asset, 20-year stress fixtures.
-complete-plan memory behavior on the representative and 100-asset, 20-year stress
-fixtures. Timing reports preserve immutable targets and provenance; incomplete
+proxy records complete-plan allocation work on the representative and
+100-asset, 20-year stress fixtures, with a dedicated byte-aware memory window
+recording allocated and deallocated bytes plus peak and final live balances
+for one complete stress rebuild. Allocation-call counts are work evidence,
+not memory measurements; memory values are process-allocation high-water and
+live balances, not RSS or isolated plan-object footprints, and their scope
+and exclusions are recorded in `docs/nav-rollout-performance-evidence.md`.
+Timing reports preserve immutable targets and provenance; incomplete
 collections or regressions remain explicit decision-gate failures.
-Allocation-proxy counts may drift slightly between runs (small async/runtime
-allocations inside the measured window) and are recorded as bounds, not exact
-pinned values.
 
 ### Test Files
 

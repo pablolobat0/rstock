@@ -49,10 +49,17 @@ bottleneck claim is inferred from a plan alone.
 
 The committed report is generated from actual Criterion estimate and sample
 files by `generate-performance-baseline.sh`; no timing numbers are hand-authored.
-(The #32-era provenance note about a timed-out stress rerun refreshed in
-results-only mode does not apply to the committed run-4 report: it was
-generated in full benchmark-and-verification mode with candidate work output
-retained.)
+The run-4 numbers in this report came from a complete
+full-benchmark-and-verification generation on 2026-10-01 (benchmark collection
+plus the fmt/clippy/test commands executed inside that generation). The
+committed JSON also records a later results-only re-derivation that was used to
+re-verify identical numbers after a generator hardening fix
+(`PERFORMANCE_RESULTS_ONLY=1 ./generate-performance-baseline.sh`): that mode
+re-derives the report from existing run-4 Criterion artifacts without any
+new benchmark collection and does NOT execute the fmt/clippy/test commands;
+those checks were run separately on the branch. The JSON's
+`verification.status` field states whether the recorded commands were executed
+by that derivation (`not run by results-only generation` for the re-derivation).
 The issue #20 decision gate approved immutable p95 targets for the named paths;
 the one exception is `nav_readiness_warm_representative`, whose original
 `12,847,958 ns` target was explicitly user-approved as `20,338,526 ns` for the
@@ -77,14 +84,22 @@ production limit of **4** remains in force.
 
 ## Prepared-NAV rollout evidence
 
-The #68 gate adds two deterministic work proxies to the same offline Criterion
+The #68 gate adds three deterministic work proxies to the same offline Criterion
 harness. `nav_plan_allocation_proxy` resets the benchmark's counting global
-allocator after constructing the fixture, then records allocations for one
-complete representative and stress rebuild. `nav_preparation_read_proxy` counts
+allocator after constructing the fixture, then records allocation-call counts
+for one complete representative and stress rebuild; these are allocation-work
+evidence, not memory measurements.
+`nav_plan_memory_proxy` records the byte-aware allocator profile of one
+complete end-to-end stress rebuild measured in a dedicated window: scoped
+allocation calls, allocated and deallocated bytes, and the running balance
+peak and final live bytes; its scope and exclusions are stated in
+`docs/nav-rollout-performance-evidence.md`.
+`nav_preparation_read_proxy` counts
 only SQL `SELECT` statements during public NAV readiness for one and twenty
 calendar years; persistence writes are intentionally excluded because generated
 rows necessarily scale with history. The performance generator rejects missing
-proxy output or unequal read counts, and stores both records in
+proxy output, unequal read counts, and vacuous zero-valued work or memory
+fields, and stores all records in
 `decision_gate.work_and_plan_output` without converting them into timing claims.
 
 The benchmark stdout and Criterion artifacts are the provenance for every timing

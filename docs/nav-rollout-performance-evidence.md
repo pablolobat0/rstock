@@ -26,8 +26,14 @@ truth. It records Criterion estimates and raw-sample p95 values, fixed-target
 comparisons, warm Historical market-data source calls, and the following rollout
 work evidence:
 
-- `nav_plan_allocation_proxy`: allocation counts for complete representative and
-  stress plans after fixture construction.
+- `nav_plan_allocation_proxy`: allocation-call counts for complete
+  representative and stress plans after fixture construction. These are
+  allocation-work evidence (how much allocation work one complete rebuild
+  performs), not memory measurements.
+- `nav_plan_memory_proxy`: the byte-aware allocator profile of one complete
+  end-to-end rebuild on the stress fixture, collected in a dedicated
+  measurement window: scoped allocation calls, allocated bytes, deallocated
+  bytes, and the running balance's peak and final live bytes.
 - `nav_preparation_read_proxy`: SQL read counts for one versus twenty calendar
   years at the public readiness seam; equal counts demonstrate no date-scaled
   preparation reads. Generated snapshot writes are not included in this proxy.
@@ -35,12 +41,43 @@ work evidence:
   readiness tests via the `execution_database_reads` probe on the execution
   sink; it is not a generated report field.
 
+`nav_plan_memory_proxy` measurement scope and exclusions, stated precisely:
+
+- Measured process memory: bytes routed through the Rust `GlobalAlloc`
+  implementation on the benchmark's counting allocator (system allocator
+  wrapper). It is an allocation-level high-water/live profile, not an RSS or
+  page-level end-to-end memory measurement.
+- Measured window: from opening the window (after the 100-asset, 20-year,
+  20,000-transaction stress fixture is fully constructed) until the public
+  `ensure_portfolio_history` readiness call completes; this spans preparation,
+  execution, and atomic snapshot persistence of one rebuild. Fixture
+  construction itself is outside the window.
+- Included: every Rust-allocated byte on any thread of the benchmark process
+  during the window, including Tokio runtime primitives and SQLite's Rust
+  wrapper objects.
+- Excluded: allocations by native code that does not route through the Rust
+  global allocator (notably SQLite's C-side memory), kernel page cache, and
+  file-backed database storage; bytes freed for allocations made before the
+  window opened are counted as drops inside the window, so `live_bytes` is a
+  running balance of window allocations and window drops, not a strict heap
+  snapshot, saturating at zero if pre-window drops would drive it negative;
+  bytes freed after the window closes are not observed.
+- Because the plan type is crate-private, an isolated plan-object footprint is
+  not claimed; `peak_live_bytes` is the end-to-end complete-rebuild
+  high-water, and `final_live_bytes` is the balance remaining at window close
+  (including retained database-connection buffers). No byte value is
+  converted into a timing target.
+- The memory window is collected in a separate focused memory-only run
+  (`cargo bench` with a no-match filter so no timed benchmark executes), whose
+  stdout is recorded at `target/nav-memory-collection-output.txt` and whose
+  values the generator requires to be present and non-vacuous.
+
 The performance generator rejects missing work evidence and rejects unequal
 preparation-read counts. It does not invent timings, convert incomplete benchmark
 collection into a pass, or alter immutable fixed targets. The generator rejects
-zero-valued work proxies so an inert metric callback cannot become a vacuous
-pass. Any fixed-target regression requires resolution or an explicit decision
-gate with provenance.
+zero-valued work or memory proxies so an inert metric callback cannot become a
+vacuous pass. Any fixed-target regression requires resolution or an explicit
+decision gate with provenance.
 
 ## Decision gate record (BLOCKED)
 
@@ -70,11 +107,18 @@ In all four runs every NAV-specific target passed:
 `rolling_metric_representative` (except where marked failed above). Work
 evidence was captured in every run: warm Historical preparation made zero source
 calls, preparation `SELECT` counts were equal across one and twenty calendar
-years (5 vs 5), and the deterministic allocation proxy recorded complete
-representative and stress plan allocations (run 3: 2,467,579 / 9,655,915;
-run 4: 2,467,214 / 9,656,752; counts are not bit-identical between runs — a
-small fixed-input drift from async/DB-runtime allocations inside the measured
-window — so they bound rather than pin plan memory behavior). The committed
+years (5 vs 5), and the allocation-work proxy recorded complete
+representative and stress plan allocation-call counts (run 3: 2,467,579 /
+9,655,915; run 4: 2,467,214 / 9,656,752 — small fixed-input drift between
+runs from async/DB-runtime allocations inside the measured call-count window).
+After the coordinator checkpoint stopped timing collection, one byte-aware
+memory profile of the complete stress rebuild was collected in a dedicated
+focused memory-only window (peak live 46,391,190 bytes; final live 13,420,716
+bytes; allocated 1,377,071,225; deallocated 1,363,650,509; 9,656,501 scoped
+allocation calls) and is now required and recorded by the generator. A repeated
+focused memory-only collection reproduced identical peak and final live bytes
+(46,391,190 / 13,420,716), with cumulative allocated and deallocated bytes
+within ~0.01% (1,377,060,601 / 1,363,639,885). The committed
 `docs/performance-baseline-results.json` is the run-4 report: after the
 2026-10-01 checkpoint stopped benchmark collection, a generator fix
 (rejecting vacuous work proxies) was re-verified with

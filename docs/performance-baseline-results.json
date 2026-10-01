@@ -406,6 +406,17 @@
         "allocations": 9656752
       }
     },
+    "nav_plan_memory_proxy": {
+      "stdout": "target/nav-memory-collection-output.txt",
+      "assets": 100,
+      "years": 20,
+      "transactions": 20000,
+      "allocations": 9656501,
+      "allocated_bytes": 1377071225,
+      "deallocated_bytes": 1363650509,
+      "peak_live_bytes": 46391190,
+      "final_live_bytes": 13420716
+    },
     "nav_preparation_read_proxy": {
       "short_years": 1,
       "long_years": 20,

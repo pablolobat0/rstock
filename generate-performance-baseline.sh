@@ -169,6 +169,51 @@ warm_source_calls = next(
     for line in benchmark_output
     if (match := re.search(r"warm preparation source_calls=(\d+)", line))
 )
+nav_plan_memory = None
+nav_memory_stdout = None
+for memory_file in ("target/nav-memory-collection-output.txt", "target/performance-benchmark-output.txt"):
+    if os.path.exists(memory_file):
+        for line in Path(memory_file).read_text().splitlines():
+            match = re.search(
+                r"nav_plan_memory_proxy stress_assets=(\d+) stress_years=(\d+) "
+                r"stress_transactions=(\d+) scoped_allocations=(\d+) "
+                r"allocated_bytes=(\d+) deallocated_bytes=(\d+) "
+                r"peak_live_bytes=(\d+) final_live_bytes=(\d+)",
+                line,
+            )
+            if match:
+                assets, years, transactions, allocations, allocated, deallocated, peak_live, final_live = map(int, match.groups())
+                nav_plan_memory = {
+                    "assets": assets,
+                    "years": years,
+                    "transactions": transactions,
+                    "allocations": allocations,
+                    "allocated_bytes": allocated,
+                    "deallocated_bytes": deallocated,
+                    "peak_live_bytes": peak_live,
+                    "final_live_bytes": final_live,
+                }
+                nav_memory_stdout = memory_file
+                break
+    if nav_plan_memory is not None:
+        break
+if nav_plan_memory is None:
+    raise SystemExit("NAV plan memory proxy is missing from benchmark output")
+required_memory_fields = (
+    "allocations",
+    "allocated_bytes",
+    "deallocated_bytes",
+    "peak_live_bytes",
+    "final_live_bytes",
+)
+for field in required_memory_fields:
+    if nav_plan_memory[field] <= 0:
+        raise SystemExit(f"NAV plan memory proxy is vacuous ({field}=0): {nav_plan_memory}")
+if nav_plan_memory["peak_live_bytes"] < nav_plan_memory["final_live_bytes"]:
+    raise SystemExit(
+        "NAV plan memory proxy recorded live bytes above the peak: "
+        f"{nav_plan_memory}"
+    )
 
 approved_targets = {
     "correlation_matrix": 445_531_056,
@@ -268,6 +313,7 @@ report = {
         ),
         "rolling_work_proxy": rolling_work,
         "nav_plan_allocation_proxy": nav_plan_allocations,
+        "nav_plan_memory_proxy": {"stdout": nav_memory_stdout, **nav_plan_memory},
         "nav_preparation_read_proxy": nav_preparation_reads,
         "query_count": {
             "approved_numeric_target": None,
