@@ -250,5 +250,8 @@ git diff --check
 
 All passed. The final follow-up commit `3a154e3` additionally fixes
 range-sensitive boundary coverage, reports later independent blockers, and
-updates the related documentation. Public-readiness SQL-read capture and
-large-fixture memory evidence remain explicit follow-up validation gaps.
+updates the related documentation. At that revision, public-readiness SQL-read
+capture and large-fixture memory evidence were explicit follow-up validation
+gaps. Both were subsequently supplied by the prepared-NAV rollout; see
+[the final evidence record](nav-rollout-performance-evidence.md) for SQL-read
+capture, query scaling, and the scoped byte-aware stress memory proxy.

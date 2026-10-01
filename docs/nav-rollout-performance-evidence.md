@@ -98,7 +98,7 @@ green, or waived.
 
 | Path | Run 1 p95 (ns) | Run 2 p95 (ns) | Run 3 p95 (ns) | Run 4 p95 (ns) | Immutable target (ns) |
 | --- | --- | --- | --- | --- | --- |
-| `transaction_listing` | 546,424.75 | 468,339.5 (passed) | passed | passed | 486,397 |
+| `transaction_listing` | 546,424.75 (failed) | 468,339.5 (passed) | passed | passed | 486,397 |
 | `transaction_listing_representative` | 29,372,720 | 31,015,634 | 22,949,776 | 22,607,817 | 21,554,013 |
 | `transaction_listing_stress` | 135,363,533 | 111,915,912 | 114,137,330 | 100,651,388 | 98,552,625 |
 | `rolling_metric_representative` | 290,169.25 (failed) | 227,675.4 (passed) | passed | passed | 260,907 |
@@ -106,8 +106,8 @@ green, or waived.
 In all four runs every NAV-specific target passed:
 `nav_rebuild_full`, `nav_rebuild_full_representative`, `nav_rebuild_full_stress`,
 `nav_rebuild_incremental`, and `nav_readiness_warm_representative`, as well as
-`startup_and_migration`, `transaction_listing`, and
-`rolling_metric_representative` (except where marked failed above). Work
+`startup_and_migration`. Small `transaction_listing` and
+`rolling_metric_representative` failed in run 1 and passed in runs 2–4. Work
 evidence was captured in every run: warm Historical preparation made zero source
 calls, preparation `SELECT` counts were equal across one and twenty calendar
 years (5 vs 5), and the allocation-work proxy recorded complete

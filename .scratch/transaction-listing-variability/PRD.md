@@ -12,8 +12,9 @@ Four complete runs of the established offline Criterion report recorded
 immutable `transaction_listing_representative` and
 `transaction_listing_stress` p95 misses that varied widely run-to-run
 (representative 22607817.0–31015634.0 ns and stress 100651388.0–135363533.0 ns
-against immutable 21554013 / 98552625 ns targets), while the small
-`transaction_listing`, NAV-specific, and startup targets passed in every run.
+against immutable 21554013 / 98552625 ns targets). NAV-specific and startup
+targets passed in every run; small `transaction_listing` failed in run 1
+(546424.75 ns against 486397 ns) and passed in runs 2–4.
 On 2026-10-01 the user accepted the latest two misses as a documented rollout
 exception; the root cause is unresolved.
 

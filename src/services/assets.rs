@@ -1,11 +1,11 @@
 use clap::ValueEnum;
-use sea_orm::DatabaseConnection;
+use sea_orm::{ConnectionTrait, DatabaseConnection, TransactionTrait};
 
 use crate::db::repos::{
     asset_repo, daily_price_repo, portfolio_asset_history_repo, portfolio_history_repo,
     transaction_repo,
 };
-use crate::models::{Asset, AssetClassification, AssetInfo};
+use crate::models::{Asset, AssetClass, AssetClassification, AssetInfo};
 
 pub async fn create_tracked_asset(
     db: &DatabaseConnection,
@@ -24,15 +24,23 @@ pub async fn update_tracked_asset(
     name: Option<&str>,
     morningstar_code: Option<&str>,
 ) -> anyhow::Result<()> {
-    let existing = asset_repo::find_by_ticker(db, ticker)
+    let txn = db.begin().await?;
+    let existing = asset_repo::find_by_ticker(&txn, ticker)
         .await?
         .ok_or_else(|| anyhow::anyhow!("asset with ticker '{ticker}' not found"))?;
     let updated_classification = merge_classification(&existing, classification)?;
     let updated_morningstar_code = morningstar_code.or(existing.morningstar_code.as_deref());
 
     updated_classification.validate_for_asset(&existing.asset_type, updated_morningstar_code)?;
+    let nav_scope_changed = existing.is_monetary()
+        != (updated_classification.asset_class.as_ref() == Some(&AssetClass::Monetary));
+    let provider_changed = matches!(
+        existing.asset_type,
+        crate::models::AssetType::Fund | crate::models::AssetType::Etf
+    ) && morningstar_code.is_some()
+        && existing.morningstar_code.as_deref() != morningstar_code;
     asset_repo::update(
-        db,
+        &txn,
         ticker,
         &updated_classification,
         name,
@@ -40,15 +48,14 @@ pub async fn update_tracked_asset(
     )
     .await?;
 
-    if matches!(
-        existing.asset_type,
-        crate::models::AssetType::Fund | crate::models::AssetType::Etf
-    ) && morningstar_code.is_some()
-        && existing.morningstar_code.as_deref() != morningstar_code
-    {
-        invalidate_provider_price_cache(db, &existing).await?;
+    if provider_changed {
+        daily_price_repo::delete_all_for_asset(&txn, existing.id).await?;
+    }
+    if nav_scope_changed || provider_changed {
+        invalidate_nav_history(&txn, existing.id).await?;
     }
 
+    txn.commit().await?;
     Ok(())
 }
 
@@ -92,13 +99,8 @@ where
         .transpose()
 }
 
-async fn invalidate_provider_price_cache(
-    db: &DatabaseConnection,
-    asset: &Asset,
-) -> anyhow::Result<()> {
-    daily_price_repo::delete_all_for_asset(db, asset.id).await?;
-
-    let earliest_tx_date = transaction_repo::find_by_asset_id(db, asset.id)
+async fn invalidate_nav_history(db: &impl ConnectionTrait, asset_id: i32) -> anyhow::Result<()> {
+    let earliest_tx_date = transaction_repo::find_by_asset_id(db, asset_id)
         .await?
         .into_iter()
         .map(|tx| tx.date)
@@ -106,7 +108,7 @@ async fn invalidate_provider_price_cache(
 
     if let Some(date) = earliest_tx_date {
         portfolio_history_repo::delete_from_date(db, &date).await?;
-        portfolio_asset_history_repo::delete_from_date_for_asset(db, &date, asset.id).await?;
+        portfolio_asset_history_repo::delete_from_date(db, &date).await?;
     }
 
     Ok(())

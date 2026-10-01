@@ -29,19 +29,6 @@ pub async fn upsert_many(
     Ok(())
 }
 
-pub async fn delete_from_date_for_asset(
-    db: &impl ConnectionTrait,
-    date: &str,
-    asset_id: i32,
-) -> anyhow::Result<()> {
-    portfolio_asset_history::Entity::delete_many()
-        .filter(portfolio_asset_history::Column::Date.gte(date))
-        .filter(portfolio_asset_history::Column::AssetId.eq(asset_id))
-        .exec(db)
-        .await?;
-    Ok(())
-}
-
 pub async fn delete_from_date(db: &impl ConnectionTrait, date: &str) -> anyhow::Result<()> {
     portfolio_asset_history::Entity::delete_many()
         .filter(portfolio_asset_history::Column::Date.gte(date))
