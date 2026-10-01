@@ -408,12 +408,18 @@
     },
     "nav_plan_memory_proxy": {
       "stdout": "target/nav-memory-collection-output.txt",
+      "collection_mode": "focused memory-only collection",
+      "collection_provenance": {
+        "collected_at": "2026-10-01T18:05:42+02:00",
+        "revision": "3ff305e",
+        "command": "CARGO_NET_OFFLINE=true cargo bench --offline --bench performance -- --sample-size 10 --measurement-time 0.1 --warm-up-time 0.1 zzz_no_matching_benchmark"
+      },
       "assets": 100,
       "years": 20,
       "transactions": 20000,
-      "allocations": 9656501,
-      "allocated_bytes": 1377071225,
-      "deallocated_bytes": 1363650509,
+      "allocations": 9656896,
+      "allocated_bytes": 1377116185,
+      "deallocated_bytes": 1363695469,
       "peak_live_bytes": 46391190,
       "final_live_bytes": 13420716
     },

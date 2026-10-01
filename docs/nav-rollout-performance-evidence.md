@@ -69,8 +69,11 @@ work evidence:
   converted into a timing target.
 - The memory window is collected in a separate focused memory-only run
   (`cargo bench` with a no-match filter so no timed benchmark executes), whose
-  stdout is recorded at `target/nav-memory-collection-output.txt` and whose
-  values the generator requires to be present and non-vacuous.
+  stdout with true revision/date/command provenance tokens is recorded at
+  `target/nav-memory-collection-output.txt`; the generator requires the values
+  to be present and non-vacuous and, in results-only mode, requires the
+  provenance tokens and never attributes that older measurement to a newer
+  revision or reference time.
 
 The performance generator rejects missing work evidence and rejects unequal
 preparation-read counts. It does not invent timings, convert incomplete benchmark
@@ -111,14 +114,22 @@ years (5 vs 5), and the allocation-work proxy recorded complete
 representative and stress plan allocation-call counts (run 3: 2,467,579 /
 9,655,915; run 4: 2,467,214 / 9,656,752 — small fixed-input drift between
 runs from async/DB-runtime allocations inside the measured call-count window).
-After the coordinator checkpoint stopped timing collection, one byte-aware
-memory profile of the complete stress rebuild was collected in a dedicated
-focused memory-only window (peak live 46,391,190 bytes; final live 13,420,716
-bytes; allocated 1,377,071,225; deallocated 1,363,650,509; 9,656,501 scoped
-allocation calls) and is now required and recorded by the generator. A repeated
-focused memory-only collection reproduced identical peak and final live bytes
-(46,391,190 / 13,420,716), with cumulative allocated and deallocated bytes
-within ~0.01% (1,377,060,601 / 1,363,639,885). The committed
+After the coordinator checkpoint stopped timing collection, byte-aware memory
+profiles of the complete stress rebuild were collected in dedicated focused
+memory-only windows. Three focused collections were taken; peak and final
+live bytes reproduced exactly in all three (46,391,190 / 13,420,716), with
+cumulative allocated/deallocated bytes drifting ~0.01% across runs. The
+canonical evidence is the third collection, collected from the exact
+commit-`3ff305e` bench content at `2026-10-01T18:05:42+02:00` and recorded with
+its own `memory_collection_provenance` tokens (collected_at, revision,
+command) in `target/nav-memory-collection-output.txt`; the generator requires
+these tokens when it selects the focused collection in results-only mode and
+does not infer the current revision or time for it. The first collection's
+cumulative counts (1,377,071,225 / 1,363,650,509; 9,656,501 scoped calls)
+remain recorded here. Mode selection in the generator: a full run must parse
+the memory line from the current benchmark stdout of that same run; the
+focused collection file may not override it, so stale focused evidence cannot
+shadow fresh full-run output. The committed
 `docs/performance-baseline-results.json` is the run-4 report: after the
 2026-10-01 checkpoint stopped benchmark collection, a generator fix
 (rejecting vacuous work proxies) was re-verified with

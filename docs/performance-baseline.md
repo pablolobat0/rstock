@@ -101,6 +101,12 @@ rows necessarily scale with history. The performance generator rejects missing
 proxy output, unequal read counts, and vacuous zero-valued work or memory
 fields, and stores all records in
 `decision_gate.work_and_plan_output` without converting them into timing claims.
+Memory-evidence source selection is mode-accurate: a full generation must find
+the memory line in the current benchmark stdout it just produced, while
+results-only mode may explicitly choose the focused memory-only collection
+file, which must carry its own `memory_collection_provenance` tokens (true
+collection revision/date/command) so the older measurement is never attributed
+to a newer revision or time.
 
 The benchmark stdout and Criterion artifacts are the provenance for every timing
 value. If a full collection is interrupted, the report records the incomplete

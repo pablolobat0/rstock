@@ -170,35 +170,80 @@ warm_source_calls = next(
     if (match := re.search(r"warm preparation source_calls=(\d+)", line))
 )
 nav_plan_memory = None
-nav_memory_stdout = None
-for memory_file in ("target/nav-memory-collection-output.txt", "target/performance-benchmark-output.txt"):
-    if os.path.exists(memory_file):
-        for line in Path(memory_file).read_text().splitlines():
-            match = re.search(
-                r"nav_plan_memory_proxy stress_assets=(\d+) stress_years=(\d+) "
-                r"stress_transactions=(\d+) scoped_allocations=(\d+) "
-                r"allocated_bytes=(\d+) deallocated_bytes=(\d+) "
-                r"peak_live_bytes=(\d+) final_live_bytes=(\d+)",
-                line,
-            )
-            if match:
-                assets, years, transactions, allocations, allocated, deallocated, peak_live, final_live = map(int, match.groups())
-                nav_plan_memory = {
-                    "assets": assets,
-                    "years": years,
-                    "transactions": transactions,
-                    "allocations": allocations,
-                    "allocated_bytes": allocated,
-                    "deallocated_bytes": deallocated,
-                    "peak_live_bytes": peak_live,
-                    "final_live_bytes": final_live,
-                }
-                nav_memory_stdout = memory_file
-                break
-    if nav_plan_memory is not None:
-        break
-if nav_plan_memory is None:
-    raise SystemExit("NAV plan memory proxy is missing from benchmark output")
+memory_collection_provenance = None
+if os.environ.get("PERFORMANCE_RESULTS_ONLY") == "1":
+    memory_source_file = "target/nav-memory-collection-output.txt"
+    memory_collection_mode = "focused memory-only collection"
+    if not Path(memory_source_file).exists():
+        raise SystemExit(f"focused memory evidence stdout is missing: {memory_source_file}")
+    for line in Path(memory_source_file).read_text().splitlines():
+        if match := re.search(
+            r"nav_plan_memory_proxy stress_assets=(\d+) stress_years=(\d+) "
+            r"stress_transactions=(\d+) scoped_allocations=(\d+) "
+            r"allocated_bytes=(\d+) deallocated_bytes=(\d+) "
+            r"peak_live_bytes=(\d+) final_live_bytes=(\d+)",
+            line,
+        ):
+            assets, years, transactions, allocations, allocated, deallocated, peak_live, final_live = map(int, match.groups())
+            nav_plan_memory = {
+                "assets": assets,
+                "years": years,
+                "transactions": transactions,
+                "allocations": allocations,
+                "allocated_bytes": allocated,
+                "deallocated_bytes": deallocated,
+                "peak_live_bytes": peak_live,
+                "final_live_bytes": final_live,
+            }
+            continue
+        if match := re.search(
+            r"memory_collection_provenance collected_at=(\S+) revision=(\S+) command=\"(.*)\"",
+            line,
+        ):
+            memory_collection_provenance = {
+                "collected_at": match.group(1),
+                "revision": match.group(2),
+                "command": match.group(3),
+            }
+    if nav_plan_memory is None:
+        raise SystemExit(f"NAV plan memory proxy line is missing from {memory_source_file}")
+    if memory_collection_provenance is None:
+        raise SystemExit(
+            "focused memory collection provenance token is missing from "
+            f"{memory_source_file}; the focused collection must record its own "
+            "collected_at, revision, and command provenance"
+        )
+else:
+    memory_source_file = "target/performance-benchmark-output.txt"
+    memory_collection_mode = "current full benchmark run"
+    if not Path(memory_source_file).exists():
+        raise SystemExit(f"memory evidence stdout is missing: {memory_source_file}")
+    for line in Path(memory_source_file).read_text().splitlines():
+        if match := re.search(
+            r"nav_plan_memory_proxy stress_assets=(\d+) stress_years=(\d+) "
+            r"stress_transactions=(\d+) scoped_allocations=(\d+) "
+            r"allocated_bytes=(\d+) deallocated_bytes=(\d+) "
+            r"peak_live_bytes=(\d+) final_live_bytes=(\d+)",
+            line,
+        ):
+            assets, years, transactions, allocations, allocated, deallocated, peak_live, final_live = map(int, match.groups())
+            nav_plan_memory = {
+                "assets": assets,
+                "years": years,
+                "transactions": transactions,
+                "allocations": allocations,
+                "allocated_bytes": allocated,
+                "deallocated_bytes": deallocated,
+                "peak_live_bytes": peak_live,
+                "final_live_bytes": final_live,
+            }
+            break
+    if nav_plan_memory is None:
+        raise SystemExit(f"NAV plan memory proxy line is missing from {memory_source_file}")
+    memory_collection_provenance = {
+        "mode": "collected within the same full benchmark run that produced the timed paths",
+        "stdout": memory_source_file,
+    }
 required_memory_fields = (
     "allocations",
     "allocated_bytes",
@@ -313,7 +358,12 @@ report = {
         ),
         "rolling_work_proxy": rolling_work,
         "nav_plan_allocation_proxy": nav_plan_allocations,
-        "nav_plan_memory_proxy": {"stdout": nav_memory_stdout, **nav_plan_memory},
+        "nav_plan_memory_proxy": {
+            "stdout": memory_source_file,
+            "collection_mode": memory_collection_mode,
+            "collection_provenance": memory_collection_provenance,
+            **nav_plan_memory,
+        },
         "nav_preparation_read_proxy": nav_preparation_reads,
         "query_count": {
             "approved_numeric_target": None,

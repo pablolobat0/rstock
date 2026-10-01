@@ -58,22 +58,6 @@ static PEAK_LIVE_BYTES: AtomicUsize = AtomicUsize::new(0);
 #[global_allocator]
 static GLOBAL_ALLOCATOR: CountingAllocator = CountingAllocator;
 
-/// Opens a byte-aware allocator measurement window. Only size changes that
-/// happen while the window is open contribute to the byte statistics:
-/// `allocated_bytes` counts sizes of allocations made inside the window,
-/// `deallocated_bytes` counts sizes of drops that happen inside the window,
-/// and `live_bytes` is their running balance (so bytes freed late for
-/// allocations made before the window slightly deflate the final live
-/// total; this is stated in the evidence documentation).
-fn open_allocation_memory_window() {
-    WINDOW_ALLOCATIONS.store(0, Ordering::Relaxed);
-    ALLOCATED_BYTES.store(0, Ordering::Relaxed);
-    DEALLOCATED_BYTES.store(0, Ordering::Relaxed);
-    LIVE_BYTES.store(0, Ordering::Relaxed);
-    PEAK_LIVE_BYTES.store(0, Ordering::Relaxed);
-    WINDOW_OPEN.store(true, Ordering::Relaxed);
-}
-
 /// Result of one closed allocator measurement window.
 struct AllocationMemoryWindow {
     allocations: usize,
@@ -86,14 +70,39 @@ struct AllocationMemoryWindow {
     peak_live_bytes: usize,
 }
 
-fn close_allocation_memory_window() -> AllocationMemoryWindow {
-    WINDOW_OPEN.store(false, Ordering::Relaxed);
-    AllocationMemoryWindow {
-        allocations: WINDOW_ALLOCATIONS.load(Ordering::Relaxed),
-        allocated_bytes: ALLOCATED_BYTES.load(Ordering::Relaxed),
-        deallocated_bytes: DEALLOCATED_BYTES.load(Ordering::Relaxed),
-        final_live_bytes: LIVE_BYTES.load(Ordering::Relaxed),
-        peak_live_bytes: PEAK_LIVE_BYTES.load(Ordering::Relaxed),
+unsafe impl GlobalAlloc for CountingAllocator {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        let pointer = System.alloc(layout);
+        if !pointer.is_null() && WINDOW_OPEN.load(Ordering::Relaxed) {
+            record_window_alloc(layout.size());
+        }
+        pointer
+    }
+
+    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        let pointer = System.alloc_zeroed(layout);
+        if !pointer.is_null() && WINDOW_OPEN.load(Ordering::Relaxed) {
+            record_window_alloc(layout.size());
+        }
+        pointer
+    }
+
+    unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
+        if WINDOW_OPEN.load(Ordering::Relaxed) {
+            record_window_dealloc(layout.size());
+        }
+        System.dealloc(pointer, layout);
+    }
+
+    unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        let pointer = System.realloc(pointer, layout, new_size);
+        if !pointer.is_null() && WINDOW_OPEN.load(Ordering::Relaxed) {
+            record_window_realloc(layout.size(), new_size);
+        }
+        pointer
     }
 }
 
@@ -133,42 +142,6 @@ fn shrink_live_bytes_saturating(size: usize) -> usize {
             Ok(_) => return next,
             Err(observed) => current = observed,
         }
-    }
-}
-
-unsafe impl GlobalAlloc for CountingAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
-        let pointer = System.alloc(layout);
-        if !pointer.is_null() && WINDOW_OPEN.load(Ordering::Relaxed) {
-            record_window_alloc(layout.size());
-        }
-        pointer
-    }
-
-    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
-        let pointer = System.alloc_zeroed(layout);
-        if !pointer.is_null() && WINDOW_OPEN.load(Ordering::Relaxed) {
-            record_window_alloc(layout.size());
-        }
-        pointer
-    }
-
-    unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
-        if WINDOW_OPEN.load(Ordering::Relaxed) {
-            record_window_dealloc(layout.size());
-        }
-        System.dealloc(pointer, layout);
-    }
-
-    unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
-        let pointer = System.realloc(pointer, layout, new_size);
-        if !pointer.is_null() && WINDOW_OPEN.load(Ordering::Relaxed) {
-            record_window_realloc(layout.size(), new_size);
-        }
-        pointer
     }
 }
 
@@ -1237,6 +1210,33 @@ fn measure_nav_plan_memory_proxy(
         ))
         .expect("NAV plan memory proxy fixture should rebuild");
     close_allocation_memory_window()
+}
+
+/// Opens a byte-aware allocator measurement window. Only size changes that
+/// happen while the window is open contribute to the byte statistics:
+/// `allocated_bytes` counts sizes of allocations made inside the window,
+/// `deallocated_bytes` counts sizes of drops that happen inside the window,
+/// and `live_bytes` is their running balance (so bytes freed late for
+/// allocations made before the window slightly deflate the final live
+/// total; this is stated in the evidence documentation).
+fn open_allocation_memory_window() {
+    WINDOW_ALLOCATIONS.store(0, Ordering::Relaxed);
+    ALLOCATED_BYTES.store(0, Ordering::Relaxed);
+    DEALLOCATED_BYTES.store(0, Ordering::Relaxed);
+    LIVE_BYTES.store(0, Ordering::Relaxed);
+    PEAK_LIVE_BYTES.store(0, Ordering::Relaxed);
+    WINDOW_OPEN.store(true, Ordering::Relaxed);
+}
+
+fn close_allocation_memory_window() -> AllocationMemoryWindow {
+    WINDOW_OPEN.store(false, Ordering::Relaxed);
+    AllocationMemoryWindow {
+        allocations: WINDOW_ALLOCATIONS.load(Ordering::Relaxed),
+        allocated_bytes: ALLOCATED_BYTES.load(Ordering::Relaxed),
+        deallocated_bytes: DEALLOCATED_BYTES.load(Ordering::Relaxed),
+        final_live_bytes: LIVE_BYTES.load(Ordering::Relaxed),
+        peak_live_bytes: PEAK_LIVE_BYTES.load(Ordering::Relaxed),
+    }
 }
 
 async fn measure_nav_plan_allocation_proxy(
