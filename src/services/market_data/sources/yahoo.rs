@@ -4,7 +4,7 @@ use yfinance_rs::core::conversions::money_to_f64;
 use yfinance_rs::history::HistoryBuilder;
 use yfinance_rs::profile::{self, Profile};
 use yfinance_rs::ticker::Ticker;
-use yfinance_rs::YfClient;
+use yfinance_rs::{Range, YfClient};
 
 use crate::models::StockInfo;
 
@@ -51,6 +51,37 @@ impl YahooFinanceAdapter {
         end: NaiveDate,
     ) -> anyhow::Result<Vec<SourceObservation>> {
         self.price_history(&format!("{from}{to}=X"), start, end)
+            .await
+    }
+
+    pub(super) async fn latest_price_before(
+        &self,
+        ticker: &str,
+        before: NaiveDate,
+    ) -> anyhow::Result<Option<SourceObservation>> {
+        let client = YfClient::default();
+        let candles = HistoryBuilder::new(&client, ticker)
+            .range(Range::Max)
+            .fetch()
+            .await
+            .context(format!("failed to fetch historical prices for {ticker}"))?;
+        Ok(candles
+            .iter()
+            .filter(|candle| candle.ts.date_naive() < before)
+            .max_by_key(|candle| candle.ts)
+            .map(|candle| SourceObservation {
+                date: candle.ts.date_naive(),
+                value: money_to_f64(&candle.close),
+            }))
+    }
+
+    pub(super) async fn latest_exchange_rate_before(
+        &self,
+        from: &str,
+        to: &str,
+        before: NaiveDate,
+    ) -> anyhow::Result<Option<SourceObservation>> {
+        self.latest_price_before(&format!("{from}{to}=X"), before)
             .await
     }
 

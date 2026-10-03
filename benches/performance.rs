@@ -12,7 +12,7 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Instant;
@@ -48,28 +48,100 @@ impl Clock for BenchmarkClock {
 struct CountingAllocator;
 
 static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
+static WINDOW_OPEN: AtomicBool = AtomicBool::new(false);
+static WINDOW_ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
+static ALLOCATED_BYTES: AtomicUsize = AtomicUsize::new(0);
+static DEALLOCATED_BYTES: AtomicUsize = AtomicUsize::new(0);
+static LIVE_BYTES: AtomicUsize = AtomicUsize::new(0);
+static PEAK_LIVE_BYTES: AtomicUsize = AtomicUsize::new(0);
 
 #[global_allocator]
 static GLOBAL_ALLOCATOR: CountingAllocator = CountingAllocator;
 
+/// Result of one closed allocator measurement window.
+struct AllocationMemoryWindow {
+    allocations: usize,
+    allocated_bytes: usize,
+    deallocated_bytes: usize,
+    /// Running balance of window allocations and window drops when the
+    /// window closes.
+    final_live_bytes: usize,
+    /// Maximum live balance observed during the window.
+    peak_live_bytes: usize,
+}
+
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
-        System.alloc(layout)
+        let pointer = System.alloc(layout);
+        if !pointer.is_null() && WINDOW_OPEN.load(Ordering::Relaxed) {
+            record_window_alloc(layout.size());
+        }
+        pointer
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
         ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
-        System.alloc_zeroed(layout)
+        let pointer = System.alloc_zeroed(layout);
+        if !pointer.is_null() && WINDOW_OPEN.load(Ordering::Relaxed) {
+            record_window_alloc(layout.size());
+        }
+        pointer
     }
 
     unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
+        if WINDOW_OPEN.load(Ordering::Relaxed) {
+            record_window_dealloc(layout.size());
+        }
         System.dealloc(pointer, layout);
     }
 
     unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
         ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
-        System.realloc(pointer, layout, new_size)
+        let pointer = System.realloc(pointer, layout, new_size);
+        if !pointer.is_null() && WINDOW_OPEN.load(Ordering::Relaxed) {
+            record_window_realloc(layout.size(), new_size);
+        }
+        pointer
+    }
+}
+
+fn record_window_alloc(size: usize) {
+    let live = LIVE_BYTES.fetch_add(size, Ordering::Relaxed) + size;
+    PEAK_LIVE_BYTES.fetch_max(live, Ordering::Relaxed);
+    WINDOW_ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+    ALLOCATED_BYTES.fetch_add(size, Ordering::Relaxed);
+}
+
+fn record_window_realloc(old_size: usize, new_size: usize) {
+    let live = if new_size > old_size {
+        LIVE_BYTES.fetch_add(new_size - old_size, Ordering::Relaxed) + (new_size - old_size)
+    } else {
+        shrink_live_bytes_saturating(old_size - new_size)
+    };
+    PEAK_LIVE_BYTES.fetch_max(live, Ordering::Relaxed);
+    WINDOW_ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+    ALLOCATED_BYTES.fetch_add(new_size, Ordering::Relaxed);
+    DEALLOCATED_BYTES.fetch_add(old_size, Ordering::Relaxed);
+}
+
+fn record_window_dealloc(size: usize) {
+    let _live = shrink_live_bytes_saturating(size);
+    DEALLOCATED_BYTES.fetch_add(size, Ordering::Relaxed);
+}
+
+/// Subtracts a byte amount from the running live balance, saturating at zero
+/// instead of underflowing when bytes for pre-window allocations are freed
+/// during the window.
+fn shrink_live_bytes_saturating(size: usize) -> usize {
+    let mut current = LIVE_BYTES.load(Ordering::Relaxed);
+    loop {
+        let next = current.saturating_sub(size);
+        match LIVE_BYTES.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed)
+        {
+            Ok(_) => return next,
+            Err(observed) => current = observed,
+        }
     }
 }
 
@@ -524,25 +596,6 @@ fn rolling_return_fixture(days: usize) -> Vec<(String, f64, f64)> {
         .collect()
 }
 
-fn print_rolling_work_proxy(label: &str, returns: &[(String, f64, f64)]) {
-    let input_len = returns.len();
-    let window_count = input_len.saturating_sub(ROLLING_CORRELATION_WINDOW_DAYS) + 1;
-    let naive_window_value_visits = window_count * ROLLING_CORRELATION_WINDOW_DAYS * 2;
-    let optimized_value_updates = (input_len + window_count.saturating_sub(1)) * 2;
-    ALLOCATIONS.store(0, Ordering::Relaxed);
-    let output = metrics::compute_rolling_correlation(returns);
-    std::hint::black_box(output);
-    let optimized_total_allocations = ALLOCATIONS.load(Ordering::Relaxed);
-    println!(
-        "rolling_work_proxy label={label} input={input_len} windows={window_count} \
-         naive_window_value_visits={naive_window_value_visits} \
-         optimized_value_updates={optimized_value_updates} \
-         naive_window_allocations={} optimized_window_allocations=0 \
-         optimized_total_allocations={optimized_total_allocations}",
-        window_count * 2,
-    );
-}
-
 #[allow(clippy::too_many_lines)]
 fn benchmark_performance(c: &mut Criterion) {
     let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -555,6 +608,35 @@ fn benchmark_performance(c: &mut Criterion) {
     assert_eq!(FIXTURE_MATRIX.len(), 3);
     print_rolling_work_proxy("representative", &rolling_representative);
     print_rolling_work_proxy("stress", &rolling_stress);
+    let representative_plan_allocations =
+        runtime.block_on(measure_nav_plan_allocation_proxy(50, 10, 5_000));
+    let stress_plan_allocations =
+        runtime.block_on(measure_nav_plan_allocation_proxy(100, 20, 20_000));
+    let short_preparation_reads = runtime.block_on(measure_nav_preparation_read_proxy(1));
+    let long_preparation_reads = runtime.block_on(measure_nav_preparation_read_proxy(20));
+    let stress_plan_memory = measure_nav_plan_memory_proxy(100, 20, 20_000);
+    println!(
+        "nav_plan_allocation_proxy representative_assets=50 representative_years=10 \
+         representative_transactions=5000 allocations={representative_plan_allocations}"
+    );
+    println!(
+        "nav_plan_allocation_proxy stress_assets=100 stress_years=20 \
+         stress_transactions=20000 allocations={stress_plan_allocations}"
+    );
+    println!(
+        "nav_plan_memory_proxy stress_assets=100 stress_years=20 stress_transactions=20000 \
+         scoped_allocations={} allocated_bytes={} deallocated_bytes={} \
+         peak_live_bytes={} final_live_bytes={}",
+        stress_plan_memory.allocations,
+        stress_plan_memory.allocated_bytes,
+        stress_plan_memory.deallocated_bytes,
+        stress_plan_memory.peak_live_bytes,
+        stress_plan_memory.final_live_bytes,
+    );
+    println!(
+        "nav_preparation_read_proxy short_years=1 long_years=20 short_reads={short_preparation_reads} \
+         long_reads={long_preparation_reads}"
+    );
     let mut group = c.benchmark_group("performance-baseline");
     group.bench_function("transaction_listing", |b| {
         b.to_async(&runtime).iter(|| async {
@@ -1108,6 +1190,106 @@ fn benchmark_performance(c: &mut Criterion) {
     );
     std::hint::black_box(fixture.counters.source_calls.load(Ordering::Relaxed));
     std::hint::black_box(fixture.counters.peak.load(Ordering::Relaxed));
+}
+
+fn measure_nav_plan_memory_proxy(
+    asset_count: usize,
+    years: usize,
+    transaction_count: usize,
+) -> AllocationMemoryWindow {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("memory probe runtime should build");
+    let fixture = runtime.block_on(build_fixture(asset_count, years, transaction_count));
+    open_allocation_memory_window();
+    runtime
+        .block_on(nav::ensure_portfolio_history(
+            &fixture.db,
+            &fixture.market_data,
+        ))
+        .expect("NAV plan memory proxy fixture should rebuild");
+    close_allocation_memory_window()
+}
+
+/// Opens a byte-aware allocator measurement window. Only size changes that
+/// happen while the window is open contribute to the byte statistics:
+/// `allocated_bytes` counts sizes of allocations made inside the window,
+/// `deallocated_bytes` counts sizes of drops that happen inside the window,
+/// and `live_bytes` is their running balance (so bytes freed late for
+/// allocations made before the window slightly deflate the final live
+/// total; this is stated in the evidence documentation).
+fn open_allocation_memory_window() {
+    WINDOW_ALLOCATIONS.store(0, Ordering::Relaxed);
+    ALLOCATED_BYTES.store(0, Ordering::Relaxed);
+    DEALLOCATED_BYTES.store(0, Ordering::Relaxed);
+    LIVE_BYTES.store(0, Ordering::Relaxed);
+    PEAK_LIVE_BYTES.store(0, Ordering::Relaxed);
+    WINDOW_OPEN.store(true, Ordering::Relaxed);
+}
+
+fn close_allocation_memory_window() -> AllocationMemoryWindow {
+    WINDOW_OPEN.store(false, Ordering::Relaxed);
+    AllocationMemoryWindow {
+        allocations: WINDOW_ALLOCATIONS.load(Ordering::Relaxed),
+        allocated_bytes: ALLOCATED_BYTES.load(Ordering::Relaxed),
+        deallocated_bytes: DEALLOCATED_BYTES.load(Ordering::Relaxed),
+        final_live_bytes: LIVE_BYTES.load(Ordering::Relaxed),
+        peak_live_bytes: PEAK_LIVE_BYTES.load(Ordering::Relaxed),
+    }
+}
+
+async fn measure_nav_plan_allocation_proxy(
+    asset_count: usize,
+    years: usize,
+    transaction_count: usize,
+) -> usize {
+    let fixture = build_fixture(asset_count, years, transaction_count).await;
+    ALLOCATIONS.store(0, Ordering::Relaxed);
+    nav::ensure_portfolio_history(&fixture.db, &fixture.market_data)
+        .await
+        .expect("NAV plan allocation fixture should rebuild");
+    ALLOCATIONS.load(Ordering::Relaxed)
+}
+
+async fn measure_nav_preparation_read_proxy(years: usize) -> usize {
+    let mut fixture = build_fixture(1, years, 1).await;
+    let reads = Arc::new(AtomicUsize::new(0));
+    let callback_reads = Arc::clone(&reads);
+    fixture.db.set_metric_callback(move |info| {
+        if info
+            .statement
+            .sql
+            .trim_start()
+            .to_ascii_uppercase()
+            .starts_with("SELECT")
+        {
+            callback_reads.fetch_add(1, Ordering::Relaxed);
+        }
+    });
+    nav::ensure_portfolio_history(&fixture.db, &fixture.market_data)
+        .await
+        .expect("NAV preparation query fixture should rebuild");
+    reads.load(Ordering::Relaxed)
+}
+
+fn print_rolling_work_proxy(label: &str, returns: &[(String, f64, f64)]) {
+    let input_len = returns.len();
+    let window_count = input_len.saturating_sub(ROLLING_CORRELATION_WINDOW_DAYS) + 1;
+    let naive_window_value_visits = window_count * ROLLING_CORRELATION_WINDOW_DAYS * 2;
+    let optimized_value_updates = (input_len + window_count.saturating_sub(1)) * 2;
+    ALLOCATIONS.store(0, Ordering::Relaxed);
+    let output = metrics::compute_rolling_correlation(returns);
+    std::hint::black_box(output);
+    let optimized_total_allocations = ALLOCATIONS.load(Ordering::Relaxed);
+    println!(
+        "rolling_work_proxy label={label} input={input_len} windows={window_count} \
+         naive_window_value_visits={naive_window_value_visits} \
+         optimized_value_updates={optimized_value_updates} \
+         naive_window_allocations={} optimized_window_allocations=0 \
+         optimized_total_allocations={optimized_total_allocations}",
+        window_count * 2,
+    );
 }
 
 criterion_group!(benches, benchmark_performance);
