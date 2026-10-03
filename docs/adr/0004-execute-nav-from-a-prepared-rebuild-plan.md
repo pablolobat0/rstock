@@ -1,4 +1,4 @@
-# Execute NAV from a Prepared Rebuild Plan
+# ADR-0004: Execute NAV from a Prepared Rebuild Plan
 
 NAV rebuilds will execute from one immutable, NAV-owned `NavRebuildPlan` containing the checkpoint state, ordered Transaction ledger entries, assets, Positive-holding intervals, and the range-loaded valuation data produced by `MarketData`. A successfully prepared plan guarantees that execution performs no database reads or fallback lookups; missing in-memory valuation data is an invariant failure. The first rollout will materialize the complete rebuild range because rstock is a personal CLI and the documented 100-asset, 20-year stress case is sufficient to measure its peak memory; windowed plans and concurrent write coordination are out of scope.
 

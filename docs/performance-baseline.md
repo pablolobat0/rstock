@@ -41,9 +41,9 @@ Transaction listing is immaterial at small scale but grows substantially at
 5,000 and 20,000 rows. Prepared NAV readiness trusts the latest Complete NAV
 snapshot as its NAV rebuild checkpoint and does not audit earlier history.
 Startup remains a separate measurable path.
-The unindexed transaction plan shapes are evidence for later index work, but
-their expected improvement is a hypothesis until that work is measured; no
-bottleneck claim is inferred from a plan alone.
+The original unindexed transaction plan shapes motivated the later ledger
+chronology indexes. Current query-plan checks verify indexed access; a query
+plan alone does not establish the size of a timing improvement or a bottleneck.
 
 ## Decision gate
 

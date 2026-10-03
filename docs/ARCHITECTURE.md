@@ -55,6 +55,8 @@
 
 `main.rs` creates an `OutputFormat` from the global `--json` flag and passes it through every dispatch path. Command adapters in `src/cli/commands/` call presentation-neutral services, then choose either the existing human renderer or `output::emit_json()`. `src/cli/output.rs` owns compact serialization and emits one `command`/`data` envelope to stdout; services do not emit successful command output. Errors and Clap help/version remain outside this successful-output boundary.
 
+The CLI imports the shared modules from the `rstock` library rather than compiling a second copy of them. Logging initialization remains owned by the executable. Test bodies and helpers live in dedicated files under `tests/`; private unit modules reference `tests/unit/` files through test-only module declarations.
+
 ### Logging (`logging.rs`)
 
 Structured logging via `tracing`. Two output layers:
@@ -211,11 +213,15 @@ Chronological ledger access is indexed by `(date, id)`, while per-asset access i
 | Column | Type | Notes |
 |--------|------|-------|
 | date | String PK | YYYY-MM-DD |
-| cash_balance | f64 | (Reserved, currently unused) |
+| cash_balance | f64 | Legacy physical column, default 0.0; excluded from the current ORM model |
 | asset_value | f64 | Total market value in EUR |
 | total_value | f64 | Total portfolio value in EUR |
 | outstanding_shares | f64 | NAV shares outstanding |
 | nav | f64 | NAV per share |
+
+Accumulated net dividend income is represented by `total_value - asset_value`.
+The original migration's `cash_balance` column remains in SQLite but is not
+read or written by the current ORM model.
 
 ### Per-Asset History (Migration 3)
 
@@ -265,7 +271,7 @@ assets 1──* portfolio_asset_history
 
 The NAV engine (`src/services/nav.rs`) uses the same valuation method as mutual funds:
 
-1. **Initialization**: The day before the first transaction, a seed snapshot is created with NAV = 100.0 and zero shares.
+1. **Initialization**: A new portfolio starts with NAV = 100.0 and zero shares. When the first calculable performance transaction is processed, the engine also persists a zero-value seed snapshot for the previous day.
 
 2. **Daily iteration**: For each calendar day from start to effective end:
 
@@ -277,7 +283,7 @@ The NAV engine (`src/services/nav.rs`) uses the same valuation method as mutual 
 
    c. **Calculate NAV**: `nav = total_value / outstanding_shares`
 
-   d. **Store snapshot**: Write the day's `portfolio_history` and `portfolio_asset_history` records, persisted in writes bounded by both date and row targets so a persisted snapshot is never split (see ADR-0003).
+   d. **Store snapshot**: Write the day's `portfolio_history` and `portfolio_asset_history` records, persisted in writes bounded by both date and row targets so a persisted snapshot is never split (see [ADR-0004](adr/0004-execute-nav-from-a-prepared-rebuild-plan.md)).
 
 3. **Effective valuation date**: The rebuild never extends beyond yesterday and stops at the end of the contiguous prefix whose Positive-holding intervals and transaction-date FX requirements are present in the prepared series. This prevents extrapolation or skipping when data sources lag.
 

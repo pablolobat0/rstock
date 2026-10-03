@@ -173,7 +173,7 @@ The Effective valuation date will be the final date in the contiguous calculable
 
 ## Further Notes
 
-- ADR-0003 records the accepted architectural decision and is authoritative for ownership, checkpoint trust, calculable-prefix behavior, persistence boundaries, memory strategy, and rollout.
+- [ADR-0004](../../docs/adr/0004-execute-nav-from-a-prepared-rebuild-plan.md) records the accepted architectural decision and is authoritative for ownership, checkpoint trust, calculable-prefix behavior, persistence boundaries, memory strategy, and rollout.
 - The domain glossary defines Complete NAV snapshot, NAV rebuild checkpoint, Positive-holding interval, Effective valuation date, Forward-filled market data, Transaction ledger, and related relationships. Implementation and tests should use those exact terms.
 - The current implementation already preloads valuation maps and transactions for calculation and atomically batches portfolio and per-asset writes. This work should deepen and complete that direction rather than rewrite correct unitization behavior.
 - The most important removed cost is the routine full-history holdings audit. Warm readiness should become proportional to checkpoint and new-range work rather than all historical per-asset rows.

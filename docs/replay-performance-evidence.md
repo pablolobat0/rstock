@@ -9,7 +9,8 @@ Fixture construction is outside timed closures; no network source is used.
 This is historical R77-D evidence, not the #68 prepared-NAV acceptance
 measurement. The patched-head column is intentionally identified by the
 commit that produced that run; it must not be read as evidence for the current
-uncommitted tree.
+implementation. Current rollout measurements are recorded in
+[the prepared-NAV evidence](nav-rollout-performance-evidence.md).
 
 ## Comparison
 

@@ -17,8 +17,6 @@ use super::SourceObservation;
 pub(super) struct MorningstarAdapter {
     client: Client,
     settings: Settings,
-    #[cfg(test)]
-    test_chart_response: Option<String>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -34,25 +32,6 @@ impl MorningstarAdapter {
                 .build()
                 .expect("reqwest client configuration should be valid"),
             settings,
-            #[cfg(test)]
-            test_chart_response: None,
-        }
-    }
-
-    #[cfg(test)]
-    fn with_chart_response(body: &str) -> Self {
-        Self {
-            client: Client::new(),
-            settings: Settings {
-                token_page_url: String::new(),
-                chartservice_url: String::new(),
-                holdings_url: String::new(),
-                quote_url: String::new(),
-                sal_api_key: String::new(),
-                user_agent: String::new(),
-                token_cache_path: Path::new("test-token-cache").to_path_buf(),
-            },
-            test_chart_response: Some(body.to_owned()),
         }
     }
 
@@ -95,13 +74,6 @@ impl MorningstarAdapter {
         if let Some(start) = start {
             query.push(("startDate", start.format(DATE_FORMAT).to_string()));
         }
-        #[cfg(test)]
-        let body = if let Some(body) = &self.test_chart_response {
-            body.clone()
-        } else {
-            self.fetch_chart_response(code, &query).await?
-        };
-        #[cfg(not(test))]
         let body = self.fetch_chart_response(code, &query).await?;
 
         parse_price_history_response(&body)
@@ -410,22 +382,5 @@ async fn write_cached_token(path: &Path, token: &CachedMorningstarToken) -> anyh
 }
 
 #[cfg(test)]
-mod tests {
-    use chrono::NaiveDate;
-
-    use super::MorningstarAdapter;
-
-    #[tokio::test]
-    async fn empty_bounded_history_is_a_successful_empty_result() {
-        let observations = MorningstarAdapter::with_chart_response(r#"[{"series":[]}]"#)
-            .price_history(
-                "XFAKEMSTAR",
-                NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
-                NaiveDate::from_ymd_opt(2025, 1, 2).unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert!(observations.is_empty());
-    }
-}
+#[path = "../../../../tests/unit/morningstar_tests.rs"]
+mod tests;
