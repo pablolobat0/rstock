@@ -25,6 +25,46 @@ fn classified_stock_row(tx_type: &str, quantity: &str, price: &str, fees: &str) 
 }
 
 #[tokio::test]
+async fn import_normalizes_pence_and_rejects_mixed_denominations() {
+    let db = common::setup_test_db().await;
+    let csv = write_csv(&format!(
+        "{CSV_HEADER}{}",
+        classified_stock_row("buy", "186.8131", "456.1", "100").replace("EUR", "GBp")
+    ));
+    import_transactions_csv(&db, csv.path().to_str().unwrap())
+        .await
+        .unwrap();
+    assert_eq!(
+        asset_repo::find_by_ticker(&db, "XFAKE1")
+            .await
+            .unwrap()
+            .unwrap()
+            .currency,
+        "GBX"
+    );
+    let txns = transaction_repo::find_all_ordered_by_date(&db, None, None)
+        .await
+        .unwrap();
+    assert_eq!(txns[0].unit_price_cents, Some(4_561_000));
+    assert_eq!(txns[0].trade_fees_cents, Some(1_000_000));
+    let csv = write_csv(&format!(
+        "{CSV_HEADER}{}",
+        classified_stock_row("buy", "1", "4.561", "1").replace("EUR", "GBP")
+    ));
+    let error = import_transactions_csv(&db, csv.path().to_str().unwrap())
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("does not match"));
+    assert_eq!(
+        transaction_repo::find_all_ordered_by_date(&db, None, None)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
 async fn test_import_buy_sell_dividend_split() {
     let db = common::setup_test_db().await;
 

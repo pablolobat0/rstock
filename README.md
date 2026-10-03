@@ -72,6 +72,31 @@ Create the asset once, then record transactions against it.
 
 Asset metadata for funds/ETFs belongs on `rstock portfolio asset add/edit`, including `--morningstar-code`.
 
+### Stocks quoted in British pence
+
+Use `--currency GBX` for stocks quoted in pence. The case-sensitive alias `GBp`
+is also accepted and stored as `GBX`; `GBP` means pounds. Prices, fees, dividend
+amounts and dividend deductions must all use the asset's denomination, including
+CSV imports. For a GBX asset, a £1 fee is entered as `--fees 100`.
+
+```bash
+rstock portfolio asset add --ticker FDEV.L --name "Frontier Developments" --type stock --asset-class equity --currency GBX
+rstock transaction buy --ticker FDEV.L --date 09-09-2026 --quantity 186.8131 --price 456.1
+```
+
+Here `456.1` pence equals £4.561 per share, or £852.0545491 before fees.
+Transaction amounts preserve four decimal places in their denomination. Market
+prices stay in pence; EUR valuation uses the GBP/EUR rate divided by 100.
+
+For an existing FDEV.L asset mistakenly recorded as GBP, first inspect whether
+its transaction prices, fees, dividends and cached prices are actually in pence.
+If they are, correct its currency to GBX and invalidate `portfolio_history` and
+`portfolio_asset_history` from its earliest transaction date in the same database
+transaction. Keep pence amounts unchanged. Any amounts originally entered in
+pounds need individual conversion to pence. This is a manual database correction
+under the historical-data policy in `docs/adr/0002-immutable-historical-market-data.md`;
+the asset edit command does not change currency.
+
 ### Record a sell transaction
 
 ```bash

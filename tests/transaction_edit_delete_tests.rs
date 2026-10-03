@@ -10,6 +10,36 @@ use sea_orm::ConnectionTrait;
 use common::*;
 
 #[tokio::test]
+async fn test_buy_preserves_fractional_penny_price() {
+    let db = setup_test_db().await;
+    insert_asset(&db, "XFAKE1", "Fake UK Stock", "stock", "GBP").await;
+
+    let receipt = services::transactions::buy(
+        &db,
+        "XFAKE1".to_owned(),
+        BuyOrder {
+            date: "2025-01-02".to_owned(),
+            quantity: 186.8131,
+            price: 4.561,
+            fees: 0.0,
+        },
+    )
+    .await
+    .unwrap();
+
+    let transaction = transaction_repo::find_by_id(&db, receipt.transaction_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let stored_price = rstock::models::cents_to_f64(transaction.display_price_cents());
+    assert!(
+        (stored_price - 4.561).abs() < 1e-9,
+        "expected 4.561 GBP per share, stored {stored_price}"
+    );
+    assert!((transaction.units.unwrap() * stored_price - 852.054_549_1).abs() < 1e-9);
+}
+
+#[tokio::test]
 async fn test_find_by_id() {
     let db = setup_test_db().await;
     let asset_id = insert_asset(&db, "XFAKE1", "Fake Stock", "stock", "EUR").await;
