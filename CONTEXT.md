@@ -105,8 +105,24 @@ A currently held Tracked asset with the Monetary Asset classification, shown as 
 _Avoid_: Cash balance, performance asset
 
 **Portfolio view**:
-The user-facing view of current Transaction ledger inventory and its latest available Individual prices, shown alongside NAV and returns at their Effective valuation date.
+The user-facing composition of Portfolio inventory and Portfolio performance.
 _Avoid_: NAV snapshot, current NAV valuation
+
+**Portfolio inventory**:
+Current Transaction ledger holdings and their independently dated Individual prices, with current holding facts and complete-or-unavailable aggregates.
+_Avoid_: NAV holdings, synchronized portfolio value
+
+**Portfolio performance**:
+Synchronized performance-holdings value, NAV, returns, risk facts, and requested ready NAV history at an Effective valuation date, composed alongside Portfolio inventory without sharing its valuation date.
+_Avoid_: Current inventory, mixed-date total value
+
+**Portfolio fact availability**:
+The state of one Portfolio inventory or Portfolio performance fact: available with a value, not applicable for a domain reason, or unavailable because a required input is missing.
+_Avoid_: Null, missing value
+
+**Daily-priced holdings movement**:
+The current-day Base currency movement of the explicitly covered stock and ETF holdings for which both current-day and prior-day valuation inputs exist; it reports its coverage, excludes mutual funds, and is not whole-portfolio performance.
+_Avoid_: Daily portfolio return, daily NAV change
 
 **Average cost**:
 The weighted-average Base currency acquisition cost per currently held unit, including buy fees; sells remove cost proportionally and splits change units without changing total cost.
@@ -126,6 +142,29 @@ _Avoid_: Gross dividend distribution, per-share dividend rate
 
 ## Relationships
 
+- A **Portfolio view** always contains **Portfolio inventory** and reports **Portfolio performance** as a distinct outcome.
+- **Portfolio performance** is not applicable when there are no current or historical performance holdings to measure.
+- **Portfolio performance** is unavailable when performance holdings exist but no **Complete NAV snapshot** can be produced.
+- **Portfolio performance** is available whenever a **Complete NAV snapshot** exists; a **Market data limitation** may prevent advancing its **Effective valuation date** without making that snapshot unavailable.
+- Available **Portfolio performance** always has an Effective valuation date, NAV, and inception date; unavailable and not-applicable performance do not carry placeholder versions of those facts.
+- Available **Portfolio performance** reports the synchronized performance-holdings value from its **Complete NAV snapshot**; it does not reuse mixed-date **Portfolio inventory** values or include **Monetary holding** values.
+- A composed **Portfolio view** obtains requested ready NAV history before presentation begins; presentation does not perform a second portfolio-history operation.
+- **Portfolio fact availability** is reported independently for each return and risk fact; insufficient portfolio history makes a period fact not applicable, while missing benchmark data makes only benchmark-dependent facts unavailable.
+- **Portfolio fact availability** and **Market data limitation** values are independent: a dated fact may remain available with a limitation, and a not-applicable fact may have no limitation.
+- **Portfolio fact availability** applies to calculated financial facts, not descriptive metadata whose absence has its own meaning.
+- A risk fact is not applicable when its required observations exist but the metric is mathematically undefined for that series; unavailable is reserved for a missing required input.
+- Expected domain absence may produce unavailable or not-applicable **Portfolio fact availability**; database failures, malformed persisted data, violated Transaction ledger invariants, and missing required lookup metadata remain errors rather than availability states.
+- Volatility, maximum drawdown, Sharpe, and Sortino use the available NAV series for their period; only beta requires NAV returns aligned with benchmark observations.
+- Available **Portfolio performance** groups each YTD, 1Y, 3Y, 5Y, and All return with the risk facts for the same period while preserving each fact's independent availability; All means since inception.
+- YTD Portfolio performance uses the first calculable NAV point in the year and otherwise falls back to inception; period reference dates remain calculation details rather than Portfolio view facts.
+- **Daily-priced holdings movement** belongs to **Portfolio inventory**, not **Portfolio performance**; its explicitly narrower scope does not imply that excluded holdings have zero movement.
+- Each **Portfolio inventory** section reports its own **Daily-priced holdings movement** for eligible positions; performance-holding and **Monetary holding** movements are not combined.
+- **Daily-priced holdings movement** applies the current quantity to both current-day and prior-day Base currency unit values, so current-day Transaction ledger cash flows are not reported as market movement.
+- **Daily-priced holdings movement** may remain available when an otherwise eligible position lacks an input only by identifying included and excluded positions; it must not present partial coverage as complete.
+- **Daily-priced holdings movement** is not applicable on Saturday or Sunday.
+- On a weekday, an eligible holding without a current-day price observation reuses its prior price as zero native-price movement because rstock does not infer exchange holidays; Base currency FX movement still contributes, and any **Market data limitation** remains visible.
+- Each holding's **Daily-priced holdings movement** uses its latest valuation observation before today as the baseline and reports that baseline date; holdings need not share one baseline date.
+- **Daily-priced holdings movement** reports absolute Base currency movement and percentage movement against the covered positions' prior Base currency value; the percentage is not applicable when that value is zero.
 - **NAV** is calculated at one **Effective valuation date**.
 - NAV history preserves one portfolio snapshot and its per-asset snapshots for every calculable calendar date; performance optimizations must not make that history sparse or lazy.
 - A **Complete NAV snapshot** is the atomic unit of rebuild progress: interruption may preserve complete dates, but a portfolio snapshot without all required per-asset snapshots is not valid history.
@@ -180,7 +219,8 @@ _Avoid_: Gross dividend distribution, per-share dividend rate
 - Position facts are independently available: missing historical FX can make cost or dividend facts unavailable without hiding a known quantity or current value, while a missing **Individual price** makes current value and dependent **Open-position gain/loss** unavailable without hiding ledger facts.
 - The portfolio view's current performance-holdings total is unavailable when any currently held performance asset has no **Individual price**; a partial sum must not be presented as the complete total.
 - Every aggregate in the **Portfolio view** is either complete across all included holdings or unavailable; known per-holding facts remain visible when an aggregate is unavailable.
-- Portfolio composition uses current **Transaction ledger** inventory rather than holdings at the **Effective valuation date**; value-dependent composition is unavailable when any included holding has no **Individual price**.
+- Ordinary aggregates for an empty **Portfolio inventory** section are available with value zero; observation-dependent facts such as **Daily-priced holdings movement** are not applicable when the section has no eligible holdings.
+- Portfolio composition consumes **Portfolio inventory**, not the composed **Portfolio view** or holdings at the **Effective valuation date**; value-dependent composition is unavailable when any included holding has no **Individual price**.
 - Rolling correlation analysis compares **Tracked assets**, not arbitrary market symbols.
 - Correlation analysis uses aligned available **Base currency** series for each **Tracked asset** and benchmark; it does not force every series to one **Effective valuation date**.
 - Risk and correlation metric labels preserve their broad portfolio-analysis interpretation, but unspecified statistical details and cross-version numeric comparability are not compatibility contracts; explicit metric relationships in this glossary remain authoritative until deliberately revised.
@@ -197,13 +237,13 @@ _Avoid_: Gross dividend distribution, per-share dividend rate
 - **Average cost** describes current portfolio inventory and does not perform tax-lot or realized-gain accounting.
 - A **Monetary holding** is displayed by the portfolio view but is excluded from aggregate portfolio value, allocation weights, gain/loss, NAV, returns, and risk metrics.
 - A **Monetary holding** retains its own quantity, Average cost, Individual price, current value, dividends, and Open-position gain/loss for display.
-- The portfolio view presents performance holdings as `positions` and **Monetary holding** values separately as `monetary_positions`.
+- **Portfolio inventory** has separate performance-holding and **Monetary holding** sections; each section owns its positions, complete-or-unavailable aggregates, and **Market data limitation** values.
 - If a **Monetary holding** has no available Individual price, it remains visible with ledger-derived quantity and cost facts; its current price, price date, value, and gain/loss are unavailable rather than inferred from a transaction price.
 - The **Base currency** value of all **Monetary holding** values is reported separately from aggregate portfolio value and is unavailable when any open Monetary holding cannot be valued.
-- The portfolio view's Total value is the sum of aggregate portfolio value and the separate Monetary holding value; it is unavailable when either subtotal is unavailable, and it does not participate in portfolio performance measurement.
-- The portfolio view's Total value may combine the latest available **Individual price** dates across holdings; it is an informational current estimate, not a synchronized NAV valuation.
+- **Portfolio inventory** Total value is the sum of its performance-holding and **Monetary holding** section values; it is unavailable when either subtotal is unavailable, and it does not participate in portfolio performance measurement.
+- **Portfolio inventory** Total value may combine the latest available **Individual price** dates across holdings; it is an informational current estimate, not a synchronized NAV valuation.
 - Market data limitations for **Monetary holding** values are reported separately and do not imply a limitation on NAV or portfolio performance.
-- The **Portfolio view** reports **Market data limitation** values separately for NAV/history, current performance positions, and **Monetary holding** values; a limitation in one scope does not imply that another scope is invalid.
+- The **Portfolio view** reports **Market data limitation** values separately for NAV/history readiness, benchmark-dependent risk metrics, current performance inventory, and **Monetary holding** inventory; a limitation in one scope does not imply that another scope is invalid.
 - **Net dividend income** is reported as lifetime income for a **Tracked asset** and is not attributed to the units that remain after a partial sell.
 - **Open-position gain/loss** uses only current value and remaining weighted-average cost; dividends and realized gains from sold units are separate facts and never contribute to it.
 
