@@ -174,11 +174,11 @@ JSON mode applies only to successful application results. Runtime errors and Cla
 
 ```
 src/
-├── cli/                # Clap CLI, command adapters, human display, and JSON output
-├── main.rs             # Entry point, command dispatch
+├── cli/                # Clap CLI, library-owned command dispatch, command adapters, human display, and JSON output
+├── main.rs             # Entry point, thin process bootstrap
+├── lib.rs              # Public module exports
 ├── constants.rs        # Centralized constants (dates, currency, metrics, thresholds)
 ├── utils.rs            # Shared interactive helpers
-├── lib.rs              # Public module exports
 ├── models/
 │   ├── asset.rs        # AssetType enum, AssetInfo, Asset, CurrentPosition
 │   ├── portfolio.rs    # PortfolioSnapshot, CorrelationMatrix, composition and holdings models
@@ -208,7 +208,7 @@ tests/                         # Integration tests + common test utilities
 ### Data flow
 
 1. `src/cli` parses commands via clap derive macros
-2. `main.rs` dispatches to service functions
+2. `main.rs` bootstraps the process and delegates the parsed command to the library-owned dispatch in `src/cli/dispatch.rs`, which routes to command adapters
 3. Services request valuation, Individual price, and correlation inputs through `MarketData`
 4. Public NAV readiness ensures daily snapshots through a private rebuild loop when needed
 5. The focused current-positions interface projects ledger inventory without requiring NAV; the full Portfolio view adds NAV, returns, and risk

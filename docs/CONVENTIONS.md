@@ -132,7 +132,7 @@ collections or regressions remain explicit decision-gate failures.
 ## How To: Add a New CLI Command
 
 1. **Define the command** — Add a new variant to the appropriate clap enum in `src/cli/mod.rs` with attributes for all flags
-2. **Add dispatch** — Add a match arm in `src/main.rs` that calls the appropriate service function
+2. **Add dispatch** — Add a match arm in the library-owned `src/cli/dispatch.rs` (`cli::run_command`) that routes to the appropriate CLI command adapter in `src/cli/commands/`
 3. **Implement service logic** — Create or update a function in `src/services/`. Follow the verb-first naming pattern
 4. **Add repo functions** — If new database operations are needed, add them to the relevant repo in `src/db/repos/`
 5. **Integrate both output formats** — Pass `OutputFormat` into the CLI command adapter. Preserve the human renderer under `OutputFormat::Human`, and emit exactly one compact dotted-command envelope through `cli::output::emit_json()` under `OutputFormat::Json`

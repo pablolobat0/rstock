@@ -53,9 +53,9 @@
 - **`analyze`** — Composition, fund analysis, static correlation matrix, and rolling pair correlation
 - **`compare`** — Side-by-side fund candidate comparison
 
-`main.rs` creates an `OutputFormat` from the global `--json` flag and passes it through every dispatch path. Command adapters in `src/cli/commands/` call presentation-neutral services, then choose either the existing human renderer or `output::emit_json()`. `src/cli/output.rs` owns compact serialization and emits one `command`/`data` envelope to stdout; services do not emit successful command output. Errors and Clap help/version remain outside this successful-output boundary.
+`main.rs` is a thin process bootstrap: it parses the CLI with clap, initializes logging, connects to the database, and builds the `MarketData` sources, then delegates the parsed command to `cli::run_command()` in `src/cli/dispatch.rs`. That library-owned dispatch routes every command in the current surface — both dashboard aliases `get` and `portfolio get` reach the same path — so production, integration tests, and benchmarks exercise one application module graph. Command adapters in `src/cli/commands/` call presentation-neutral services, then choose either the existing human renderer or `output::emit_json()`. `src/cli/output.rs` owns compact serialization and emits one `command`/`data` envelope to stdout; services do not emit successful command output. Errors and Clap help/version remain outside this successful-output boundary.
 
-The CLI imports the shared modules from the `rstock` library rather than compiling a second copy of them. Logging initialization remains owned by the executable. Test bodies and helpers live in dedicated files under `tests/`; private unit modules reference `tests/unit/` files through test-only module declarations.
+The library owns the complete command dispatch, and the executable imports the shared modules from the `rstock` library rather than compiling a second copy of them. Logging initialization remains owned by the executable. Test bodies and helpers live in dedicated files under `tests/`; private unit modules reference `tests/unit/` files through test-only module declarations.
 
 ### Logging (`logging.rs`)
 
@@ -337,7 +337,7 @@ Historical market data preparation caches source observations and fills gaps bet
 ### `get`
 
 ```
-main.rs
+rstock::cli::run_command
   └─> portfolio::get_portfolio()
         ├─> nav::ensure_portfolio_history()
         │     ├─> Prepare one immutable NavRebuildPlan from the trusted checkpoint
@@ -356,7 +356,7 @@ main.rs
 ### `transaction buy`
 
 ```
-main.rs
+rstock::cli::run_command
   └─> transactions::buy()
         └─> Database transaction
               ├─> asset_repo::find_by_ticker() (asset must already exist)
@@ -367,7 +367,7 @@ main.rs
 ### `transaction sell`
 
 ```
-main.rs
+rstock::cli::run_command
   └─> transactions::sell()
         └─> Database transaction
               ├─> Load the asset and its `(date, id)` ordered ledger
@@ -379,7 +379,7 @@ main.rs
 ### `transaction dividend`
 
 ```
-main.rs
+rstock::cli::run_command
   └─> transactions::dividend()
         └─> Database transaction
               ├─> Load the asset and its `(date, id)` ordered ledger
@@ -390,7 +390,7 @@ main.rs
 ### `transaction split`
 
 ```
-main.rs
+rstock::cli::run_command
   └─> transactions::split()
         └─> Database transaction
               ├─> Load the asset and its `(date, id)` ordered ledger
@@ -402,7 +402,7 @@ main.rs
 ### `transaction export`
 
 ```
-main.rs
+rstock::cli::run_command
   └─> export::export_transactions_csv()
         ├─> transaction_repo::find_all() (load all txs with asset info)
         └─> Write CSV file
@@ -411,7 +411,7 @@ main.rs
 ### `analyze composition`
 
 ```
-main.rs
+rstock::cli::run_command
   └─> composition::compute_composition()
         ├─> Load current Transaction ledger positions and Individual prices
         ├─> Aggregate classifications and look-through holdings without rebuilding NAV
@@ -422,7 +422,7 @@ main.rs
 ### `analyze correlation matrix`
 
 ```
-main.rs
+rstock::cli::run_command
   └─> analytics::compute_correlation_data()
         ├─> Derive current held assets from the Transaction ledger
         ├─> Request historical Base currency asset and benchmark series
@@ -434,7 +434,7 @@ main.rs
 ### `analyze correlation rolling`
 
 ```
-main.rs
+rstock::cli::run_command
   └─> analytics::compute_rolling_correlation_data()
         ├─> Fetch stock metadata for the two requested tickers
         ├─> Request cache-first tracked correlation market data from MarketData
@@ -448,7 +448,7 @@ main.rs
 ### `analyze fund`
 
 ```
-main.rs
+rstock::cli::run_command
   └─> fund_analysis::compute_fund_analysis()
         ├─> asset_repo::find_by_morningstar_code()
         ├─> market_data.fund_data() for Morningstar fund data
