@@ -1,11 +1,8 @@
-mod cli;
-mod constants;
-mod db;
 mod logging;
-mod models;
-mod services;
-mod settings;
-mod utils;
+
+// Keep the executable's logging module on the shared constants; the startup
+// logging benchmark supplies its own constants module when including logging.
+use rstock::{cli, constants, db, services};
 
 use clap::Parser;
 

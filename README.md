@@ -252,7 +252,7 @@ Tests use in-memory SQLite with migrations applied. `MockMarketDataSources` enab
 
 ## Documentation
 
-- [`CLAUDE.md`](CLAUDE.md) — AI-oriented project guide (build commands, key rules, project structure)
+- [`AGENTS.md`](AGENTS.md) — AI-oriented project guide (build commands, key rules, project structure)
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — System architecture, database schema, NAV algorithm, data flows
 - [`docs/CONVENTIONS.md`](docs/CONVENTIONS.md) — Code conventions, naming patterns, testing guidelines, how-to guides
 - [`TODO.md`](TODO.md) — Roadmap and known issues

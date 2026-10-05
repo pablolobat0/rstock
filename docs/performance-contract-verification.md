@@ -1,5 +1,12 @@
 # Performance 13 contract verification
 
+**Historical record:** This document captures issue #32's persistence-contract
+verification and its partial benchmark collection. The current shared numeric
+report has since been regenerated for the prepared-NAV rollout; see
+[the current baseline and gate](performance-baseline.md) and
+[the rollout evidence](nav-rollout-performance-evidence.md) for the complete
+collections, memory/read-work evidence, and accepted listing exception.
+
 Issue #32 closes the persistence expand-contract migration on top of the approved
 PRD #19 performance baseline. Repository `upsert` and `upsert_many` operations now
 use native SQLite conflict handling directly. The former manual check-then-write
@@ -42,8 +49,8 @@ single-row and bulk writes. Existing market-data, NAV, ledger-ordering, effectiv
 valuation-date, Base currency, and complete-aggregate tests remain unchanged and are
 included in the full offline suite.
 
-The final full baseline command timed out during the stress NAV benchmark. The
-results-only refresh records zero warm Historical market-data source calls but no
+The issue #32 full baseline command timed out during the stress NAV benchmark. Its
+results-only refresh recorded zero warm Historical market-data source calls but no
 candidate or baseline work output, and it reports the fixed-target failures
 without treating them as passes. The completed startup rerun recorded a
 3,663,891 ns warm transaction-list median and a 132,956 ns transactional warm

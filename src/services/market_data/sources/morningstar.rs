@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use anyhow::{bail, Context};
+use anyhow::Context;
 use base64::Engine;
 use chrono::{NaiveDate, TimeZone, Utc};
 use reqwest::{Client, StatusCode};
@@ -41,31 +41,60 @@ impl MorningstarAdapter {
         start: NaiveDate,
         end: NaiveDate,
     ) -> anyhow::Result<Vec<SourceObservation>> {
-        let body = self
-            .get_with_token_refresh(code, |token| {
-                self.client
-                    .get(&self.settings.chartservice_url)
-                    .bearer_auth(token)
-                    .header("accept", "application/json, text/plain, */*")
-                    .header("origin", "https://www.morningstar.com")
-                    .header("referer", "https://www.morningstar.com/")
-                    .query(&[
-                        ("query", format!("{code}:nav,totalReturn")),
-                        ("frequency", "d".to_owned()),
-                        ("startDate", start.format(DATE_FORMAT).to_string()),
-                        ("endDate", end.format(DATE_FORMAT).to_string()),
-                        ("trackMarketData", "3.6.5".to_owned()),
-                        ("instid", "DOTCOM".to_owned()),
-                    ])
-            })
-            .await
-            .context("Morningstar chartservice request failed")?;
+        self.price_history_with_start(code, Some(start), end).await
+    }
 
-        let observations = parse_timeseries(&body)?;
-        if observations.is_empty() {
-            bail!("No NAV data found for '{code}'");
+    pub(super) async fn latest_price_before(
+        &self,
+        code: &str,
+        before: NaiveDate,
+    ) -> anyhow::Result<Option<SourceObservation>> {
+        let observations = self
+            .price_history_with_start(code, None, before - chrono::Duration::days(1))
+            .await?;
+        Ok(observations
+            .into_iter()
+            .filter(|observation| observation.date < before)
+            .max_by_key(|observation| observation.date))
+    }
+
+    async fn price_history_with_start(
+        &self,
+        code: &str,
+        start: Option<NaiveDate>,
+        end: NaiveDate,
+    ) -> anyhow::Result<Vec<SourceObservation>> {
+        let mut query = vec![
+            ("query", format!("{code}:nav,totalReturn")),
+            ("frequency", "d".to_owned()),
+            ("trackMarketData", "3.6.5".to_owned()),
+            ("instid", "DOTCOM".to_owned()),
+            ("endDate", end.format(DATE_FORMAT).to_string()),
+        ];
+        if let Some(start) = start {
+            query.push(("startDate", start.format(DATE_FORMAT).to_string()));
         }
-        Ok(observations)
+        let body = self.fetch_chart_response(code, &query).await?;
+
+        parse_price_history_response(&body)
+    }
+
+    async fn fetch_chart_response(
+        &self,
+        code: &str,
+        query: &[(&str, String)],
+    ) -> anyhow::Result<String> {
+        self.get_with_token_refresh(code, |token| {
+            self.client
+                .get(&self.settings.chartservice_url)
+                .bearer_auth(token)
+                .header("accept", "application/json, text/plain, */*")
+                .header("origin", "https://www.morningstar.com")
+                .header("referer", "https://www.morningstar.com/")
+                .query(query)
+        })
+        .await
+        .context("Morningstar chartservice request failed")
     }
 
     pub(super) async fn fund_data(&self, code: &str, limit: u32) -> anyhow::Result<FundData> {
@@ -204,6 +233,10 @@ fn parse_timeseries(body: &str) -> anyhow::Result<Vec<SourceObservation>> {
         })
         .collect();
     Ok(sort_and_dedup_observations(observations))
+}
+
+fn parse_price_history_response(body: &str) -> anyhow::Result<Vec<SourceObservation>> {
+    parse_timeseries(body)
 }
 
 fn parse_fund_data(body: &str, limit: u32) -> anyhow::Result<FundData> {
@@ -347,3 +380,7 @@ async fn write_cached_token(path: &Path, token: &CachedMorningstarToken) -> anyh
         .await
         .context("failed to write Morningstar token cache")
 }
+
+#[cfg(test)]
+#[path = "../../../../tests/unit/morningstar_tests.rs"]
+mod tests;

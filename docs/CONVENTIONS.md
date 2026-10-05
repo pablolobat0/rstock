@@ -37,7 +37,7 @@ Within each file, order functions top-to-bottom like a book: if function A calls
 - `get_portfolio()`, `compute_fund_analysis()`
 - `buy()`, `sell()`, `dividend()`, `split()`
 - `ensure_portfolio_history()`
-- `fill_prices_for_range()`, `get_closing_price()`
+- `prepare_valuation_market_data()`, `prepare_individual_price_market_data()`
 - `compute_breakdown()`, `compute_correlation_data()`
 - `generate_monitor_report()`
 - `export_transactions_csv()`
@@ -59,6 +59,7 @@ Three categories of model structs:
 - Constants: `UPPER_SNAKE_CASE`
 - Modules: `lowercase`
 - Enum variants: `PascalCase` (e.g., `Stock`, `Fund`, `Etf`)
+- Remove unused code rather than suppressing `dead_code` or `unused_*` warnings with `#[allow]` or `#[expect]` attributes.
 
 ## Database Patterns
 
@@ -86,10 +87,30 @@ All test utilities are in `tests/common/mod.rs`:
 - **Imports**: Tests import from `rstock::` (the library crate), not `crate::`
 - **Assertions**: For floating-point comparisons, use `(value * 100.0).round() / 100.0` for 2-decimal precision or `assert!((a - b).abs() < epsilon)` for tolerance-based checks
 - **No fixtures or property testing**: Tests build their own state imperatively using the helper functions
-- **Test location**: Integration tests in `tests/` directory. Unit tests inline with `#[cfg(test)]` modules (e.g., `src/models/transaction.rs`)
+- **Test location**: All test functions and test helpers live in dedicated test files under `tests/`. Private unit coverage lives in `tests/unit/*_tests.rs`, referenced by a production module's `#[cfg(test)]` / `#[path = "..."]` declaration. Do not embed test bodies or test-only fields, constructors, or execution branches in production files. Test public interfaces from integration tests whenever possible.
 - **Fixed clock**: Date-sensitive portfolio tests inject `FixedClock` through `MarketData` (normally via `market_data_at()`) and assert behavior through `get_current_positions()` or `get_portfolio()`. Tests specifically covering NAV-readiness ownership may call `ensure_portfolio_history()`. Do not call private rebuild helpers or rely on the machine date for these contracts
 - **Nullable facts**: Test unavailable position facts independently and assert that aggregates are complete across their scope or `None`; do not accept partial sums as totals
 - **Ledger boundary**: Build typed entries through the authoritative pure ledger replay service. It owns `(date, id)` canonicalization, prefix validation, and semantic transitions; consumers must not reinterpret persistence columns or duplicate quantity/cost/dividend folds. Mutation paths validate before persistence, replay the complete affected ledger after tentative writes, and invalidate dependent history atomically.
+
+### NAV Performance Evidence
+
+Public NAV readiness prepares one immutable NAV-owned plan from the trusted latest
+Complete NAV snapshot, ordered Transaction ledger effects, Positive-holding
+intervals, and MarketData valuation series. Execution performs strict in-memory
+valuation reads and only atomic Complete NAV snapshot writes; it must not issue
+database reads or fallback MarketData calls. Performance evidence uses the
+fixed-clock Criterion fixtures with temporary or in-memory SQLite, dummy
+identities, and fake or unreachable sources. Preparation read work is measured
+separately from generated-row writes, and a fixed-input counting-allocator
+proxy records complete-plan allocation work on the representative and
+100-asset, 20-year stress fixtures, with a dedicated byte-aware memory window
+recording allocated and deallocated bytes plus peak and final live balances
+for one complete stress rebuild. Allocation-call counts are work evidence,
+not memory measurements; memory values are process-allocation high-water and
+live balances, not RSS or isolated plan-object footprints, and their scope
+and exclusions are recorded in `docs/nav-rollout-performance-evidence.md`.
+Timing reports preserve immutable targets and provenance; incomplete
+collections or regressions remain explicit decision-gate failures.
 
 ### Test Files
 

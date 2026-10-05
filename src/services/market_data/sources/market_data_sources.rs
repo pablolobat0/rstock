@@ -34,6 +34,37 @@ pub trait MarketDataSources: Send + Sync {
         end: NaiveDate,
     ) -> anyhow::Result<Vec<SourceObservation>>;
 
+    /// Returns the latest source observation whose date is strictly before `before`.
+    async fn latest_stock_price_before(
+        &self,
+        ticker: &str,
+        before: NaiveDate,
+    ) -> anyhow::Result<Option<SourceObservation>> {
+        let _ = (ticker, before);
+        Ok(None)
+    }
+
+    /// Returns the latest source observation whose date is strictly before `before`.
+    async fn latest_fund_price_before(
+        &self,
+        code: &str,
+        before: NaiveDate,
+    ) -> anyhow::Result<Option<SourceObservation>> {
+        let _ = (code, before);
+        Ok(None)
+    }
+
+    /// Returns the latest source observation whose date is strictly before `before`.
+    async fn latest_exchange_rate_before(
+        &self,
+        from: &str,
+        to: &str,
+        before: NaiveDate,
+    ) -> anyhow::Result<Option<SourceObservation>> {
+        let _ = (from, to, before);
+        Ok(None)
+    }
+
     async fn stock_info(&self, ticker: &str) -> anyhow::Result<StockInfo>;
 
     async fn fund_data(&self, code: &str, limit: u32) -> anyhow::Result<FundData>;
