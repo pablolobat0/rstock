@@ -77,7 +77,9 @@ All business logic lives here. Key modules:
 
 **`market_data/individual_price.rs`** — Private implementation for display-time Individual price values for portfolio rows. Stocks request same-day observations, and ETFs request them through the fund-price capability already exposed by `MarketDataSources`; neither caller depends on a concrete source Adapter. A same-day observation is a Live quote. If an ETF source cannot supply one, the row falls back to the latest Historical market data. Mutual funds retain closing-price semantics and never use same-day Live quotes.
 
-**`portfolio.rs`** — `get_current_positions()` is the focused current-inventory interface and does not require NAV history. `get_portfolio()` is the full Portfolio view: it requests NAV readiness, reuses current positions, and adds NAV, return, and risk facts. One Transaction ledger projection derives quantity, remaining cost, dividends, and Open-position gain/loss identically for performance and Monetary positions. Facts are independently nullable when their required historical FX or Individual price is unavailable; each aggregate is complete across its included positions or unavailable. NAV/history, current performance-position, and Monetary-position Market data limitations remain separate scopes.
+**`portfolio_inventory.rs`** — `get_portfolio_inventory()` is the focused Portfolio inventory Interface and does not request NAV readiness, so it never creates or rebuilds NAV history. One Transaction ledger projection derives quantity, remaining cost, dividends, and Open-position gain/loss identically for performance-holding and Monetary-holding sections, which separately own their positions, complete-or-unavailable aggregates, and Market data limitations; the combined informational Total value is available only when both section values are complete. Calculated financial facts carry explicit available, unavailable, or not-applicable `FactAvailability` states while descriptive metadata stays unwrapped. Composition analysis consumes this Interface directly.
+
+**`portfolio.rs`** — `get_portfolio()` is the old flat Portfolio path, temporarily retained until the migration tickets switch its callers: it requests NAV readiness, projects inventory through `portfolio_inventory`, adds NAV, return, and risk facts, and maps the result onto the legacy `PortfolioResult` shape.
 
 **`analytics.rs`** — Computes asset-series correlation from current Transaction ledger holdings and historical Base currency series, and computes portfolio risk metrics from NAV history and benchmark prices. Asset-series correlation does not rebuild NAV history.
 
@@ -132,11 +134,19 @@ Domain structs organized by concept:
 **`portfolio.rs`**:
 - `PortfolioSnapshot` — Daily NAV snapshot (date, asset_value, total_value, outstanding_shares, nav)
 - `AssetSnapshot` — Per-asset daily position (quantity, closing_price, market_value, exchange_rate)
-- `CurrentPositions` — Focused current inventory with performance and Monetary positions, complete-or-unavailable aggregates, and separate limitation scopes; it does not require NAV history
-- `PortfolioResult` — Full Portfolio view combining `CurrentPositions` facts with nullable NAV, return, and risk facts after NAV readiness is ensured
+- `CurrentPositions` — Legacy flat current-inventory outcome, temporarily retained while the old `get_portfolio()` path maps over Portfolio inventory
+- `PortfolioResult` — Legacy flat Portfolio view outcome, temporarily retained for the old Portfolio command path
 - `PeriodMetrics` — Per-period volatility, max drawdown, beta, Sharpe ratio, and Sortino ratio
 - `CorrelationMatrix` — N×N asset correlation matrix with labels and warnings
 - `AllocationEntry`, `TopHolding`, `CompositionResult`, `FundHolding` — Composition and holdings models
+
+**`portfolio_inventory.rs`**:
+- `FactAvailability<T>` — Portfolio fact availability: Available value, Unavailable because a required input is missing, or NotApplicable for a domain reason
+- `IndividualPrice` — One Individual price fact with its native price and observation date
+- `InventoryPosition` — One current holding with unwrapped descriptive metadata, known quantity, availability-wrapped calculated financial facts, and position Market data limitations
+- `InventorySectionAggregates` — Complete-or-unavailable section sums; empty sections are available zero
+- `PortfolioInventorySection` — One section's positions, aggregates, and Market data limitations
+- `PortfolioInventory` — Separate performance-holding and Monetary-holding sections with the combined informational Total value
 
 **`fund_analysis.rs`**:
 - `FundAnalysisResult` — Full fund report including top holdings, allocations, period metrics, and holdings snapshot diff
@@ -342,13 +352,13 @@ rstock::cli::run_command
         ├─> nav::ensure_portfolio_history()
         │     ├─> Prepare one immutable NavRebuildPlan from the trusted checkpoint
         │     └─> Execute the plan with strict in-memory valuation reads
-        ├─> portfolio::get_current_positions()
+        ├─> portfolio_inventory::get_portfolio_inventory()
         │     ├─> Project all open holdings once from the Transaction ledger
         │     ├─> Resolve each position's Individual price through MarketData
-        │     ├─> Separate performance and Monetary positions
-        │     └─> Build complete-or-unavailable aggregates for each scope
+        │     ├─> Separate performance and Monetary sections
+        │     └─> Build complete-or-unavailable section aggregates
         ├─> Compute NAV return and risk facts
-        └─> Keep NAV, current-position, and Monetary limitations separate
+        └─> Keep NAV, performance-inventory, and Monetary limitations separate
   └─> display::print_portfolio()
   └─> display::print_nav_chart()
 ```
