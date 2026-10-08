@@ -121,6 +121,7 @@ collections or regressions remain explicit decision-gate failures.
 | `tests/portfolio_summary_tests.rs` | Portfolio computation and return calculations |
 | `tests/current_date_tests.rs` | Fixed-clock portfolio and NAV-readiness behavior |
 | `tests/portfolio_inventory_tests.rs` | Focused Portfolio inventory seam: Transaction ledger projection, shared performance/Monetary projection, fact availability, section aggregates, scoped limitations, and composition's no-NAV behavior |
+| `tests/portfolio_view_tests.rs` | Portfolio view composer seam: inventory-preserving performance states, readiness limitations, requested history, and hard-error propagation |
 | `tests/market_data_tests.rs` | Public market-data valuation, Individual price Live quote and Historical fallback, ETF/fund semantics, FX limitations, and forward-fill behavior |
 | `tests/market_data_cache_tests.rs` | Historical market-data cache reuse and immutable coverage |
 | `tests/market_data_concurrency_tests.rs` | Bounded source concurrency and command-scoped request coordination |

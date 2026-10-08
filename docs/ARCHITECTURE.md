@@ -79,7 +79,7 @@ All business logic lives here. Key modules:
 
 **`portfolio_inventory.rs`** — `get_portfolio_inventory()` is the focused Portfolio inventory Interface and does not request NAV readiness, so it never creates or rebuilds NAV history. One Transaction ledger projection derives quantity, remaining cost, dividends, and Open-position gain/loss identically for performance-holding and Monetary-holding sections, which separately own their positions, complete-or-unavailable aggregates, and Market data limitations; the combined informational Total value is available only when both section values are complete. Calculated financial facts carry explicit available, unavailable, or not-applicable `FactAvailability` states while descriptive metadata stays unwrapped. Composition analysis consumes this Interface directly.
 
-**`portfolio.rs`** — `get_portfolio()` is the old flat Portfolio path, temporarily retained until the migration tickets switch its callers: it requests NAV readiness, projects inventory through `portfolio_inventory`, adds NAV, return, and risk facts, and maps the result onto the legacy `PortfolioResult` shape.
+**`portfolio.rs`** — `get_portfolio()` is the legacy flat Portfolio path, retained until later migration tickets switch its callers. **`portfolio_view.rs`** — `get_portfolio_view()` is the presentation-neutral Portfolio view composer. It owns NAV readiness, composes the focused inventory, expresses core Portfolio performance as not applicable/unavailable/available, and includes the requested ready NAV history before returning. Performance periods and daily movement are completed in later tickets.
 
 **`analytics.rs`** — Computes asset-series correlation from current Transaction ledger holdings and historical Base currency series, and computes portfolio risk metrics from NAV history and benchmark prices. Asset-series correlation does not rebuild NAV history.
 
@@ -147,6 +147,9 @@ Domain structs organized by concept:
 - `InventorySectionAggregates` — Complete-or-unavailable section sums; empty sections are available zero
 - `PortfolioInventorySection` — One section's positions, aggregates, and Market data limitations
 - `PortfolioInventory` — Separate performance-holding and Monetary-holding sections with the combined informational Total value
+- `NavHistoryRequest` — Presentation-neutral request for ready NAV history, consumed by the Portfolio view composer
+- `PortfolioPerformance` / `AvailablePortfolioPerformance` — Core performance outcome state and its non-nullable synchronized facts
+- `PortfolioView` — Always-present Portfolio inventory, core performance state, and requested ready NAV history
 
 **`fund_analysis.rs`**:
 - `FundAnalysisResult` — Full fund report including top holdings, allocations, period metrics, and holdings snapshot diff

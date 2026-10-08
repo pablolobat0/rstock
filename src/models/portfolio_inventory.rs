@@ -36,7 +36,7 @@ pub struct IndividualPrice {
 /// Descriptive metadata is plain: its absence has its own meaning and is not
 /// wrapped in financial availability. Calculated financial facts carry their
 /// own `FactAvailability` so a missing input hides only the dependent fact.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct InventoryPosition {
     pub ticker: String,
     pub name: String,
@@ -75,6 +75,7 @@ pub struct InventorySectionAggregates {
 
 /// One Portfolio inventory section: its positions, aggregates, and the Market
 /// data limitations scoped to that section.
+#[derive(Debug)]
 pub struct PortfolioInventorySection {
     pub positions: Vec<InventoryPosition>,
     pub aggregates: InventorySectionAggregates,
@@ -85,6 +86,7 @@ pub struct PortfolioInventorySection {
 /// performance-holding and Monetary-holding sections. Always returned, even
 /// when every fact is unavailable. The combined informational Total value
 /// stays outside portfolio performance measurement.
+#[derive(Debug)]
 pub struct PortfolioInventory {
     pub base_currency: String,
     pub performance_holdings: PortfolioInventorySection,

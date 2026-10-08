@@ -5,6 +5,7 @@ mod fund_comparison;
 mod market_data;
 mod portfolio;
 mod portfolio_inventory;
+mod portfolio_view;
 mod stock_info;
 mod transaction;
 
@@ -35,6 +36,9 @@ pub use portfolio::{
 pub use portfolio_inventory::{
     FactAvailability, IndividualPrice, InventoryPosition, InventorySectionAggregates,
     PortfolioInventory, PortfolioInventorySection,
+};
+pub use portfolio_view::{
+    AvailablePortfolioPerformance, NavHistoryRequest, PortfolioPerformance, PortfolioView,
 };
 pub use stock_info::StockInfo;
 pub use transaction::{
