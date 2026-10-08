@@ -1,6 +1,9 @@
 pub mod commands;
+mod dispatch;
 pub mod display;
 pub mod output;
+
+pub use dispatch::run_command;
 
 use chrono::NaiveDate;
 use clap::{Args, Parser, Subcommand, ValueEnum};

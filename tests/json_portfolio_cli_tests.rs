@@ -67,40 +67,7 @@ fn empty_dashboard_keeps_human_table_and_chart_messages() {
 #[tokio::test]
 async fn dashboard_keeps_weight_and_marks_unavailable_values_in_human_output() {
     let home = tempfile::tempdir().expect("temporary HOME should be created");
-    run_success(
-        home.path(),
-        &[
-            "portfolio",
-            "asset",
-            "add",
-            "-t",
-            "IE00XFAKE001",
-            "-n",
-            "Unavailable asset",
-            "-T",
-            "fund",
-            "--asset-class",
-            "equity",
-            "--morningstar-code",
-            "F00000XFAKE",
-        ],
-    );
-    run_success(
-        home.path(),
-        &[
-            "transaction",
-            "buy",
-            "-t",
-            "IE00XFAKE001",
-            "-d",
-            "01-01-2020",
-            "-q",
-            "1",
-            "-p",
-            "10",
-        ],
-    );
-    insert_offline_nav_fixture(home.path()).await;
+    insert_ledger_with_offline_nav(home.path()).await;
 
     let output = command(home.path())
         .arg("get")
@@ -162,6 +129,128 @@ async fn insert_offline_nav_fixture(home: &Path) {
     .insert(&db)
     .await
     .expect("complete NAV asset snapshot should be inserted");
+}
+
+#[tokio::test]
+async fn dashboard_aliases_emit_identical_json_for_the_same_ledger() {
+    let home = tempfile::tempdir().expect("temporary HOME should be created");
+    insert_ledger_with_offline_nav(home.path()).await;
+
+    let get_output = command(home.path())
+        .args(["--json", "get"])
+        .output()
+        .expect("rstock should run");
+    let alias_output = command(home.path())
+        .args(["portfolio", "get", "--json"])
+        .output()
+        .expect("rstock should run");
+
+    assert!(
+        get_output.status.success(),
+        "get failed: {}",
+        String::from_utf8_lossy(&get_output.stderr)
+    );
+    assert!(
+        alias_output.status.success(),
+        "portfolio get failed: {}",
+        String::from_utf8_lossy(&alias_output.stderr)
+    );
+    let get_stdout = String::from_utf8(get_output.stdout).expect("stdout should be UTF-8");
+    let alias_stdout = String::from_utf8(alias_output.stdout).expect("stdout should be UTF-8");
+    assert_eq!(
+        get_stdout, alias_stdout,
+        "dashboard aliases must dispatch identically"
+    );
+    assert_eq!(get_stdout.lines().count(), 1);
+    assert!(!get_stdout.contains("\u{1b}["));
+}
+
+#[tokio::test]
+async fn dashboard_aliases_emit_identical_human_output_for_the_same_ledger() {
+    let home = tempfile::tempdir().expect("temporary HOME should be created");
+    insert_ledger_with_offline_nav(home.path()).await;
+
+    let get_output = command(home.path())
+        .arg("get")
+        .output()
+        .expect("rstock should run");
+    let alias_output = command(home.path())
+        .args(["portfolio", "get"])
+        .output()
+        .expect("rstock should run");
+
+    assert!(
+        get_output.status.success(),
+        "get failed: {}",
+        String::from_utf8_lossy(&get_output.stderr)
+    );
+    assert!(
+        alias_output.status.success(),
+        "portfolio get failed: {}",
+        String::from_utf8_lossy(&alias_output.stderr)
+    );
+    let get_stdout = String::from_utf8(get_output.stdout).expect("stdout should be UTF-8");
+    let alias_stdout = String::from_utf8(alias_output.stdout).expect("stdout should be UTF-8");
+    assert_eq!(
+        get_stdout, alias_stdout,
+        "dashboard aliases must dispatch identically"
+    );
+    assert!(get_stdout.contains("Weight"));
+    assert!(get_stdout.contains("unavailable"));
+    assert!(get_stdout.contains("Performance positions value: unavailable"));
+}
+
+#[test]
+fn failing_command_exits_nonzero_through_the_library_dispatch() {
+    let home = tempfile::tempdir().expect("temporary HOME should be created");
+    let output = command(home.path())
+        .args(["transaction", "delete", "999", "--yes"])
+        .output()
+        .expect("rstock should run");
+
+    assert!(
+        !output.status.success(),
+        "deleting a missing transaction must fail"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("not found"), "stderr was: {stderr}");
+}
+
+async fn insert_ledger_with_offline_nav(home: &Path) {
+    run_success(
+        home,
+        &[
+            "portfolio",
+            "asset",
+            "add",
+            "-t",
+            "IE00XFAKE001",
+            "-n",
+            "Unavailable asset",
+            "-T",
+            "fund",
+            "--asset-class",
+            "equity",
+            "--morningstar-code",
+            "F00000XFAKE",
+        ],
+    );
+    run_success(
+        home,
+        &[
+            "transaction",
+            "buy",
+            "-t",
+            "IE00XFAKE001",
+            "-d",
+            "01-01-2020",
+            "-q",
+            "1",
+            "-p",
+            "10",
+        ],
+    );
+    insert_offline_nav_fixture(home).await;
 }
 
 fn run_success(home: &Path, args: &[&str]) {
