@@ -4,6 +4,7 @@ mod fund_analysis;
 mod fund_comparison;
 mod market_data;
 mod portfolio;
+mod portfolio_inventory;
 mod stock_info;
 mod transaction;
 
@@ -30,6 +31,10 @@ pub use portfolio::{
     AllocationEntry, AssetSnapshot, CompositionResult, CorrelationMatrix, CurrentPositions,
     FundHolding, MarketCapCategory, PeriodMetrics, PortfolioResult, PortfolioSnapshot,
     RollingCorrelationResult, TopHolding,
+};
+pub use portfolio_inventory::{
+    FactAvailability, IndividualPrice, InventoryPosition, InventorySectionAggregates,
+    PortfolioInventory, PortfolioInventorySection,
 };
 pub use stock_info::StockInfo;
 pub use transaction::{

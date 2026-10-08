@@ -8,7 +8,7 @@ use crate::models::{
     AllocationEntry, AssetType, CompositionResult, FundHolding, MarketCapCategory, TopHolding,
 };
 use crate::services::market_data::MarketData;
-use crate::services::portfolio::get_current_positions;
+use crate::services::portfolio_inventory::get_portfolio_inventory;
 
 const LARGE_CAP_THRESHOLD: f64 = 10_000_000_000.0;
 const MID_CAP_THRESHOLD: f64 = 2_000_000_000.0;
@@ -18,9 +18,14 @@ pub async fn compute_composition(
     db: &DatabaseConnection,
     market_data: &MarketData,
 ) -> anyhow::Result<CompositionResult> {
-    let portfolio = get_current_positions(db, market_data).await?;
-    let Some(total_value) = portfolio.total_current_value else {
-        return Ok(unavailable_composition(portfolio.market_data_limitations));
+    // Composition consumes the focused performance-holding inventory section:
+    // current Transaction ledger inventory without NAV readiness or rebuilds.
+    let inventory = get_portfolio_inventory(db, market_data).await?;
+    let performance = &inventory.performance_holdings;
+    let Some(total_value) = performance.aggregates.current_value.value().copied() else {
+        return Ok(unavailable_composition(
+            performance.market_data_limitations.clone(),
+        ));
     };
 
     if total_value <= 0.0 {
@@ -32,12 +37,12 @@ pub async fn compute_composition(
             country_breakdown: Some(Vec::new()),
             market_cap_breakdown: Some(Vec::new()),
             top_holdings: Some(Vec::new()),
-            market_data_limitations: portfolio.market_data_limitations,
+            market_data_limitations: performance.market_data_limitations.clone(),
             warnings: vec!["Portfolio has no value.".to_owned()],
         });
     }
 
-    let total_equity_value: f64 = portfolio
+    let total_equity_value: f64 = performance
         .positions
         .iter()
         .filter(|p| {
@@ -45,7 +50,7 @@ pub async fn compute_composition(
                 .as_deref()
                 .is_some_and(|ac| ac.eq_ignore_ascii_case("equity"))
         })
-        .filter_map(|p| p.current_value)
+        .filter_map(|p| p.current_value.value().copied())
         .sum();
 
     // --- Phase 1: classify each position ---
@@ -57,9 +62,11 @@ pub async fn compute_composition(
     let mut direct_stock_tickers: Vec<(String, String, f64)> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
 
-    for pos in &portfolio.positions {
+    for pos in &performance.positions {
         let current_value = pos
             .current_value
+            .value()
+            .copied()
             .context("complete current position value contained an unvalued position")?;
         let portfolio_weight = (current_value / total_value) * 100.0;
         let equity_weight = if total_equity_value > 0.0 {
@@ -198,7 +205,7 @@ pub async fn compute_composition(
         country_breakdown: Some(map_to_sorted_entries(normalize_to_100(country_map))),
         market_cap_breakdown: Some(map_to_sorted_entries(normalize_to_100(market_cap_map))),
         top_holdings: Some(top_holdings),
-        market_data_limitations: portfolio.market_data_limitations,
+        market_data_limitations: performance.market_data_limitations.clone(),
         warnings,
     })
 }

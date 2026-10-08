@@ -22,7 +22,6 @@ pub struct PortfolioHistoryReadiness {
     pub market_data_limitations: Vec<MarketDataLimitation>,
     /// Repository reads performed while executing the prepared plan.
     pub execution_database_reads: usize,
-    pub(crate) performance_market_data_prepared: bool,
 }
 
 struct NavRebuildPlan {
@@ -76,7 +75,6 @@ pub async fn ensure_portfolio_history(
                 latest_snapshot: Some(snapshot),
                 market_data_limitations: Vec::new(),
                 execution_database_reads: 0,
-                performance_market_data_prepared: false,
             });
         }
         Some(snapshot) => {
@@ -92,7 +90,6 @@ pub async fn ensure_portfolio_history(
                     latest_snapshot: None,
                     market_data_limitations: Vec::new(),
                     execution_database_reads: 0,
-                    performance_market_data_prepared: false,
                 });
             };
             let date = NaiveDate::parse_from_str(&first.date, crate::constants::DATE_FORMAT)
@@ -106,7 +103,6 @@ pub async fn ensure_portfolio_history(
             latest_snapshot: checkpoint,
             market_data_limitations: Vec::new(),
             execution_database_reads: 0,
-            performance_market_data_prepared: false,
         });
     }
 
@@ -132,7 +128,6 @@ pub async fn ensure_portfolio_history(
         latest_snapshot: portfolio_history_repo::find_latest(db).await?,
         market_data_limitations: limitations,
         execution_database_reads,
-        performance_market_data_prepared: true,
     };
     tracing::debug!(
         execution_database_reads = readiness.execution_database_reads,
