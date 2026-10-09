@@ -24,9 +24,10 @@ pub use fund_comparison::{
     FundComparisonPeriod, FundComparisonResult, FundComparisonSide, FundInfoComparison,
 };
 pub use market_data::{
-    BaseCurrencyPriceSeries, CorrelationMarketData, CorrelationMarketDataSeries,
-    IndividualPriceAvailability, MarketDataLimitation, MarketDataLimitationClassification,
-    MarketDataSubject, MarketDataValuation, ValuationMarketData, ValuationMarketDataAvailability,
+    BaseCurrencyPriceSeries, BenchmarkRiskMarketData, CorrelationMarketData,
+    CorrelationMarketDataSeries, IndividualPriceAvailability, MarketDataLimitation,
+    MarketDataLimitationClassification, MarketDataSubject, MarketDataValuation,
+    ValuationMarketData, ValuationMarketDataAvailability,
 };
 pub use portfolio::{
     AllocationEntry, AssetSnapshot, CompositionResult, CorrelationMatrix, CurrentPositions,
@@ -38,7 +39,8 @@ pub use portfolio_inventory::{
     PortfolioInventory, PortfolioInventorySection,
 };
 pub use portfolio_view::{
-    AvailablePortfolioPerformance, NavHistoryRequest, PortfolioPerformance, PortfolioView,
+    AvailablePortfolioPerformance, NavHistoryRequest, PerformancePeriods, PeriodOutcome,
+    PortfolioPerformance, PortfolioView,
 };
 pub use stock_info::StockInfo;
 pub use transaction::{

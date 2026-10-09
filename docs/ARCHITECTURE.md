@@ -79,7 +79,7 @@ All business logic lives here. Key modules:
 
 **`portfolio_inventory.rs`** — `get_portfolio_inventory()` is the focused Portfolio inventory Interface and does not request NAV readiness, so it never creates or rebuilds NAV history. One Transaction ledger projection derives quantity, remaining cost, dividends, and Open-position gain/loss identically for performance-holding and Monetary-holding sections, which separately own their positions, complete-or-unavailable aggregates, and Market data limitations; the combined informational Total value is available only when both section values are complete. Calculated financial facts carry explicit available, unavailable, or not-applicable `FactAvailability` states while descriptive metadata stays unwrapped. Composition analysis consumes this Interface directly.
 
-**`portfolio.rs`** — `get_portfolio()` is the legacy flat Portfolio path, retained until later migration tickets switch its callers. **`portfolio_view.rs`** — `get_portfolio_view()` is the presentation-neutral Portfolio view composer. It owns NAV readiness, composes the focused inventory, expresses core Portfolio performance as not applicable/unavailable/available, and includes the requested ready NAV history before returning. Performance periods and daily movement are completed in later tickets.
+**`portfolio.rs`** — `get_portfolio()` is the legacy flat Portfolio path, retained until later migration tickets switch its callers. **`portfolio_view.rs`** — `get_portfolio_view()` is the presentation-neutral Portfolio view composer. It owns NAV readiness, composes the focused inventory, expresses core Portfolio performance as not applicable/unavailable/available, and includes the requested ready NAV history before returning. Available performance carries cohesive YTD, 1Y, 3Y, 5Y, and All period outcomes over the ready NAV series with independently available return and risk facts, and exposes the benchmark-dependent risk limitations as their own scope. Daily movement is completed in a later ticket.
 
 **`analytics.rs`** — Computes asset-series correlation from current Transaction ledger holdings and historical Base currency series, and computes portfolio risk metrics from NAV history and benchmark prices. Asset-series correlation does not rebuild NAV history.
 
@@ -89,9 +89,9 @@ All business logic lives here. Key modules:
 
 **`assets.rs`** — Tracked asset edits that cross the Monetary/performance boundary invalidate every dependent Complete NAV snapshot from the asset's earliest transaction date. Fund/ETF provider-identity changes also clear that asset's price cache and invalidate the same complete dates. Metadata updates, cache deletion when required, and portfolio/all-per-asset snapshot invalidation commit atomically so readiness can continue trusting the retained checkpoint.
 
-**`market_data/`** — Stateful market data Module. It exposes use-case-shaped Interfaces for valuation market data, correlation market data, Individual price, stock info, and fund data. Yahoo Finance and Morningstar source Adapters are private implementation details behind `MarketDataSources`.
+**`market_data/`** — Stateful market data Module. It exposes use-case-shaped Interfaces for valuation market data, correlation market data, benchmark risk market data, Individual price, stock info, and fund data. Yahoo Finance and Morningstar source Adapters are private implementation details behind `MarketDataSources`.
 
-**`metrics.rs`** — Shared math helpers for volatility, max drawdown, Sharpe, Sortino, beta, Pearson correlation, log returns, return alignment, and CAGR. Uses daily log returns, 252 trading days/year, 3% annual risk-free rate, and actual elapsed dates for CAGR.
+**`metrics.rs`** — Shared math helpers for volatility, max drawdown, Sharpe, Sortino, beta, Pearson correlation, log returns, return alignment, and CAGR. Uses daily log returns, 252 trading days/year, 3% annual risk-free rate, and actual elapsed dates for CAGR. A metric that is mathematically undefined for the given series (zero-variance benchmark beta, zero-dispersion Sharpe, no-downside Sortino) is `None`, so consumers can distinguish undefined metrics from computed values.
 
 **`fund_analysis.rs`** — `compute_fund_analysis()` builds a deep-dive report for any Morningstar fund code, including performance, holdings, equity-only allocation tables, and holdings snapshot diffs. Snapshot persistence is keyed by Morningstar's reported portfolio date, so repeated runs against the same Morningstar snapshot do not create duplicate history rows.
 
@@ -148,7 +148,8 @@ Domain structs organized by concept:
 - `PortfolioInventorySection` — One section's positions, aggregates, and Market data limitations
 - `PortfolioInventory` — Separate performance-holding and Monetary-holding sections with the combined informational Total value
 - `NavHistoryRequest` — Presentation-neutral request for ready NAV history, consumed by the Portfolio view composer
-- `PortfolioPerformance` / `AvailablePortfolioPerformance` — Core performance outcome state and its non-nullable synchronized facts
+- `PortfolioPerformance` / `AvailablePortfolioPerformance` — Core performance outcome state and its non-nullable synchronized facts, five cohesive period outcomes with independently available return and risk facts, and NAV/history plus benchmark-dependent risk limitation scopes
+- `PeriodOutcome` / `PerformancePeriods` — One period's return, volatility, max drawdown, beta, Sharpe, and Sortino facts with independent availability, and the YTD/1Y/3Y/5Y/All group
 - `PortfolioView` — Always-present Portfolio inventory, core performance state, and requested ready NAV history
 
 **`fund_analysis.rs`**:

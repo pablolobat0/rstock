@@ -53,6 +53,16 @@ pub struct CorrelationMarketData {
     pub limitations: Vec<MarketDataLimitation>,
 }
 
+/// Benchmark market data for benchmark-dependent risk metrics. Missing
+/// benchmark data is a domain outcome rather than an error: the series may be
+/// empty and the reason is reported in the classified limitations.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BenchmarkRiskMarketData {
+    /// Benchmark Base currency price series for the requested window.
+    pub benchmark_series: BaseCurrencyPriceSeries,
+    pub limitations: Vec<MarketDataLimitation>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MarketDataLimitation {
     pub subject: MarketDataSubject,

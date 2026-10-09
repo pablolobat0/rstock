@@ -12,9 +12,9 @@ fn test_sortino_none_for_insufficient_data() {
 }
 
 #[test]
-fn test_sortino_zero_when_all_excess_returns_are_non_negative() {
+fn test_sortino_none_when_all_excess_returns_are_non_negative() {
     let returns = vec![0.01; MIN_DATA_POINTS];
-    assert_eq!(compute_sortino(&returns), Some(0.0));
+    assert!(compute_sortino(&returns).is_none());
 }
 
 #[test]
@@ -35,10 +35,10 @@ fn test_sortino_matches_expected_annualized_value() {
 }
 
 #[test]
-fn test_sortino_zero_when_downside_deviation_is_zero() {
+fn test_sortino_none_when_downside_deviation_is_zero() {
     let rf = daily_risk_free_rate();
     let returns = vec![rf; MIN_DATA_POINTS];
-    assert_eq!(compute_sortino(&returns), Some(0.0));
+    assert!(compute_sortino(&returns).is_none());
 }
 
 #[test]
@@ -49,4 +49,31 @@ fn test_sortino_negative_when_average_excess_return_is_negative() {
 
     let sortino = compute_sortino(&returns).unwrap();
     assert!(sortino < 0.0);
+}
+
+#[test]
+fn test_sharpe_none_when_excess_return_standard_deviation_is_zero() {
+    // Excess returns are exactly zero, so the denominator is exactly zero.
+    let returns = vec![daily_risk_free_rate(); MIN_DATA_POINTS];
+    assert!(rstock::services::metrics::compute_sharpe(&returns).is_none());
+}
+
+#[test]
+fn test_beta_none_when_benchmark_variance_is_zero() {
+    let portfolio = vec![0.01, -0.005, 0.004, -0.01];
+    let benchmark = vec![0.0; MIN_DATA_POINTS];
+    assert!(rstock::services::metrics::compute_beta(&portfolio, &benchmark).is_none());
+}
+
+#[test]
+fn test_beta_computes_ratio_for_variable_benchmark() {
+    let portfolio: Vec<f64> = (0..MIN_DATA_POINTS)
+        .map(|index| if index % 2 == 0 { 0.01 } else { -0.01 })
+        .collect();
+    let benchmark: Vec<f64> = (0..MIN_DATA_POINTS)
+        .map(|index| if index % 2 == 0 { 0.005 } else { -0.005 })
+        .collect();
+    let beta = rstock::services::metrics::compute_beta(&portfolio, &benchmark).unwrap();
+    // Identical Up/down alternation makes the covariance/variance ratio 2.0.
+    assert!((beta - 2.0).abs() < 1e-9);
 }
