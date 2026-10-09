@@ -1,4 +1,6 @@
-use crate::models::{MarketDataLimitation, PortfolioInventory, PortfolioSnapshot};
+use crate::models::{
+    FactAvailability, MarketDataLimitation, PortfolioInventory, PortfolioSnapshot,
+};
 
 /// Presentation-neutral request for the ready NAV history the composer must
 /// include in the outcome. Callers choose a period; the Portfolio view
@@ -24,7 +26,7 @@ pub enum PortfolioPerformance {
     /// A Complete NAV snapshot exists, so performance is measurable at its
     /// Effective valuation date even when limitations prevent advancing that
     /// date.
-    Available(AvailablePortfolioPerformance),
+    Available(Box<AvailablePortfolioPerformance>),
     /// Performance holdings exist but no Complete NAV snapshot can be
     /// produced. The readiness limitations of that blocked initial NAV
     /// remain visible without inventing measured facts.
@@ -35,9 +37,50 @@ pub enum PortfolioPerformance {
     NotApplicable,
 }
 
+/// One period's cohesive return and risk facts. Every calculated fact keeps
+/// its independent availability: insufficient period history and
+/// mathematically undefined metrics are not applicable, while a missing
+/// required input makes only the dependent fact unavailable. Period reference
+/// snapshot dates remain calculation details and are not exposed as facts.
+///
+/// All means the whole measurable lifetime since inception and carries the
+/// same facts as every other period.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PeriodOutcome {
+    /// Return over the period as a percentage of the baseline NAV. YTD and 1Y
+    /// are simple interval returns; 3Y, 5Y, and All are annualized CAGR
+    /// values consistent with the existing period conventions.
+    pub return_pct: FactAvailability<f64>,
+    /// Annualized volatility of the period's weekday NAV log returns.
+    pub volatility: FactAvailability<f64>,
+    /// Worst peak-to-trough decline of the period's NAV series, as a
+    /// negative percentage.
+    pub max_drawdown: FactAvailability<f64>,
+    /// Beta against the configured benchmark, using the period's NAV
+    /// returns aligned with benchmark observations.
+    pub beta: FactAvailability<f64>,
+    pub sharpe: FactAvailability<f64>,
+    pub sortino: FactAvailability<f64>,
+}
+
+/// The YTD, 1Y, 3Y, 5Y, and All period outcomes of available Portfolio
+/// performance. Available performance always contains all five outcomes;
+/// individual facts inside them still express their own availability.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PerformancePeriods {
+    pub ytd: PeriodOutcome,
+    pub one_year: PeriodOutcome,
+    pub three_years: PeriodOutcome,
+    pub five_years: PeriodOutcome,
+    /// Since inception.
+    pub all: PeriodOutcome,
+}
+
 /// The facts of an available Portfolio performance state. A Complete NAV
-/// snapshot guarantees every fact, so none is optional: an available state
-/// never carries nullable placeholders.
+/// snapshot guarantees the synchronized facts and all five period outcomes,
+/// so none of them is optional: an available state never carries nullable
+/// placeholders, while each calculated period fact keeps independent
+/// availability.
 ///
 /// Synchronized facts describe the portfolio at one shared Effective
 /// valuation date. They exclude Monetary holdings and stay distinct from the
@@ -59,9 +102,17 @@ pub struct AvailablePortfolioPerformance {
     /// The earliest Complete NAV snapshot date, bounding the measurable
     /// lifetime of the portfolio.
     pub inception_date: String,
+    /// The YTD, 1Y, 3Y, 5Y, and All period outcomes measured over the ready
+    /// NAV history through the Effective valuation date.
+    pub periods: PerformancePeriods,
     /// NAV/history readiness Market data limitations. They are independent
     /// from fact availability and may coexist with this older snapshot.
     pub nav_history_limitations: Vec<MarketDataLimitation>,
+    /// Market data limitations scoped to benchmark-dependent risk facts
+    /// (beta). They are independent from every other limitation scope and
+    /// never imply that NAV, inventory, or portfolio-only risk facts are
+    /// invalid.
+    pub benchmark_risk_limitations: Vec<MarketDataLimitation>,
 }
 
 /// One complete, presentation-neutral Portfolio view outcome. It is composed

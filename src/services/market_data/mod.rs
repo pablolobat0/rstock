@@ -14,7 +14,7 @@ use tokio::sync::Semaphore;
 
 use crate::db::repos::asset_repo;
 use crate::models::{
-    normalize_currency, Asset, AssetClassification, CorrelationMarketData,
+    normalize_currency, Asset, AssetClassification, BenchmarkRiskMarketData, CorrelationMarketData,
     CorrelationMarketDataSeries, FundData, FundQuoteMetadata, IndividualPriceAvailability,
     MarketDataValuation, StockInfo, ValuationMarketData, ValuationMarketDataAvailability,
 };
@@ -458,6 +458,42 @@ impl MarketData {
             .collect();
 
         Ok((tracked_asset_series, prepared.limitations))
+    }
+
+    /// Prepares the benchmark Base currency series needed by
+    /// benchmark-dependent risk metrics for the requested window. Missing
+    /// benchmark data is reported through empty series parts and classified
+    /// limitations instead of failing, so a benchmark gap removes only the
+    /// benchmark-dependent facts and never the portfolio-only ones.
+    pub async fn benchmark_risk_market_data(
+        &self,
+        db: &DatabaseConnection,
+        start_date: &str,
+        end_date: &str,
+    ) -> anyhow::Result<BenchmarkRiskMarketData> {
+        let benchmark = get_or_create_benchmark_asset(db).await?;
+        let prepared = self
+            .prepare_valuation_market_data_if_available(
+                db,
+                std::slice::from_ref(&benchmark),
+                start_date,
+                end_date,
+            )
+            .await?;
+        let benchmark_series = historical::get_base_currency_price_series_for_assets(
+            db,
+            std::slice::from_ref(&benchmark),
+            start_date,
+            end_date,
+        )
+        .await?
+        .remove(&benchmark.id)
+        .unwrap_or_default();
+
+        Ok(BenchmarkRiskMarketData {
+            benchmark_series,
+            limitations: prepared.limitations,
+        })
     }
 
     async fn request_historical_data(

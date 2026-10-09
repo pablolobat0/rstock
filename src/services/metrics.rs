@@ -54,7 +54,9 @@ pub fn compute_max_drawdown(nav_values: &[f64]) -> Option<f64> {
 }
 
 /// Computes annualized Sharpe ratio from daily log returns.
-/// Returns `None` if fewer than `MIN_DATA_POINTS` returns.
+/// Returns `None` when there are fewer than `MIN_DATA_POINTS` returns or the
+/// excess-return standard deviation is zero, because the ratio is then
+/// mathematically undefined rather than a meaningful zero.
 pub fn compute_sharpe(daily_returns: &[f64]) -> Option<f64> {
     if daily_returns.len() < MIN_DATA_POINTS {
         return None;
@@ -75,12 +77,14 @@ pub fn compute_sharpe(daily_returns: &[f64]) -> Option<f64> {
     if std > 0.0 {
         Some((mean_excess / std) * TRADING_DAYS_PER_YEAR.sqrt())
     } else {
-        Some(0.0)
+        None
     }
 }
 
 /// Computes annualized Sortino ratio from daily log returns.
-/// Returns `None` if fewer than `MIN_DATA_POINTS` returns.
+/// Returns `None` when there are fewer than `MIN_DATA_POINTS` returns or no
+/// downside returns exist, because the ratio is then mathematically undefined
+/// rather than a meaningful zero.
 pub fn compute_sortino(daily_returns: &[f64]) -> Option<f64> {
     if daily_returns.len() < MIN_DATA_POINTS {
         return None;
@@ -98,7 +102,7 @@ pub fn compute_sortino(daily_returns: &[f64]) -> Option<f64> {
         .collect();
 
     if downside_returns.is_empty() {
-        return Some(0.0);
+        return None;
     }
 
     let downside_var = downside_returns.iter().map(|r| r.powi(2)).sum::<f64>() / n;
@@ -107,12 +111,14 @@ pub fn compute_sortino(daily_returns: &[f64]) -> Option<f64> {
     if downside_deviation > 0.0 {
         Some((mean_excess / downside_deviation) * TRADING_DAYS_PER_YEAR.sqrt())
     } else {
-        Some(0.0)
+        None
     }
 }
 
 /// Computes beta = cov(portfolio, benchmark) / var(benchmark) from daily log returns.
-/// Returns `None` if fewer than `MIN_DATA_POINTS` returns.
+/// Returns `None` when there are fewer than `MIN_DATA_POINTS` returns or the
+/// benchmark return variance is zero, because beta is then mathematically
+/// undefined rather than a meaningful zero.
 pub fn compute_beta(portfolio_returns: &[f64], benchmark_returns: &[f64]) -> Option<f64> {
     if portfolio_returns.len() < MIN_DATA_POINTS || benchmark_returns.len() < MIN_DATA_POINTS {
         return None;
@@ -137,7 +143,7 @@ pub fn compute_beta(portfolio_returns: &[f64], benchmark_returns: &[f64]) -> Opt
     if var_bench > 0.0 {
         Some(cov / var_bench)
     } else {
-        Some(0.0)
+        None
     }
 }
 
