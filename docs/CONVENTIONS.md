@@ -122,6 +122,7 @@ collections or regressions remain explicit decision-gate failures.
 | `tests/current_date_tests.rs` | Fixed-clock portfolio and NAV-readiness behavior |
 | `tests/portfolio_inventory_tests.rs` | Focused Portfolio inventory seam: Transaction ledger projection, shared performance/Monetary projection, fact availability, section aggregates, scoped limitations, and composition's no-NAV behavior |
 | `tests/portfolio_view_tests.rs` | Portfolio view composer seam: inventory-preserving performance states, readiness limitations, requested history, cohesive period outcomes with independent fact availability, undefined-math and missing-benchmark semantics, all four limitation scopes, and hard-error propagation |
+| `tests/portfolio_adapter_tests.rs` | Human and JSON output Adapter writer seams: the nested JSON schema with null mapping and history, semantic human labels and states, the Effective valuation date association, and the four limitation scope headings |
 | `tests/market_data_tests.rs` | Public market-data valuation, Individual price Live quote and Historical fallback, ETF/fund semantics, FX limitations, and forward-fill behavior |
 | `tests/market_data_cache_tests.rs` | Historical market-data cache reuse and immutable coverage |
 | `tests/market_data_concurrency_tests.rs` | Bounded source concurrency and command-scoped request coordination |
@@ -136,7 +137,7 @@ collections or regressions remain explicit decision-gate failures.
 2. **Add dispatch** — Add a match arm in the library-owned `src/cli/dispatch.rs` (`cli::run_command`) that routes to the appropriate CLI command adapter in `src/cli/commands/`
 3. **Implement service logic** — Create or update a function in `src/services/`. Follow the verb-first naming pattern
 4. **Add repo functions** — If new database operations are needed, add them to the relevant repo in `src/db/repos/`
-5. **Integrate both output formats** — Pass `OutputFormat` into the CLI command adapter. Preserve the human renderer under `OutputFormat::Human`, and emit exactly one compact dotted-command envelope through `cli::output::emit_json()` under `OutputFormat::Json`
+5. **Integrate both output formats** — Pass `OutputFormat` into the CLI command adapter. Under `OutputFormat::Human`, render through a writer-injected output Adapter (see `src/cli/adapters/`) or a `display` renderer, and under `OutputFormat::Json`, emit exactly one compact dotted-command envelope through `cli::output::write_json()` so the output seam accepts injected writers in tests
 6. **Keep services presentation-neutral** — Return results or small mutation receipts from services. Do not print successful command output, terminal previews, or prompts from service code
 7. **Write tests** — Add integration tests in `tests/` using the common test utilities. Cover representative human output and assert JSON structurally through `serde_json::Value`; do not snapshot field order. Add the new leaf path to the command-surface audit
 
