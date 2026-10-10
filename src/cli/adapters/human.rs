@@ -59,11 +59,19 @@ fn write_inventory<W: Write>(writer: &mut W, inventory: &PortfolioInventory) -> 
         writeln!(writer, "No positions found.")?;
     }
     if has_performance_positions {
-        write_performance_section(writer, &inventory.performance_holdings)?;
+        write_performance_section(
+            writer,
+            &inventory.performance_holdings,
+            &inventory.base_currency,
+        )?;
     }
     if has_monetary_positions {
         writeln!(writer)?;
-        write_monetary_section(writer, &inventory.monetary_holdings)?;
+        write_monetary_section(
+            writer,
+            &inventory.monetary_holdings,
+            &inventory.base_currency,
+        )?;
     }
     if has_performance_positions || has_monetary_positions {
         writeln!(
@@ -78,18 +86,94 @@ fn write_inventory<W: Write>(writer: &mut W, inventory: &PortfolioInventory) -> 
 fn write_performance_section<W: Write>(
     writer: &mut W,
     section: &PortfolioInventorySection,
+    base_currency: &str,
 ) -> anyhow::Result<()> {
     write_position_section(writer, "Performance holdings:", section, true)?;
     writeln!(writer, "{}", section_aggregates_line(&section.aggregates))?;
+    write_daily_movement(
+        writer,
+        &section.daily_priced_holdings_movement,
+        base_currency,
+    )?;
     Ok(())
 }
 
 fn write_monetary_section<W: Write>(
     writer: &mut W,
     section: &PortfolioInventorySection,
+    base_currency: &str,
 ) -> anyhow::Result<()> {
     write_position_section(writer, "Monetary holdings:", section, false)?;
     writeln!(writer, "{}", section_aggregates_line(&section.aggregates))?;
+    write_daily_movement(
+        writer,
+        &section.daily_priced_holdings_movement,
+        base_currency,
+    )?;
+    Ok(())
+}
+
+fn write_daily_movement<W: Write>(
+    writer: &mut W,
+    movement: &crate::models::DailyPricedHoldingsMovement,
+    base_currency: &str,
+) -> anyhow::Result<()> {
+    let value = match &movement.movement {
+        FactAvailability::Available(value) => format_amount(*value),
+        FactAvailability::Unavailable => "unavailable".to_owned(),
+        FactAvailability::NotApplicable => "not applicable".to_owned(),
+    };
+    let percentage = match &movement.movement_pct {
+        FactAvailability::Available(value) => format!("{value:.2}%"),
+        FactAvailability::Unavailable => "unavailable".to_owned(),
+        FactAvailability::NotApplicable => "not applicable".to_owned(),
+    };
+    writeln!(writer, "Daily-priced holdings movement in {base_currency} (covered inventory, not Portfolio performance): {value} ({percentage})")?;
+    if !movement.included_positions.is_empty() || !movement.excluded_positions.is_empty() {
+        writeln!(
+            writer,
+            "Movement coverage: {} included, {} excluded{}",
+            movement.included_positions.len(),
+            movement.excluded_positions.len(),
+            if movement.excluded_positions.is_empty() {
+                String::new()
+            } else {
+                "; reduced coverage".to_owned()
+            }
+        )?;
+        for position in &movement.included_positions {
+            if let Some(date) = &position.baseline_date {
+                let fx_date = position
+                    .baseline_fx_date
+                    .as_deref()
+                    .map_or_else(|| "n/a".to_owned(), display_date);
+                writeln!(
+                    writer,
+                    "  included {} baseline price {} / FX {}",
+                    position.ticker,
+                    display_date(date),
+                    fx_date
+                )?;
+            }
+        }
+        for position in &movement.excluded_positions {
+            writeln!(
+                writer,
+                "  excluded {}: {}",
+                position.ticker,
+                position
+                    .exclusion_reason
+                    .map_or("outside movement scope", |reason| reason.as_str())
+            )?;
+        }
+    }
+    for limitation in &movement.limitations {
+        writeln!(
+            writer,
+            "  movement limitation: {}",
+            format_market_data_limitation_warning(limitation)
+        )?;
+    }
     Ok(())
 }
 
