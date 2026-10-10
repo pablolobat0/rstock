@@ -16,7 +16,9 @@ use tabled::settings::{Alignment, Color, Style};
 use tabled::Table;
 use textplots::{Chart, Plot, Shape};
 
-use crate::cli::display::helpers::{color_value, format_eu, format_market_data_limitation_warning};
+use crate::cli::display::helpers::{
+    color_for_value, color_value, format_eu, format_market_data_limitation_warning,
+};
 use crate::constants::display_date;
 use crate::models::{
     AssetType, FactAvailability, InventoryPosition, InventorySectionAggregates,
@@ -115,7 +117,7 @@ fn write_position_section<W: Write>(
         let FactAvailability::Available(gain_loss) = position.open_position_gain_loss else {
             continue;
         };
-        let color = value_color(gain_loss);
+        let color = color_for_value(gain_loss);
         table.modify(Cell::new(index + 1, 11), color.clone());
         table.modify(Cell::new(index + 1, 12), color);
     }
@@ -127,14 +129,6 @@ fn sorted_by_value(positions: &[InventoryPosition]) -> Vec<&InventoryPosition> {
     let mut sorted: Vec<&InventoryPosition> = positions.iter().collect();
     super::sort_position_refs_by_current_value(&mut sorted);
     sorted
-}
-
-fn value_color(value: f64) -> Color {
-    if value >= 0.0 {
-        Color::FG_GREEN
-    } else {
-        Color::FG_RED
-    }
 }
 
 // --- Performance facts ---
@@ -235,16 +229,16 @@ fn write_metrics_table<W: Write>(
     for (column, (_, outcome)) in periods.iter().enumerate() {
         let column = column + 1; // offset for the label column
         if let FactAvailability::Available(return_pct) = &outcome.return_pct {
-            table.modify(Cell::new(1, column), value_color(*return_pct));
+            table.modify(Cell::new(1, column), color_for_value(*return_pct));
         }
         if let FactAvailability::Available(_) = &outcome.max_drawdown {
             table.modify(Cell::new(3, column), Color::FG_RED);
         }
         if let FactAvailability::Available(sharpe) = &outcome.sharpe {
-            table.modify(Cell::new(4, column), value_color(*sharpe));
+            table.modify(Cell::new(4, column), color_for_value(*sharpe));
         }
         if let FactAvailability::Available(sortino) = &outcome.sortino {
-            table.modify(Cell::new(5, column), value_color(*sortino));
+            table.modify(Cell::new(5, column), color_for_value(*sortino));
         }
     }
     writeln!(writer, "{table}")?;
@@ -453,11 +447,15 @@ fn position_row(
     performance_total: Option<f64>,
     with_weight: bool,
 ) -> PositionRow {
-    let weight = match (position.current_value.value(), performance_total) {
-        (Some(value), Some(total)) if total.abs() > f64::EPSILON => {
-            format_eu(&format!("{:.2}%", value / total * 100.0))
+    let weight = if with_weight {
+        match (position.current_value.value(), performance_total) {
+            (Some(value), Some(total)) if total.abs() > f64::EPSILON => {
+                format_eu(&format!("{:.2}%", value / total * 100.0))
+            }
+            _ => "unavailable".to_owned(),
         }
-        _ => "unavailable".to_owned(),
+    } else {
+        String::new()
     };
     PositionRow {
         ticker: if position.asset_type == AssetType::Stock {
@@ -486,7 +484,7 @@ fn position_row(
             &position.open_position_gain_loss_pct,
             |value| signed_percent(*value),
         ),
-        weight: if with_weight { weight } else { String::new() },
+        weight,
     }
 }
 

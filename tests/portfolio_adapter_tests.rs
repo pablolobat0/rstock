@@ -12,8 +12,8 @@ pub mod common;
 
 use rstock::cli::adapters;
 use rstock::models::{
-    FactAvailability, IndividualPrice, InventoryPosition, InventorySectionAggregates,
-    PortfolioInventory, PortfolioInventorySection, PortfolioPerformance, PortfolioView,
+    FactAvailability, InventoryPosition, InventorySectionAggregates, PortfolioInventory,
+    PortfolioInventorySection, PortfolioPerformance, PortfolioView,
 };
 use serde_json::{json, Value};
 
@@ -58,6 +58,29 @@ fn write_json(view: &PortfolioView) -> Value {
     adapters::write_portfolio_json(&mut output, view)
         .expect("JSON adapter should write the outcome");
     common::parse_json_envelope(&output)
+}
+
+struct FailingWriter;
+
+impl std::io::Write for FailingWriter {
+    fn write(&mut self, _buffer: &[u8]) -> std::io::Result<usize> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            "simulated writer failure",
+        ))
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn json_adapter_propagates_writer_failures() {
+    let error = adapters::write_portfolio_json(&mut FailingWriter, &empty_view())
+        .expect_err("writer failure should be returned to the caller");
+
+    assert!(format!("{error:#}").contains("simulated writer failure"));
 }
 
 // --- JSON adapter ---
@@ -240,16 +263,8 @@ fn portfolio_json_maps_available_unavailable_and_not_applicable_facts_into_the_n
     assert_eq!(data["nav_history"][0]["nav"], 100.0);
 }
 
-/// A populated Portfolio view with one priced and one unpriced performance
-/// position, one Monetary position, available performance with mixed fact
-/// availability, all four limitation scopes, and one ready history point.
-fn populated_view() -> PortfolioView {
-    let nav_limitation = limitation("XFAKE1", "History Fund");
-    let benchmark_limitation = limitation("ACWI", "Benchmark");
-    let performance_section_limitation = limitation("XFAKE2", "Unpriced Fund");
-    let monetary_section_limitation = limitation("XFAKEM1", "Money Fund");
-
-    let unpriced_position = InventoryPosition {
+fn unpriced_position(limitation: rstock::models::MarketDataLimitation) -> InventoryPosition {
+    InventoryPosition {
         ticker: "IE00XFAKE002".to_owned(),
         name: "Unpriced Fund".to_owned(),
         asset_type: rstock::models::AssetType::Fund,
@@ -266,9 +281,12 @@ fn populated_view() -> PortfolioView {
         current_value: FactAvailability::Unavailable,
         open_position_gain_loss: FactAvailability::Unavailable,
         open_position_gain_loss_pct: FactAvailability::Unavailable,
-        market_data_limitations: vec![performance_section_limitation.clone()],
-    };
-    let priced_position = InventoryPosition {
+        market_data_limitations: vec![limitation],
+    }
+}
+
+fn priced_position() -> InventoryPosition {
+    InventoryPosition {
         ticker: "IE00XFAKE001".to_owned(),
         name: "History Fund".to_owned(),
         asset_type: rstock::models::AssetType::Fund,
@@ -289,8 +307,11 @@ fn populated_view() -> PortfolioView {
         open_position_gain_loss: FactAvailability::Available(-2.0),
         open_position_gain_loss_pct: FactAvailability::Available(-10.0),
         market_data_limitations: Vec::new(),
-    };
-    let monetary_position = InventoryPosition {
+    }
+}
+
+fn monetary_position(limitation: rstock::models::MarketDataLimitation) -> InventoryPosition {
+    InventoryPosition {
         ticker: "IE00XFAKEM1".to_owned(),
         name: "Money Fund".to_owned(),
         asset_type: rstock::models::AssetType::Fund,
@@ -310,15 +331,27 @@ fn populated_view() -> PortfolioView {
         current_value: FactAvailability::Available(100.0),
         open_position_gain_loss: FactAvailability::Available(0.0),
         open_position_gain_loss_pct: FactAvailability::Available(0.0),
-        market_data_limitations: vec![monetary_section_limitation.clone()],
-    };
+        market_data_limitations: vec![limitation],
+    }
+}
+
+/// Populated view covering priced and unpriced holdings, mixed fact
+/// availability, four limitation scopes, and one ready history point.
+fn populated_view() -> PortfolioView {
+    let nav_limitation = limitation("XFAKE1", "History Fund");
+    let benchmark_limitation = limitation("ACWI", "Benchmark");
+    let performance_section_limitation = limitation("XFAKE2", "Unpriced Fund");
+    let monetary_section_limitation = limitation("XFAKEM1", "Money Fund");
 
     let not_applicable = FactAvailability::NotApplicable;
     PortfolioView {
         inventory: PortfolioInventory {
             base_currency: "EUR".to_owned(),
             performance_holdings: PortfolioInventorySection {
-                positions: vec![priced_position, unpriced_position],
+                positions: vec![
+                    priced_position(),
+                    unpriced_position(performance_section_limitation.clone()),
+                ],
                 aggregates: InventorySectionAggregates {
                     // One unvalued position makes the ordinary aggregate
                     // unavailable even though other position facts stay known.
@@ -331,7 +364,7 @@ fn populated_view() -> PortfolioView {
                 market_data_limitations: vec![performance_section_limitation],
             },
             monetary_holdings: PortfolioInventorySection {
-                positions: vec![monetary_position],
+                positions: vec![monetary_position(monetary_section_limitation.clone())],
                 aggregates: InventorySectionAggregates {
                     current_value: FactAvailability::Available(100.0),
                     invested_cost: FactAvailability::Available(100.0),
@@ -436,6 +469,15 @@ fn write_human(view: &PortfolioView) -> String {
     adapters::write_portfolio_human(&mut output, view, NavHistoryRequest::All)
         .expect("human adapter should write the outcome");
     String::from_utf8(output).expect("human output should be UTF-8")
+}
+
+#[test]
+fn human_adapter_propagates_writer_failures() {
+    let error =
+        adapters::write_portfolio_human(&mut FailingWriter, &empty_view(), NavHistoryRequest::All)
+            .expect_err("writer failure should be returned to the caller");
+
+    assert!(format!("{error:#}").contains("simulated writer failure"));
 }
 
 #[test]

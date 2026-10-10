@@ -76,7 +76,7 @@ pub(super) fn format_return_plain(r: Option<f64>) -> String {
     }
 }
 
-pub(super) fn color_for_value(v: f64) -> Color {
+pub(in crate::cli) fn color_for_value(v: f64) -> Color {
     if v >= 0.0 {
         Color::FG_GREEN
     } else {
