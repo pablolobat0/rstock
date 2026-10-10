@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use anyhow::Context;
-use chrono::{Duration, NaiveDate};
+use chrono::{Datelike, Duration, NaiveDate, Weekday};
 use futures::stream::{self, StreamExt};
 use sea_orm::DatabaseConnection;
 
@@ -10,6 +10,7 @@ use crate::constants::{
 };
 use crate::db::repos::{asset_repo, transaction_repo};
 use crate::models::{
+    DailyMovementCoverage, DailyMovementExclusionReason, DailyPricedHoldingsMovement,
     FactAvailability, IndividualPrice, InventoryPosition, InventorySectionAggregates,
     MarketDataLimitation, MarketDataLimitationClassification, MarketDataSubject,
     PortfolioInventory, PortfolioInventorySection,
@@ -74,37 +75,51 @@ pub async fn get_portfolio_inventory(
 
     let mut performance_positions = Vec::new();
     let mut monetary_positions = Vec::new();
+    let mut performance_movement = Vec::new();
+    let mut monetary_movement = Vec::new();
     let mut performance_limitations = Vec::new();
     let mut monetary_limitations = Vec::new();
     let projected_positions = stream::iter(projections)
         .map(|projection| async move {
             let is_monetary = projection.asset.is_monetary();
-            let position = inventory_position_from_projection(db, market_data, projection).await?;
-            Ok::<_, anyhow::Error>((is_monetary, position))
+            let (position, movement) =
+                inventory_position_from_projection(db, market_data, projection).await?;
+            Ok::<_, anyhow::Error>((is_monetary, position, movement))
         })
         .buffered(CURRENT_POSITION_CONCURRENCY_LIMIT)
         .collect::<Vec<_>>()
         .await;
     for projected_position in projected_positions {
-        let (is_monetary, position) = projected_position?;
+        let (is_monetary, position, movement) = projected_position?;
         if is_monetary {
             extend_unique_limitations(
                 &mut monetary_limitations,
                 position.market_data_limitations.clone(),
             );
             monetary_positions.push(position);
+            monetary_movement.push(movement);
         } else {
             extend_unique_limitations(
                 &mut performance_limitations,
                 position.market_data_limitations.clone(),
             );
             performance_positions.push(position);
+            performance_movement.push(movement);
         }
     }
 
-    let performance_section =
-        build_inventory_section(performance_positions, performance_limitations);
-    let monetary_section = build_inventory_section(monetary_positions, monetary_limitations);
+    let performance_section = build_inventory_section(
+        performance_positions,
+        performance_limitations,
+        performance_movement,
+        current_date,
+    );
+    let monetary_section = build_inventory_section(
+        monetary_positions,
+        monetary_limitations,
+        monetary_movement,
+        current_date,
+    );
     let total_value = section_total_value(&performance_section, &monetary_section);
 
     Ok(PortfolioInventory {
@@ -198,11 +213,13 @@ fn empty_portfolio_inventory() -> PortfolioInventory {
         performance_holdings: PortfolioInventorySection {
             positions: Vec::new(),
             aggregates: empty_aggregates.clone(),
+            daily_priced_holdings_movement: not_applicable_movement(),
             market_data_limitations: Vec::new(),
         },
         monetary_holdings: PortfolioInventorySection {
             positions: Vec::new(),
             aggregates: empty_aggregates,
+            daily_priced_holdings_movement: not_applicable_movement(),
             market_data_limitations: Vec::new(),
         },
         total_value: FactAvailability::Available(0.0),
@@ -286,11 +303,15 @@ async fn inventory_position_from_projection(
     db: &DatabaseConnection,
     market_data: &MarketData,
     projection: HoldingProjection,
-) -> anyhow::Result<InventoryPosition> {
+) -> anyhow::Result<(InventoryPosition, MovementCandidate)> {
+    let asset = projection.asset.clone();
     let individual_price = market_data
         .individual_price_if_available(db, &projection.asset)
         .await?;
-    let individual_price_fact = match (individual_price.native_price, individual_price.price_date) {
+    let individual_price_fact = match (
+        individual_price.native_price,
+        individual_price.price_date.clone(),
+    ) {
         (Some(native_price), Some(price_date)) => FactAvailability::Available(IndividualPrice {
             native_price,
             price_date,
@@ -327,15 +348,15 @@ async fn inventory_position_from_projection(
         gain_loss_pct,
     );
 
-    Ok(InventoryPosition {
-        ticker: projection.asset.ticker,
-        name: projection.asset.name,
-        asset_type: projection.asset.asset_type,
-        currency: projection.asset.currency,
-        morningstar_code: projection.asset.morningstar_code,
-        asset_class: projection.asset.asset_class,
-        equity_style: projection.asset.equity_style,
-        management: projection.asset.management,
+    let position = InventoryPosition {
+        ticker: asset.ticker.clone(),
+        name: asset.name.clone(),
+        asset_type: asset.asset_type.clone(),
+        currency: asset.currency.clone(),
+        morningstar_code: asset.morningstar_code.clone(),
+        asset_class: asset.asset_class.clone(),
+        equity_style: asset.equity_style.clone(),
+        management: asset.management.clone(),
         quantity: projection.total_qty,
         average_cost,
         invested_cost,
@@ -346,10 +367,182 @@ async fn inventory_position_from_projection(
         open_position_gain_loss_pct,
         market_data_limitations: {
             let mut limitations = projection.market_data_limitations;
-            extend_unique_limitations(&mut limitations, individual_price.limitations);
+            extend_unique_limitations(&mut limitations, individual_price.limitations.clone());
             limitations
         },
-    })
+    };
+    let movement = movement_candidate(
+        db,
+        market_data,
+        &asset,
+        projection.total_qty,
+        &individual_price,
+    )
+    .await?;
+    Ok((position, movement))
+}
+
+struct MovementCandidate {
+    eligible: bool,
+    coverage: DailyMovementCoverage,
+    movement: Option<f64>,
+    limitations: Vec<MarketDataLimitation>,
+}
+
+struct BaselineValuation {
+    native_price: f64,
+    price_date: String,
+    fx_rate: Option<f64>,
+    fx_date: Option<String>,
+}
+
+async fn movement_candidate(
+    db: &DatabaseConnection,
+    market_data: &MarketData,
+    asset: &crate::models::Asset,
+    quantity: f64,
+    current: &crate::models::IndividualPriceAvailability,
+) -> anyhow::Result<MovementCandidate> {
+    use crate::db::repos::{daily_price_repo, exchange_rate_repo};
+    use crate::models::AssetType;
+
+    let eligible = matches!(asset.asset_type, AssetType::Stock | AssetType::Etf);
+    let today = market_data.today();
+    let no_coverage = |reason: DailyMovementExclusionReason| DailyMovementCoverage {
+        ticker: asset.ticker.clone(),
+        baseline_date: None,
+        baseline_fx_date: None,
+        prior_base_currency_value: None,
+        current_base_currency_value: None,
+        exclusion_reason: Some(reason),
+    };
+    if !eligible {
+        return Ok(MovementCandidate {
+            eligible,
+            coverage: no_coverage(DailyMovementExclusionReason::OutsideMovementScope),
+            movement: None,
+            limitations: Vec::new(),
+        });
+    }
+    let prior_date = today - Duration::days(1);
+    let prior_str = format_date(prior_date);
+    let Some((baseline_price, baseline_date)) =
+        daily_price_repo::find_price_and_date_at_or_before(db, asset.id, &prior_str).await?
+    else {
+        return Ok(MovementCandidate {
+            eligible,
+            coverage: no_coverage(DailyMovementExclusionReason::NoPriorPriceObservation),
+            movement: None,
+            limitations: vec![MarketDataLimitation {
+                subject: MarketDataSubject::Asset {
+                    ticker: asset.ticker.clone(),
+                    name: asset.name.clone(),
+                    asset_type: asset.asset_type.clone(),
+                },
+                latest_available_date: None,
+                requested_end_date: today,
+                classification: MarketDataLimitationClassification::ActionableMissingData,
+            }],
+        });
+    };
+    let (prior_fx, baseline_fx_date) = if asset.currency == BASE_CURRENCY {
+        (Some(1.0), Some(baseline_date.clone()))
+    } else {
+        exchange_rate_repo::find_rate_and_date_at_or_before(
+            db,
+            &asset.currency,
+            BASE_CURRENCY,
+            &format_date(today - Duration::days(1)),
+        )
+        .await?
+        .map_or((None, None), |(rate, date)| (Some(rate), Some(date)))
+    };
+    Ok(movement_from_baseline(
+        asset,
+        quantity,
+        current,
+        today,
+        BaselineValuation {
+            native_price: baseline_price,
+            price_date: baseline_date,
+            fx_rate: prior_fx,
+            fx_date: baseline_fx_date,
+        },
+    ))
+}
+
+fn movement_from_baseline(
+    asset: &crate::models::Asset,
+    quantity: f64,
+    current: &crate::models::IndividualPriceAvailability,
+    today: NaiveDate,
+    baseline: BaselineValuation,
+) -> MovementCandidate {
+    let today_text = format_date(today);
+    let has_today_quote = current.price_date.as_deref() == Some(today_text.as_str());
+    let current_native = if has_today_quote {
+        current.native_price
+    } else {
+        Some(baseline.native_price)
+    };
+    let current_fx = if asset.currency == BASE_CURRENCY {
+        Some(1.0)
+    } else {
+        current.fx_rate
+    };
+    let (prior_value, current_value, movement) =
+        match (baseline.fx_rate, current_native, current_fx) {
+            (Some(prior_fx), Some(current_native), Some(current_fx)) => {
+                let prior_value = quantity * baseline.native_price * prior_fx;
+                let current_value = quantity * current_native * current_fx;
+                (
+                    Some(prior_value),
+                    Some(current_value),
+                    Some(current_value - prior_value),
+                )
+            }
+            _ => (None, None, None),
+        };
+    let mut limitations = current.limitations.clone();
+    if !has_today_quote {
+        limitations.push(MarketDataLimitation {
+            subject: MarketDataSubject::Asset {
+                ticker: asset.ticker.clone(),
+                name: asset.name.clone(),
+                asset_type: asset.asset_type.clone(),
+            },
+            latest_available_date: NaiveDate::parse_from_str(&baseline.price_date, DATE_FORMAT)
+                .ok(),
+            requested_end_date: today,
+            classification: MarketDataLimitationClassification::ActionableReportingLag,
+        });
+    }
+    if baseline.fx_rate.is_none() || current_fx.is_none() {
+        limitations.push(MarketDataLimitation {
+            subject: MarketDataSubject::FxRate {
+                currency: asset.currency.clone(),
+            },
+            latest_available_date: None,
+            requested_end_date: today,
+            classification: MarketDataLimitationClassification::ActionableMissingData,
+        });
+    }
+    let exclusion_reason = movement
+        .is_none()
+        .then_some(DailyMovementExclusionReason::MissingCurrentPriceOrFx);
+    MovementCandidate {
+        eligible: true,
+        coverage: DailyMovementCoverage {
+            ticker: asset.ticker.clone(),
+            baseline_date: Some(baseline.price_date),
+            baseline_fx_date: baseline.fx_date,
+            prior_base_currency_value: prior_value,
+            current_base_currency_value: current_value,
+            exclusion_reason,
+        },
+        movement,
+        limitations,
+    }
 }
 
 /// Builds a fact from two independently available inputs; the fact is
@@ -368,6 +561,8 @@ fn dependent_fact<T>(
 fn build_inventory_section(
     positions: Vec<InventoryPosition>,
     mut limitations: Vec<MarketDataLimitation>,
+    candidates: Vec<MovementCandidate>,
+    today: NaiveDate,
 ) -> PortfolioInventorySection {
     let open_position_gain_loss = complete_fact_sum(
         positions
@@ -400,10 +595,80 @@ fn build_inventory_section(
     for position in &positions {
         extend_unique_limitations(&mut limitations, position.market_data_limitations.clone());
     }
+    let movement = build_daily_movement(candidates, today);
     PortfolioInventorySection {
         positions,
         aggregates,
+        daily_priced_holdings_movement: movement,
         market_data_limitations: limitations,
+    }
+}
+
+fn not_applicable_movement() -> DailyPricedHoldingsMovement {
+    DailyPricedHoldingsMovement {
+        movement: FactAvailability::NotApplicable,
+        movement_pct: FactAvailability::NotApplicable,
+        covered_prior_value: FactAvailability::NotApplicable,
+        included_positions: Vec::new(),
+        excluded_positions: Vec::new(),
+        limitations: Vec::new(),
+    }
+}
+
+fn build_daily_movement(
+    candidates: Vec<MovementCandidate>,
+    today: NaiveDate,
+) -> DailyPricedHoldingsMovement {
+    let weekday = !matches!(today.weekday(), Weekday::Sat | Weekday::Sun);
+    let eligible_count = candidates
+        .iter()
+        .filter(|candidate| candidate.eligible)
+        .count();
+    if !weekday || eligible_count == 0 {
+        return not_applicable_movement();
+    }
+    let mut included_positions = Vec::new();
+    let mut excluded_positions = Vec::new();
+    let mut movement_total = 0.0;
+    let mut prior_total = 0.0;
+    let mut movement_limitations = Vec::new();
+    for candidate in candidates {
+        extend_unique_limitations(&mut movement_limitations, candidate.limitations);
+        if !candidate.eligible {
+            excluded_positions.push(candidate.coverage);
+        } else if let Some(movement) = candidate.movement {
+            movement_total += movement;
+            prior_total += candidate
+                .coverage
+                .prior_base_currency_value
+                .unwrap_or_default();
+            included_positions.push(candidate.coverage);
+        } else {
+            excluded_positions.push(candidate.coverage);
+        }
+    }
+    if included_positions.is_empty() {
+        return DailyPricedHoldingsMovement {
+            movement: FactAvailability::Unavailable,
+            movement_pct: FactAvailability::Unavailable,
+            covered_prior_value: FactAvailability::Unavailable,
+            included_positions,
+            excluded_positions,
+            limitations: movement_limitations,
+        };
+    }
+    let percentage = if prior_total.abs() < FLOAT_EPSILON {
+        FactAvailability::NotApplicable
+    } else {
+        FactAvailability::Available(movement_total / prior_total * 100.0)
+    };
+    DailyPricedHoldingsMovement {
+        movement: FactAvailability::Available(movement_total),
+        movement_pct: percentage,
+        covered_prior_value: FactAvailability::Available(prior_total),
+        included_positions,
+        excluded_positions,
+        limitations: movement_limitations,
     }
 }
 

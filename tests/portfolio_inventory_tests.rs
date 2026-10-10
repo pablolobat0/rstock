@@ -212,6 +212,193 @@ async fn inventory_applies_fixed_clock_individual_price_semantics() {
 }
 
 #[tokio::test]
+async fn daily_movement_covers_stock_etf_current_day_buys_and_excludes_funds() {
+    let db = common::setup_test_db().await;
+    let stock = common::insert_asset(&db, "XFAKEMOV1", "Movement Stock", "stock", "EUR").await;
+    let etf = common::insert_etf_asset(&db, "XFAKEMOV2", "Movement ETF", "EUR", "MOVETF").await;
+    let fund =
+        common::insert_fund_asset(&db, "XFAKEMOV3", "Out of Scope Fund", "EUR", "MOVFUND").await;
+    let monetary =
+        common::insert_monetary_fund_asset(&db, "XFAKEMOV4", "Monetary Fund", "EUR", "MOVMONEY")
+            .await;
+    for id in [stock, fund, monetary] {
+        common::insert_daily_price(&db, id, "2025-06-09", 10.0, false).await;
+    }
+    common::insert_daily_price(&db, etf, "2025-06-06", 10.0, false).await;
+    common::insert_transaction(&db, stock, "2025-06-10", 2.0, 11.0, 0.0).await;
+    common::insert_transaction(&db, etf, "2025-06-02", 1.0, 9.0, 0.0).await;
+    common::insert_transaction(&db, fund, "2025-06-02", 1.0, 9.0, 0.0).await;
+    common::insert_transaction(&db, monetary, "2025-06-02", 1.0, 9.0, 0.0).await;
+    let mut sources = common::MockMarketDataSources::new();
+    sources
+        .historical_prices
+        .insert("XFAKEMOV1".into(), vec![("2025-06-10".into(), 12.0)]);
+    sources
+        .historical_prices
+        .insert("MOVETF".into(), vec![("2025-06-10".into(), 13.0)]);
+    let market_data = common::market_data_at(&sources, fixed_today());
+
+    let inventory = portfolio_inventory::get_portfolio_inventory(&db, &market_data)
+        .await
+        .unwrap();
+    let movement = &inventory
+        .performance_holdings
+        .daily_priced_holdings_movement;
+    assert_eq!(movement.movement, FactAvailability::Available(7.0));
+    assert!((movement.movement_pct.value().copied().unwrap() - 23.3333333333).abs() < 1e-8);
+    assert_eq!(movement.included_positions.len(), 2);
+    assert_eq!(
+        movement.included_positions[0].baseline_date.as_deref(),
+        Some("2025-06-09")
+    );
+    assert_eq!(
+        movement.included_positions[1].baseline_date.as_deref(),
+        Some("2025-06-06")
+    );
+    assert_eq!(
+        movement.included_positions[1].baseline_fx_date.as_deref(),
+        Some("2025-06-06")
+    );
+    assert_eq!(movement.excluded_positions.len(), 1);
+    assert_eq!(movement.excluded_positions[0].ticker, "XFAKEMOV3");
+    assert_eq!(
+        inventory
+            .monetary_holdings
+            .daily_priced_holdings_movement
+            .movement,
+        FactAvailability::NotApplicable
+    );
+}
+
+#[tokio::test]
+async fn daily_movement_is_not_applicable_on_weekends() {
+    let db = common::setup_test_db().await;
+    let stock = common::insert_asset(&db, "XFAKEMOV4", "Weekend Stock", "stock", "EUR").await;
+    common::insert_transaction(&db, stock, "2025-06-13", 1.0, 10.0, 0.0).await;
+    common::insert_daily_price(&db, stock, "2025-06-13", 10.0, false).await;
+    let saturday = NaiveDate::from_ymd_opt(2025, 6, 14).unwrap();
+    for date in [saturday, saturday + chrono::Duration::days(1)] {
+        let market_data = common::market_data_at(&common::MockMarketDataSources::new(), date);
+        let inventory = portfolio_inventory::get_portfolio_inventory(&db, &market_data)
+            .await
+            .unwrap();
+        assert_eq!(
+            inventory
+                .performance_holdings
+                .daily_priced_holdings_movement
+                .movement,
+            FactAvailability::NotApplicable
+        );
+        assert_eq!(
+            inventory
+                .performance_holdings
+                .daily_priced_holdings_movement
+                .movement_pct,
+            FactAvailability::NotApplicable
+        );
+    }
+}
+
+#[tokio::test]
+async fn weekday_without_quote_keeps_native_price_flat_and_includes_fx_movement() {
+    let db = common::setup_test_db().await;
+    let stock = common::insert_asset(&db, "XFAKEMOVFX", "FX Movement Stock", "stock", "USD").await;
+    common::insert_transaction(&db, stock, "2025-06-02", 1.0, 10.0, 0.0).await;
+    common::insert_daily_price(&db, stock, "2025-06-06", 10.0, false).await;
+    common::insert_exchange_rate(&db, "USD", "EUR", "2025-06-09", 0.9).await;
+    let mut sources = common::MockMarketDataSources::new();
+    sources
+        .exchange_rates
+        .insert("USDEUR".into(), vec![("2025-06-10".into(), 1.0)]);
+    let market_data = common::market_data_at(&sources, fixed_today());
+
+    let inventory = portfolio_inventory::get_portfolio_inventory(&db, &market_data)
+        .await
+        .unwrap();
+    let movement = &inventory
+        .performance_holdings
+        .daily_priced_holdings_movement;
+    assert_eq!(movement.movement, FactAvailability::Available(1.0));
+    assert_eq!(
+        movement.included_positions[0].baseline_date.as_deref(),
+        Some("2025-06-06")
+    );
+    assert_eq!(
+        movement.included_positions[0].baseline_fx_date.as_deref(),
+        Some("2025-06-09")
+    );
+    assert_eq!(
+        movement.included_positions[0].current_base_currency_value,
+        Some(10.0)
+    );
+    assert!(movement.limitations.iter().any(|limitation| matches!(
+        limitation.subject,
+        rstock::models::MarketDataSubject::Asset { .. }
+    )));
+}
+
+#[tokio::test]
+async fn daily_movement_retains_covered_positions_and_explains_missing_fx() {
+    let db = common::setup_test_db().await;
+    let covered = common::insert_asset(&db, "XFAKEMOVC", "Covered", "stock", "EUR").await;
+    let excluded = common::insert_asset(&db, "XFAKEMOVU", "Uncovered", "stock", "USD").await;
+    for id in [covered, excluded] {
+        common::insert_transaction(&db, id, "2025-06-02", 1.0, 10.0, 0.0).await;
+        common::insert_daily_price(&db, id, "2025-06-09", 10.0, false).await;
+    }
+    let mut sources = common::MockMarketDataSources::new();
+    sources
+        .historical_prices
+        .insert("XFAKEMOVC".into(), vec![("2025-06-10".into(), 11.0)]);
+    sources
+        .historical_prices
+        .insert("XFAKEMOVU".into(), vec![("2025-06-10".into(), 11.0)]);
+    let market_data = common::market_data_at(&sources, fixed_today());
+
+    let inventory = portfolio_inventory::get_portfolio_inventory(&db, &market_data)
+        .await
+        .unwrap();
+    let movement = &inventory
+        .performance_holdings
+        .daily_priced_holdings_movement;
+    assert_eq!(movement.movement, FactAvailability::Available(1.0));
+    assert_eq!(movement.included_positions.len(), 1);
+    assert_eq!(movement.included_positions[0].ticker, "XFAKEMOVC");
+    assert_eq!(movement.excluded_positions.len(), 1);
+    assert_eq!(movement.excluded_positions[0].ticker, "XFAKEMOVU");
+    assert!(movement.limitations.iter().any(|limitation| matches!(
+        limitation.subject,
+        rstock::models::MarketDataSubject::FxRate { ref currency } if currency == "USD"
+    )));
+}
+
+#[tokio::test]
+async fn daily_movement_percentage_is_not_applicable_for_zero_covered_prior_value() {
+    let db = common::setup_test_db().await;
+    let stock = common::insert_asset(&db, "XFAKEMOVZERO", "Zero Baseline", "stock", "EUR").await;
+    common::insert_transaction(&db, stock, "2025-06-02", 1.0, 1.0, 0.0).await;
+    common::insert_daily_price(&db, stock, "2025-06-09", 0.0, false).await;
+    let mut sources = common::MockMarketDataSources::new();
+    sources
+        .historical_prices
+        .insert("XFAKEMOVZERO".into(), vec![("2025-06-10".into(), 1.0)]);
+    let market_data = common::market_data_at(&sources, fixed_today());
+
+    let inventory = portfolio_inventory::get_portfolio_inventory(&db, &market_data)
+        .await
+        .unwrap();
+    let movement = &inventory
+        .performance_holdings
+        .daily_priced_holdings_movement;
+    assert_eq!(movement.movement, FactAvailability::Available(1.0));
+    assert_eq!(
+        movement.covered_prior_value,
+        FactAvailability::Available(0.0)
+    );
+    assert_eq!(movement.movement_pct, FactAvailability::NotApplicable);
+}
+
+#[tokio::test]
 async fn inventory_reports_remaining_cost_dividends_and_open_gain_separately() {
     let db = common::setup_test_db().await;
     let asset_id =

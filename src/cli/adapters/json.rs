@@ -12,8 +12,9 @@ use serde::Serialize;
 
 use crate::cli::output::write_json;
 use crate::models::{
-    FactAvailability, IndividualPrice, InventoryPosition, MarketDataLimitation,
-    PortfolioInventorySection, PortfolioPerformance, PortfolioSnapshot, PortfolioView,
+    DailyMovementCoverage, DailyPricedHoldingsMovement, FactAvailability, IndividualPrice,
+    InventoryPosition, MarketDataLimitation, PortfolioInventorySection, PortfolioPerformance,
+    PortfolioSnapshot, PortfolioView,
 };
 
 /// Maps the composed Portfolio view onto the nested JSON schema and writes one
@@ -63,6 +64,7 @@ struct InventoryJson<'a> {
 struct PortfolioInventorySectionJson<'a> {
     positions: Vec<PositionJson<'a>>,
     aggregates: AggregatesJson,
+    daily_priced_holdings_movement: DailyMovementJson<'a>,
     market_data_limitations: Vec<&'a MarketDataLimitation>,
 }
 
@@ -76,8 +78,85 @@ impl<'a> From<&'a PortfolioInventorySection> for PortfolioInventorySectionJson<'
                 .map(|position| PositionJson::from(*position))
                 .collect(),
             aggregates: AggregatesJson::from(&section.aggregates),
+            daily_priced_holdings_movement: DailyMovementJson::from(
+                &section.daily_priced_holdings_movement,
+            ),
             market_data_limitations: section.market_data_limitations.iter().collect(),
         }
+    }
+}
+
+#[derive(Serialize)]
+struct DailyMovementJson<'a> {
+    movement: Option<f64>,
+    movement_availability: &'static str,
+    movement_pct: Option<f64>,
+    movement_pct_availability: &'static str,
+    covered_prior_value: Option<f64>,
+    covered_prior_value_availability: &'static str,
+    included_positions: Vec<DailyMovementCoverageJson<'a>>,
+    excluded_positions: Vec<DailyMovementCoverageJson<'a>>,
+    limitations: Vec<&'a MarketDataLimitation>,
+}
+
+impl<'a> From<&'a DailyPricedHoldingsMovement> for DailyMovementJson<'a> {
+    fn from(value: &'a DailyPricedHoldingsMovement) -> Self {
+        let (movement, movement_availability) = fact_json(&value.movement);
+        let (movement_pct, movement_pct_availability) = fact_json(&value.movement_pct);
+        let (covered_prior_value, covered_prior_value_availability) =
+            fact_json(&value.covered_prior_value);
+        Self {
+            movement,
+            movement_availability,
+            movement_pct,
+            movement_pct_availability,
+            covered_prior_value,
+            covered_prior_value_availability,
+            included_positions: value
+                .included_positions
+                .iter()
+                .map(DailyMovementCoverageJson::from)
+                .collect(),
+            excluded_positions: value
+                .excluded_positions
+                .iter()
+                .map(DailyMovementCoverageJson::from)
+                .collect(),
+            limitations: value.limitations.iter().collect(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct DailyMovementCoverageJson<'a> {
+    ticker: &'a str,
+    baseline_date: Option<&'a str>,
+    baseline_fx_date: Option<&'a str>,
+    prior_base_currency_value: Option<f64>,
+    current_base_currency_value: Option<f64>,
+    exclusion_reason: Option<&'a str>,
+}
+
+impl<'a> From<&'a DailyMovementCoverage> for DailyMovementCoverageJson<'a> {
+    fn from(coverage: &'a DailyMovementCoverage) -> Self {
+        Self {
+            ticker: &coverage.ticker,
+            baseline_date: coverage.baseline_date.as_deref(),
+            baseline_fx_date: coverage.baseline_fx_date.as_deref(),
+            prior_base_currency_value: coverage.prior_base_currency_value,
+            current_base_currency_value: coverage.current_base_currency_value,
+            exclusion_reason: coverage
+                .exclusion_reason
+                .map(crate::models::DailyMovementExclusionReason::as_str),
+        }
+    }
+}
+
+fn fact_json(fact: &FactAvailability<f64>) -> (Option<f64>, &'static str) {
+    match fact {
+        FactAvailability::Available(value) => (Some(*value), "available"),
+        FactAvailability::Unavailable => (None, "unavailable"),
+        FactAvailability::NotApplicable => (None, "not_applicable"),
     }
 }
 
