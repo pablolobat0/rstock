@@ -7,8 +7,8 @@ use textplots::{Chart, Plot, Shape};
 use crate::constants::display_date;
 use crate::models::{CorrelationMatrix, RollingCorrelationResult};
 
+use super::helpers::format_market_data_limitation_warning;
 use super::helpers::{color_for_value, format_eu, format_plain};
-use super::portfolio::format_market_data_limitation_warning;
 
 pub fn print_correlation_matrix(matrix: &CorrelationMatrix, period_label: &str) {
     if matrix.names.is_empty() {

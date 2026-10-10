@@ -1,3 +1,4 @@
+pub mod adapters;
 pub mod commands;
 mod dispatch;
 pub mod display;
@@ -82,7 +83,7 @@ pub enum CorrelationPeriod {
     FiveYears,
 }
 
-#[derive(ValueEnum, Clone, Debug)]
+#[derive(ValueEnum, Clone, Copy, Debug)]
 pub enum ChartPeriod {
     #[value(name = "1m")]
     OneMonth,

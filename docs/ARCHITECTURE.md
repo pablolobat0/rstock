@@ -53,7 +53,7 @@
 - **`analyze`** — Composition, fund analysis, static correlation matrix, and rolling pair correlation
 - **`compare`** — Side-by-side fund candidate comparison
 
-`main.rs` is a thin process bootstrap: it parses the CLI with clap, initializes logging, connects to the database, and builds the `MarketData` sources, then delegates the parsed command to `cli::run_command()` in `src/cli/dispatch.rs`. That library-owned dispatch routes every command in the current surface — both dashboard aliases `get` and `portfolio get` reach the same path — so production, integration tests, and benchmarks exercise one application module graph. Command adapters in `src/cli/commands/` call presentation-neutral services, then choose either the existing human renderer or `output::emit_json()`. `src/cli/output.rs` owns compact serialization and emits one `command`/`data` envelope to stdout; services do not emit successful command output. Errors and Clap help/version remain outside this successful-output boundary.
+`main.rs` is a thin process bootstrap: it parses the CLI with clap, initializes logging, connects to the database, and builds the `MarketData` sources, then delegates the parsed command to `cli::run_command()` in `src/cli/dispatch.rs`. That library-owned dispatch routes every command in the current surface — both dashboard aliases `get` and `portfolio get` reach the same path — so production, integration tests, and benchmarks exercise one application module graph. The Portfolio dashboard commands compose `portfolio_view::get_portfolio_view()` first, then write the complete outcome through the separate human and JSON output Adapters in `src/cli/adapters/`, which accept injected `Write` targets and own sorting, labels, the nested JSON schema, and the NAV chart (ADR-0004). Other command adapters in `src/cli/commands/` call presentation-neutral services, then choose either the existing human renderer or `output::emit_json()`. `src/cli/output.rs` owns compact serialization and emits one `command`/`data` envelope to stdout; services do not emit successful command output. Errors and Clap help/version remain outside this successful-output boundary.
 
 The library owns the complete command dispatch, and the executable imports the shared modules from the `rstock` library rather than compiling a second copy of them. Logging initialization remains owned by the executable. Test bodies and helpers live in dedicated files under `tests/`; private unit modules reference `tests/unit/` files through test-only module declarations.
 
@@ -79,7 +79,7 @@ All business logic lives here. Key modules:
 
 **`portfolio_inventory.rs`** — `get_portfolio_inventory()` is the focused Portfolio inventory Interface and does not request NAV readiness, so it never creates or rebuilds NAV history. One Transaction ledger projection derives quantity, remaining cost, dividends, and Open-position gain/loss identically for performance-holding and Monetary-holding sections, which separately own their positions, complete-or-unavailable aggregates, and Market data limitations; the combined informational Total value is available only when both section values are complete. Calculated financial facts carry explicit available, unavailable, or not-applicable `FactAvailability` states while descriptive metadata stays unwrapped. Composition analysis consumes this Interface directly.
 
-**`portfolio.rs`** — `get_portfolio()` is the legacy flat Portfolio path, retained until later migration tickets switch its callers. **`portfolio_view.rs`** — `get_portfolio_view()` is the presentation-neutral Portfolio view composer. It owns NAV readiness, composes the focused inventory, expresses core Portfolio performance as not applicable/unavailable/available, and includes the requested ready NAV history before returning. Available performance carries cohesive YTD, 1Y, 3Y, 5Y, and All period outcomes over the ready NAV series with independently available return and risk facts, and exposes the benchmark-dependent risk limitations as their own scope. Daily movement is completed in a later ticket.
+**`portfolio.rs`** — `get_portfolio()` is the legacy flat Portfolio path. Its production callers were removed when the dashboard commands switched to the composed Portfolio view; the path now runs behind its existing legacy tests only and is removed together with the flat models by the surface-contract ticket. **`portfolio_view.rs`** — `get_portfolio_view()` is the presentation-neutral Portfolio view composer. It owns NAV readiness, composes the focused inventory, expresses core Portfolio performance as not applicable/unavailable/available, and includes the requested ready NAV history before returning. Available performance carries cohesive YTD, 1Y, 3Y, 5Y, and All period outcomes over the ready NAV series with independently available return and risk facts, and exposes the benchmark-dependent risk limitations as their own scope. Daily movement is completed in a later ticket.
 
 **`analytics.rs`** — Computes asset-series correlation from current Transaction ledger holdings and historical Base currency series, and computes portfolio risk metrics from NAV history and benchmark prices. Asset-series correlation does not rebuild NAV history.
 
@@ -101,13 +101,13 @@ All business logic lives here. Key modules:
 
 **`export.rs`** — `export_transactions_csv()` dumps all transactions to a CSV file.
 
-### Output Layer (`src/cli/display/`, `src/cli/output.rs`)
+### Output Layer (`src/cli/adapters/`, `src/cli/display/`, `src/cli/output.rs`)
 
-Pure output formatting with no business logic. `OutputFormat` selects human or JSON output at the CLI boundary. Human formatting remains split into command-oriented display submodules, while `output.rs` provides the shared JSON envelope writer:
+Pure output formatting with no business logic. `OutputFormat` selects human or JSON output at the CLI boundary. The Portfolio dashboard commands use the dedicated output Adapters, which write one complete Portfolio view through an injected `Write` target; the other human renderers print through `display` submodules:
 
-- **`helpers.rs`** — Shared formatting utilities (price, quantity, percentage, color helpers)
-- **`portfolio.rs`** — `print_portfolio()` renders per-asset table, summary (NAV, returns, risk metrics), and user-facing Market data limitation warning text using `tabled` with green/red coloring via `colored`
-- **`simple.rs`** — `print_nav_chart()` renders the ASCII NAV chart via `textplots`
+- **`adapters/human.rs`** — the human Portfolio view Adapter: per-section inventory tables and aggregates, synchronized performance facts with the Effective valuation date, the metrics table, the NAV chart for the requested history, semantic not-applicable/unavailable fact labels, and the four limitation scopes
+- **`adapters/json.rs`** — the JSON Portfolio view Adapter: one compact envelope over the nested inventory/performance schema, `null` mapping for unavailable and not-applicable scalar facts, requested NAV history, and the four structured limitation scopes
+- **`helpers.rs`** — Shared formatting utilities (price, quantity, percentage, color helpers, limitation wording)
 - **`correlation.rs`** — `print_correlation_matrix()` renders N×N correlation matrix with color-coded values
 - **`composition.rs`** — `print_composition()` renders composition breakdowns and top holdings
 - **`fund_analysis.rs`** — `print_fund_analysis()` renders deep-dive fund analysis tables and snapshot diffs
@@ -134,8 +134,8 @@ Domain structs organized by concept:
 **`portfolio.rs`**:
 - `PortfolioSnapshot` — Daily NAV snapshot (date, asset_value, total_value, outstanding_shares, nav)
 - `AssetSnapshot` — Per-asset daily position (quantity, closing_price, market_value, exchange_rate)
-- `CurrentPositions` — Legacy flat current-inventory outcome, temporarily retained while the old `get_portfolio()` path maps over Portfolio inventory
-- `PortfolioResult` — Legacy flat Portfolio view outcome, temporarily retained for the old Portfolio command path
+- `PortfolioResult` — Legacy flat Portfolio view outcome, retained behind the old `get_portfolio()` service path and its tests until the flat surface is removed
+- `CurrentPositions` — Legacy flat current-inventory outcome, retained until the flat surface is removed
 - `PeriodMetrics` — Per-period volatility, max drawdown, beta, Sharpe ratio, and Sortino ratio
 - `CorrelationMatrix` — N×N asset correlation matrix with labels and warnings
 - `AllocationEntry`, `TopHolding`, `CompositionResult`, `FundHolding` — Composition and holdings models
@@ -352,19 +352,22 @@ Historical market data preparation caches source observations and fills gaps bet
 
 ```
 rstock::cli::run_command
-  └─> portfolio::get_portfolio()
-        ├─> nav::ensure_portfolio_history()
-        │     ├─> Prepare one immutable NavRebuildPlan from the trusted checkpoint
-        │     └─> Execute the plan with strict in-memory valuation reads
-        ├─> portfolio_inventory::get_portfolio_inventory()
-        │     ├─> Project all open holdings once from the Transaction ledger
-        │     ├─> Resolve each position's Individual price through MarketData
-        │     ├─> Separate performance and Monetary sections
-        │     └─> Build complete-or-unavailable section aggregates
-        ├─> Compute NAV return and risk facts
-        └─> Keep NAV, performance-inventory, and Monetary limitations separate
-  └─> display::print_portfolio()
-  └─> display::print_nav_chart()
+  └─> commands::portfolio::get()
+        ├─> Map the CLI chart period onto NavHistoryRequest
+        ├─> portfolio_view::get_portfolio_view()
+        │     ├─> nav::ensure_portfolio_history()
+        │     │     ├─> Prepare one immutable NavRebuildPlan from the trusted checkpoint
+        │     │     └─> Execute the plan with strict in-memory valuation reads
+        │     ├─> portfolio_inventory::get_portfolio_inventory()
+        │     │     ├─> Project all open holdings once from the Transaction ledger
+        │     │     ├─> Resolve each position's Individual price through MarketData
+        │     │     ├─> Separate performance and Monetary sections
+        │     │     └─> Build complete-or-unavailable section aggregates
+        │     ├─> Compose the YTD/1Y/3Y/5Y/All period outcomes over the ready NAV series
+        │     └─> Slice the requested ready NAV history into the same outcome
+        └─> Choose the output Adapter (both aliases share this path)
+              ├─> adapters::write_portfolio_json() via the injected stdout writer
+              └─> adapters::write_portfolio_human() via the injected stdout writer
 ```
 
 ### `transaction buy`
