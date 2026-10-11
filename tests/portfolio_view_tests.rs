@@ -1,5 +1,3 @@
-#![allow(clippy::float_cmp)]
-
 pub mod common;
 
 use chrono::{Datelike, NaiveDate};
@@ -9,6 +7,10 @@ use rstock::models::{
 };
 use rstock::services::metrics;
 use rstock::services::portfolio_view;
+
+fn assert_close(actual: f64, expected: f64) {
+    assert!((actual - expected).abs() < 1e-9, "{actual} != {expected}");
+}
 
 fn fixed_today() -> NaiveDate {
     NaiveDate::from_ymd_opt(2025, 6, 10).unwrap()
@@ -186,8 +188,8 @@ async fn view_keeps_available_performance_at_older_snapshot_with_limitations() {
     };
     assert_eq!(performance.effective_valuation_date, "2025-06-06");
     // The snapshot helper stores its configured total value of 1,000 EUR.
-    assert_eq!(performance.synchronized_value, 1000.0);
-    assert_eq!(performance.nav, 110.0);
+    assert_close(performance.synchronized_value, 1000.0);
+    assert_close(performance.nav, 110.0);
     assert_eq!(performance.inception_date, "2025-06-01");
     // Limitations must mention the stale holding even though performance is
     // available: a limitation may coexist with an older available snapshot.
@@ -204,7 +206,7 @@ async fn view_keeps_available_performance_at_older_snapshot_with_limitations() {
         view.inventory.performance_holdings.aggregates.current_value,
         FactAvailability::Available(72.0)
     );
-    assert_ne!(performance.synchronized_value, 72.0);
+    assert!((performance.synchronized_value - 72.0).abs() > 1e-9);
 
     assert!(!view.nav_history.is_empty());
     assert!(view.nav_history.iter().all(|snapshot| {
@@ -840,7 +842,7 @@ async fn view_reports_four_independent_limitation_scopes() {
     // A limitation in one scope does not invalidate another scope's facts:
     // the synchronized performance facts remain available at the older
     // snapshot while inventory facts stay independently dated.
-    assert_eq!(performance.nav, 110.0);
+    assert_close(performance.nav, 110.0);
     assert_eq!(view.inventory.total_value, FactAvailability::Unavailable);
 }
 

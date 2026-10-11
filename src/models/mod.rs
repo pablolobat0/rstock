@@ -31,7 +31,7 @@ pub use market_data::{
 };
 pub use portfolio::{
     AllocationEntry, AssetSnapshot, CompositionResult, CorrelationMatrix, FundHolding,
-    MarketCapCategory, PeriodMetrics, PortfolioSnapshot, RollingCorrelationResult, TopHolding,
+    MarketCapCategory, PortfolioSnapshot, RollingCorrelationResult, TopHolding,
 };
 pub use portfolio_inventory::{
     DailyMovementCoverage, DailyMovementExclusionReason, DailyPricedHoldingsMovement,

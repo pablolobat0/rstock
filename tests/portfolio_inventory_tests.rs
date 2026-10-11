@@ -1,5 +1,3 @@
-#![allow(clippy::float_cmp)]
-
 pub mod common;
 
 use chrono::NaiveDate;
@@ -8,6 +6,10 @@ use rstock::models::{
     FactAvailability, MarketDataSubject, PortfolioInventory, PortfolioInventorySection,
 };
 use rstock::services::{composition, portfolio_inventory};
+
+fn assert_close(actual: f64, expected: f64) {
+    assert!((actual - expected).abs() < 1e-9, "{actual} != {expected}");
+}
 
 fn fixed_today() -> NaiveDate {
     NaiveDate::from_ymd_opt(2025, 6, 10).unwrap()
@@ -119,7 +121,7 @@ async fn inventory_uses_fixed_date_and_shared_ledger_projection() {
     assert_eq!(inventory.monetary_holdings.positions.len(), 1);
     let stock = &inventory.performance_holdings.positions[0];
     assert!((stock.quantity - 4.0).abs() < 1e-9);
-    assert_eq!(stock.invested_cost.value().copied().unwrap(), 21.0);
+    assert_close(stock.invested_cost.value().copied().unwrap(), 21.0);
     let monetary = &inventory.monetary_holdings.positions[0];
     assert!((monetary.quantity - 3.0).abs() < 1e-9);
     assert!(portfolio_history_repo::find_latest(&db)
@@ -201,13 +203,13 @@ async fn inventory_applies_fixed_clock_individual_price_semantics() {
     let price_of = |position: &rstock::models::InventoryPosition| {
         position.individual_price.value().cloned().unwrap()
     };
-    assert_eq!(price_of(position("XFAKEETF3")).native_price, 125.0);
+    assert_close(price_of(position("XFAKEETF3")).native_price, 125.0);
     assert_eq!(price_of(position("XFAKEETF3")).price_date, "2025-06-10");
-    assert_eq!(price_of(position("XFAKEETF4")).native_price, 100.0);
+    assert_close(price_of(position("XFAKEETF4")).native_price, 100.0);
     assert_eq!(price_of(position("XFAKEETF4")).price_date, "2025-06-09");
-    assert_eq!(price_of(position("XFAKEF3")).native_price, 100.0);
+    assert_close(price_of(position("XFAKEF3")).native_price, 100.0);
     assert_eq!(price_of(position("XFAKEF3")).price_date, "2025-06-09");
-    assert_eq!(price_of(position("XFAKES6")).native_price, 126.0);
+    assert_close(price_of(position("XFAKES6")).native_price, 126.0);
     assert_eq!(price_of(position("XFAKES6")).price_date, "2025-06-10");
 }
 
@@ -588,7 +590,7 @@ async fn inventory_never_uses_later_fx_for_historical_ledger_facts() {
         .unwrap();
     let position = &performance(&inventory).positions[0];
 
-    assert_eq!(position.quantity, 2.0);
+    assert_close(position.quantity, 2.0);
     assert_eq!(position.current_value.value().copied(), Some(21.6));
     assert_eq!(position.invested_cost, FactAvailability::Unavailable);
     assert_eq!(position.average_cost, FactAvailability::Unavailable);
@@ -695,7 +697,7 @@ async fn inventory_is_identical_across_requests_when_fx_is_source_available_but_
     assert!((first_position.invested_cost.value().copied().unwrap() - 16.0).abs() < 1e-9);
     assert!((first_position.average_cost.value().copied().unwrap() - 8.0).abs() < 1e-9);
     assert!((first_position.dividends.value().copied().unwrap() - 2.4).abs() < 1e-9);
-    assert_eq!(first_position.quantity, second_position.quantity);
+    assert_close(first_position.quantity, second_position.quantity);
     assert_eq!(first_position.invested_cost, second_position.invested_cost);
     assert_eq!(first_position.average_cost, second_position.average_cost);
     assert_eq!(first_position.dividends, second_position.dividends);
@@ -764,7 +766,7 @@ async fn inventory_keeps_independent_facts_when_buy_fx_is_missing() {
         .unwrap();
     let position = &performance(&inventory).positions[0];
 
-    assert_eq!(position.quantity, 2.0);
+    assert_close(position.quantity, 2.0);
     assert_eq!(position.invested_cost, FactAvailability::Unavailable);
     assert_eq!(position.average_cost, FactAvailability::Unavailable);
     assert_eq!(position.current_value.value().copied(), Some(21.6));
@@ -833,7 +835,7 @@ async fn inventory_keeps_quantity_and_current_value_when_dividend_fx_is_missing(
         .unwrap();
     let position = &performance(&inventory).positions[0];
 
-    assert_eq!(position.quantity, 2.0);
+    assert_close(position.quantity, 2.0);
     assert_eq!(position.invested_cost, FactAvailability::Unavailable);
     assert_eq!(position.dividends, FactAvailability::Unavailable);
     assert_eq!(position.current_value.value().copied(), Some(21.6));
@@ -862,7 +864,7 @@ async fn inventory_reopens_after_liquidation_with_fresh_cost_basis() {
         .unwrap();
     let position = &performance(&inventory).positions[0];
 
-    assert_eq!(position.quantity, 1.0);
+    assert_close(position.quantity, 1.0);
     assert_eq!(position.invested_cost.value().copied(), Some(7.5));
     assert_eq!(position.average_cost.value().copied(), Some(7.5));
     assert_eq!(position.current_value.value().copied(), Some(8.0));
@@ -890,7 +892,7 @@ async fn unpriced_holding_stays_visible_with_unavailable_valuation_aggregates() 
         .iter()
         .find(|position| position.ticker == "XFAKEPRICE2")
         .unwrap();
-    assert_eq!(unpriced.quantity, 1.0);
+    assert_close(unpriced.quantity, 1.0);
     assert_eq!(unpriced.invested_cost.value().copied(), Some(5.0));
     assert_eq!(unpriced.individual_price, FactAvailability::Unavailable);
     assert_eq!(unpriced.current_value, FactAvailability::Unavailable);

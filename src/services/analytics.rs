@@ -2,24 +2,11 @@ use std::collections::HashMap;
 
 use sea_orm::DatabaseConnection;
 
-use crate::constants::{
-    is_benchmark_ticker, FLOAT_EPSILON, MIN_DATA_POINTS, ZERO_RETURN_THRESHOLD,
-};
-use crate::db::repos::{asset_repo, portfolio_history_repo, transaction_repo};
-use crate::models::{
-    Asset, CorrelationMatrix, MarketDataLimitation, PeriodMetrics, PortfolioSnapshot,
-    RollingCorrelationResult,
-};
+use crate::constants::{is_benchmark_ticker, FLOAT_EPSILON, MIN_DATA_POINTS};
+use crate::db::repos::{asset_repo, transaction_repo};
+use crate::models::{Asset, CorrelationMatrix, RollingCorrelationResult};
 use crate::services::market_data::MarketData;
 use crate::services::{ledger, metrics};
-
-pub struct PeriodMetricsResult {
-    pub ytd: Option<PeriodMetrics>,
-    pub one_year: Option<PeriodMetrics>,
-    pub three_year: Option<PeriodMetrics>,
-    pub five_year: Option<PeriodMetrics>,
-    pub market_data_limitations: Vec<MarketDataLimitation>,
-}
 
 pub async fn compute_correlation_data(
     db: &DatabaseConnection,
@@ -166,92 +153,6 @@ pub async fn compute_rolling_correlation_data(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
-pub async fn compute_all_period_metrics(
-    db: &DatabaseConnection,
-    snapshot_date: &str,
-    ytd_date: &str,
-    one_year_date: &str,
-    three_year_date: &str,
-    five_year_date: &str,
-    market_data: &MarketData,
-) -> anyhow::Result<PeriodMetricsResult> {
-    let widest_start = five_year_date
-        .min(three_year_date)
-        .min(one_year_date)
-        .min(ytd_date);
-
-    let all_snapshots =
-        portfolio_history_repo::find_between(db, widest_start, snapshot_date).await?;
-    if all_snapshots.len() < 2 {
-        return Ok(PeriodMetricsResult {
-            ytd: None,
-            one_year: None,
-            three_year: None,
-            five_year: None,
-            market_data_limitations: Vec::new(),
-        });
-    }
-
-    let benchmark_market_data = market_data
-        .correlation_market_data(db, Vec::new(), widest_start, snapshot_date)
-        .await?;
-    let benchmark_map: HashMap<&str, f64> = benchmark_market_data
-        .benchmark_series
-        .prices
-        .iter()
-        .map(|(d, p)| (d.as_str(), *p))
-        .collect();
-
-    let period_dates = [ytd_date, one_year_date, three_year_date, five_year_date];
-    let mut results = Vec::new();
-
-    for start_date in &period_dates {
-        if portfolio_history_repo::find_at_or_before(db, start_date)
-            .await?
-            .is_none()
-        {
-            results.push(None);
-            continue;
-        }
-
-        let period_snapshots: Vec<&PortfolioSnapshot> = all_snapshots
-            .iter()
-            .filter(|s| s.date.as_str() >= *start_date)
-            .collect();
-
-        if period_snapshots.len() < 2 {
-            results.push(None);
-            continue;
-        }
-
-        let (portfolio_returns, benchmark_returns, trading_day_navs) =
-            filter_trading_days(&period_snapshots, &benchmark_map);
-
-        let volatility = metrics::compute_volatility(&portfolio_returns);
-        let max_drawdown = metrics::compute_max_drawdown(&trading_day_navs);
-        let beta = metrics::compute_beta(&portfolio_returns, &benchmark_returns);
-        let sharpe = metrics::compute_sharpe(&portfolio_returns);
-        let sortino = metrics::compute_sortino(&portfolio_returns);
-
-        results.push(Some(PeriodMetrics {
-            volatility,
-            max_drawdown,
-            beta,
-            sharpe,
-            sortino,
-        }));
-    }
-
-    Ok(PeriodMetricsResult {
-        ytd: results[0].take(),
-        one_year: results[1].take(),
-        three_year: results[2].take(),
-        five_year: results[3].take(),
-        market_data_limitations: benchmark_market_data.limitations,
-    })
-}
-
 fn series_prices(
     series: &[crate::models::CorrelationMarketDataSeries],
     asset_id: i32,
@@ -261,44 +162,6 @@ fn series_prices(
         .find(|series| series.asset_id == asset_id)
         .map(|series| series.prices.clone())
         .ok_or_else(|| anyhow::anyhow!("missing correlation market data for asset {asset_id}"))
-}
-
-fn filter_trading_days(
-    snapshots: &[&PortfolioSnapshot],
-    benchmark_map: &HashMap<&str, f64>,
-) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
-    let mut portfolio_returns = Vec::new();
-    let mut benchmark_returns = Vec::new();
-    let mut trading_day_navs = Vec::new();
-
-    let mut first_added = false;
-
-    for i in 1..snapshots.len() {
-        let date = snapshots[i].date.as_str();
-        let prev_date = snapshots[i - 1].date.as_str();
-
-        if let (Some(&bench_today), Some(&bench_prev)) =
-            (benchmark_map.get(date), benchmark_map.get(prev_date))
-        {
-            if bench_prev > 0.0 && snapshots[i - 1].nav > 0.0 {
-                let bench_ret = (bench_today / bench_prev).ln();
-                if bench_ret.abs() < ZERO_RETURN_THRESHOLD {
-                    continue;
-                }
-                let port_ret = (snapshots[i].nav / snapshots[i - 1].nav).ln();
-                portfolio_returns.push(port_ret);
-                benchmark_returns.push(bench_ret);
-
-                if !first_added {
-                    trading_day_navs.push(snapshots[i - 1].nav);
-                    first_added = true;
-                }
-                trading_day_navs.push(snapshots[i].nav);
-            }
-        }
-    }
-
-    (portfolio_returns, benchmark_returns, trading_day_navs)
 }
 
 async fn find_tracked_asset(db: &DatabaseConnection, identifier: &str) -> anyhow::Result<Asset> {

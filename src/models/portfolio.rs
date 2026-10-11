@@ -3,15 +3,6 @@ use serde::Serialize;
 
 use super::MarketDataLimitation;
 
-#[derive(Serialize)]
-pub struct PeriodMetrics {
-    pub volatility: Option<f64>,
-    pub max_drawdown: Option<f64>,
-    pub beta: Option<f64>,
-    pub sharpe: Option<f64>,
-    pub sortino: Option<f64>,
-}
-
 #[derive(Debug, Clone)]
 pub struct PortfolioSnapshot {
     pub date: String,
