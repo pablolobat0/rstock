@@ -73,12 +73,52 @@ pub struct InventorySectionAggregates {
     pub open_position_gain_loss_pct: FactAvailability<f64>,
 }
 
+/// One eligible holding included in or excluded from the scoped daily movement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DailyMovementCoverage {
+    pub ticker: String,
+    pub baseline_date: Option<String>,
+    pub baseline_fx_date: Option<String>,
+    pub prior_base_currency_value: Option<f64>,
+    pub current_base_currency_value: Option<f64>,
+    pub exclusion_reason: Option<DailyMovementExclusionReason>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DailyMovementExclusionReason {
+    OutsideMovementScope,
+    NoPriorPriceObservation,
+    MissingCurrentPriceOrFx,
+}
+
+impl DailyMovementExclusionReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::OutsideMovementScope => "mutual funds are outside daily-priced movement scope",
+            Self::NoPriorPriceObservation => "no prior price observation",
+            Self::MissingCurrentPriceOrFx => "missing current price or required FX input",
+        }
+    }
+}
+
+/// Daily-priced movement for the explicitly covered stock and ETF positions.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DailyPricedHoldingsMovement {
+    pub movement: FactAvailability<f64>,
+    pub movement_pct: FactAvailability<f64>,
+    pub covered_prior_value: FactAvailability<f64>,
+    pub included_positions: Vec<DailyMovementCoverage>,
+    pub excluded_positions: Vec<DailyMovementCoverage>,
+    pub limitations: Vec<MarketDataLimitation>,
+}
+
 /// One Portfolio inventory section: its positions, aggregates, and the Market
 /// data limitations scoped to that section.
 #[derive(Debug)]
 pub struct PortfolioInventorySection {
     pub positions: Vec<InventoryPosition>,
     pub aggregates: InventorySectionAggregates,
+    pub daily_priced_holdings_movement: DailyPricedHoldingsMovement,
     pub market_data_limitations: Vec<MarketDataLimitation>,
 }
 

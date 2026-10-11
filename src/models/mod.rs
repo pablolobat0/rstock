@@ -35,6 +35,7 @@ pub use portfolio::{
     RollingCorrelationResult, TopHolding,
 };
 pub use portfolio_inventory::{
+    DailyMovementCoverage, DailyMovementExclusionReason, DailyPricedHoldingsMovement,
     FactAvailability, IndividualPrice, InventoryPosition, InventorySectionAggregates,
     PortfolioInventory, PortfolioInventorySection,
 };

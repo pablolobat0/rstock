@@ -12,6 +12,7 @@ pub mod common;
 
 use rstock::cli::adapters;
 use rstock::models::{
+    DailyMovementCoverage, DailyMovementExclusionReason, DailyPricedHoldingsMovement,
     FactAvailability, InventoryPosition, InventorySectionAggregates, PortfolioInventory,
     PortfolioInventorySection, PortfolioPerformance, PortfolioView,
 };
@@ -34,6 +35,14 @@ fn section(positions: Vec<InventoryPosition>) -> PortfolioInventorySection {
     PortfolioInventorySection {
         positions,
         aggregates: zero_aggregates(),
+        daily_priced_holdings_movement: DailyPricedHoldingsMovement {
+            movement: FactAvailability::NotApplicable,
+            movement_pct: FactAvailability::NotApplicable,
+            covered_prior_value: FactAvailability::NotApplicable,
+            included_positions: vec![],
+            excluded_positions: vec![],
+            limitations: vec![],
+        },
         market_data_limitations: Vec::new(),
     }
 }
@@ -108,6 +117,22 @@ fn portfolio_json_renders_the_nested_schema_for_not_applicable_performance() {
         0.0
     );
     assert_eq!(performance_holdings["market_data_limitations"], json!([]));
+    assert_eq!(
+        performance_holdings["daily_priced_holdings_movement"]["movement_availability"],
+        "not_applicable"
+    );
+    assert_eq!(
+        performance_holdings["daily_priced_holdings_movement"]["included_positions"],
+        json!([])
+    );
+    assert_eq!(
+        performance_holdings["daily_priced_holdings_movement"]["excluded_positions"],
+        json!([])
+    );
+    assert_eq!(
+        performance_holdings["daily_priced_holdings_movement"]["limitations"],
+        json!([])
+    );
     let monetary_holdings = &data["inventory"]["monetary_holdings"];
     assert_eq!(monetary_holdings["positions"], json!([]));
     assert_eq!(monetary_holdings["aggregates"]["current_value"], 0.0);
@@ -263,6 +288,52 @@ fn portfolio_json_maps_available_unavailable_and_not_applicable_facts_into_the_n
     assert_eq!(data["nav_history"][0]["nav"], 100.0);
 }
 
+#[test]
+fn portfolio_json_exposes_daily_movement_values_coverage_and_limitations() {
+    let mut view = populated_view();
+    view.inventory
+        .performance_holdings
+        .daily_priced_holdings_movement = DailyPricedHoldingsMovement {
+        movement: FactAvailability::Available(4.0),
+        movement_pct: FactAvailability::Available(10.0),
+        covered_prior_value: FactAvailability::Available(40.0),
+        included_positions: vec![DailyMovementCoverage {
+            ticker: "XFAKE1".into(),
+            baseline_date: Some("2025-06-09".into()),
+            baseline_fx_date: Some("2025-06-09".into()),
+            prior_base_currency_value: Some(40.0),
+            current_base_currency_value: Some(44.0),
+            exclusion_reason: None,
+        }],
+        excluded_positions: vec![DailyMovementCoverage {
+            ticker: "XFAKE2".into(),
+            baseline_date: None,
+            baseline_fx_date: None,
+            prior_base_currency_value: None,
+            current_base_currency_value: None,
+            exclusion_reason: Some(DailyMovementExclusionReason::MissingCurrentPriceOrFx),
+        }],
+        limitations: vec![limitation("XFAKE2", "Missing FX")],
+    };
+
+    let value = write_json(&view);
+    let movement =
+        &value["data"]["inventory"]["performance_holdings"]["daily_priced_holdings_movement"];
+    assert_eq!(movement["movement"], 4.0);
+    assert_eq!(movement["movement_availability"], "available");
+    assert_eq!(movement["movement_pct"], 10.0);
+    assert_eq!(movement["covered_prior_value"], 40.0);
+    assert_eq!(
+        movement["included_positions"][0]["baseline_date"],
+        "2025-06-09"
+    );
+    assert_eq!(
+        movement["excluded_positions"][0]["exclusion_reason"],
+        "missing current price or required FX input"
+    );
+    assert_eq!(movement["limitations"].as_array().map(Vec::len), Some(1));
+}
+
 fn unpriced_position(limitation: rstock::models::MarketDataLimitation) -> InventoryPosition {
     InventoryPosition {
         ticker: "IE00XFAKE002".to_owned(),
@@ -361,6 +432,14 @@ fn populated_view() -> PortfolioView {
                     open_position_gain_loss: FactAvailability::Unavailable,
                     open_position_gain_loss_pct: FactAvailability::Unavailable,
                 },
+                daily_priced_holdings_movement: DailyPricedHoldingsMovement {
+                    movement: FactAvailability::Unavailable,
+                    movement_pct: FactAvailability::Unavailable,
+                    covered_prior_value: FactAvailability::Unavailable,
+                    included_positions: vec![],
+                    excluded_positions: vec![],
+                    limitations: vec![],
+                },
                 market_data_limitations: vec![performance_section_limitation],
             },
             monetary_holdings: PortfolioInventorySection {
@@ -371,6 +450,14 @@ fn populated_view() -> PortfolioView {
                     dividends: FactAvailability::Available(0.0),
                     open_position_gain_loss: FactAvailability::Available(0.0),
                     open_position_gain_loss_pct: FactAvailability::Available(0.0),
+                },
+                daily_priced_holdings_movement: DailyPricedHoldingsMovement {
+                    movement: FactAvailability::NotApplicable,
+                    movement_pct: FactAvailability::NotApplicable,
+                    covered_prior_value: FactAvailability::NotApplicable,
+                    included_positions: vec![],
+                    excluded_positions: vec![],
+                    limitations: vec![],
                 },
                 market_data_limitations: vec![monetary_section_limitation],
             },
@@ -497,6 +584,9 @@ fn portfolio_human_presents_sections_synchronized_facts_and_limitation_scopes() 
     // their own aggregates.
     assert!(text.contains("Performance holdings:"));
     assert!(text.contains("Monetary holdings:"));
+    assert!(text.contains(
+        "Daily-priced holdings movement in EUR (covered inventory, not Portfolio performance):"
+    ));
     let aggregate_lines: Vec<&str> = text
         .lines()
         .filter(|line| line.contains("Invested:"))
