@@ -1,86 +1,53 @@
-use anyhow::Context;
-use chrono::{Datelike, NaiveDate};
-use sea_orm::DatabaseConnection;
-use serde::Serialize;
+use std::io;
 
-use crate::constants::{
-    format_date, DATE_FORMAT, FIVE_YEAR_DAYS, ONE_MONTH_DAYS, ONE_YEAR_DAYS, SIX_MONTH_DAYS,
-    THREE_MONTH_DAYS, THREE_YEAR_DAYS,
-};
+use sea_orm::DatabaseConnection;
+
+use crate::cli::adapters;
+use crate::cli::{output, ChartPeriod};
 use crate::models::{
     AssetClass, AssetClassification, AssetInfo, AssetType, BondCredit, BondDuration, EquityStyle,
-    Management,
+    Management, NavHistoryRequest,
 };
 use crate::services;
 use crate::services::market_data::MarketData;
-
-use super::super::display;
-use super::super::output::{self, OutputFormat};
-use super::super::ChartPeriod;
 
 pub async fn get(
     db: &DatabaseConnection,
     market_data: &MarketData,
     period: ChartPeriod,
-    output_format: OutputFormat,
+    output_format: output::OutputFormat,
 ) -> anyhow::Result<()> {
-    let mut result = services::portfolio::get_portfolio(db, market_data).await?;
+    let nav_history_request = nav_history_request(period);
+    // One complete Portfolio view, including the requested ready NAV history,
+    // is obtained before either output Adapter writes anything (ADR-0004).
+    // Both dashboard aliases route through this single library dispatch path.
+    let view =
+        services::portfolio_view::get_portfolio_view(db, market_data, nav_history_request).await?;
 
-    if output_format.is_json() {
-        prepare_json_result(&mut result);
-        return output::emit_json("portfolio.get", &result);
-    }
-
-    display::print_portfolio(&result);
-
-    if result.rows.is_empty() && !result.monetary_positions.is_empty() {
-        return Ok(());
-    }
-
-    let today = market_data.today();
-    let today_str = format_date(today);
-
-    let (start_date, period_label) = match period {
-        ChartPeriod::OneMonth => (today - chrono::Duration::days(ONE_MONTH_DAYS), "1M"),
-        ChartPeriod::ThreeMonths => (today - chrono::Duration::days(THREE_MONTH_DAYS), "3M"),
-        ChartPeriod::SixMonths => (today - chrono::Duration::days(SIX_MONTH_DAYS), "6M"),
-        ChartPeriod::Ytd => {
-            let d = NaiveDate::from_ymd_opt(today.year(), 1, 1).expect("Jan 1 is always valid");
-            (d, "YTD")
+    let stdout = io::stdout();
+    let mut writer = stdout.lock();
+    match output_format {
+        output::OutputFormat::Json => adapters::write_portfolio_json(&mut writer, &view),
+        output::OutputFormat::Human => {
+            adapters::write_portfolio_human(&mut writer, &view, nav_history_request)
         }
-        ChartPeriod::OneYear => (today - chrono::Duration::days(ONE_YEAR_DAYS), "1Y"),
-        ChartPeriod::ThreeYears => (today - chrono::Duration::days(THREE_YEAR_DAYS), "3Y"),
-        ChartPeriod::FiveYears => (today - chrono::Duration::days(FIVE_YEAR_DAYS), "5Y"),
-        ChartPeriod::All => match result.inception_date.as_deref() {
-            Some(date_str) => {
-                let d = NaiveDate::parse_from_str(date_str, DATE_FORMAT)
-                    .context("invalid inception date")?;
-                (d, "All")
-            }
-            None => (today, "All"),
-        },
-    };
-
-    let start_str = format_date(start_date);
-    let snapshots = services::nav::get_ready_portfolio_history(db, &start_str, &today_str).await?;
-    display::print_nav_chart(&snapshots, period_label);
-
-    Ok(())
+    }
 }
 
-fn prepare_json_result(result: &mut crate::models::PortfolioResult) {
-    result.rows.sort_by(|left, right| {
-        right
-            .current_value
-            .unwrap_or(f64::NEG_INFINITY)
-            .total_cmp(&left.current_value.unwrap_or(f64::NEG_INFINITY))
-    });
-    result.monetary_positions.sort_by(|left, right| {
-        right
-            .current_value
-            .unwrap_or(f64::NEG_INFINITY)
-            .total_cmp(&left.current_value.unwrap_or(f64::NEG_INFINITY))
-    });
+/// Maps the CLI chart period onto the presentation-neutral history request
+/// the Portfolio view composer consumes. Period date calculation and history
+/// reads stay inside the composer.
+fn nav_history_request(period: ChartPeriod) -> NavHistoryRequest {
+    match period {
+        ChartPeriod::OneMonth => NavHistoryRequest::OneMonth,
+        ChartPeriod::ThreeMonths => NavHistoryRequest::ThreeMonths,
+        ChartPeriod::SixMonths => NavHistoryRequest::SixMonths,
+        ChartPeriod::Ytd => NavHistoryRequest::Ytd,
+        ChartPeriod::OneYear => NavHistoryRequest::OneYear,
+        ChartPeriod::ThreeYears => NavHistoryRequest::ThreeYears,
+        ChartPeriod::FiveYears => NavHistoryRequest::FiveYears,
+        ChartPeriod::All => NavHistoryRequest::All,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -96,7 +63,7 @@ pub async fn asset_add(
     bond_duration: Option<BondDuration>,
     management: Option<Management>,
     morningstar_code: Option<String>,
-    output_format: OutputFormat,
+    output_format: output::OutputFormat,
 ) -> anyhow::Result<()> {
     let info = AssetInfo {
         ticker: ticker.clone(),
@@ -143,7 +110,7 @@ pub async fn asset_edit(
     bond_duration: Option<BondDuration>,
     management: Option<Management>,
     morningstar_code: Option<String>,
-    output_format: OutputFormat,
+    output_format: output::OutputFormat,
 ) -> anyhow::Result<()> {
     let classification = AssetClassification {
         asset_class,
@@ -171,17 +138,13 @@ pub async fn asset_edit(
     Ok(())
 }
 
-#[derive(Serialize)]
+#[derive(serde::Serialize)]
 struct CreatedAssetOutput<'a> {
     asset_id: i32,
     ticker: &'a str,
 }
 
-#[derive(Serialize)]
+#[derive(serde::Serialize)]
 struct AssetOutput<'a> {
     ticker: &'a str,
 }
-
-#[cfg(test)]
-#[path = "../../../tests/unit/portfolio_json_tests.rs"]
-mod tests;

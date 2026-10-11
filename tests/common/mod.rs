@@ -18,6 +18,22 @@ use rstock::models::{f64_to_cents, FundData, FundQuoteMetadata, StockInfo};
 use rstock::services::clock::Clock;
 use rstock::services::market_data::{MarketData, MarketDataSources, SourceObservation};
 
+/// Parses one compact JSON envelope produced through an injected writer or
+/// process stdout, asserting the shared one-line, ANSI-free contract.
+pub fn parse_json_envelope(output: &[u8]) -> serde_json::Value {
+    let text = String::from_utf8(output.to_vec()).expect("output should be UTF-8");
+    assert_eq!(
+        text.lines().count(),
+        1,
+        "JSON must stay one compact envelope: {text}"
+    );
+    assert!(
+        !text.contains("\u{1b}["),
+        "JSON must not contain ANSI bytes: {text}"
+    );
+    serde_json::from_str(&text).expect("output should be one JSON value")
+}
+
 pub async fn setup_test_db() -> DatabaseConnection {
     let db = Database::connect("sqlite::memory:")
         .await

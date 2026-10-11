@@ -4,11 +4,13 @@ mod fund_analysis;
 mod fund_comparison;
 mod market_data;
 mod portfolio;
+mod portfolio_inventory;
+mod portfolio_view;
 mod stock_info;
 mod transaction;
 
 pub(crate) use asset::normalize_currency;
-pub use asset::{Asset, AssetInfo, AssetType, CurrentPosition};
+pub use asset::{Asset, AssetInfo, AssetType};
 pub use classification::{
     enum_to_db, AssetClass, AssetClassification, BondCredit, BondDuration, EquityStyle, Management,
 };
@@ -22,14 +24,23 @@ pub use fund_comparison::{
     FundComparisonPeriod, FundComparisonResult, FundComparisonSide, FundInfoComparison,
 };
 pub use market_data::{
-    BaseCurrencyPriceSeries, CorrelationMarketData, CorrelationMarketDataSeries,
-    IndividualPriceAvailability, MarketDataLimitation, MarketDataLimitationClassification,
-    MarketDataSubject, MarketDataValuation, ValuationMarketData, ValuationMarketDataAvailability,
+    BaseCurrencyPriceSeries, BenchmarkRiskMarketData, CorrelationMarketData,
+    CorrelationMarketDataSeries, IndividualPriceAvailability, MarketDataLimitation,
+    MarketDataLimitationClassification, MarketDataSubject, MarketDataValuation,
+    ValuationMarketData, ValuationMarketDataAvailability,
 };
 pub use portfolio::{
-    AllocationEntry, AssetSnapshot, CompositionResult, CorrelationMatrix, CurrentPositions,
-    FundHolding, MarketCapCategory, PeriodMetrics, PortfolioResult, PortfolioSnapshot,
-    RollingCorrelationResult, TopHolding,
+    AllocationEntry, AssetSnapshot, CompositionResult, CorrelationMatrix, FundHolding,
+    MarketCapCategory, PortfolioSnapshot, RollingCorrelationResult, TopHolding,
+};
+pub use portfolio_inventory::{
+    DailyMovementCoverage, DailyMovementExclusionReason, DailyPricedHoldingsMovement,
+    FactAvailability, IndividualPrice, InventoryPosition, InventorySectionAggregates,
+    PortfolioInventory, PortfolioInventorySection,
+};
+pub use portfolio_view::{
+    AvailablePortfolioPerformance, NavHistoryRequest, PerformancePeriods, PeriodOutcome,
+    PortfolioPerformance, PortfolioView,
 };
 pub use stock_info::StockInfo;
 pub use transaction::{

@@ -174,20 +174,22 @@ JSON mode applies only to successful application results. Runtime errors and Cla
 
 ```
 src/
-├── cli/                # Clap CLI, command adapters, human display, and JSON output
-├── main.rs             # Entry point, command dispatch
+├── cli/                # Clap CLI, library-owned command dispatch, command adapters, human display, and JSON output
+├── main.rs             # Entry point, thin process bootstrap
+├── lib.rs              # Public module exports
 ├── constants.rs        # Centralized constants (dates, currency, metrics, thresholds)
 ├── utils.rs            # Shared interactive helpers
-├── lib.rs              # Public module exports
 ├── models/
-│   ├── asset.rs        # AssetType enum, AssetInfo, Asset, CurrentPosition
+│   ├── asset.rs        # AssetType enum, AssetInfo, Asset
+│   ├── portfolio_inventory.rs # Portfolio inventory and InventoryPosition
 │   ├── portfolio.rs    # PortfolioSnapshot, CorrelationMatrix, composition and holdings models
 │   ├── fund_analysis.rs# Fund analysis result and metrics models
 │   ├── transaction.rs  # BuyOrder, SellOrder, DividendOrder, SplitOrder, TxType, Transaction
 │   └── monitor.rs      # StockInfo, MomentumIndicators, RelationshipMetrics, MonitorReport
 ├── services/
 │   ├── transactions.rs # Buy/sell/dividend/split recording + snapshot invalidation
-│   ├── portfolio.rs    # Portfolio summary and per-asset positions
+│   ├── portfolio_inventory.rs # Current inventory projection without NAV readiness
+│   ├── portfolio_view.rs # Composed inventory, performance, and requested NAV history
 │   ├── nav.rs          # NAV unitization engine
 │   ├── analytics.rs    # Portfolio analytics and correlation data
 │   ├── composition.rs  # Portfolio composition analysis
@@ -208,10 +210,10 @@ tests/                         # Integration tests + common test utilities
 ### Data flow
 
 1. `src/cli` parses commands via clap derive macros
-2. `main.rs` dispatches to service functions
+2. `main.rs` bootstraps the process and delegates the parsed command to the library-owned dispatch in `src/cli/dispatch.rs`, which routes to command adapters
 3. Services request valuation, Individual price, and correlation inputs through `MarketData`
 4. Public NAV readiness ensures daily snapshots through a private rebuild loop when needed
-5. The focused current-positions interface projects ledger inventory without requiring NAV; the full Portfolio view adds NAV, returns, and risk
+5. `portfolio_inventory::get_portfolio_inventory()` projects current ledger inventory without requiring NAV; `portfolio_view::get_portfolio_view()` composes it with NAV performance and requested history
 6. The CLI boundary selects human rendering or one compact JSON envelope
 
 ### Key design decisions

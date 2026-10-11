@@ -85,7 +85,7 @@ fn format_composition(result: &CompositionResult) -> String {
         )
         .expect("writing to a String cannot fail");
         for limitation in &result.market_data_limitations {
-            let warning = super::portfolio::format_market_data_limitation_warning(limitation);
+            let warning = super::helpers::format_market_data_limitation_warning(limitation);
             writeln!(output, "  - {warning}").expect("writing to a String cannot fail");
         }
     }

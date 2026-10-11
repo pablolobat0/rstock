@@ -8,7 +8,7 @@ use anyhow::Result;
 use chrono::{Duration as ChronoDuration, NaiveDate};
 use rstock::models::{FundData, FundQuoteMetadata, StockInfo};
 use rstock::services::market_data::{MarketData, MarketDataSources, SourceObservation};
-use rstock::services::portfolio;
+use rstock::services::portfolio_inventory;
 
 #[derive(Default)]
 struct Counters {
@@ -110,15 +110,18 @@ async fn portfolio_quotes_are_bounded_and_use_historical_fallback_without_duplic
     );
 
     let started = Instant::now();
-    let result = portfolio::get_portfolio(&db, &market_data).await.unwrap();
+    let result = portfolio_inventory::get_portfolio_inventory(&db, &market_data)
+        .await
+        .unwrap();
     let elapsed = started.elapsed();
 
-    assert_eq!(result.rows.len(), 5);
+    assert_eq!(result.performance_holdings.positions.len(), 5);
     assert!(result
-        .rows
+        .performance_holdings
+        .positions
         .iter()
-        .all(|position| position.current_price == Some(100.0)
-            && position.price_date.as_deref() == Some("2025-06-09")));
+        .all(|position| matches!(&position.individual_price, rstock::models::FactAvailability::Available(price)
+            if (price.native_price - 100.0).abs() < 1e-9 && price.price_date == "2025-06-09")));
     assert_eq!(counters.calls.load(Ordering::Relaxed), 10);
     assert_eq!(counters.active.load(Ordering::Relaxed), 0);
     assert_eq!(counters.peak.load(Ordering::Relaxed), 4);

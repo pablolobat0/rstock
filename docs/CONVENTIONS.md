@@ -34,7 +34,7 @@ Within each file, order functions top-to-bottom like a book: if function A calls
 - `exists()` — Check existence
 
 **Service functions** use verb-first naming:
-- `get_portfolio()`, `compute_fund_analysis()`
+- `get_portfolio_inventory()`, `get_portfolio_view()`, `compute_fund_analysis()`
 - `buy()`, `sell()`, `dividend()`, `split()`
 - `ensure_portfolio_history()`
 - `prepare_valuation_market_data()`, `prepare_individual_price_market_data()`
@@ -50,7 +50,7 @@ Three categories of model structs:
 |----------|----------|---------|
 | Input structs | `AssetInfo`, `BuyOrder`, `SellOrder`, `DividendOrder`, `SplitOrder` | Data from CLI/caller, pre-persistence |
 | DB-backed structs | `Asset`, `Transaction` | Domain objects with id, converted from entity::Model |
-| Display structs | `CurrentPosition`, `CurrentPositions`, `PortfolioResult`, `CorrelationMatrix`, `CompositionResult`, `FundAnalysisResult`, `MonitorReport` | Computed values ready for rendering |
+| Display structs | `PortfolioInventory`, `PortfolioView`, `CorrelationMatrix`, `CompositionResult`, `FundAnalysisResult`, `MonitorReport` | Computed outcomes ready for rendering |
 
 ### General
 
@@ -88,7 +88,7 @@ All test utilities are in `tests/common/mod.rs`:
 - **Assertions**: For floating-point comparisons, use `(value * 100.0).round() / 100.0` for 2-decimal precision or `assert!((a - b).abs() < epsilon)` for tolerance-based checks
 - **No fixtures or property testing**: Tests build their own state imperatively using the helper functions
 - **Test location**: All test functions and test helpers live in dedicated test files under `tests/`. Private unit coverage lives in `tests/unit/*_tests.rs`, referenced by a production module's `#[cfg(test)]` / `#[path = "..."]` declaration. Do not embed test bodies or test-only fields, constructors, or execution branches in production files. Test public interfaces from integration tests whenever possible.
-- **Fixed clock**: Date-sensitive portfolio tests inject `FixedClock` through `MarketData` (normally via `market_data_at()`) and assert behavior through `get_current_positions()` or `get_portfolio()`. Tests specifically covering NAV-readiness ownership may call `ensure_portfolio_history()`. Do not call private rebuild helpers or rely on the machine date for these contracts
+- **Fixed clock**: Date-sensitive portfolio tests inject `FixedClock` through `MarketData` (normally via `market_data_at()`) and assert behavior through `get_portfolio_inventory()` or `get_portfolio_view()`. Tests specifically covering NAV-readiness ownership may call `ensure_portfolio_history()`. Do not call private rebuild helpers or rely on the machine date for these contracts
 - **Nullable facts**: Test unavailable position facts independently and assert that aggregates are complete across their scope or `None`; do not accept partial sums as totals
 - **Ledger boundary**: Build typed entries through the authoritative pure ledger replay service. It owns `(date, id)` canonicalization, prefix validation, and semantic transitions; consumers must not reinterpret persistence columns or duplicate quantity/cost/dividend folds. Mutation paths validate before persistence, replay the complete affected ledger after tentative writes, and invalidate dependent history atomically.
 
@@ -118,9 +118,10 @@ collections or regressions remain explicit decision-gate failures.
 |------|----------|
 | `tests/nav_tests.rs` | NAV unitization: empty portfolio, single/multiple buys, deposits at different NAVs, fee handling, sell transactions |
 | `tests/integration_test.rs` | End-to-end scenarios combining buys, price changes, and portfolio queries |
-| `tests/portfolio_summary_tests.rs` | Portfolio computation and return calculations |
-| `tests/current_positions_tests.rs` | Focused Transaction ledger inventory, shared performance/Monetary projection, nullable facts, and complete aggregates |
-| `tests/current_date_tests.rs` | Fixed-clock portfolio and NAV-readiness behavior |
+| `tests/current_date_tests.rs` | Fixed-clock inventory, PortfolioView, NAV-readiness, and no-NAV composition behavior |
+| `tests/portfolio_inventory_tests.rs` | Focused Portfolio inventory seam: Transaction ledger projection, shared performance/Monetary projection, fact availability, section aggregates, scoped limitations, and composition's no-NAV behavior |
+| `tests/portfolio_view_tests.rs` | Portfolio view composer seam: inventory-preserving performance states, readiness limitations, requested history, cohesive period outcomes with independent fact availability, undefined-math and missing-benchmark semantics, all four limitation scopes, and hard-error propagation |
+| `tests/portfolio_adapter_tests.rs` | Human and JSON output Adapter writer seams: the nested JSON schema with null mapping and history, semantic human labels and states, the Effective valuation date association, and the four limitation scope headings |
 | `tests/market_data_tests.rs` | Public market-data valuation, Individual price Live quote and Historical fallback, ETF/fund semantics, FX limitations, and forward-fill behavior |
 | `tests/market_data_cache_tests.rs` | Historical market-data cache reuse and immutable coverage |
 | `tests/market_data_concurrency_tests.rs` | Bounded source concurrency and command-scoped request coordination |
@@ -132,10 +133,10 @@ collections or regressions remain explicit decision-gate failures.
 ## How To: Add a New CLI Command
 
 1. **Define the command** — Add a new variant to the appropriate clap enum in `src/cli/mod.rs` with attributes for all flags
-2. **Add dispatch** — Add a match arm in `src/main.rs` that calls the appropriate service function
+2. **Add dispatch** — Add a match arm in the library-owned `src/cli/dispatch.rs` (`cli::run_command`) that routes to the appropriate CLI command adapter in `src/cli/commands/`
 3. **Implement service logic** — Create or update a function in `src/services/`. Follow the verb-first naming pattern
 4. **Add repo functions** — If new database operations are needed, add them to the relevant repo in `src/db/repos/`
-5. **Integrate both output formats** — Pass `OutputFormat` into the CLI command adapter. Preserve the human renderer under `OutputFormat::Human`, and emit exactly one compact dotted-command envelope through `cli::output::emit_json()` under `OutputFormat::Json`
+5. **Integrate both output formats** — Pass `OutputFormat` into the CLI command adapter. Under `OutputFormat::Human`, render through a writer-injected output Adapter (see `src/cli/adapters/`) or a `display` renderer, and under `OutputFormat::Json`, emit exactly one compact dotted-command envelope through `cli::output::write_json()` so the output seam accepts injected writers in tests
 6. **Keep services presentation-neutral** — Return results or small mutation receipts from services. Do not print successful command output, terminal previews, or prompts from service code
 7. **Write tests** — Add integration tests in `tests/` using the common test utilities. Cover representative human output and assert JSON structurally through `serde_json::Value`; do not snapshot field order. Add the new leaf path to the command-surface audit
 

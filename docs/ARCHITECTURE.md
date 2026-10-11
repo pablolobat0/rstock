@@ -53,9 +53,9 @@
 - **`analyze`** — Composition, fund analysis, static correlation matrix, and rolling pair correlation
 - **`compare`** — Side-by-side fund candidate comparison
 
-`main.rs` creates an `OutputFormat` from the global `--json` flag and passes it through every dispatch path. Command adapters in `src/cli/commands/` call presentation-neutral services, then choose either the existing human renderer or `output::emit_json()`. `src/cli/output.rs` owns compact serialization and emits one `command`/`data` envelope to stdout; services do not emit successful command output. Errors and Clap help/version remain outside this successful-output boundary.
+`main.rs` is a thin process bootstrap: it parses the CLI with clap, initializes logging, connects to the database, and builds the `MarketData` sources, then delegates the parsed command to `cli::run_command()` in `src/cli/dispatch.rs`. That library-owned dispatch routes every command in the current surface — both dashboard aliases `get` and `portfolio get` reach the same path — so production, integration tests, and benchmarks exercise one application module graph. The Portfolio dashboard commands compose `portfolio_view::get_portfolio_view()` first, then write the complete outcome through the separate human and JSON output Adapters in `src/cli/adapters/`, which accept injected `Write` targets and own sorting, labels, the nested JSON schema, and the NAV chart (ADR-0004). Other command adapters in `src/cli/commands/` call presentation-neutral services, then choose either the existing human renderer or `output::emit_json()`. `src/cli/output.rs` owns compact serialization and emits one `command`/`data` envelope to stdout; services do not emit successful command output. Errors and Clap help/version remain outside this successful-output boundary.
 
-The CLI imports the shared modules from the `rstock` library rather than compiling a second copy of them. Logging initialization remains owned by the executable. Test bodies and helpers live in dedicated files under `tests/`; private unit modules reference `tests/unit/` files through test-only module declarations.
+The library owns the complete command dispatch, and the executable imports the shared modules from the `rstock` library rather than compiling a second copy of them. Logging initialization remains owned by the executable. Test bodies and helpers live in dedicated files under `tests/`; private unit modules reference `tests/unit/` files through test-only module declarations.
 
 ### Logging (`logging.rs`)
 
@@ -77,7 +77,9 @@ All business logic lives here. Key modules:
 
 **`market_data/individual_price.rs`** — Private implementation for display-time Individual price values for portfolio rows. Stocks request same-day observations, and ETFs request them through the fund-price capability already exposed by `MarketDataSources`; neither caller depends on a concrete source Adapter. A same-day observation is a Live quote. If an ETF source cannot supply one, the row falls back to the latest Historical market data. Mutual funds retain closing-price semantics and never use same-day Live quotes.
 
-**`portfolio.rs`** — `get_current_positions()` is the focused current-inventory interface and does not require NAV history. `get_portfolio()` is the full Portfolio view: it requests NAV readiness, reuses current positions, and adds NAV, return, and risk facts. One Transaction ledger projection derives quantity, remaining cost, dividends, and Open-position gain/loss identically for performance and Monetary positions. Facts are independently nullable when their required historical FX or Individual price is unavailable; each aggregate is complete across its included positions or unavailable. NAV/history, current performance-position, and Monetary-position Market data limitations remain separate scopes.
+**`portfolio_inventory.rs`** — `get_portfolio_inventory()` is the focused Portfolio inventory Interface and does not request NAV readiness, so it never creates or rebuilds NAV history. One Transaction ledger projection derives quantity, remaining cost, dividends, and Open-position gain/loss identically for performance-holding and Monetary-holding sections, which separately own their positions, complete-or-unavailable aggregates, and Market data limitations; the combined informational Total value is available only when both section values are complete. Calculated financial facts carry explicit available, unavailable, or not-applicable `FactAvailability` states while descriptive metadata stays unwrapped. Composition analysis consumes this Interface directly.
+
+**`portfolio_view.rs`** — `get_portfolio_view()` is the presentation-neutral Portfolio view composer. It owns NAV readiness, composes the focused inventory, expresses core Portfolio performance as not applicable/unavailable/available, and includes the requested ready NAV history before returning. Available performance carries cohesive YTD, 1Y, 3Y, 5Y, and All period outcomes over the ready NAV series with independently available return and risk facts, and exposes the benchmark-dependent risk limitations as their own scope.
 
 **`analytics.rs`** — Computes asset-series correlation from current Transaction ledger holdings and historical Base currency series, and computes portfolio risk metrics from NAV history and benchmark prices. Asset-series correlation does not rebuild NAV history.
 
@@ -87,9 +89,9 @@ All business logic lives here. Key modules:
 
 **`assets.rs`** — Tracked asset edits that cross the Monetary/performance boundary invalidate every dependent Complete NAV snapshot from the asset's earliest transaction date. Fund/ETF provider-identity changes also clear that asset's price cache and invalidate the same complete dates. Metadata updates, cache deletion when required, and portfolio/all-per-asset snapshot invalidation commit atomically so readiness can continue trusting the retained checkpoint.
 
-**`market_data/`** — Stateful market data Module. It exposes use-case-shaped Interfaces for valuation market data, correlation market data, Individual price, stock info, and fund data. Yahoo Finance and Morningstar source Adapters are private implementation details behind `MarketDataSources`.
+**`market_data/`** — Stateful market data Module. It exposes use-case-shaped Interfaces for valuation market data, correlation market data, benchmark risk market data, Individual price, stock info, and fund data. Yahoo Finance and Morningstar source Adapters are private implementation details behind `MarketDataSources`.
 
-**`metrics.rs`** — Shared math helpers for volatility, max drawdown, Sharpe, Sortino, beta, Pearson correlation, log returns, return alignment, and CAGR. Uses daily log returns, 252 trading days/year, 3% annual risk-free rate, and actual elapsed dates for CAGR.
+**`metrics.rs`** — Shared math helpers for volatility, max drawdown, Sharpe, Sortino, beta, Pearson correlation, log returns, return alignment, and CAGR. Uses daily log returns, 252 trading days/year, 3% annual risk-free rate, and actual elapsed dates for CAGR. A metric that is mathematically undefined for the given series (zero-variance benchmark beta, zero-dispersion Sharpe, no-downside Sortino) is `None`, so consumers can distinguish undefined metrics from computed values.
 
 **`fund_analysis.rs`** — `compute_fund_analysis()` builds a deep-dive report for any Morningstar fund code, including performance, holdings, equity-only allocation tables, and holdings snapshot diffs. Snapshot persistence is keyed by Morningstar's reported portfolio date, so repeated runs against the same Morningstar snapshot do not create duplicate history rows.
 
@@ -99,13 +101,13 @@ All business logic lives here. Key modules:
 
 **`export.rs`** — `export_transactions_csv()` dumps all transactions to a CSV file.
 
-### Output Layer (`src/cli/display/`, `src/cli/output.rs`)
+### Output Layer (`src/cli/adapters/`, `src/cli/display/`, `src/cli/output.rs`)
 
-Pure output formatting with no business logic. `OutputFormat` selects human or JSON output at the CLI boundary. Human formatting remains split into command-oriented display submodules, while `output.rs` provides the shared JSON envelope writer:
+Pure output formatting with no business logic. `OutputFormat` selects human or JSON output at the CLI boundary. The Portfolio dashboard commands use the dedicated output Adapters, which write one complete Portfolio view through an injected `Write` target; the other human renderers print through `display` submodules:
 
-- **`helpers.rs`** — Shared formatting utilities (price, quantity, percentage, color helpers)
-- **`portfolio.rs`** — `print_portfolio()` renders per-asset table, summary (NAV, returns, risk metrics), and user-facing Market data limitation warning text using `tabled` with green/red coloring via `colored`
-- **`simple.rs`** — `print_nav_chart()` renders the ASCII NAV chart via `textplots`
+- **`adapters/human.rs`** — the human Portfolio view Adapter: per-section inventory tables and aggregates, synchronized performance facts with the Effective valuation date, the metrics table, the NAV chart for the requested history, semantic not-applicable/unavailable fact labels, and the four limitation scopes
+- **`adapters/json.rs`** — the JSON Portfolio view Adapter: one compact envelope over the nested inventory/performance schema, `null` mapping for unavailable and not-applicable scalar facts, requested NAV history, and the four structured limitation scopes
+- **`helpers.rs`** — Shared formatting utilities (price, quantity, percentage, color helpers, limitation wording)
 - **`correlation.rs`** — `print_correlation_matrix()` renders N×N correlation matrix with color-coded values
 - **`composition.rs`** — `print_composition()` renders composition breakdowns and top holdings
 - **`fund_analysis.rs`** — `print_fund_analysis()` renders deep-dive fund analysis tables and snapshot diffs
@@ -121,7 +123,7 @@ Domain structs organized by concept:
 - `AssetType` enum — Stock, Fund, Etf (derives `ValueEnum` for clap integration)
 - `AssetInfo` — Input struct for creating/updating assets
 - `Asset` — DB-backed struct with id (converted from `asset::Model`)
-- `CurrentPosition` — Current Transaction ledger holding with independently nullable cost, dividend, Individual price, value, and Open-position gain/loss facts
+- `InventoryPosition` — Current Transaction ledger holding with independently available cost, dividend, Individual price, value, and Open-position gain/loss facts
 
 **`transaction.rs`**:
 - `TxType` enum — Buy, Sell, Dividend, Split (with `Display`/`FromStr` for DB serialization)
@@ -132,11 +134,20 @@ Domain structs organized by concept:
 **`portfolio.rs`**:
 - `PortfolioSnapshot` — Daily NAV snapshot (date, asset_value, total_value, outstanding_shares, nav)
 - `AssetSnapshot` — Per-asset daily position (quantity, closing_price, market_value, exchange_rate)
-- `CurrentPositions` — Focused current inventory with performance and Monetary positions, complete-or-unavailable aggregates, and separate limitation scopes; it does not require NAV history
-- `PortfolioResult` — Full Portfolio view combining `CurrentPositions` facts with nullable NAV, return, and risk facts after NAV readiness is ensured
-- `PeriodMetrics` — Per-period volatility, max drawdown, beta, Sharpe ratio, and Sortino ratio
 - `CorrelationMatrix` — N×N asset correlation matrix with labels and warnings
 - `AllocationEntry`, `TopHolding`, `CompositionResult`, `FundHolding` — Composition and holdings models
+
+**`portfolio_inventory.rs`**:
+- `FactAvailability<T>` — Portfolio fact availability: Available value, Unavailable because a required input is missing, or NotApplicable for a domain reason
+- `IndividualPrice` — One Individual price fact with its native price and observation date
+- `InventoryPosition` — One current holding with unwrapped descriptive metadata, known quantity, availability-wrapped calculated financial facts, and position Market data limitations
+- `InventorySectionAggregates` — Complete-or-unavailable section sums; empty sections are available zero
+- `PortfolioInventorySection` — One section's positions, aggregates, and Market data limitations
+- `PortfolioInventory` — Separate performance-holding and Monetary-holding sections with the combined informational Total value
+- `NavHistoryRequest` — Presentation-neutral request for ready NAV history, consumed by the Portfolio view composer
+- `PortfolioPerformance` / `AvailablePortfolioPerformance` — Core performance outcome state and its non-nullable synchronized facts, five cohesive period outcomes with independently available return and risk facts, and NAV/history plus benchmark-dependent risk limitation scopes
+- `PeriodOutcome` / `PerformancePeriods` — One period's return, volatility, max drawdown, beta, Sharpe, and Sortino facts with independent availability, and the YTD/1Y/3Y/5Y/All group
+- `PortfolioView` — Always-present Portfolio inventory, core performance state, and requested ready NAV history
 
 **`fund_analysis.rs`**:
 - `FundAnalysisResult` — Full fund report including top holdings, allocations, period metrics, and holdings snapshot diff
@@ -337,26 +348,29 @@ Historical market data preparation caches source observations and fills gaps bet
 ### `get`
 
 ```
-main.rs
-  └─> portfolio::get_portfolio()
-        ├─> nav::ensure_portfolio_history()
-        │     ├─> Prepare one immutable NavRebuildPlan from the trusted checkpoint
-        │     └─> Execute the plan with strict in-memory valuation reads
-        ├─> portfolio::get_current_positions()
-        │     ├─> Project all open holdings once from the Transaction ledger
-        │     ├─> Resolve each position's Individual price through MarketData
-        │     ├─> Separate performance and Monetary positions
-        │     └─> Build complete-or-unavailable aggregates for each scope
-        ├─> Compute NAV return and risk facts
-        └─> Keep NAV, current-position, and Monetary limitations separate
-  └─> display::print_portfolio()
-  └─> display::print_nav_chart()
+rstock::cli::run_command
+  └─> commands::portfolio::get()
+        ├─> Map the CLI chart period onto NavHistoryRequest
+        ├─> portfolio_view::get_portfolio_view()
+        │     ├─> nav::ensure_portfolio_history()
+        │     │     ├─> Prepare one immutable NavRebuildPlan from the trusted checkpoint
+        │     │     └─> Execute the plan with strict in-memory valuation reads
+        │     ├─> portfolio_inventory::get_portfolio_inventory()
+        │     │     ├─> Project all open holdings once from the Transaction ledger
+        │     │     ├─> Resolve each position's Individual price through MarketData
+        │     │     ├─> Separate performance and Monetary sections
+        │     │     └─> Build complete-or-unavailable section aggregates
+        │     ├─> Compose the YTD/1Y/3Y/5Y/All period outcomes over the ready NAV series
+        │     └─> Slice the requested ready NAV history into the same outcome
+        └─> Choose the output Adapter (both aliases share this path)
+              ├─> adapters::write_portfolio_json() via the injected stdout writer
+              └─> adapters::write_portfolio_human() via the injected stdout writer
 ```
 
 ### `transaction buy`
 
 ```
-main.rs
+rstock::cli::run_command
   └─> transactions::buy()
         └─> Database transaction
               ├─> asset_repo::find_by_ticker() (asset must already exist)
@@ -367,7 +381,7 @@ main.rs
 ### `transaction sell`
 
 ```
-main.rs
+rstock::cli::run_command
   └─> transactions::sell()
         └─> Database transaction
               ├─> Load the asset and its `(date, id)` ordered ledger
@@ -379,7 +393,7 @@ main.rs
 ### `transaction dividend`
 
 ```
-main.rs
+rstock::cli::run_command
   └─> transactions::dividend()
         └─> Database transaction
               ├─> Load the asset and its `(date, id)` ordered ledger
@@ -390,7 +404,7 @@ main.rs
 ### `transaction split`
 
 ```
-main.rs
+rstock::cli::run_command
   └─> transactions::split()
         └─> Database transaction
               ├─> Load the asset and its `(date, id)` ordered ledger
@@ -402,7 +416,7 @@ main.rs
 ### `transaction export`
 
 ```
-main.rs
+rstock::cli::run_command
   └─> export::export_transactions_csv()
         ├─> transaction_repo::find_all() (load all txs with asset info)
         └─> Write CSV file
@@ -411,7 +425,7 @@ main.rs
 ### `analyze composition`
 
 ```
-main.rs
+rstock::cli::run_command
   └─> composition::compute_composition()
         ├─> Load current Transaction ledger positions and Individual prices
         ├─> Aggregate classifications and look-through holdings without rebuilding NAV
@@ -422,7 +436,7 @@ main.rs
 ### `analyze correlation matrix`
 
 ```
-main.rs
+rstock::cli::run_command
   └─> analytics::compute_correlation_data()
         ├─> Derive current held assets from the Transaction ledger
         ├─> Request historical Base currency asset and benchmark series
@@ -434,7 +448,7 @@ main.rs
 ### `analyze correlation rolling`
 
 ```
-main.rs
+rstock::cli::run_command
   └─> analytics::compute_rolling_correlation_data()
         ├─> Fetch stock metadata for the two requested tickers
         ├─> Request cache-first tracked correlation market data from MarketData
@@ -448,7 +462,7 @@ main.rs
 ### `analyze fund`
 
 ```
-main.rs
+rstock::cli::run_command
   └─> fund_analysis::compute_fund_analysis()
         ├─> asset_repo::find_by_morningstar_code()
         ├─> market_data.fund_data() for Morningstar fund data
