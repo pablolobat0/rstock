@@ -1,7 +1,7 @@
 use crate::db::entities::{portfolio_asset_history, portfolio_history};
 use serde::Serialize;
 
-use super::{CurrentPosition, MarketDataLimitation};
+use super::MarketDataLimitation;
 
 #[derive(Debug, Clone)]
 pub struct PortfolioSnapshot {
@@ -44,70 +44,6 @@ impl From<portfolio_asset_history::Model> for AssetSnapshot {
             exchange_rate: m.exchange_rate,
         }
     }
-}
-
-#[derive(Serialize)]
-pub struct PeriodMetrics {
-    pub volatility: Option<f64>,
-    pub max_drawdown: Option<f64>,
-    pub beta: Option<f64>,
-    pub sharpe: Option<f64>,
-    pub sortino: Option<f64>,
-}
-
-#[derive(Serialize)]
-pub struct PortfolioResult {
-    pub base_currency: String,
-    #[serde(rename = "positions")]
-    pub rows: Vec<CurrentPosition>,
-    pub monetary_positions: Vec<CurrentPosition>,
-    pub total_invested: Option<f64>,
-    pub total_current_value: Option<f64>,
-    pub total_monetary_invested: Option<f64>,
-    pub total_monetary_value: Option<f64>,
-    pub total_value: Option<f64>,
-    pub total_dividends: Option<f64>,
-    pub total_monetary_dividends: Option<f64>,
-    pub total_open_position_gain_loss: Option<f64>,
-    pub total_open_position_gain_loss_pct: Option<f64>,
-    pub total_monetary_open_position_gain_loss: Option<f64>,
-    pub total_monetary_open_position_gain_loss_pct: Option<f64>,
-    pub snapshot_date: Option<String>,
-    pub nav: Option<f64>,
-    pub daily_change: Option<f64>,
-    pub daily_change_pct: Option<f64>,
-    pub inception_date: Option<String>,
-    pub ytd_return: Option<f64>,
-    pub one_year_return: Option<f64>,
-    pub three_year_return: Option<f64>,
-    pub five_year_return: Option<f64>,
-    pub ytd_metrics: Option<PeriodMetrics>,
-    pub one_year_metrics: Option<PeriodMetrics>,
-    pub three_year_metrics: Option<PeriodMetrics>,
-    pub five_year_metrics: Option<PeriodMetrics>,
-    pub nav_market_data_limitations: Vec<MarketDataLimitation>,
-    pub current_position_market_data_limitations: Vec<MarketDataLimitation>,
-    pub monetary_market_data_limitations: Vec<MarketDataLimitation>,
-}
-
-#[derive(Serialize)]
-pub struct CurrentPositions {
-    pub base_currency: String,
-    pub positions: Vec<CurrentPosition>,
-    pub monetary_positions: Vec<CurrentPosition>,
-    pub total_current_value: Option<f64>,
-    pub total_monetary_value: Option<f64>,
-    pub total_value: Option<f64>,
-    pub total_invested: Option<f64>,
-    pub total_monetary_invested: Option<f64>,
-    pub total_dividends: Option<f64>,
-    pub total_monetary_dividends: Option<f64>,
-    pub total_open_position_gain_loss: Option<f64>,
-    pub total_open_position_gain_loss_pct: Option<f64>,
-    pub total_monetary_open_position_gain_loss: Option<f64>,
-    pub total_monetary_open_position_gain_loss_pct: Option<f64>,
-    pub market_data_limitations: Vec<MarketDataLimitation>,
-    pub monetary_market_data_limitations: Vec<MarketDataLimitation>,
 }
 
 #[derive(Serialize)]

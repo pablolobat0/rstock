@@ -6,8 +6,6 @@
 //! relying on object field order, and the human output through semantic
 //! states and labels without relying on spacing or ANSI formatting.
 
-#![allow(clippy::float_cmp)]
-
 pub mod common;
 
 use rstock::cli::adapters;
@@ -408,13 +406,58 @@ fn monetary_position(limitation: rstock::models::MarketDataLimitation) -> Invent
 
 /// Populated view covering priced and unpriced holdings, mixed fact
 /// availability, four limitation scopes, and one ready history point.
+fn populated_periods() -> rstock::models::PerformancePeriods {
+    let not_applicable = FactAvailability::NotApplicable;
+    rstock::models::PerformancePeriods {
+        ytd: rstock::models::PeriodOutcome {
+            return_pct: FactAvailability::Available(2.0),
+            volatility: FactAvailability::Available(1.5),
+            max_drawdown: FactAvailability::Available(-3.0),
+            beta: FactAvailability::Unavailable,
+            sharpe: FactAvailability::Available(0.4),
+            sortino: not_applicable.clone(),
+        },
+        one_year: rstock::models::PeriodOutcome {
+            return_pct: not_applicable.clone(),
+            volatility: not_applicable.clone(),
+            max_drawdown: not_applicable.clone(),
+            beta: not_applicable.clone(),
+            sharpe: not_applicable.clone(),
+            sortino: not_applicable.clone(),
+        },
+        three_years: rstock::models::PeriodOutcome {
+            return_pct: FactAvailability::Available(12.5),
+            volatility: FactAvailability::Available(9.0),
+            max_drawdown: FactAvailability::Available(-15.0),
+            beta: FactAvailability::Available(1.1),
+            sharpe: FactAvailability::Available(0.9),
+            sortino: FactAvailability::Available(1.3),
+        },
+        five_years: rstock::models::PeriodOutcome {
+            return_pct: not_applicable.clone(),
+            volatility: not_applicable.clone(),
+            max_drawdown: not_applicable.clone(),
+            beta: not_applicable.clone(),
+            sharpe: not_applicable.clone(),
+            sortino: not_applicable.clone(),
+        },
+        all: rstock::models::PeriodOutcome {
+            return_pct: FactAvailability::Available(8.0),
+            volatility: FactAvailability::Available(10.0),
+            max_drawdown: FactAvailability::Available(-20.0),
+            beta: FactAvailability::Available(0.9),
+            sharpe: FactAvailability::Available(0.6),
+            sortino: FactAvailability::Available(0.8),
+        },
+    }
+}
+
 fn populated_view() -> PortfolioView {
     let nav_limitation = limitation("XFAKE1", "History Fund");
     let benchmark_limitation = limitation("ACWI", "Benchmark");
     let performance_section_limitation = limitation("XFAKE2", "Unpriced Fund");
     let monetary_section_limitation = limitation("XFAKEM1", "Money Fund");
 
-    let not_applicable = FactAvailability::NotApplicable;
     PortfolioView {
         inventory: PortfolioInventory {
             base_currency: "EUR".to_owned(),
@@ -469,48 +512,7 @@ fn populated_view() -> PortfolioView {
                 synchronized_value: 18.0,
                 nav: 100.0,
                 inception_date: "2025-06-01".to_owned(),
-                periods: rstock::models::PerformancePeriods {
-                    ytd: rstock::models::PeriodOutcome {
-                        return_pct: FactAvailability::Available(2.0),
-                        volatility: FactAvailability::Available(1.5),
-                        max_drawdown: FactAvailability::Available(-3.0),
-                        beta: FactAvailability::Unavailable,
-                        sharpe: FactAvailability::Available(0.4),
-                        sortino: not_applicable.clone(),
-                    },
-                    one_year: rstock::models::PeriodOutcome {
-                        return_pct: not_applicable.clone(),
-                        volatility: not_applicable.clone(),
-                        max_drawdown: not_applicable.clone(),
-                        beta: not_applicable.clone(),
-                        sharpe: not_applicable.clone(),
-                        sortino: not_applicable.clone(),
-                    },
-                    three_years: rstock::models::PeriodOutcome {
-                        return_pct: FactAvailability::Available(12.5),
-                        volatility: FactAvailability::Available(9.0),
-                        max_drawdown: FactAvailability::Available(-15.0),
-                        beta: FactAvailability::Available(1.1),
-                        sharpe: FactAvailability::Available(0.9),
-                        sortino: FactAvailability::Available(1.3),
-                    },
-                    five_years: rstock::models::PeriodOutcome {
-                        return_pct: not_applicable.clone(),
-                        volatility: not_applicable.clone(),
-                        max_drawdown: not_applicable.clone(),
-                        beta: not_applicable.clone(),
-                        sharpe: not_applicable.clone(),
-                        sortino: not_applicable.clone(),
-                    },
-                    all: rstock::models::PeriodOutcome {
-                        return_pct: FactAvailability::Available(8.0),
-                        volatility: FactAvailability::Available(10.0),
-                        max_drawdown: FactAvailability::Available(-20.0),
-                        beta: FactAvailability::Available(0.9),
-                        sharpe: FactAvailability::Available(0.6),
-                        sortino: FactAvailability::Available(0.8),
-                    },
-                },
+                periods: populated_periods(),
                 nav_history_limitations: vec![nav_limitation],
                 benchmark_risk_limitations: vec![benchmark_limitation],
             },

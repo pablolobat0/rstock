@@ -4,15 +4,12 @@ pub mod common;
 
 use common::{
     insert_asset, insert_daily_price, insert_etf_asset, insert_exchange_rate, insert_fund_asset,
-    insert_portfolio_snapshot, insert_sell_transaction, insert_transaction, setup_test_db,
-    MockMarketDataSources,
+    insert_sell_transaction, insert_transaction, setup_test_db, MockMarketDataSources,
 };
 use rstock::constants::BENCHMARK_TICKER;
 use rstock::db::repos::asset_repo;
 use rstock::models::{MarketDataSubject, StockInfo};
-use rstock::services::analytics::{
-    compute_all_period_metrics, compute_correlation_data, compute_rolling_correlation_data,
-};
+use rstock::services::analytics::{compute_correlation_data, compute_rolling_correlation_data};
 use rstock::services::metrics::{
     align_return_series_with_dates, align_return_series_with_dates_unfiltered,
     compute_rolling_correlation, summarize_rolling_correlation,
@@ -784,40 +781,6 @@ async fn test_insufficient_rolling_correlation_json_uses_normal_schema() {
     assert_eq!(data["right_name"], "Fake B");
     assert!(!text.contains("Not enough aligned data"));
     assert!(!text.contains("\u{1b}["));
-}
-
-#[tokio::test]
-async fn test_period_metrics_carry_benchmark_market_data_limitations() {
-    let db = setup_test_db().await;
-    let mut fetcher = MockMarketDataSources::new();
-    seed_benchmark_market_data(&mut fetcher, 25);
-
-    for i in 0..25 {
-        let date = (chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap()
-            + chrono::Duration::days(i))
-        .format("%Y-%m-%d")
-        .to_string();
-        insert_portfolio_snapshot(&db, &date, 100.0 + i as f64, 1.0).await;
-    }
-
-    let result = compute_all_period_metrics(
-        &db,
-        "2025-02-10",
-        "2025-01-01",
-        "2025-01-01",
-        "2025-01-01",
-        "2025-01-01",
-        &correlation_market_data(&fetcher),
-    )
-    .await
-    .unwrap();
-
-    assert!(result.market_data_limitations.iter().any(|limitation| {
-        matches!(
-            &limitation.subject,
-            MarketDataSubject::Asset { ticker, .. } if ticker == BENCHMARK_TICKER
-        )
-    }));
 }
 
 #[tokio::test]

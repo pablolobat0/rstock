@@ -79,7 +79,7 @@ All business logic lives here. Key modules:
 
 **`portfolio_inventory.rs`** — `get_portfolio_inventory()` is the focused Portfolio inventory Interface and does not request NAV readiness, so it never creates or rebuilds NAV history. One Transaction ledger projection derives quantity, remaining cost, dividends, and Open-position gain/loss identically for performance-holding and Monetary-holding sections, which separately own their positions, complete-or-unavailable aggregates, and Market data limitations; the combined informational Total value is available only when both section values are complete. Calculated financial facts carry explicit available, unavailable, or not-applicable `FactAvailability` states while descriptive metadata stays unwrapped. Composition analysis consumes this Interface directly.
 
-**`portfolio.rs`** — `get_portfolio()` is the legacy flat Portfolio path. Its production callers were removed when the dashboard commands switched to the composed Portfolio view; the path now runs behind its existing legacy tests only and is removed together with the flat models by the surface-contract ticket. **`portfolio_view.rs`** — `get_portfolio_view()` is the presentation-neutral Portfolio view composer. It owns NAV readiness, composes the focused inventory, expresses core Portfolio performance as not applicable/unavailable/available, and includes the requested ready NAV history before returning. Available performance carries cohesive YTD, 1Y, 3Y, 5Y, and All period outcomes over the ready NAV series with independently available return and risk facts, and exposes the benchmark-dependent risk limitations as their own scope. Daily movement is completed in a later ticket.
+**`portfolio_view.rs`** — `get_portfolio_view()` is the presentation-neutral Portfolio view composer. It owns NAV readiness, composes the focused inventory, expresses core Portfolio performance as not applicable/unavailable/available, and includes the requested ready NAV history before returning. Available performance carries cohesive YTD, 1Y, 3Y, 5Y, and All period outcomes over the ready NAV series with independently available return and risk facts, and exposes the benchmark-dependent risk limitations as their own scope.
 
 **`analytics.rs`** — Computes asset-series correlation from current Transaction ledger holdings and historical Base currency series, and computes portfolio risk metrics from NAV history and benchmark prices. Asset-series correlation does not rebuild NAV history.
 
@@ -123,7 +123,7 @@ Domain structs organized by concept:
 - `AssetType` enum — Stock, Fund, Etf (derives `ValueEnum` for clap integration)
 - `AssetInfo` — Input struct for creating/updating assets
 - `Asset` — DB-backed struct with id (converted from `asset::Model`)
-- `CurrentPosition` — Current Transaction ledger holding with independently nullable cost, dividend, Individual price, value, and Open-position gain/loss facts
+- `InventoryPosition` — Current Transaction ledger holding with independently available cost, dividend, Individual price, value, and Open-position gain/loss facts
 
 **`transaction.rs`**:
 - `TxType` enum — Buy, Sell, Dividend, Split (with `Display`/`FromStr` for DB serialization)
@@ -134,9 +134,6 @@ Domain structs organized by concept:
 **`portfolio.rs`**:
 - `PortfolioSnapshot` — Daily NAV snapshot (date, asset_value, total_value, outstanding_shares, nav)
 - `AssetSnapshot` — Per-asset daily position (quantity, closing_price, market_value, exchange_rate)
-- `PortfolioResult` — Legacy flat Portfolio view outcome, retained behind the old `get_portfolio()` service path and its tests until the flat surface is removed
-- `CurrentPositions` — Legacy flat current-inventory outcome, retained until the flat surface is removed
-- `PeriodMetrics` — Per-period volatility, max drawdown, beta, Sharpe ratio, and Sortino ratio
 - `CorrelationMatrix` — N×N asset correlation matrix with labels and warnings
 - `AllocationEntry`, `TopHolding`, `CompositionResult`, `FundHolding` — Composition and holdings models
 

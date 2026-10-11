@@ -10,7 +10,7 @@ mod stock_info;
 mod transaction;
 
 pub(crate) use asset::normalize_currency;
-pub use asset::{Asset, AssetInfo, AssetType, CurrentPosition};
+pub use asset::{Asset, AssetInfo, AssetType};
 pub use classification::{
     enum_to_db, AssetClass, AssetClassification, BondCredit, BondDuration, EquityStyle, Management,
 };
@@ -30,9 +30,8 @@ pub use market_data::{
     ValuationMarketData, ValuationMarketDataAvailability,
 };
 pub use portfolio::{
-    AllocationEntry, AssetSnapshot, CompositionResult, CorrelationMatrix, CurrentPositions,
-    FundHolding, MarketCapCategory, PeriodMetrics, PortfolioResult, PortfolioSnapshot,
-    RollingCorrelationResult, TopHolding,
+    AllocationEntry, AssetSnapshot, CompositionResult, CorrelationMatrix, FundHolding,
+    MarketCapCategory, PortfolioSnapshot, RollingCorrelationResult, TopHolding,
 };
 pub use portfolio_inventory::{
     DailyMovementCoverage, DailyMovementExclusionReason, DailyPricedHoldingsMovement,

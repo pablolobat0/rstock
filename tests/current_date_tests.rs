@@ -2,7 +2,8 @@ pub mod common;
 
 use chrono::NaiveDate;
 use rstock::db::repos::{asset_repo, portfolio_history_repo};
-use rstock::services::{analytics, composition, nav, portfolio};
+use rstock::models::{NavHistoryRequest, PortfolioPerformance};
+use rstock::services::{analytics, composition, nav, portfolio_inventory, portfolio_view};
 
 fn fixed_today() -> NaiveDate {
     NaiveDate::from_ymd_opt(2025, 6, 10).unwrap()
@@ -43,14 +44,37 @@ async fn pence_prices_and_fees_value_portfolio_in_euros_and_survive_cache_reuse(
         ],
     );
     let market_data = common::market_data_at(&sources, fixed_today());
-    let result = portfolio::get_portfolio(&db, &market_data).await.unwrap();
+    let result = portfolio_inventory::get_portfolio_inventory(&db, &market_data)
+        .await
+        .unwrap();
     let expected = 186.8131 * 5.0 * 1.2;
-    assert!((result.total_value.unwrap() - expected).abs() < 1e-8);
-    assert!((result.total_current_value.unwrap() - expected).abs() < 1e-8);
-    assert!(result.nav.is_some());
+    assert!((result.total_value.value().unwrap() - expected).abs() < 1e-8);
+    assert!(
+        (result
+            .performance_holdings
+            .aggregates
+            .current_value
+            .value()
+            .unwrap()
+            - expected)
+            .abs()
+            < 1e-8
+    );
     let offline = common::market_data_at(&common::MockMarketDataSources::new(), fixed_today());
-    let cached = portfolio::get_portfolio(&db, &offline).await.unwrap();
-    assert!((cached.total_current_value.unwrap() - expected).abs() < 1e-8);
+    let cached = portfolio_inventory::get_portfolio_inventory(&db, &offline)
+        .await
+        .unwrap();
+    assert!(
+        (cached
+            .performance_holdings
+            .aggregates
+            .current_value
+            .value()
+            .unwrap()
+            - expected)
+            .abs()
+            < 1e-8
+    );
 }
 
 #[tokio::test]
@@ -64,10 +88,12 @@ async fn fixed_clock_excludes_future_transactions_from_current_inventory() {
     common::insert_daily_price(&db, asset_id, "2025-06-09", 101.0, false).await;
 
     let market_data = common::market_data_at(&common::MockMarketDataSources::new(), fixed_today());
-    let result = portfolio::get_portfolio(&db, &market_data).await.unwrap();
+    let result = portfolio_inventory::get_portfolio_inventory(&db, &market_data)
+        .await
+        .unwrap();
 
-    assert_eq!(result.monetary_positions.len(), 1);
-    assert!((result.monetary_positions[0].total_qty - 2.0).abs() < 1e-9);
+    assert_eq!(result.monetary_holdings.positions.len(), 1);
+    assert!((result.monetary_holdings.positions[0].quantity - 2.0).abs() < 1e-9);
 }
 
 #[tokio::test]
@@ -88,12 +114,14 @@ async fn fixed_clock_excludes_future_sells_and_dividends_from_portfolio_inventor
     common::insert_daily_price(&db, asset_id, "2025-06-09", 101.0, false).await;
 
     let market_data = common::market_data_at(&common::MockMarketDataSources::new(), fixed_today());
-    let result = portfolio::get_portfolio(&db, &market_data).await.unwrap();
+    let result = portfolio_inventory::get_portfolio_inventory(&db, &market_data)
+        .await
+        .unwrap();
 
-    assert_eq!(result.monetary_positions.len(), 1);
-    let position = &result.monetary_positions[0];
-    assert!((position.total_qty - 2.0).abs() < 1e-9);
-    assert_eq!(position.dividends_received, Some(10.0));
+    assert_eq!(result.monetary_holdings.positions.len(), 1);
+    let position = &result.monetary_holdings.positions[0];
+    assert!((position.quantity - 2.0).abs() < 1e-9);
+    assert_eq!(position.dividends.value(), Some(&10.0));
 }
 
 #[tokio::test]
@@ -194,14 +222,30 @@ async fn first_portfolio_view_keeps_positions_visible_after_rebuilding_nav() {
         .await
         .unwrap()
         .is_none());
-    let result = portfolio::get_portfolio(&db, &market_data).await.unwrap();
+    let result = portfolio_view::get_portfolio_view(&db, &market_data, NavHistoryRequest::All)
+        .await
+        .unwrap();
 
-    assert_eq!(result.rows.len(), 1);
-    assert_eq!(result.rows[0].ticker, "XFAKEVISIBLE");
-    assert!((result.rows[0].total_qty - 2.0).abs() < 1e-9);
-    assert_eq!(result.total_current_value, Some(220.0));
-    assert_eq!(result.total_value, Some(220.0));
-    assert!(result.nav.is_some());
+    assert_eq!(result.inventory.performance_holdings.positions.len(), 1);
+    assert_eq!(
+        result.inventory.performance_holdings.positions[0].ticker,
+        "XFAKEVISIBLE"
+    );
+    assert!((result.inventory.performance_holdings.positions[0].quantity - 2.0).abs() < 1e-9);
+    assert_eq!(
+        result
+            .inventory
+            .performance_holdings
+            .aggregates
+            .current_value
+            .value(),
+        Some(&220.0)
+    );
+    assert_eq!(result.inventory.total_value.value(), Some(&220.0));
+    assert!(matches!(
+        result.performance,
+        PortfolioPerformance::Available(_)
+    ));
 }
 
 #[tokio::test]
@@ -241,18 +285,30 @@ async fn fixed_clock_future_dated_performance_only_portfolio_is_empty_and_never_
     common::insert_transaction(&db, asset_id, "2025-06-11", 2.0, 10.0, 0.0).await;
 
     let market_data = common::market_data_at(&common::MockMarketDataSources::new(), fixed_today());
-    let result = portfolio::get_portfolio(&db, &market_data).await.unwrap();
+    let result = portfolio_view::get_portfolio_view(&db, &market_data, NavHistoryRequest::All)
+        .await
+        .unwrap();
 
-    assert!(result.rows.is_empty());
-    assert!(result.monetary_positions.is_empty());
-    assert!(result.nav.is_none());
-    assert!(result.snapshot_date.is_none());
+    assert!(result.inventory.performance_holdings.positions.is_empty());
+    assert!(result.inventory.monetary_holdings.positions.is_empty());
+    assert!(matches!(
+        result.performance,
+        PortfolioPerformance::NotApplicable
+    ));
     assert!(portfolio_history_repo::find_latest(&db)
         .await
         .unwrap()
         .is_none());
-    assert!(result.nav_market_data_limitations.is_empty());
-    assert!(result.current_position_market_data_limitations.is_empty());
+    assert!(result
+        .inventory
+        .performance_holdings
+        .market_data_limitations
+        .is_empty());
+    assert!(result
+        .inventory
+        .monetary_holdings
+        .market_data_limitations
+        .is_empty());
 }
 
 #[tokio::test]

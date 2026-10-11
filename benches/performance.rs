@@ -25,10 +25,11 @@ use migration::{Migrator, MigratorTrait};
 use rstock::constants::ROLLING_CORRELATION_WINDOW_DAYS;
 use rstock::db::entities::{asset, transaction};
 use rstock::db::repos::transaction_repo;
+use rstock::models::NavHistoryRequest;
 use rstock::models::{Asset, AssetType};
 use rstock::services::import::import_transactions_csv;
 use rstock::services::market_data::{MarketData, MarketDataSources, SourceObservation};
-use rstock::services::{analytics, clock::Clock, metrics, nav, portfolio};
+use rstock::services::{analytics, clock::Clock, metrics, nav, portfolio_view};
 use sea_orm::{ActiveModelTrait, Database, DatabaseConnection, EntityTrait, Set};
 use tempfile::TempDir;
 
@@ -709,9 +710,13 @@ fn benchmark_performance(c: &mut Criterion) {
     });
     group.bench_function("portfolio_retrieval_representative", |b| {
         b.to_async(&runtime).iter(|| async {
-            portfolio::get_portfolio(&representative.db, &representative.market_data)
-                .await
-                .unwrap()
+            portfolio_view::get_portfolio_view(
+                &representative.db,
+                &representative.market_data,
+                NavHistoryRequest::All,
+            )
+            .await
+            .unwrap()
         });
     });
     group.bench_function("correlation_matrix_representative", |b| {
@@ -891,7 +896,11 @@ fn benchmark_performance(c: &mut Criterion) {
                 let fresh = runtime.block_on(build_fixture(5, 1, 100));
                 let started = Instant::now();
                 runtime
-                    .block_on(portfolio::get_portfolio(&fresh.db, &fresh.market_data))
+                    .block_on(portfolio_view::get_portfolio_view(
+                        &fresh.db,
+                        &fresh.market_data,
+                        NavHistoryRequest::All,
+                    ))
                     .expect("cold portfolio retrieval");
                 elapsed += started.elapsed();
                 calls += fresh.counters.source_calls.load(Ordering::Relaxed);
@@ -902,15 +911,16 @@ fn benchmark_performance(c: &mut Criterion) {
     });
     let warm_setup_market_data = fixture.new_market_data();
     runtime
-        .block_on(portfolio::get_portfolio(
+        .block_on(portfolio_view::get_portfolio_view(
             &fixture.db,
             &warm_setup_market_data,
+            NavHistoryRequest::All,
         ))
         .expect("warm setup");
     group.bench_function("portfolio_retrieval_warm", |b| {
         b.to_async(&runtime).iter(|| async {
             let market_data = fixture.new_market_data();
-            portfolio::get_portfolio(&fixture.db, &market_data)
+            portfolio_view::get_portfolio_view(&fixture.db, &market_data, NavHistoryRequest::All)
                 .await
                 .unwrap()
         });
@@ -922,7 +932,11 @@ fn benchmark_performance(c: &mut Criterion) {
             for _ in 0..iterations {
                 let market_data = fixture.new_market_data();
                 runtime
-                    .block_on(portfolio::get_portfolio(&fixture.db, &market_data))
+                    .block_on(portfolio_view::get_portfolio_view(
+                        &fixture.db,
+                        &market_data,
+                        NavHistoryRequest::All,
+                    ))
                     .expect("warm portfolio work evidence");
             }
             let elapsed = started.elapsed();
