@@ -30,9 +30,13 @@ fn weekly_observations(
     while current <= end {
         values.push((
             rstock::constants::format_date(current),
-            if index % 2 == 0 { first } else { second },
+            if index.is_multiple_of(2) {
+                first
+            } else {
+                second
+            },
         ));
-        current = current + chrono::Duration::days(step_days);
+        current += chrono::Duration::days(step_days);
         index += 1;
     }
     values
@@ -899,7 +903,7 @@ async fn beta_uses_nav_returns_aligned_with_benchmark_observations() {
             current.weekday(),
             chrono::Weekday::Sat | chrono::Weekday::Sun
         ) {
-            let stock_price = if index % 2 == 0 { 10.0 } else { 10.1 };
+            let stock_price = if index.is_multiple_of(2) { 10.0 } else { 10.1 };
             common::insert_daily_price(
                 &db,
                 asset_id,

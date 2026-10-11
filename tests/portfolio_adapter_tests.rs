@@ -408,6 +408,7 @@ fn monetary_position(limitation: rstock::models::MarketDataLimitation) -> Invent
 
 /// Populated view covering priced and unpriced holdings, mixed fact
 /// availability, four limitation scopes, and one ready history point.
+#[allow(clippy::too_many_lines)]
 fn populated_view() -> PortfolioView {
     let nav_limitation = limitation("XFAKE1", "History Fund");
     let benchmark_limitation = limitation("ACWI", "Benchmark");

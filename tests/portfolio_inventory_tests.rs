@@ -245,7 +245,7 @@ async fn daily_movement_covers_stock_etf_current_day_buys_and_excludes_funds() {
         .performance_holdings
         .daily_priced_holdings_movement;
     assert_eq!(movement.movement, FactAvailability::Available(7.0));
-    assert!((movement.movement_pct.value().copied().unwrap() - 23.3333333333).abs() < 1e-8);
+    assert!((movement.movement_pct.value().copied().unwrap() - 23.333_333_333_3).abs() < 1e-8);
     assert_eq!(movement.included_positions.len(), 2);
     assert_eq!(
         movement.included_positions[0].baseline_date.as_deref(),

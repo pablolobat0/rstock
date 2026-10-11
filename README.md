@@ -180,7 +180,8 @@ src/
 ├── constants.rs        # Centralized constants (dates, currency, metrics, thresholds)
 ├── utils.rs            # Shared interactive helpers
 ├── models/
-│   ├── asset.rs        # AssetType enum, AssetInfo, Asset, CurrentPosition
+│   ├── asset.rs        # AssetType enum, AssetInfo, Asset
+│   ├── portfolio_inventory.rs # Portfolio inventory and InventoryPosition
 │   ├── portfolio.rs    # PortfolioSnapshot, CorrelationMatrix, composition and holdings models
 │   ├── fund_analysis.rs# Fund analysis result and metrics models
 │   ├── transaction.rs  # BuyOrder, SellOrder, DividendOrder, SplitOrder, TxType, Transaction
