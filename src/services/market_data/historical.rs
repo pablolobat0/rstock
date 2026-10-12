@@ -243,64 +243,98 @@ pub(crate) async fn prepare_nav_valuation_data(
     end_date: NaiveDate,
     market_data: &MarketData,
 ) -> anyhow::Result<NavValuationData> {
+    let (exchange_rates, asset_prices) = tokio::join!(
+        prepare_nav_exchange_rates(db, fx_currencies, fx_start, end_date, market_data),
+        prepare_nav_asset_prices(db, assets, intervals, end_date, market_data),
+    );
+    Ok(NavValuationData::from_maps(asset_prices?, exchange_rates?))
+}
+
+/// Independent assets can prepare together, but one asset's intervals retain
+/// their order because they share persisted coverage and predecessor seeds.
+/// `MarketData`'s source semaphore bounds the combined asset and FX requests.
+async fn prepare_nav_asset_prices(
+    db: &DatabaseConnection,
+    assets: &[Asset],
+    intervals: &[NavValuationInterval],
+    end_date: NaiveDate,
+    market_data: &MarketData,
+) -> anyhow::Result<HashMap<i32, BTreeMap<NaiveDate, f64>>> {
     let asset_map: HashMap<i32, &Asset> = assets.iter().map(|asset| (asset.id, asset)).collect();
-    let mut asset_prices = HashMap::<i32, BTreeMap<NaiveDate, f64>>::new();
-    for valuation_interval in intervals {
+    let mut intervals_by_asset = BTreeMap::<i32, Vec<&NavValuationInterval>>::new();
+    for interval in intervals {
+        intervals_by_asset
+            .entry(interval.asset_id)
+            .or_default()
+            .push(interval);
+    }
+    let mut requirements = Vec::with_capacity(intervals_by_asset.len());
+    for (asset_id, asset_intervals) in intervals_by_asset {
         let asset = asset_map
-            .get(&valuation_interval.asset_id)
-            .with_context(|| {
-                format!(
-                    "missing asset {} for NAV valuation interval",
-                    valuation_interval.asset_id
+            .get(&asset_id)
+            .with_context(|| format!("missing asset {asset_id} for NAV valuation interval"))?;
+        requirements.push((*asset, lookup_identifier(asset)?, asset_intervals));
+    }
+    let results = futures::future::join_all(requirements.iter().map(
+        |(asset, identifier, asset_intervals)| async move {
+            let mut prices = BTreeMap::new();
+            for interval in asset_intervals {
+                if let Some(values) = fill_historical_asset_prices(
+                    db,
+                    asset,
+                    identifier,
+                    &format_date(interval.start),
+                    AssetFillScope {
+                        required_end: interval.end,
+                        cache_end: end_date,
+                        source_end: end_date,
+                        discover_boundary: true,
+                    },
+                    market_data,
                 )
-            })?;
-        let values = fill_historical_asset_prices(
+                .await?
+                {
+                    prices.extend(
+                        values
+                            .values
+                            .into_iter()
+                            .filter(|(date, _)| *date <= interval.end),
+                    );
+                }
+            }
+            Ok((asset.id, prices))
+        },
+    ))
+    .await;
+    results.into_iter().collect()
+}
+
+async fn prepare_nav_exchange_rates(
+    db: &DatabaseConnection,
+    currencies: &[String],
+    start_date: Option<NaiveDate>,
+    end_date: NaiveDate,
+    market_data: &MarketData,
+) -> anyhow::Result<HashMap<String, BTreeMap<NaiveDate, f64>>> {
+    let Some(start) = start_date else {
+        return Ok(HashMap::new());
+    };
+    let results = futures::future::join_all(currencies.iter().map(|currency| async move {
+        let values = fill_historical_exchange_rates(
             db,
-            asset,
-            lookup_identifier(asset)?,
-            &format_date(valuation_interval.start),
-            AssetFillScope {
-                required_end: valuation_interval.end,
-                cache_end: end_date,
-                source_end: end_date,
-                discover_boundary: true,
-            },
+            currency,
+            &format_date(start),
+            &format_date(end_date),
+            true,
             market_data,
         )
         .await?
-        .map(|values| {
-            values
-                .values
-                .into_iter()
-                .filter(|(date, _)| *date <= valuation_interval.end)
-                .collect::<BTreeMap<NaiveDate, f64>>()
-        })
+        .map(|values| values.values)
         .unwrap_or_default();
-        asset_prices
-            .entry(valuation_interval.asset_id)
-            .or_default()
-            .extend(values);
-    }
-
-    let mut exchange_rates = HashMap::new();
-    if let Some(start) = fx_start {
-        for currency in fx_currencies {
-            let values = fill_historical_exchange_rates(
-                db,
-                currency,
-                &format_date(start),
-                &format_date(end_date),
-                true,
-                market_data,
-            )
-            .await?
-            .map(|values| values.values)
-            .unwrap_or_default();
-            exchange_rates.insert(currency.clone(), values);
-        }
-    }
-
-    Ok(NavValuationData::from_maps(asset_prices, exchange_rates))
+        Ok((currency.clone(), values))
+    }))
+    .await;
+    results.into_iter().collect()
 }
 
 async fn prepare_historical_market_data_inner(

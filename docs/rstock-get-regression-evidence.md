@@ -81,3 +81,53 @@ the complete `cargo test` suite passing.
 
 Pre-commit standards and requested-behavior reviews passed after correcting
 the historical-FX recovery and overlapping-request edge cases.
+
+## Remaining latency and concurrent NAV preparation
+
+The installed release binary matched the rebuilt release at the start of the
+follow-up investigation. Live production-source commands ran against isolated
+database/settings copies on 12 October, with token-cache writes isolated too.
+The command was `rstock -vv get`, timed with `/usr/bin/time`. Tests continued
+to use only in-memory SQLite and offline injected sources.
+
+Two sequential-preparation runs took 16.27 and 18.42 seconds. Temporary
+request/phase instrumentation on the second run measured:
+
+| Stage | Sequential | Concurrent |
+| --- | ---: | ---: |
+| NAV readiness | 16.45 s | 3.78 s |
+| Inventory and current quotes/FX | 1.95 s | 1.90 s |
+| Performance composition | 0.01 s | 0.01 s |
+| Complete command | 18.42 s | 5.69 s |
+
+Sequential NAV source work comprised approximately 8.87 seconds of stock
+history/predecessor requests, 4.28 seconds of FX history/predecessor requests,
+and 3.29 seconds of fund requests. Both instrumented commands made 27 source
+attempts overall, all successful. The concurrent command returned the same
+NAV of 165.73 and performance value of EUR 30,195.65 at 2 October.
+
+The cause was serial awaiting of independent NAV asset intervals followed by
+serial FX preparation. The fix groups intervals by asset, retains their
+per-asset order, and overlaps independent asset and currency preparation
+under MarketData's existing shared four-source-request semaphore. Four is a
+conservative application cap, not a documented provider requirement.
+
+Three public NAV-readiness tests verify combined asset/FX overlap, bounded
+concurrency with isolated source failure, and sequential disjoint intervals
+for one asset. The first two failed with peak source concurrency one before
+the fix, and pass with peak four afterward.
+
+These are individual live-source measurements, not statistically controlled
+benchmark estimates or a runtime guarantee. Current quote values and provider
+latencies can change between commands. The Cat Bond fund's latest price still
+limits NAV to 2 October, and fresh commands continue retrying missing ranges.
+
+Temporary timing instrumentation was removed. Formatting, Clippy with warnings
+denied, the complete test suite, and a release build passed. Separate standards
+and requested-behavior reviews passed.
+
+A final live-source run of the clean release binary, using another fresh
+database copy, took 5.62 seconds (0.14 seconds user CPU, 0.04 seconds system
+CPU). NAV readiness completed at approximately 3.82 seconds, with zero
+execution-phase database reads and the same NAV/value/effective date. The
+temporary debug prefix was absent from its output.

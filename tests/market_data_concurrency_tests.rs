@@ -72,6 +72,7 @@ impl MarketDataSources for DelayedSources {
         start: NaiveDate,
         _: NaiveDate,
     ) -> Result<Vec<SourceObservation>> {
+        self.delayed_call().await;
         Ok(vec![SourceObservation {
             date: start,
             value: 1.0,
@@ -176,4 +177,106 @@ async fn identical_source_requests_share_one_attempt() {
         .unwrap();
 
     assert_eq!(sources.calls.load(Ordering::Relaxed), 1);
+}
+
+#[tokio::test]
+async fn nav_preparation_overlaps_independent_asset_and_fx_requests() {
+    let db = setup_test_db().await;
+    for (ticker, currency) in [("XFAKENAVUSD", "USD"), ("XFAKENAVGBP", "GBP")] {
+        let id = insert_asset(&db, ticker, ticker, "stock", currency).await;
+        common::insert_transaction(&db, id, "2025-01-02", 1.0, 100.0, 0.0).await;
+    }
+    let sources = DelayedSources::new(None);
+    let market_data = MarketData::new_with_clock(
+        Box::new(sources.clone()),
+        &common::TestClock::new(NaiveDate::from_ymd_opt(2025, 1, 3).unwrap()),
+    );
+
+    let readiness = rstock::services::nav::ensure_portfolio_history(&db, &market_data)
+        .await
+        .unwrap();
+
+    let snapshot = readiness.latest_snapshot.unwrap();
+    assert_eq!(snapshot.date, "2025-01-02");
+    assert_eq!(snapshot.total_value, 200.0);
+    assert_eq!(snapshot.nav, 100.0);
+    assert_eq!(readiness.execution_database_reads, 0);
+    assert_eq!(sources.calls.load(Ordering::Relaxed), 4);
+    assert_eq!(
+        sources.peak.load(Ordering::Relaxed),
+        4,
+        "NAV must overlap both asset and FX preparation rather than run sequential phases"
+    );
+    assert_eq!(sources.active.load(Ordering::Relaxed), 0);
+}
+
+#[tokio::test]
+async fn concurrent_nav_preparation_preserves_success_when_an_asset_fails() {
+    let db = setup_test_db().await;
+    let tickers = [
+        "XFAKENAV01",
+        "XFAKENAV02",
+        "XFAKENAV03",
+        "XFAKENAV04",
+        "XFAKENAV05",
+        "XFAKENAVFAIL",
+    ];
+    let assets = load_assets(&db, &tickers).await;
+    for asset in &assets {
+        common::insert_transaction(&db, asset.id, "2025-01-02", 1.0, 100.0, 0.0).await;
+    }
+    let sources = DelayedSources::new(Some("XFAKENAVFAIL"));
+    let market_data = MarketData::new_with_clock(
+        Box::new(sources.clone()),
+        &common::TestClock::new(NaiveDate::from_ymd_opt(2025, 1, 3).unwrap()),
+    );
+
+    let readiness = rstock::services::nav::ensure_portfolio_history(&db, &market_data)
+        .await
+        .unwrap();
+
+    assert!(readiness.latest_snapshot.is_none());
+    assert!(readiness
+        .market_data_limitations
+        .iter()
+        .any(|limitation| matches!(
+            &limitation.subject, MarketDataSubject::Asset { ticker, .. } if ticker == "XFAKENAVFAIL"
+        )));
+    assert_eq!(sources.peak.load(Ordering::Relaxed), 4);
+    assert_eq!(sources.active.load(Ordering::Relaxed), 0);
+    for asset in assets.iter().filter(|asset| asset.ticker != "XFAKENAVFAIL") {
+        assert_eq!(
+            common::find_daily_price(&db, asset.id, "2025-01-02")
+                .await
+                .unwrap(),
+            Some(100.0)
+        );
+    }
+}
+
+#[tokio::test]
+async fn nav_preparation_keeps_one_assets_disjoint_intervals_sequential() {
+    let db = setup_test_db().await;
+    let id = insert_asset(&db, "XFAKENAVREOPEN", "Reopened stock", "stock", "EUR").await;
+    common::insert_transaction(&db, id, "2025-01-02", 1.0, 100.0, 0.0).await;
+    common::insert_sell_transaction(&db, id, "2025-01-03", 1.0, 100.0, 0.0).await;
+    common::insert_transaction(&db, id, "2025-01-05", 1.0, 100.0, 0.0).await;
+    let sources = DelayedSources::new(None);
+    let market_data = MarketData::new_with_clock(
+        Box::new(sources.clone()),
+        &common::TestClock::new(NaiveDate::from_ymd_opt(2025, 1, 6).unwrap()),
+    );
+
+    let readiness = rstock::services::nav::ensure_portfolio_history(&db, &market_data)
+        .await
+        .unwrap();
+
+    assert_eq!(readiness.latest_snapshot.unwrap().date, "2025-01-05");
+    assert_eq!(sources.calls.load(Ordering::Relaxed), 2);
+    assert_eq!(
+        sources.peak.load(Ordering::Relaxed),
+        1,
+        "intervals for one asset share cache/predecessor state and must retain their ordering"
+    );
+    assert_eq!(sources.active.load(Ordering::Relaxed), 0);
 }
