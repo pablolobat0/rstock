@@ -2,7 +2,7 @@ use anyhow::Context;
 use chrono::NaiveDate;
 use sea_orm::DatabaseConnection;
 
-use super::{historical, policy, MarketData};
+use super::{historical, policy, InventoryMarketDataRequirement, MarketData};
 use crate::constants::{format_date, BASE_CURRENCY};
 use crate::db::repos::{daily_price_repo, exchange_rate_repo};
 use crate::models::{Asset, AssetType, IndividualPriceAvailability};
@@ -98,12 +98,11 @@ async fn fetch_live_exchange_rate_if_needed(
 
 pub(crate) async fn prepare_individual_price_market_data(
     db: &DatabaseConnection,
-    assets: &[Asset],
-    start_date: &str,
+    requirements: &[InventoryMarketDataRequirement],
     end_date: &str,
     market_data: &MarketData,
 ) -> anyhow::Result<()> {
-    historical::fill_historical_market_data_cache(db, assets, start_date, end_date, market_data)
+    historical::fill_individual_price_market_data_cache(db, requirements, end_date, market_data)
         .await
 }
 

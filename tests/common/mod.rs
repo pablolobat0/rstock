@@ -492,6 +492,8 @@ pub struct MockMarketDataSources {
     pub fund_quote_metadata: HashMap<String, FundQuoteMetadata>,
     pub historical_source_calls: Arc<AtomicUsize>,
     pub historical_price_requests: Arc<Mutex<Vec<(String, chrono::NaiveDate, chrono::NaiveDate)>>>,
+    pub historical_fx_requests: Arc<Mutex<Vec<(String, chrono::NaiveDate, chrono::NaiveDate)>>>,
+    pub exchange_rate_delay: std::time::Duration,
     pub historical_predecessor_requests: Arc<Mutex<Vec<(String, chrono::NaiveDate)>>>,
 }
 
@@ -507,6 +509,8 @@ impl MockMarketDataSources {
             fund_quote_metadata: HashMap::new(),
             historical_source_calls: Arc::new(AtomicUsize::new(0)),
             historical_price_requests: Arc::new(Mutex::new(Vec::new())),
+            historical_fx_requests: Arc::new(Mutex::new(Vec::new())),
+            exchange_rate_delay: std::time::Duration::ZERO,
             historical_predecessor_requests: Arc::new(Mutex::new(Vec::new())),
         }
     }
@@ -616,6 +620,13 @@ impl MarketDataSources for MockMarketDataSources {
     ) -> anyhow::Result<Vec<SourceObservation>> {
         let pair = format!("{from}{to}");
         self.historical_source_calls.fetch_add(1, Ordering::Relaxed);
+        self.historical_fx_requests
+            .lock()
+            .expect("historical FX request mutex poisoned")
+            .push((pair.clone(), start, end));
+        if !self.exchange_rate_delay.is_zero() {
+            tokio::time::sleep(self.exchange_rate_delay).await;
+        }
         Ok(to_source_observations(
             self.exchange_rates.get(&pair).cloned().unwrap_or_default(),
             start,

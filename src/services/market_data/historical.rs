@@ -4,7 +4,10 @@ use anyhow::{bail, Context};
 use chrono::NaiveDate;
 use sea_orm::DatabaseConnection;
 
-use super::{policy, MarketData, NavValuationData, NavValuationInterval, SourceObservation};
+use super::{
+    policy, InventoryMarketDataRequirement, MarketData, NavValuationData, NavValuationInterval,
+    SourceObservation,
+};
 use crate::constants::{format_date, BASE_CURRENCY, FUND_API_PADDING_DAYS};
 use crate::db::repos::{daily_price_repo, exchange_rate_repo};
 use crate::models::{Asset, AssetType, ValuationMarketData, ValuationMarketDataAvailability};
@@ -32,17 +35,69 @@ pub(crate) async fn prepare_valuation_market_data(
     prepare_historical_market_data(db, assets, start_date, end_date, market_data).await
 }
 
-pub(crate) async fn fill_historical_market_data_cache(
+pub(crate) async fn fill_individual_price_market_data_cache(
     db: &DatabaseConnection,
-    assets: &[Asset],
-    start_date: &str,
+    requirements: &[InventoryMarketDataRequirement],
     end_date: &str,
     market_data: &MarketData,
 ) -> anyhow::Result<()> {
-    fill_nav_asset_prices(db, assets, start_date, end_date, market_data).await?;
-    let currencies = infer_required_currencies(assets);
-    if !currencies.is_empty() {
-        fill_nav_exchange_rates(db, &currencies, start_date, end_date, market_data).await?;
+    let end = policy::parse_market_data_date(end_date, "inventory historical end date")?;
+    let price_requirements: Vec<_> = {
+        let attempts = market_data
+            .nav_price_attempt_ends
+            .lock()
+            .map_err(|_| anyhow::anyhow!("NAV price preparation mutex poisoned"))?;
+        requirements
+            .iter()
+            .filter(|requirement| {
+                attempts
+                    .get(&requirement.asset.id)
+                    .is_none_or(|attempted_end| *attempted_end < end)
+            })
+            .collect()
+    };
+    let prices =
+        futures::future::join_all(price_requirements.iter().map(|requirement| async move {
+            fill_nav_asset_prices(
+                db,
+                std::slice::from_ref(&requirement.asset),
+                &format_date(requirement.start_date),
+                end_date,
+                market_data,
+            )
+            .await
+        }))
+        .await;
+    for result in prices {
+        result?;
+    }
+
+    // NAV's price scope says nothing about older ledger FX, which inventory
+    // still needs for acquisition costs and dividends. Merge all requirements
+    // for a currency before resolving it to avoid overlapping source requests.
+    let mut currency_starts = BTreeMap::<String, NaiveDate>::new();
+    for requirement in requirements {
+        if requirement.asset.currency != BASE_CURRENCY {
+            currency_starts
+                .entry(requirement.asset.currency.clone())
+                .and_modify(|start| *start = (*start).min(requirement.start_date))
+                .or_insert(requirement.start_date);
+        }
+    }
+    let rates =
+        futures::future::join_all(currency_starts.iter().map(|(currency, start)| async move {
+            fill_nav_exchange_rates(
+                db,
+                std::slice::from_ref(currency),
+                &format_date(*start),
+                end_date,
+                market_data,
+            )
+            .await
+        }))
+        .await;
+    for result in rates {
+        result?;
     }
     Ok(())
 }
@@ -454,7 +509,18 @@ async fn fill_historical_asset_prices(
         {
             Ok(observations) => observations,
             Err(error) => {
-                tracing::warn!(ticker = %asset.ticker, error = %format!("{error:#}"), "failed to fetch historical prices");
+                let usable_cached_price =
+                    known
+                        .range(..=required_end)
+                        .next_back()
+                        .is_some_and(|(date, _)| {
+                            policy::classify_asset_limitation(asset, *date, required_end).is_none()
+                        });
+                if usable_cached_price {
+                    tracing::debug!(ticker = %asset.ticker, error = %format!("{error:#}"), "failed to fetch historical prices; cached price is within acceptable lag");
+                } else {
+                    tracing::warn!(ticker = %asset.ticker, error = %format!("{error:#}"), "failed to fetch historical prices");
+                }
                 continue;
             }
         };

@@ -21,9 +21,10 @@ use crate::cli::display::helpers::{
 };
 use crate::constants::display_date;
 use crate::models::{
-    AssetType, FactAvailability, InventoryPosition, InventorySectionAggregates,
-    MarketDataLimitation, NavHistoryRequest, PeriodOutcome, PortfolioInventory,
-    PortfolioInventorySection, PortfolioPerformance, PortfolioSnapshot, PortfolioView,
+    AssetType, DailyMovementExclusionReason, FactAvailability, InventoryPosition,
+    InventorySectionAggregates, MarketDataLimitation, NavHistoryRequest, PeriodOutcome,
+    PortfolioInventory, PortfolioInventorySection, PortfolioPerformance, PortfolioSnapshot,
+    PortfolioView,
 };
 
 /// Renders the complete Portfolio view through the injected writer. The view
@@ -129,34 +130,21 @@ fn write_daily_movement<W: Write>(
         FactAvailability::NotApplicable => "not applicable".to_owned(),
     };
     writeln!(writer, "Daily-priced holdings movement in {base_currency} (covered inventory, not Portfolio performance): {value} ({percentage})")?;
-    if !movement.included_positions.is_empty() || !movement.excluded_positions.is_empty() {
+    let missing_positions: Vec<_> = movement
+        .excluded_positions
+        .iter()
+        .filter(|position| {
+            position.exclusion_reason != Some(DailyMovementExclusionReason::OutsideMovementScope)
+        })
+        .collect();
+    if !missing_positions.is_empty() {
         writeln!(
             writer,
-            "Movement coverage: {} included, {} excluded{}",
+            "Movement coverage: {} included, {} missing price/FX; reduced coverage",
             movement.included_positions.len(),
-            movement.excluded_positions.len(),
-            if movement.excluded_positions.is_empty() {
-                String::new()
-            } else {
-                "; reduced coverage".to_owned()
-            }
+            missing_positions.len(),
         )?;
-        for position in &movement.included_positions {
-            if let Some(date) = &position.baseline_date {
-                let fx_date = position
-                    .baseline_fx_date
-                    .as_deref()
-                    .map_or_else(|| "n/a".to_owned(), display_date);
-                writeln!(
-                    writer,
-                    "  included {} baseline price {} / FX {}",
-                    position.ticker,
-                    display_date(date),
-                    fx_date
-                )?;
-            }
-        }
-        for position in &movement.excluded_positions {
+        for position in missing_positions {
             writeln!(
                 writer,
                 "  excluded {}: {}",

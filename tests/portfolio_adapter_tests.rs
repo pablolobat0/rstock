@@ -332,6 +332,64 @@ fn portfolio_json_exposes_daily_movement_values_coverage_and_limitations() {
     assert_eq!(movement["limitations"].as_array().map(Vec::len), Some(1));
 }
 
+#[test]
+fn human_movement_omits_routine_fund_and_baseline_noise() {
+    use rstock::models::NavHistoryRequest;
+
+    let mut view = populated_view();
+    let movement = &mut view
+        .inventory
+        .performance_holdings
+        .daily_priced_holdings_movement;
+    movement.movement = FactAvailability::Available(0.0);
+    movement.movement_pct = FactAvailability::Available(0.0);
+    movement.included_positions.push(DailyMovementCoverage {
+        ticker: "XFAKEPREOPEN".into(),
+        baseline_date: Some("2026-10-09".into()),
+        baseline_fx_date: Some("2026-10-09".into()),
+        prior_base_currency_value: Some(100.0),
+        current_base_currency_value: Some(100.0),
+        exclusion_reason: None,
+    });
+    movement.excluded_positions.push(DailyMovementCoverage {
+        ticker: "XFAKEFUND".into(),
+        baseline_date: None,
+        baseline_fx_date: None,
+        prior_base_currency_value: None,
+        current_base_currency_value: None,
+        exclusion_reason: Some(DailyMovementExclusionReason::OutsideMovementScope),
+    });
+    let mut output = Vec::new();
+    adapters::write_portfolio_human(&mut output, &view, NavHistoryRequest::All).unwrap();
+    let text = String::from_utf8(output).unwrap();
+    assert!(text.contains("Daily-priced holdings movement"));
+    assert!(!text.contains("Movement coverage:"));
+    assert!(!text.contains("baseline"));
+    assert!(!text.contains("XFAKEFUND"));
+    assert!(!text.contains("movement limitation:"));
+
+    // An eligible holding with a genuinely missing input still needs a concise
+    // partial-coverage explanation, unlike ordinary fund exclusions.
+    let movement = &mut view
+        .inventory
+        .performance_holdings
+        .daily_priced_holdings_movement;
+    movement.excluded_positions.push(DailyMovementCoverage {
+        ticker: "XFAKEMISSING".into(),
+        baseline_date: None,
+        baseline_fx_date: None,
+        prior_base_currency_value: None,
+        current_base_currency_value: None,
+        exclusion_reason: Some(DailyMovementExclusionReason::MissingCurrentPriceOrFx),
+    });
+    let mut output = Vec::new();
+    adapters::write_portfolio_human(&mut output, &view, NavHistoryRequest::All).unwrap();
+    let text = String::from_utf8(output).unwrap();
+    assert!(text.contains("1 included, 1 missing price/FX; reduced coverage"));
+    assert!(text.contains("XFAKEMISSING"));
+    assert!(!text.contains("XFAKEFUND"));
+}
+
 fn unpriced_position(limitation: rstock::models::MarketDataLimitation) -> InventoryPosition {
     InventoryPosition {
         ticker: "IE00XFAKE002".to_owned(),

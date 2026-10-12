@@ -171,7 +171,15 @@ pub struct MarketData {
     sources: Arc<dyn MarketDataSources>,
     historical_requests: Mutex<HashMap<HistoricalRequest, HistoricalRequestFuture>>,
     historical_source_slots: Arc<Semaphore>,
+    nav_price_attempt_ends: Mutex<HashMap<i32, NaiveDate>>,
     today: NaiveDate,
+}
+
+/// Historical inputs for one open holding. Price preparation is scoped to its
+/// own ledger; FX preparation is consolidated across holdings by currency.
+pub struct InventoryMarketDataRequirement {
+    pub asset: Asset,
+    pub start_date: NaiveDate,
 }
 
 impl MarketData {
@@ -184,6 +192,7 @@ impl MarketData {
             sources: sources.into(),
             historical_requests: Mutex::new(HashMap::new()),
             historical_source_slots: Arc::new(Semaphore::new(HISTORICAL_SOURCE_CONCURRENCY_LIMIT)),
+            nav_price_attempt_ends: Mutex::new(HashMap::new()),
             // Capture the date once per command's MarketData instance. A command that crosses
             // midnight must not combine different definitions of today across portfolio, NAV,
             // and individual-price work.
@@ -341,7 +350,7 @@ impl MarketData {
         fx_start: Option<NaiveDate>,
         end_date: NaiveDate,
     ) -> anyhow::Result<NavValuationData> {
-        historical::prepare_nav_valuation_data(
+        let prepared = historical::prepare_nav_valuation_data(
             db,
             assets,
             intervals,
@@ -350,7 +359,21 @@ impl MarketData {
             end_date,
             self,
         )
-        .await
+        .await?;
+        // Record attempted price scope, including unavailable observations, so
+        // inventory does not retry NAV's work during the same command. This is
+        // not a statement about transaction-date FX coverage before a checkpoint.
+        let mut attempts = self
+            .nav_price_attempt_ends
+            .lock()
+            .map_err(|_| anyhow::anyhow!("NAV price preparation mutex poisoned"))?;
+        for interval in intervals {
+            attempts
+                .entry(interval.asset_id)
+                .and_modify(|end| *end = (*end).max(interval.end))
+                .or_insert(interval.end);
+        }
+        Ok(prepared)
     }
 
     /// Returns prepared historical FX observations for transaction enrichment.
@@ -369,14 +392,11 @@ impl MarketData {
     pub async fn prepare_individual_price_market_data(
         &self,
         db: &DatabaseConnection,
-        assets: &[Asset],
-        start_date: &str,
+        requirements: &[InventoryMarketDataRequirement],
         end_date: &str,
     ) -> anyhow::Result<()> {
-        individual_price::prepare_individual_price_market_data(
-            db, assets, start_date, end_date, self,
-        )
-        .await
+        individual_price::prepare_individual_price_market_data(db, requirements, end_date, self)
+            .await
     }
 
     pub async fn individual_price_if_available(

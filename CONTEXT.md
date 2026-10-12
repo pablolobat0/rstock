@@ -163,7 +163,7 @@ _Avoid_: Gross dividend distribution, per-share dividend rate
 - **Daily-priced holdings movement** may remain available when an otherwise eligible position lacks an input only by identifying included and excluded positions; it must not present partial coverage as complete.
 - **Daily-priced holdings movement** is not applicable on Saturday or Sunday.
 - On a weekday, an eligible holding without a current-day price observation reuses its prior price as zero native-price movement because rstock does not infer exchange holidays; Base currency FX movement still contributes, and any **Market data limitation** remains visible.
-- Each holding's **Daily-priced holdings movement** uses its latest valuation observation before today as the baseline and reports that baseline date; holdings need not share one baseline date.
+- Each holding's **Daily-priced holdings movement** uses its latest valuation observation before today as the baseline; holdings need not share one baseline date.
 - **Daily-priced holdings movement** reports absolute Base currency movement and percentage movement against the covered positions' prior Base currency value; the percentage is not applicable when that value is zero.
 - **NAV** is calculated at one **Effective valuation date**.
 - NAV history preserves one portfolio snapshot and its per-asset snapshots for every calculable calendar date; performance optimizations must not make that history sparse or lazy.

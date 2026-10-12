@@ -16,7 +16,7 @@ use crate::models::{
     PortfolioInventory, PortfolioInventorySection,
 };
 use crate::services::ledger;
-use crate::services::market_data::MarketData;
+use crate::services::market_data::{InventoryMarketDataRequirement, MarketData};
 
 const CURRENT_POSITION_CONCURRENCY_LIMIT: usize = 4;
 
@@ -56,16 +56,9 @@ pub async fn get_portfolio_inventory(
     else {
         return Ok(empty_portfolio_inventory());
     };
-    if !prepare_scope.assets.is_empty() {
-        market_data
-            .prepare_individual_price_market_data(
-                db,
-                &prepare_scope.assets,
-                &prepare_scope.start_date,
-                &end_date,
-            )
-            .await?;
-    }
+    market_data
+        .prepare_individual_price_market_data(db, &prepare_scope.requirements, &end_date)
+        .await?;
 
     let projections =
         project_open_holdings(db, market_data, assets, &prepare_scope.replays).await?;
@@ -140,15 +133,14 @@ struct HoldingProjection {
     market_data_limitations: Vec<MarketDataLimitation>,
 }
 
-/// The subset of current ledger assets and the price/FX range that must be
+/// The subset of current ledger assets and their own price/FX ranges that must be
 /// prepared before any ledger fact that depends on historical FX is projected.
 struct LedgerPrepareScope {
-    assets: Vec<crate::models::Asset>,
-    start_date: String,
+    requirements: Vec<InventoryMarketDataRequirement>,
     replays: HashMap<i32, ledger::LedgerReplay>,
 }
 
-/// Derives the open-holding asset set and earliest transaction date from the
+/// Derives the open-holding asset set and per-asset earliest transaction dates from the
 /// ledger alone (no market data reads) so that historical prices and FX can be
 /// prepared before currency-dependent cost and dividend facts are projected.
 fn ledger_prepare_scope(
@@ -156,9 +148,8 @@ fn ledger_prepare_scope(
     transactions_by_asset: &HashMap<i32, Vec<crate::models::Transaction>>,
     end_date: &str,
 ) -> anyhow::Result<Option<LedgerPrepareScope>> {
-    let mut prepare_assets = Vec::new();
+    let mut requirements = Vec::new();
     let mut replays = HashMap::new();
-    let mut earliest_transaction_date: Option<NaiveDate> = None;
     let mut has_open_holding = false;
     for asset in assets {
         if is_benchmark_ticker(&asset.ticker) {
@@ -171,17 +162,13 @@ fn ledger_prepare_scope(
             .map_err(|error| anyhow::anyhow!(error))?;
         if replay.final_quantity > FLOAT_EPSILON {
             has_open_holding = true;
-            prepare_assets.push(asset.clone());
-            let earliest = NaiveDate::parse_from_str(
-                replay
-                    .transitions
-                    .first()
-                    .map_or(end_date, |transition| transition.entry.date.as_str()),
-                DATE_FORMAT,
-            )?;
-            earliest_transaction_date = Some(match earliest_transaction_date {
-                Some(previous) => previous.min(earliest),
-                None => earliest,
+            let earliest = replay
+                .transitions
+                .first()
+                .map_or(end_date, |transition| transition.entry.date.as_str());
+            requirements.push(InventoryMarketDataRequirement {
+                asset: asset.clone(),
+                start_date: NaiveDate::parse_from_str(earliest.min(end_date), DATE_FORMAT)?,
             });
             replays.insert(asset.id, replay);
         }
@@ -189,13 +176,8 @@ fn ledger_prepare_scope(
     if !has_open_holding {
         return Ok(None);
     }
-    let start_date = match earliest_transaction_date {
-        Some(date) => format_date(date).min(end_date.to_owned()),
-        None => end_date.to_owned(),
-    };
     Ok(Some(LedgerPrepareScope {
-        assets: prepare_assets,
-        start_date,
+        requirements,
         replays,
     }))
 }
@@ -504,19 +486,8 @@ fn movement_from_baseline(
             _ => (None, None, None),
         };
     let mut limitations = current.limitations.clone();
-    if !has_today_quote {
-        limitations.push(MarketDataLimitation {
-            subject: MarketDataSubject::Asset {
-                ticker: asset.ticker.clone(),
-                name: asset.name.clone(),
-                asset_type: asset.asset_type.clone(),
-            },
-            latest_available_date: NaiveDate::parse_from_str(&baseline.price_date, DATE_FORMAT)
-                .ok(),
-            requested_end_date: today,
-            classification: MarketDataLimitationClassification::ActionableReportingLag,
-        });
-    }
+    // No same-day quote is ordinary before opening or on an exchange holiday.
+    // The Individual price already carries genuinely stale/missing-data limits.
     if baseline.fx_rate.is_none() || current_fx.is_none() {
         limitations.push(MarketDataLimitation {
             subject: MarketDataSubject::FxRate {

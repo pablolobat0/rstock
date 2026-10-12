@@ -333,10 +333,10 @@ async fn weekday_without_quote_keeps_native_price_flat_and_includes_fx_movement(
         movement.included_positions[0].current_base_currency_value,
         Some(10.0)
     );
-    assert!(movement.limitations.iter().any(|limitation| matches!(
-        limitation.subject,
-        rstock::models::MarketDataSubject::Asset { .. }
-    )));
+    assert!(
+        movement.limitations.is_empty(),
+        "a missing same-day quote before opening or on a holiday is not an actionable limitation"
+    );
 }
 
 #[tokio::test]
