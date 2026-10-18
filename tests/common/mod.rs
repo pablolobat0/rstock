@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc, Mutex,
@@ -16,7 +16,9 @@ use rstock::db::entities::{
 };
 use rstock::models::{f64_to_cents, FundData, FundQuoteMetadata, StockInfo};
 use rstock::services::clock::Clock;
-use rstock::services::market_data::{MarketData, MarketDataSources, SourceObservation};
+use rstock::services::market_data::{
+    MarketData, MarketDataSources, SeriesQualification, SourceObservation,
+};
 
 /// Parses one compact JSON envelope produced through an injected writer or
 /// process stdout, asserting the shared one-line, ANSI-free contract.
@@ -490,8 +492,12 @@ pub struct MockMarketDataSources {
     pub stock_info: HashMap<String, StockInfo>,
     pub fund_data: HashMap<String, FundData>,
     pub fund_quote_metadata: HashMap<String, FundQuoteMetadata>,
+    pub series_qualifications: HashMap<(String, String), SeriesQualification>,
+    pub failing_qualifications: HashSet<(String, String)>,
+    pub failing_price_sources: HashSet<String>,
     pub historical_source_calls: Arc<AtomicUsize>,
     pub historical_price_requests: Arc<Mutex<Vec<(String, chrono::NaiveDate, chrono::NaiveDate)>>>,
+    pub benchmark_price_source_requests: Arc<Mutex<Vec<(String, String)>>>,
     pub historical_fx_requests: Arc<Mutex<Vec<(String, chrono::NaiveDate, chrono::NaiveDate)>>>,
     pub exchange_rate_delay: std::time::Duration,
     pub historical_predecessor_requests: Arc<Mutex<Vec<(String, chrono::NaiveDate)>>>,
@@ -507,8 +513,12 @@ impl MockMarketDataSources {
             stock_info: HashMap::new(),
             fund_data: HashMap::new(),
             fund_quote_metadata: HashMap::new(),
+            series_qualifications: HashMap::new(),
+            failing_qualifications: HashSet::new(),
+            failing_price_sources: HashSet::new(),
             historical_source_calls: Arc::new(AtomicUsize::new(0)),
             historical_price_requests: Arc::new(Mutex::new(Vec::new())),
+            benchmark_price_source_requests: Arc::new(Mutex::new(Vec::new())),
             historical_fx_requests: Arc::new(Mutex::new(Vec::new())),
             exchange_rate_delay: std::time::Duration::ZERO,
             historical_predecessor_requests: Arc::new(Mutex::new(Vec::new())),
@@ -568,6 +578,76 @@ impl Clock for TestClock {
 
 #[async_trait::async_trait]
 impl MarketDataSources for MockMarketDataSources {
+    async fn benchmark_price_history(
+        &self,
+        source: &str,
+        identifier: &str,
+        start: chrono::NaiveDate,
+        end: chrono::NaiveDate,
+    ) -> anyhow::Result<Vec<SourceObservation>> {
+        self.historical_source_calls.fetch_add(1, Ordering::Relaxed);
+        self.benchmark_price_source_requests
+            .lock()
+            .expect("historical price request mutex poisoned")
+            .push((source.to_owned(), identifier.to_owned()));
+        self.historical_price_requests
+            .lock()
+            .expect("historical price request mutex poisoned")
+            .push((identifier.to_owned(), start, end));
+        if self.failing_price_sources.contains(identifier) {
+            anyhow::bail!("mock benchmark price source failure for {source}/{identifier}");
+        }
+        Ok(self
+            .historical_prices
+            .get(identifier)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|(date, value)| {
+                let date = chrono::NaiveDate::parse_from_str(&date, "%Y-%m-%d").ok()?;
+                (date >= start && date <= end).then_some(SourceObservation { date, value })
+            })
+            .collect())
+    }
+
+    async fn latest_benchmark_price_before(
+        &self,
+        _source: &str,
+        identifier: &str,
+        before: chrono::NaiveDate,
+    ) -> anyhow::Result<Option<SourceObservation>> {
+        Ok(self
+            .historical_prices
+            .get(identifier)
+            .into_iter()
+            .flatten()
+            .filter_map(|(date, value)| {
+                let date = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").ok()?;
+                (date < before).then_some(SourceObservation {
+                    date,
+                    value: *value,
+                })
+            })
+            .max_by_key(|observation| observation.date))
+    }
+
+    async fn series_qualification(
+        &self,
+        source: &str,
+        identifier: &str,
+    ) -> anyhow::Result<Option<SeriesQualification>> {
+        if self
+            .failing_qualifications
+            .contains(&(source.to_owned(), identifier.to_owned()))
+        {
+            anyhow::bail!("mock qualification failure for {source}/{identifier}");
+        }
+        Ok(self
+            .series_qualifications
+            .get(&(source.to_owned(), identifier.to_owned()))
+            .cloned())
+    }
+
     async fn stock_price_history(
         &self,
         ticker: &str,
@@ -579,6 +659,9 @@ impl MarketDataSources for MockMarketDataSources {
             .lock()
             .expect("historical price request mutex poisoned")
             .push((ticker.to_owned(), start, end));
+        if self.failing_price_sources.contains(ticker) {
+            anyhow::bail!("mock price source failure for {ticker}");
+        }
         Ok(to_source_observations(
             self.historical_prices
                 .get(ticker)
@@ -601,6 +684,9 @@ impl MarketDataSources for MockMarketDataSources {
             .lock()
             .expect("historical price request mutex poisoned")
             .push((code.to_owned(), start, end));
+        if self.failing_price_sources.contains(code) {
+            anyhow::bail!("mock fund source failure for {code}");
+        }
         Ok(to_source_observations(
             self.historical_prices
                 .get(code)

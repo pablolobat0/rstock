@@ -471,6 +471,7 @@ async fn malformed_successful_reference_cache_prices_are_hard_errors() {
                 date: "2025-01-01".to_owned(),
                 price: invalid_price,
                 is_api_failure: false,
+                is_source_observation: true,
             }],
         )
         .await
@@ -502,6 +503,7 @@ async fn benchmark_reference_failure_marker_is_not_a_malformed_success() {
             date: "2025-01-01".to_owned(),
             price: 0.0,
             is_api_failure: true,
+            is_source_observation: false,
         }],
     )
     .await

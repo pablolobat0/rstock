@@ -18,6 +18,8 @@ mod m20260905_000001_contract_transaction_schema;
 mod m20261018_000001_add_legacy_benchmark_reference;
 mod m20261018_000002_add_reference_catalog_and_assignments;
 mod m20261018_000003_add_exact_candidate_comparators;
+mod m20261018_000004_track_reference_source_observations;
+mod m20261018_000005_add_adjustment_qualification;
 
 pub struct Migrator;
 
@@ -52,6 +54,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20261018_000001_add_legacy_benchmark_reference::Migration),
             Box::new(m20261018_000002_add_reference_catalog_and_assignments::Migration),
             Box::new(m20261018_000003_add_exact_candidate_comparators::Migration),
+            Box::new(m20261018_000004_track_reference_source_observations::Migration),
+            Box::new(m20261018_000005_add_adjustment_qualification::Migration),
         ]
     }
 

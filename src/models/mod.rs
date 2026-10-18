@@ -16,7 +16,8 @@ pub use classification::{
 };
 pub use fund_analysis::{
     CandidateCorrelationPeriod, CandidateCorrelationResult, CandidateCorrelationRow,
-    FundAnalysisResult, FundData, FundPeriodMetrics, FundQuoteMetadata, HoldingChange,
+    ComparisonAvailability, ComparisonCoverageIssue, DatedWealthPoint, FundAnalysisResult,
+    FundBenchmarkComparison, FundData, FundPeriodMetrics, FundQuoteMetadata, HoldingChange,
     HoldingChangeType,
 };
 pub use fund_comparison::{
@@ -25,9 +26,9 @@ pub use fund_comparison::{
 };
 pub use market_data::{
     BaseCurrencyPriceSeries, BenchmarkRiskMarketData, CorrelationMarketData,
-    CorrelationMarketDataSeries, IndividualPriceAvailability, MarketDataLimitation,
-    MarketDataLimitationClassification, MarketDataSubject, MarketDataValuation,
-    ValuationMarketData, ValuationMarketDataAvailability,
+    CorrelationMarketDataSeries, FundComparisonMarketData, IndividualPriceAvailability,
+    MarketDataLimitation, MarketDataLimitationClassification, MarketDataSubject,
+    MarketDataValuation, SeriesQualification, ValuationMarketData, ValuationMarketDataAvailability,
 };
 pub use portfolio::{
     AllocationEntry, AssetSnapshot, BenchmarkReferenceInfo, CompositionResult, CorrelationMatrix,

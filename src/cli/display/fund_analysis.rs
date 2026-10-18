@@ -7,6 +7,7 @@ use tabled::settings::{Alignment, Style};
 use tabled::{Table, Tabled};
 
 use crate::constants::{display_date, format_date};
+use crate::models::ComparisonAvailability;
 use crate::models::{AllocationEntry, FundAnalysisResult, HoldingChangeType};
 
 use super::helpers::{format_eu, format_pct, format_plain, format_return_plain};
@@ -123,7 +124,113 @@ pub fn write_fund_analysis_reference_context<W: Write>(
         writer,
         &result.benchmark_reference,
         &result.benchmark_limitations,
-    )
+    )?;
+    let comparison = &result.primary_benchmark_comparison;
+    match &comparison.availability {
+        ComparisonAvailability::Available => writeln!(writer, "Primary comparison: available")?,
+        ComparisonAvailability::Unavailable { reason } => {
+            writeln!(writer, "Primary comparison: unavailable ({reason})")?;
+        }
+        ComparisonAvailability::NotApplicable { reason } => {
+            writeln!(writer, "Primary comparison: not applicable ({reason})")?;
+        }
+    }
+    if let (Some(start), Some(end)) = (&comparison.start_date, &comparison.end_date) {
+        writeln!(
+            writer,
+            "Comparison dates: {} – {}; returns in %, excess in percentage points",
+            display_date(start),
+            display_date(end)
+        )?;
+        writeln!(
+            writer,
+            "Fund: {:?}; reference: {:?}; excess: {:?} pp",
+            comparison.fund_return_pct,
+            comparison.reference_return_pct,
+            comparison.excess_return_percentage_points
+        )?;
+    }
+    if let Some(name) = &comparison.reference_name {
+        writeln!(
+            writer,
+            "Assigned primary: {name} ({})",
+            comparison.reference_id.as_deref().unwrap_or("unknown id")
+        )?;
+        writeln!(
+            writer,
+            "Role: {}; wealth currency: {}; native reference currency: {}; cadence: {}; return basis: {}; adjustment: {}; hedge policy: {}; source: {} {}; provenance: {}",
+            comparison.role,
+            comparison.currency,
+            comparison.native_currency.as_deref().unwrap_or("unknown"),
+            comparison.cadence.as_deref().unwrap_or("unknown"),
+            comparison.return_basis.as_deref().unwrap_or("unknown"),
+            comparison.adjustment.as_deref().unwrap_or("unknown"),
+            comparison.hedge_policy.as_deref().unwrap_or("unknown"),
+            comparison.source.as_deref().unwrap_or("unknown"),
+            comparison.source_identifier.as_deref().unwrap_or("unknown"),
+            comparison.source_provenance.as_deref().unwrap_or("unknown")
+        )?;
+    }
+    for limitation in &comparison.fund_limitations {
+        writeln!(
+            writer,
+            "Fund comparison limitation: {}",
+            super::helpers::format_market_data_limitation_warning(limitation)
+        )?;
+    }
+    for limitation in &comparison.reference_limitations {
+        writeln!(
+            writer,
+            "Reference comparison limitation: {}",
+            super::helpers::format_market_data_limitation_warning(limitation)
+        )?;
+    }
+    if matches!(comparison.availability, ComparisonAvailability::Available) {
+        write_comparison_wealth_graph(writer, comparison)?;
+    }
+    Ok(())
+}
+
+fn write_comparison_wealth_graph<W: Write>(
+    writer: &mut W,
+    comparison: &crate::models::FundBenchmarkComparison,
+) -> anyhow::Result<()> {
+    use crate::models::DatedWealthPoint;
+
+    if comparison.fund_wealth.len() != comparison.reference_wealth.len()
+        || comparison.fund_wealth.len() < 2
+    {
+        return Ok(());
+    }
+    let points: [&[DatedWealthPoint]; 2] = [&comparison.fund_wealth, &comparison.reference_wealth];
+    let (minimum, maximum) = points
+        .iter()
+        .flat_map(|series| series.iter().map(|point| point.wealth))
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), value| {
+            (min.min(value), max.max(value))
+        });
+    let shades = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+    let render = |series: &[DatedWealthPoint]| {
+        series
+            .iter()
+            .map(|point| {
+                let fraction = if maximum > minimum {
+                    (point.wealth - minimum) / (maximum - minimum)
+                } else {
+                    0.5
+                };
+                shades[(fraction * (shades.len() - 1) as f64).round() as usize]
+            })
+            .collect::<String>()
+    };
+    writeln!(writer, "Aligned wealth graph (EUR wealth rebased to 100):")?;
+    writeln!(writer, "  Fund      {}", render(&comparison.fund_wealth))?;
+    writeln!(
+        writer,
+        "  Reference {}",
+        render(&comparison.reference_wealth)
+    )?;
+    Ok(())
 }
 
 fn print_top_holdings(result: &FundAnalysisResult) {

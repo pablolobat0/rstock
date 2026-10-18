@@ -11,6 +11,7 @@ pub struct BenchmarkReference {
     pub source_identifier: String,
     pub currency: String,
     pub adjustment_provenance: String,
+    pub adjustment_qualification: String,
     pub return_basis_qualification: String,
     pub role: String,
     pub universe: String,
@@ -32,6 +33,7 @@ impl From<benchmark_reference::Model> for BenchmarkReference {
             source_identifier: model.source_identifier,
             currency: model.currency,
             adjustment_provenance: model.adjustment_provenance,
+            adjustment_qualification: model.adjustment_qualification,
             return_basis_qualification: model.return_basis_qualification,
             role: model.role,
             universe: model.universe,
@@ -62,6 +64,7 @@ pub struct ReferencePrice {
     pub date: String,
     pub price: f64,
     pub is_api_failure: bool,
+    pub is_source_observation: bool,
 }
 
 pub async fn find_by_id(
@@ -104,6 +107,7 @@ pub async fn find_prices_with_seed(
             date: record.date,
             price: record.closing_price,
             is_api_failure: record.is_api_failure,
+            is_source_observation: record.is_source_observation,
         })
         .collect())
 }
@@ -120,6 +124,7 @@ pub async fn upsert_prices_immutable(
                 date: Set(price.date.clone()),
                 closing_price: Set(price.price),
                 is_api_failure: Set(price.is_api_failure),
+                is_source_observation: Set(price.is_source_observation),
                 ..Default::default()
             }
         }))
@@ -131,6 +136,7 @@ pub async fn upsert_prices_immutable(
             .update_columns([
                 benchmark_reference_price::Column::ClosingPrice,
                 benchmark_reference_price::Column::IsApiFailure,
+                benchmark_reference_price::Column::IsSourceObservation,
             ])
             .action_and_where(
                 sea_orm::sea_query::Expr::col(benchmark_reference_price::Column::IsApiFailure)
