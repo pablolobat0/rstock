@@ -1,4 +1,5 @@
 use colored::Colorize;
+use std::io::Write;
 use tabled::builder::Builder;
 use tabled::settings::object::Columns;
 use tabled::settings::style::HorizontalLine;
@@ -11,10 +12,7 @@ use crate::models::{
     AllocationComparison, FundComparisonResult, FundComparisonSide, FundPeriodMetrics,
 };
 
-use super::helpers::{
-    benchmark_reference_context_lines, format_eu, format_market_data_limitation_warning,
-    format_pct, format_plain, format_return_plain,
-};
+use super::helpers::{format_eu, format_pct, format_plain, format_return_plain};
 
 pub fn print_fund_comparison(result: &FundComparisonResult) {
     println!();
@@ -103,18 +101,8 @@ fn print_fund_info(result: &FundComparisonResult) {
 fn print_performance(result: &FundComparisonResult) {
     println!("{}", "Performance".bold());
     println!();
-    for line in benchmark_reference_context_lines(&result.benchmark_reference, &[]) {
-        println!("{line}");
-    }
-    for side in [&result.fund_a, &result.fund_b] {
-        for limitation in &side.benchmark_limitations {
-            println!(
-                "  {}: {}",
-                side.code,
-                format_market_data_limitation_warning(limitation)
-            );
-        }
-    }
+    write_fund_comparison_reference_context(&mut std::io::stdout().lock(), result)
+        .expect("writing fund-comparison reference context to stdout");
     println!();
 
     let return_rows = [
@@ -146,6 +134,24 @@ fn print_performance(result: &FundComparisonResult) {
     .flatten()
     .collect::<Vec<_>>();
     print_performance_table("Risk-Adjusted", risk_adjusted_rows, &[3]);
+}
+
+pub fn write_fund_comparison_reference_context<W: Write>(
+    writer: &mut W,
+    result: &FundComparisonResult,
+) -> anyhow::Result<()> {
+    super::helpers::write_benchmark_reference_context(writer, &result.benchmark_reference, &[])?;
+    for side in [&result.fund_a, &result.fund_b] {
+        for limitation in &side.benchmark_limitations {
+            writeln!(
+                writer,
+                "{}: {}",
+                side.code,
+                super::helpers::format_market_data_limitation_warning(limitation)
+            )?;
+        }
+    }
+    Ok(())
 }
 
 fn print_allocations(title: &str, entries: &[AllocationComparison], result: &FundComparisonResult) {

@@ -6,11 +6,9 @@ use textplots::{Chart, Plot, Shape};
 
 use crate::constants::display_date;
 use crate::models::{CorrelationMatrix, RollingCorrelationResult};
+use std::io::Write;
 
-use super::helpers::{
-    benchmark_reference_context_lines, color_for_value, format_eu,
-    format_market_data_limitation_warning, format_plain,
-};
+use super::helpers::{color_for_value, format_eu, format_plain};
 
 pub fn print_correlation_matrix(matrix: &CorrelationMatrix, period_label: &str) {
     if matrix.names.is_empty() {
@@ -19,9 +17,8 @@ pub fn print_correlation_matrix(matrix: &CorrelationMatrix, period_label: &str) 
     }
 
     println!("\nCorrelation Matrix — {period_label}\n");
-    for line in benchmark_reference_context_lines(&matrix.benchmark_reference, &[]) {
-        println!("{line}");
-    }
+    write_correlation_reference_context(&mut std::io::stdout().lock(), matrix)
+        .expect("writing correlation reference context to stdout");
 
     let n = matrix.names.len();
 
@@ -86,7 +83,36 @@ pub fn print_correlation_matrix(matrix: &CorrelationMatrix, period_label: &str) 
         );
     }
 
-    print_market_data_limitations(&matrix.market_data_limitations);
+    write_correlation_market_data_limitations(
+        &mut std::io::stdout().lock(),
+        &matrix.market_data_limitations,
+    )
+    .expect("writing correlation market-data limitations to stdout");
+}
+
+pub fn write_correlation_reference_context<W: Write>(
+    writer: &mut W,
+    matrix: &CorrelationMatrix,
+) -> anyhow::Result<()> {
+    super::helpers::write_benchmark_reference_context(writer, &matrix.benchmark_reference, &[])
+}
+
+pub fn write_correlation_market_data_limitations<W: Write>(
+    writer: &mut W,
+    limitations: &[crate::models::MarketDataLimitation],
+) -> anyhow::Result<()> {
+    if limitations.is_empty() {
+        return Ok(());
+    }
+    writeln!(writer, "\nMarket data limitations:")?;
+    for limitation in limitations {
+        writeln!(
+            writer,
+            "- {}",
+            super::helpers::format_market_data_limitation_warning(limitation)
+        )?;
+    }
+    Ok(())
 }
 
 pub fn print_rolling_correlation(result: &RollingCorrelationResult) {
@@ -159,14 +185,6 @@ pub fn print_rolling_correlation(result: &RollingCorrelationResult) {
 }
 
 fn print_market_data_limitations(limitations: &[crate::models::MarketDataLimitation]) {
-    if limitations.is_empty() {
-        return;
-    }
-
-    println!();
-    println!("Market data limitations:");
-    for limitation in limitations {
-        let warning = format_market_data_limitation_warning(limitation);
-        println!("- {warning}");
-    }
+    write_correlation_market_data_limitations(&mut std::io::stdout().lock(), limitations)
+        .expect("writing correlation market-data limitations to stdout");
 }

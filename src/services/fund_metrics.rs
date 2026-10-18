@@ -141,11 +141,7 @@ fn compute_period_metrics(
     let benchmark_returns = returns_in_window(benchmark_returns, &start_str, &end_str);
     let daily_returns = sorted_returns(&fund_returns);
     let nav_values: Vec<f64> = window.iter().map(|(_, p)| *p).collect();
-    let (aligned_fund, aligned_benchmark) =
-        metrics::align_return_series(&beta_returns, &benchmark_returns);
-    let beta = (aligned_fund.len() == fund_returns.len())
-        .then(|| metrics::compute_beta(&aligned_fund, &aligned_benchmark))
-        .flatten();
+    let beta = complete_beta(&beta_returns, &benchmark_returns, &fund_returns);
 
     Some(FundPeriodMetrics {
         total_return: (end_price / start_price - 1.0) * 100.0,
@@ -170,9 +166,36 @@ fn returns_in_window(
 ) -> HashMap<String, f64> {
     returns
         .iter()
-        .filter(|(date, _)| date.as_str() >= start && date.as_str() <= end)
+        // Returns are dated by their ending observation. The interval ending
+        // at the window anchor starts outside the selected period and is not
+        // part of either period's local return series.
+        .filter(|(date, _)| date.as_str() > start && date.as_str() <= end)
         .map(|(date, value)| (date.clone(), *value))
         .collect()
+}
+
+fn complete_beta(
+    subject: &HashMap<String, f64>,
+    benchmark: &HashMap<String, f64>,
+    expected_subject: &HashMap<String, f64>,
+) -> Option<f64> {
+    if subject.len() != expected_subject.len()
+        || benchmark.len() != expected_subject.len()
+        || expected_subject
+            .keys()
+            .any(|date| !subject.contains_key(date) || !benchmark.contains_key(date))
+    {
+        return None;
+    }
+    let aligned = metrics::align_return_series_with_dates_unfiltered(subject, benchmark);
+    (aligned.len() == expected_subject.len())
+        .then(|| {
+            metrics::compute_beta(
+                &aligned.iter().map(|(_, a, _)| *a).collect::<Vec<_>>(),
+                &aligned.iter().map(|(_, _, b)| *b).collect::<Vec<_>>(),
+            )
+        })
+        .flatten()
 }
 
 fn sorted_returns(returns: &HashMap<String, f64>) -> Vec<f64> {

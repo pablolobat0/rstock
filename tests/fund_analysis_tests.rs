@@ -91,6 +91,64 @@ async fn usd_fund_beta_converts_subject_returns_to_eur_before_alignment() {
     assert!(result.benchmark_limitations.is_empty());
 }
 
+#[tokio::test]
+async fn fund_beta_uses_complete_identical_window_intervals_including_flat_days() {
+    let db = setup_test_db().await;
+    let today = chrono::NaiveDate::from_ymd_opt(2026, 2, 5).unwrap();
+    let start = today - Duration::days(400);
+    let dates = date_range(start, today);
+    let mut prices: Vec<_> = dates
+        .iter()
+        .enumerate()
+        .map(|(index, date)| {
+            (
+                date.clone(),
+                100.0 + index as f64 + (index % 7) as f64 * 0.2,
+            )
+        })
+        .collect();
+    prices[175].1 = prices[174].1;
+    let mut sources = MockMarketDataSources::new();
+    sources
+        .historical_prices
+        .insert(BENCHMARK_TICKER.to_owned(), prices.clone());
+    sources.exchange_rates.insert(
+        "USDEUR".to_owned(),
+        dates.iter().map(|date| (date.clone(), 1.0)).collect(),
+    );
+    let result = compute_standard_fund_metrics(
+        &db,
+        &market_data_at(&sources, today + Duration::days(1)),
+        &prices,
+        Some("EUR"),
+        today + Duration::days(1),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result.all_time.unwrap().beta, Some(1.0));
+    assert_eq!(result.one_year.unwrap().beta, Some(1.0));
+    assert_eq!(result.ytd.unwrap().beta, Some(1.0));
+
+    let incomplete_prices: Vec<_> = prices
+        .iter()
+        .filter(|(date, _)| date != &dates[175])
+        .cloned()
+        .collect();
+    let incomplete = compute_standard_fund_metrics(
+        &db,
+        &market_data_at(&sources, today + Duration::days(1)),
+        &incomplete_prices,
+        Some("EUR"),
+        today + Duration::days(1),
+    )
+    .await
+    .unwrap();
+    let incomplete_all = incomplete.all_time.unwrap();
+    assert!(incomplete_all.beta.is_none());
+    assert!(incomplete_all.volatility.is_some());
+}
+
 #[test]
 fn test_sector_breakdown_aggregation_uses_unclassified() {
     let holdings = vec![
@@ -454,6 +512,13 @@ async fn test_fund_comparison_json_complete_structure_and_aligned_points() {
     .await
     .unwrap();
     let envelope = fund_comparison_envelope(&result);
+    let mut human = Vec::new();
+    rstock::cli::display::write_fund_comparison_reference_context(&mut human, &result).unwrap();
+    let human = String::from_utf8(human).unwrap();
+    assert!(human.contains("legacy-acwi-etf-proxy"));
+    assert!(human.contains("auto_adjust"));
+    assert!(human.contains("unverified"));
+    assert!(human.contains("FX rate USD"));
 
     assert_eq!(envelope["command"], "compare.funds");
     let data = &envelope["data"];
@@ -951,6 +1016,13 @@ async fn test_fund_analysis_json_complete_data() {
     .await
     .unwrap();
     let envelope = fund_analysis_envelope(&result);
+    let mut human = Vec::new();
+    rstock::cli::display::write_fund_analysis_reference_context(&mut human, &result).unwrap();
+    let human = String::from_utf8(human).unwrap();
+    assert!(human.contains("legacy-acwi-etf-proxy"));
+    assert!(human.contains("auto_adjust"));
+    assert!(human.contains("unverified"));
+    assert!(human.contains("FX rate USD"));
 
     assert_eq!(envelope["command"], "analyze.fund");
     let data = &envelope["data"];

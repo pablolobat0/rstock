@@ -45,6 +45,14 @@ pub(crate) async fn prepare(
         &mut limitations,
     )
     .await?;
+    for (date, rate) in &fx_values {
+        anyhow::ensure!(
+            rate.is_finite() && *rate > 0.0,
+            "invalid persisted FX rate for {} on {}",
+            reference.currency,
+            date
+        );
+    }
     let series = known
         .range(start..=end)
         .filter_map(|(date, price)| {
@@ -53,9 +61,19 @@ pub(crate) async fn prepare(
             } else {
                 fx_values.get(date).copied()
             }?;
-            Some((format_date(*date), price * rate))
+            let converted = price * rate;
+            Some((format_date(*date), converted))
         })
-        .collect();
+        .collect::<Vec<_>>();
+    for (date, converted) in &series {
+        anyhow::ensure!(
+            converted.is_finite() && *converted > 0.0,
+            "invalid converted benchmark reference price for {} on {}: {}",
+            reference.id,
+            date,
+            converted
+        );
+    }
     Ok(PreparedBenchmarkReference {
         info: BenchmarkReferenceInfo {
             id: reference.id,
@@ -91,6 +109,13 @@ async fn prepare_prices(
         .map(|row| NaiveDate::parse_from_str(&row.date, DATE_FORMAT))
         .collect::<Result<_, _>>()?;
     for row in price_rows.iter().filter(|row| !row.is_api_failure) {
+        anyhow::ensure!(
+            row.price.is_finite() && row.price > 0.0,
+            "invalid persisted benchmark reference price for {} on {}: {}",
+            reference.id,
+            row.date,
+            row.price
+        );
         known.insert(
             NaiveDate::parse_from_str(&row.date, DATE_FORMAT)?,
             row.price,
@@ -117,6 +142,15 @@ async fn prepare_prices(
         }
         observations.retain(|item| item.date <= completed_end && item.date <= interval.end);
         observations.sort_by_key(|item| item.date);
+        for observation in &observations {
+            anyhow::ensure!(
+                observation.value.is_finite() && observation.value > 0.0,
+                "invalid successful benchmark reference source price for {} on {}: {}",
+                reference.id,
+                observation.date,
+                observation.value
+            );
+        }
         let filled = historical::forward_filled_interval(
             interval,
             observations,

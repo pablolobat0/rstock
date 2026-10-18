@@ -8,6 +8,7 @@ use common::{
 };
 use rstock::constants::BENCHMARK_TICKER;
 use rstock::db::repos::asset_repo;
+use rstock::db::repos::benchmark_reference_repo::{self, ReferencePrice};
 use rstock::models::{MarketDataSubject, StockInfo};
 use rstock::services::analytics::{compute_correlation_data, compute_rolling_correlation_data};
 use rstock::services::metrics::{
@@ -459,6 +460,66 @@ async fn benchmark_fx_persistence_failure_is_a_hard_error() {
     assert!(format!("{error:#}").contains("blocked FX persistence"));
 }
 
+#[tokio::test]
+async fn malformed_successful_reference_cache_prices_are_hard_errors() {
+    for invalid_price in [0.0, -100.0, f64::INFINITY] {
+        let db = setup_test_db().await;
+        benchmark_reference_repo::upsert_prices_immutable(
+            &db,
+            "legacy-acwi-etf-proxy",
+            &[ReferencePrice {
+                date: "2025-01-01".to_owned(),
+                price: invalid_price,
+                is_api_failure: false,
+            }],
+        )
+        .await
+        .unwrap();
+        let mut sources = MockMarketDataSources::new();
+        sources
+            .historical_prices
+            .insert(BENCHMARK_TICKER.to_owned(), vec![]);
+        let market_data = common::market_data_at(
+            &sources,
+            chrono::NaiveDate::from_ymd_opt(2025, 1, 3).unwrap(),
+        );
+
+        let error = market_data
+            .benchmark_reference_market_data(&db, "2025-01-01", "2025-01-01")
+            .await
+            .expect_err("malformed successful cache row must not become a valid series");
+        assert!(format!("{error:#}").contains("invalid persisted benchmark reference price"));
+    }
+}
+
+#[tokio::test]
+async fn benchmark_reference_failure_marker_is_not_a_malformed_success() {
+    let db = setup_test_db().await;
+    benchmark_reference_repo::upsert_prices_immutable(
+        &db,
+        "legacy-acwi-etf-proxy",
+        &[ReferencePrice {
+            date: "2025-01-01".to_owned(),
+            price: 0.0,
+            is_api_failure: true,
+        }],
+    )
+    .await
+    .unwrap();
+    let sources = MockMarketDataSources::new();
+    let market_data = common::market_data_at(
+        &sources,
+        chrono::NaiveDate::from_ymd_opt(2025, 1, 3).unwrap(),
+    );
+
+    let result = market_data
+        .benchmark_reference_market_data(&db, "2025-01-01", "2025-01-01")
+        .await
+        .unwrap();
+    assert!(result.benchmark_series.is_empty());
+    assert!(!result.limitations.is_empty());
+}
+
 /// Assets with insufficient data should appear in warnings and have None correlation
 #[tokio::test]
 async fn test_insufficient_data_produces_warning() {
@@ -535,6 +596,18 @@ async fn test_correlation_matrix_json_preserves_nulls_warnings_and_limitations()
     .await
     .unwrap();
     let (text, envelope) = correlation_envelope("analyze.correlation.matrix", &matrix);
+    let mut human = Vec::new();
+    rstock::cli::display::write_correlation_reference_context(&mut human, &matrix).unwrap();
+    rstock::cli::display::write_correlation_market_data_limitations(
+        &mut human,
+        &matrix.market_data_limitations,
+    )
+    .unwrap();
+    let human = String::from_utf8(human).unwrap();
+    assert!(human.contains("legacy-acwi-etf-proxy"));
+    assert!(human.contains("auto_adjust"));
+    assert!(human.contains("unverified"));
+    assert!(human.contains("FX rate USD"));
 
     assert_eq!(envelope["command"], "analyze.correlation.matrix");
     assert_eq!(
