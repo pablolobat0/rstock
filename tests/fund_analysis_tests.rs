@@ -155,6 +155,26 @@ async fn fund_beta_uses_complete_identical_window_intervals_including_flat_days(
     assert_eq!(weekday_result.all_time.unwrap().beta, Some(1.0));
     assert_eq!(weekday_result.one_year.unwrap().beta, Some(1.0));
     assert_eq!(weekday_result.ytd.unwrap().beta, Some(1.0));
+    assert!(weekday_prices
+        .windows(2)
+        .any(|pair| { pair[0].0 == dates[170] && pair[1].0 == dates[173] }));
+
+    let missing_flat_weekday: Vec<_> = prices
+        .iter()
+        .filter(|(date, _)| date != &dates[175])
+        .cloned()
+        .collect();
+    let missing_flat = compute_standard_fund_metrics(
+        &db,
+        &market_data_at(&sources, today + Duration::days(1)),
+        &missing_flat_weekday,
+        Some("EUR"),
+        today + Duration::days(1),
+    )
+    .await
+    .unwrap();
+    assert!(missing_flat.all_time.unwrap().beta.is_none());
+    assert!(missing_flat.one_year.unwrap().beta.is_none());
 
     let incomplete_prices: Vec<_> = prices
         .iter()
@@ -173,6 +193,7 @@ async fn fund_beta_uses_complete_identical_window_intervals_including_flat_days(
     let incomplete_all = incomplete.all_time.unwrap();
     assert!(incomplete_all.beta.is_none());
     assert!(incomplete_all.volatility.is_some());
+    assert!(incomplete.one_year.unwrap().beta.is_none());
 }
 
 #[tokio::test]

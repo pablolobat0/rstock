@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use chrono::{Datelike, NaiveDate};
 
@@ -172,28 +172,27 @@ fn compute_beta_over_observation_intervals(
         .iter()
         .map(|(date, price)| (date.as_str(), *price))
         .collect();
+    let observed_dates: HashSet<&str> = subject_window
+        .iter()
+        .map(|(date, _)| date.as_str())
+        .collect();
     let mut subject_returns = Vec::with_capacity(subject_window.len() - 1);
     let mut benchmark_returns = Vec::with_capacity(subject_window.len() - 1);
     for pair in subject_window.windows(2) {
         let start_date = pair[0].0.as_str();
         let end_date = pair[1].0.as_str();
-        let mut prior_benchmark = *benchmark.get(start_date)?;
-        for (date, price) in benchmark_prices
-            .iter()
-            .filter(|(date, _)| date.as_str() > start_date && date.as_str() < end_date)
-        {
-            let parsed = NaiveDate::parse_from_str(date, DATE_FORMAT).ok()?;
-            if !matches!(
-                parsed.weekday(),
-                chrono::Weekday::Sat | chrono::Weekday::Sun
-            ) && (*price - prior_benchmark).abs() > f64::EPSILON * prior_benchmark.abs().max(1.0)
+        let start = NaiveDate::parse_from_str(start_date, DATE_FORMAT).ok()?;
+        let end = NaiveDate::parse_from_str(end_date, DATE_FORMAT).ok()?;
+        let mut date = start + chrono::Duration::days(1);
+        while date < end {
+            if !matches!(date.weekday(), chrono::Weekday::Sat | chrono::Weekday::Sun)
+                && !observed_dates.contains(format_date(date).as_str())
             {
-                // A benchmark move on a weekday omitted from the subject
-                // schedule is a missing subject observation, not a weekend
-                // mark to discard while aligning daily maps.
+                // No subject holiday/coverage provenance is available here,
+                // so an unobserved weekday is conservatively incomplete.
                 return None;
             }
-            prior_benchmark = *price;
+            date += chrono::Duration::days(1);
         }
         let subject_start = *subject_base.get(start_date)?;
         let subject_end = *subject_base.get(end_date)?;

@@ -146,21 +146,6 @@ pub(crate) async fn get_exchange_rates_for_asset(
     Ok(rates)
 }
 
-pub(crate) async fn prepare_reference_exchange_rates(
-    db: &DatabaseConnection,
-    currency: &str,
-    start_date: &str,
-    end_date: &str,
-    market_data: &MarketData,
-) -> anyhow::Result<BTreeMap<NaiveDate, f64>> {
-    Ok(
-        fill_historical_exchange_rates(db, currency, start_date, end_date, false, market_data)
-            .await?
-            .map(|values| values.values)
-            .unwrap_or_default(),
-    )
-}
-
 pub(crate) async fn prepare_base_currency_prices(
     db: &DatabaseConnection,
     currency: &str,
@@ -210,6 +195,21 @@ pub(crate) async fn prepare_base_currency_prices(
         }
     }
     Ok((converted, limitations))
+}
+
+pub(crate) async fn prepare_reference_exchange_rates(
+    db: &DatabaseConnection,
+    currency: &str,
+    start_date: &str,
+    end_date: &str,
+    market_data: &MarketData,
+) -> anyhow::Result<BTreeMap<NaiveDate, f64>> {
+    Ok(
+        fill_historical_exchange_rates(db, currency, start_date, end_date, false, market_data)
+            .await?
+            .map(|values| values.values)
+            .unwrap_or_default(),
+    )
 }
 
 pub(crate) async fn get_base_currency_price_series_for_assets(
