@@ -7,6 +7,7 @@ use tabled::settings::{Alignment, Style};
 use tabled::{Table, Tabled};
 
 use crate::constants::{display_date, format_date};
+use crate::models::ComparisonAvailability;
 use crate::models::{AllocationEntry, FundAnalysisResult, HoldingChangeType};
 
 use super::helpers::{format_eu, format_pct, format_plain, format_return_plain};
@@ -123,7 +124,49 @@ pub fn write_fund_analysis_reference_context<W: Write>(
         writer,
         &result.benchmark_reference,
         &result.benchmark_limitations,
-    )
+    )?;
+    let comparison = &result.primary_benchmark_comparison;
+    match &comparison.availability {
+        ComparisonAvailability::Available => writeln!(writer, "Primary comparison: available")?,
+        ComparisonAvailability::Unavailable { reason } => {
+            writeln!(writer, "Primary comparison: unavailable ({reason})")?;
+        }
+        ComparisonAvailability::NotApplicable { reason } => {
+            writeln!(writer, "Primary comparison: not applicable ({reason})")?;
+        }
+    }
+    if let (Some(start), Some(end)) = (&comparison.start_date, &comparison.end_date) {
+        writeln!(
+            writer,
+            "Comparison dates: {} – {}; returns in %, excess in percentage points",
+            display_date(start),
+            display_date(end)
+        )?;
+        writeln!(
+            writer,
+            "Fund: {:?}; reference: {:?}; excess: {:?} pp",
+            comparison.fund_return_pct,
+            comparison.reference_return_pct,
+            comparison.excess_return_percentage_points
+        )?;
+    }
+    if let Some(name) = &comparison.reference_name {
+        writeln!(
+            writer,
+            "Assigned primary: {name} ({})",
+            comparison.reference_id.as_deref().unwrap_or("unknown id")
+        )?;
+        writeln!(
+            writer,
+            "Role: {}; currency: {}; cadence: {}; return basis: {}; source: {}",
+            comparison.role,
+            comparison.currency,
+            comparison.cadence.as_deref().unwrap_or("unknown"),
+            comparison.return_basis.as_deref().unwrap_or("unknown"),
+            comparison.source_provenance.as_deref().unwrap_or("unknown")
+        )?;
+    }
+    Ok(())
 }
 
 fn print_top_holdings(result: &FundAnalysisResult) {

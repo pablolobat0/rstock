@@ -7,7 +7,7 @@ use chrono::NaiveDate;
 use crate::models::{FundData, FundQuoteMetadata, StockInfo};
 use crate::settings::Settings;
 
-pub use market_data_sources::{MarketDataSources, SourceObservation};
+pub use market_data_sources::{MarketDataSources, SeriesQualification, SourceObservation};
 
 use morningstar::MorningstarAdapter;
 use yahoo::YahooFinanceAdapter;

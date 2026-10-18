@@ -10,8 +10,28 @@ pub struct SourceObservation {
     pub value: f64,
 }
 
+/// Provider-reported properties of an observed price series. These describe
+/// the data, not the financial meaning or eligibility of a benchmark target.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SeriesQualification {
+    pub currency: String,
+    pub return_basis: String,
+    pub adjustment: String,
+    pub hedge_policy: String,
+    pub cadence: String,
+}
+
 #[async_trait::async_trait]
 pub trait MarketDataSources: Send + Sync {
+    async fn series_qualification(
+        &self,
+        source: &str,
+        identifier: &str,
+    ) -> anyhow::Result<Option<SeriesQualification>> {
+        let _ = (source, identifier);
+        Ok(None)
+    }
+
     async fn stock_price_history(
         &self,
         ticker: &str,

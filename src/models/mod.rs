@@ -16,8 +16,8 @@ pub use classification::{
 };
 pub use fund_analysis::{
     CandidateCorrelationPeriod, CandidateCorrelationResult, CandidateCorrelationRow,
-    FundAnalysisResult, FundData, FundPeriodMetrics, FundQuoteMetadata, HoldingChange,
-    HoldingChangeType,
+    ComparisonAvailability, DatedWealthPoint, FundAnalysisResult, FundBenchmarkComparison,
+    FundData, FundPeriodMetrics, FundQuoteMetadata, HoldingChange, HoldingChangeType,
 };
 pub use fund_comparison::{
     AlignedFundReturnPoint, AllocationComparison, CommonFundHolding, FundComparisonCorrelation,

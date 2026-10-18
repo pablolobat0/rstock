@@ -64,6 +64,15 @@ pub async fn compute_fund_analysis(
         today,
     )
     .await?;
+    let primary_benchmark_comparison = crate::services::benchmark::compare_fund_to_primary(
+        db,
+        market_data,
+        ms_code,
+        asset.as_ref().map(|asset| asset.ticker.as_str()),
+        &fund_prices,
+        today,
+    )
+    .await?;
 
     let sector_breakdown = compute_breakdown(&equity_holdings, |h| h.sector.clone());
     let country_breakdown = compute_breakdown(&equity_holdings, |h| h.country.clone());
@@ -110,6 +119,7 @@ pub async fn compute_fund_analysis(
         all_time: metrics.all_time,
         benchmark_reference: metrics.benchmark_reference,
         benchmark_limitations: metrics.benchmark_limitations,
+        primary_benchmark_comparison,
         candidate_correlation,
         holdings_changed,
         last_snapshot_date,

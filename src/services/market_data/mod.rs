@@ -20,7 +20,9 @@ use crate::models::{
 };
 use crate::services::clock::{Clock, SystemClock};
 
-pub use sources::{DefaultMarketDataSources, MarketDataSources, SourceObservation};
+pub use sources::{
+    DefaultMarketDataSources, MarketDataSources, SeriesQualification, SourceObservation,
+};
 
 pub(crate) const LEGACY_ACWI_REFERENCE_ID: &str = "legacy-acwi-etf-proxy";
 
@@ -336,6 +338,14 @@ impl MarketData {
         self.sources.fund_quote_metadata(code).await
     }
 
+    pub async fn series_qualification(
+        &self,
+        source: &str,
+        identifier: &str,
+    ) -> anyhow::Result<Option<SeriesQualification>> {
+        self.sources.series_qualification(source, identifier).await
+    }
+
     pub async fn prepare_valuation_market_data(
         &self,
         db: &DatabaseConnection,
@@ -513,6 +523,23 @@ impl MarketData {
         let reference =
             reference::prepare(db, LEGACY_ACWI_REFERENCE_ID, start_date, end_date, self).await?;
 
+        Ok(BenchmarkRiskMarketData {
+            benchmark_series: reference.series,
+            benchmark_reference: reference.info,
+            limitations: reference.limitations,
+        })
+    }
+
+    /// Prepares one selected definition through the same cache, source, fill,
+    /// and EUR conversion path used by all benchmark consumers.
+    pub async fn selected_benchmark_reference_market_data(
+        &self,
+        db: &DatabaseConnection,
+        reference_id: &str,
+        start_date: &str,
+        end_date: &str,
+    ) -> anyhow::Result<BenchmarkRiskMarketData> {
+        let reference = reference::prepare(db, reference_id, start_date, end_date, self).await?;
         Ok(BenchmarkRiskMarketData {
             benchmark_series: reference.series,
             benchmark_reference: reference.info,

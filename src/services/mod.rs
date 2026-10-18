@@ -1,5 +1,6 @@
 pub mod analytics;
 pub mod assets;
+pub mod benchmark;
 pub mod benchmark_references;
 pub mod clock;
 pub mod composition;

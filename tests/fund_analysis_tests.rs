@@ -10,6 +10,7 @@ use common::{
 use rstock::constants::format_date;
 use rstock::constants::BENCHMARK_TICKER;
 use rstock::db::entities::fund_holdings_snapshot;
+use rstock::db::entities::{benchmark_assignment, benchmark_reference};
 use rstock::db::repos::exchange_rate_repo::{self, ExchangeRateWrite};
 use rstock::db::repos::{fund_holdings_snapshot_repo, portfolio_history_repo};
 use rstock::models::{
@@ -23,6 +24,7 @@ use rstock::services::fund_analysis::{
 use rstock::services::fund_comparison::{compare_funds, compute_common_holdings};
 use rstock::services::fund_metrics::compute_standard_fund_metrics;
 use rstock::services::metrics::compute_cagr;
+use sea_orm::Set;
 use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter};
 use serde_json::{json, Value};
 
@@ -44,6 +46,109 @@ fn fund_comparison_envelope(result: &rstock::models::FundComparisonResult) -> Va
     assert_eq!(text.lines().count(), 1);
     assert!(!text.contains("\u{1b}["));
     serde_json::from_str(&text).expect("fund comparison output should be valid JSON")
+}
+
+#[tokio::test]
+async fn assigned_fund_comparison_uses_qualified_shared_market_data_path() {
+    let db = setup_test_db().await;
+    let _asset_id = insert_fund_asset(&db, "XISINFAKE1", "Fund", "EUR", "XCLASS").await;
+    benchmark_reference::Entity::insert(benchmark_reference::ActiveModel {
+        id: Set("verified-fake-reference".to_owned()),
+        display_name: Set("Verified Fake Reference".to_owned()),
+        instrument_ticker: Set("XREF".to_owned()),
+        source: Set("test_source".to_owned()),
+        source_identifier: Set("XREF".to_owned()),
+        currency: Set("EUR".to_owned()),
+        adjustment_provenance: Set("explicit fake total-return observations".to_owned()),
+        return_basis_qualification: Set("total_return".to_owned()),
+        role: Set("Investment universe".to_owned()),
+        universe: Set("test".to_owned()),
+        hedge_policy: Set("Unhedged".to_owned()),
+        source_provenance: Set("deterministic test source".to_owned()),
+        history_boundary: Set("2025-01-06 exact fixture class".to_owned()),
+        verification_state: Set("verified".to_owned()),
+        ..Default::default()
+    })
+    .exec(&db)
+    .await
+    .unwrap();
+    benchmark_assignment::Entity::insert(benchmark_assignment::ActiveModel {
+        subject_type: Set("tracked".to_owned()),
+        subject_id: Set("XISINFAKE1".to_owned()),
+        reference_id: Set("verified-fake-reference".to_owned()),
+        is_override: Set(false),
+        assigned_at: Set("2025-01-01T00:00:00Z".to_owned()),
+    })
+    .exec(&db)
+    .await
+    .unwrap();
+
+    let mut sources = MockMarketDataSources::new();
+    sources.historical_prices.insert(
+        "XCLASS".to_owned(),
+        vec![
+            ("2025-01-06".to_owned(), 100.0),
+            ("2025-01-07".to_owned(), 112.0),
+        ],
+    );
+    sources.historical_prices.insert(
+        "XREF".to_owned(),
+        vec![
+            ("2025-01-06".to_owned(), 50.0),
+            ("2025-01-07".to_owned(), 54.5),
+        ],
+    );
+    let qualification = || rstock::services::market_data::SeriesQualification {
+        currency: "EUR".to_owned(),
+        return_basis: "total_return".to_owned(),
+        adjustment: "dividends_reinvested_once".to_owned(),
+        hedge_policy: "Unhedged".to_owned(),
+        cadence: "daily".to_owned(),
+    };
+    sources.series_qualifications.insert(
+        ("morningstar".to_owned(), "XCLASS".to_owned()),
+        qualification(),
+    );
+    sources.series_qualifications.insert(
+        ("test_source".to_owned(), "XREF".to_owned()),
+        qualification(),
+    );
+    sources.fund_data.insert(
+        "XCLASS".to_owned(),
+        FundData {
+            fund_currency: Some("EUR".to_owned()),
+            total_holdings: None,
+            portfolio_date: None,
+            holdings: vec![],
+        },
+    );
+    sources.fund_quote_metadata.insert(
+        "XCLASS".to_owned(),
+        FundQuoteMetadata {
+            quote_currency: Some("EUR".to_owned()),
+            ..Default::default()
+        },
+    );
+    let market = market_data_at(
+        &sources,
+        chrono::NaiveDate::from_ymd_opt(2025, 1, 8).unwrap(),
+    );
+    let result = compute_fund_analysis(&db, &market, "XCLASS", one_year_candidate_period())
+        .await
+        .unwrap();
+    let data = fund_analysis_envelope(&result)["data"].clone();
+    assert_eq!(
+        data["primary_benchmark_comparison"]["availability"]["status"],
+        "available"
+    );
+    assert_eq!(data["primary_benchmark_comparison"]["currency"], "EUR");
+    assert_eq!(data["primary_benchmark_comparison"]["role"], "primary");
+    let comparison = result.primary_benchmark_comparison;
+    assert_eq!(comparison.start_date.as_deref(), Some("2025-01-06"));
+    assert_eq!(comparison.end_date.as_deref(), Some("2025-01-07"));
+    assert!((comparison.excess_return_percentage_points.unwrap() - 3.0).abs() < 1e-10);
+    assert_eq!(comparison.fund_wealth[0].wealth, 100.0);
+    assert_eq!(comparison.reference_wealth[0].wealth, 100.0);
 }
 
 #[tokio::test]

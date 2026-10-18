@@ -16,7 +16,9 @@ use rstock::db::entities::{
 };
 use rstock::models::{f64_to_cents, FundData, FundQuoteMetadata, StockInfo};
 use rstock::services::clock::Clock;
-use rstock::services::market_data::{MarketData, MarketDataSources, SourceObservation};
+use rstock::services::market_data::{
+    MarketData, MarketDataSources, SeriesQualification, SourceObservation,
+};
 
 /// Parses one compact JSON envelope produced through an injected writer or
 /// process stdout, asserting the shared one-line, ANSI-free contract.
@@ -490,6 +492,7 @@ pub struct MockMarketDataSources {
     pub stock_info: HashMap<String, StockInfo>,
     pub fund_data: HashMap<String, FundData>,
     pub fund_quote_metadata: HashMap<String, FundQuoteMetadata>,
+    pub series_qualifications: HashMap<(String, String), SeriesQualification>,
     pub historical_source_calls: Arc<AtomicUsize>,
     pub historical_price_requests: Arc<Mutex<Vec<(String, chrono::NaiveDate, chrono::NaiveDate)>>>,
     pub historical_fx_requests: Arc<Mutex<Vec<(String, chrono::NaiveDate, chrono::NaiveDate)>>>,
@@ -507,6 +510,7 @@ impl MockMarketDataSources {
             stock_info: HashMap::new(),
             fund_data: HashMap::new(),
             fund_quote_metadata: HashMap::new(),
+            series_qualifications: HashMap::new(),
             historical_source_calls: Arc::new(AtomicUsize::new(0)),
             historical_price_requests: Arc::new(Mutex::new(Vec::new())),
             historical_fx_requests: Arc::new(Mutex::new(Vec::new())),
@@ -568,6 +572,17 @@ impl Clock for TestClock {
 
 #[async_trait::async_trait]
 impl MarketDataSources for MockMarketDataSources {
+    async fn series_qualification(
+        &self,
+        source: &str,
+        identifier: &str,
+    ) -> anyhow::Result<Option<SeriesQualification>> {
+        Ok(self
+            .series_qualifications
+            .get(&(source.to_owned(), identifier.to_owned()))
+            .cloned())
+    }
+
     async fn stock_price_history(
         &self,
         ticker: &str,
