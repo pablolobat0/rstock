@@ -627,13 +627,13 @@ async fn rollback_benchmark_migration_boundary(db: &sea_orm::DatabaseConnection)
         .expect("catalog and exact-candidate migrations should roll back");
 }
 
-fn command(args: &[&str]) -> rstock::cli::Commands {
-    Cli::try_parse_from(args).unwrap().command
-}
-
 fn benchmark_command(args: &[&str]) -> rstock::cli::BenchmarkCommands {
     match command(args) {
         rstock::cli::Commands::Benchmark(arguments) => arguments.command,
         other => panic!("expected benchmark command, got {other:?}"),
     }
+}
+
+fn command(args: &[&str]) -> rstock::cli::Commands {
+    Cli::try_parse_from(args).unwrap().command
 }

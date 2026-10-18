@@ -95,19 +95,6 @@ pub async fn run_with_writer<W: Write>(
     }
 }
 
-pub fn write_output<W: Write, T: Serialize>(
-    writer: &mut W,
-    format: output::OutputFormat,
-    command: &str,
-    data: &T,
-    human: &str,
-) -> anyhow::Result<()> {
-    match format {
-        output::OutputFormat::Json => output::write_json(writer, command, data),
-        output::OutputFormat::Human => writeln!(writer, "{human}").map_err(Into::into),
-    }
-}
-
 fn fund_vehicle(vehicle: CandidateVehicle) -> FundCandidateVehicle {
     match vehicle {
         CandidateVehicle::Fund => FundCandidateVehicle::Fund,
@@ -142,6 +129,19 @@ fn write_removal<W: Write>(
             outcome.subject_id
         ),
     )
+}
+
+pub fn write_output<W: Write, T: Serialize>(
+    writer: &mut W,
+    format: output::OutputFormat,
+    command: &str,
+    data: &T,
+    human: &str,
+) -> anyhow::Result<()> {
+    match format {
+        output::OutputFormat::Json => output::write_json(writer, command, data),
+        output::OutputFormat::Human => writeln!(writer, "{human}").map_err(Into::into),
+    }
 }
 
 fn list_human(catalog: &BenchmarkCatalog) -> String {
