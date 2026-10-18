@@ -8,7 +8,7 @@ use super::{
     policy, InventoryMarketDataRequirement, MarketData, NavValuationData, NavValuationInterval,
     SourceObservation,
 };
-use crate::constants::{format_date, BASE_CURRENCY, DATE_FORMAT, FUND_API_PADDING_DAYS};
+use crate::constants::{format_date, BASE_CURRENCY, FUND_API_PADDING_DAYS};
 use crate::db::repos::{daily_price_repo, exchange_rate_repo};
 use crate::models::{Asset, AssetType, ValuationMarketData, ValuationMarketDataAvailability};
 
@@ -168,6 +168,12 @@ pub(crate) async fn prepare_base_currency_prices(
     requested_end_date: &str,
     market_data: &MarketData,
 ) -> anyhow::Result<(Vec<(String, f64)>, Vec<crate::models::MarketDataLimitation>)> {
+    for (date, price) in native_prices {
+        anyhow::ensure!(
+            price.is_finite() && *price > 0.0,
+            "invalid successful {currency} fund price on {date}: {price}"
+        );
+    }
     if currency == BASE_CURRENCY {
         return Ok((native_prices.to_vec(), Vec::new()));
     }
@@ -179,20 +185,30 @@ pub(crate) async fn prepare_base_currency_prices(
     let rates =
         prepare_reference_exchange_rates(db, currency, start_date, requested_end_date, market_data)
             .await?;
+    for (date, rate) in &rates {
+        anyhow::ensure!(
+            rate.is_finite() && *rate > 0.0,
+            "invalid persisted {currency}/{BASE_CURRENCY} FX rate on {date}: {rate}"
+        );
+    }
     let limitations = match rates.range(..=requested_end).next_back() {
         Some((date, _)) => policy::classify_fx_limitation(currency, *date, requested_end)
             .into_iter()
             .collect(),
         None => vec![policy::missing_fx_limitation(currency, requested_end)],
     };
-    let converted = native_prices
-        .iter()
-        .filter_map(|(date, price)| {
-            let parsed = NaiveDate::parse_from_str(date, DATE_FORMAT).ok()?;
-            let rate = rates.get(&parsed)?;
-            Some((date.clone(), price * rate))
-        })
-        .collect();
+    let mut converted = Vec::with_capacity(native_prices.len());
+    for (date, price) in native_prices {
+        let parsed = policy::parse_market_data_date(date, "fund price date")?;
+        if let Some(rate) = rates.get(&parsed) {
+            let base_price = price * rate;
+            anyhow::ensure!(
+                base_price.is_finite() && base_price > 0.0,
+                "invalid converted {currency} fund price on {date}: {base_price}"
+            );
+            converted.push((date.clone(), base_price));
+        }
+    }
     Ok((converted, limitations))
 }
 

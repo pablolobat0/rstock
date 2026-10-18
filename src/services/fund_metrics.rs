@@ -34,7 +34,6 @@ pub async fn compute_standard_fund_metrics(
     let benchmark = market_data
         .benchmark_reference_market_data(db, &requested_start, &format_date(today))
         .await?;
-    let benchmark_returns = metrics::compute_log_returns(&benchmark.benchmark_series);
     let (base_prices, mut benchmark_limitations) = match currency {
         Some(currency) => {
             market_data
@@ -48,30 +47,30 @@ pub async fn compute_standard_fund_metrics(
             benchmark_limitations.push(limitation);
         }
     }
-    let beta_returns = metrics::compute_log_returns(&base_prices);
+    let benchmark_prices = benchmark.benchmark_series;
     let ytd_start = NaiveDate::from_ymd_opt(today.year(), 1, 1).expect("Jan 1 always valid");
 
     Ok(StandardFundMetrics {
-        ytd: compute_period_metrics(prices, &beta_returns, &benchmark_returns, ytd_start, today),
+        ytd: compute_period_metrics(prices, &base_prices, &benchmark_prices, ytd_start, today),
         one_year: compute_trailing_period_metrics(
             prices,
-            &beta_returns,
-            &benchmark_returns,
+            &base_prices,
+            &benchmark_prices,
             ONE_YEAR_TRADING_DAYS,
         ),
         three_year: compute_trailing_period_metrics(
             prices,
-            &beta_returns,
-            &benchmark_returns,
+            &base_prices,
+            &benchmark_prices,
             THREE_YEAR_TRADING_DAYS,
         ),
         five_year: compute_trailing_period_metrics(
             prices,
-            &beta_returns,
-            &benchmark_returns,
+            &base_prices,
+            &benchmark_prices,
             FIVE_YEAR_TRADING_DAYS,
         ),
-        all_time: compute_all_time_metrics(prices, &beta_returns, &benchmark_returns, today),
+        all_time: compute_all_time_metrics(prices, &base_prices, &benchmark_prices, today),
         benchmark_reference: benchmark.benchmark_reference,
         benchmark_limitations,
     })
@@ -86,18 +85,18 @@ pub fn format_source_observations(observations: Vec<SourceObservation>) -> Vec<(
 
 fn compute_all_time_metrics(
     prices: &[(String, f64)],
-    beta_returns: &HashMap<String, f64>,
-    benchmark_returns: &HashMap<String, f64>,
+    base_prices: &[(String, f64)],
+    benchmark_prices: &[(String, f64)],
     today: NaiveDate,
 ) -> Option<FundPeriodMetrics> {
     let start = NaiveDate::parse_from_str(&prices.first()?.0, DATE_FORMAT).ok()?;
-    compute_period_metrics(prices, beta_returns, benchmark_returns, start, today)
+    compute_period_metrics(prices, base_prices, benchmark_prices, start, today)
 }
 
 fn compute_trailing_period_metrics(
     prices: &[(String, f64)],
-    beta_returns: &HashMap<String, f64>,
-    benchmark_returns: &HashMap<String, f64>,
+    base_prices: &[(String, f64)],
+    benchmark_prices: &[(String, f64)],
     trading_days: usize,
 ) -> Option<FundPeriodMetrics> {
     if prices.len() < 2 {
@@ -108,13 +107,13 @@ fn compute_trailing_period_metrics(
     let start = NaiveDate::parse_from_str(&prices[window_start].0, DATE_FORMAT).ok()?;
     let end = NaiveDate::parse_from_str(&prices.last()?.0, DATE_FORMAT).ok()?;
 
-    compute_period_metrics(prices, beta_returns, benchmark_returns, start, end)
+    compute_period_metrics(prices, base_prices, benchmark_prices, start, end)
 }
 
 fn compute_period_metrics(
     prices: &[(String, f64)],
-    beta_returns: &HashMap<String, f64>,
-    benchmark_returns: &HashMap<String, f64>,
+    base_prices: &[(String, f64)],
+    benchmark_prices: &[(String, f64)],
     start: NaiveDate,
     end: NaiveDate,
 ) -> Option<FundPeriodMetrics> {
@@ -137,11 +136,9 @@ fn compute_period_metrics(
 
     let window_prices: Vec<(String, f64)> = window.iter().map(|(d, p)| (d.clone(), *p)).collect();
     let fund_returns = metrics::compute_log_returns(&window_prices);
-    let beta_returns = returns_in_window(beta_returns, &start_str, &end_str);
-    let benchmark_returns = returns_in_window(benchmark_returns, &start_str, &end_str);
     let daily_returns = sorted_returns(&fund_returns);
     let nav_values: Vec<f64> = window.iter().map(|(_, p)| *p).collect();
-    let beta = complete_beta(&beta_returns, &benchmark_returns, &fund_returns);
+    let beta = compute_beta_over_observation_intervals(&window, base_prices, benchmark_prices);
 
     Some(FundPeriodMetrics {
         total_return: (end_price / start_price - 1.0) * 100.0,
@@ -159,43 +156,59 @@ fn compute_period_metrics(
     })
 }
 
-fn returns_in_window(
-    returns: &HashMap<String, f64>,
-    start: &str,
-    end: &str,
-) -> HashMap<String, f64> {
-    returns
-        .iter()
-        // Returns are dated by their ending observation. The interval ending
-        // at the window anchor starts outside the selected period and is not
-        // part of either period's local return series.
-        .filter(|(date, _)| date.as_str() > start && date.as_str() <= end)
-        .map(|(date, value)| (date.clone(), *value))
-        .collect()
-}
-
-fn complete_beta(
-    subject: &HashMap<String, f64>,
-    benchmark: &HashMap<String, f64>,
-    expected_subject: &HashMap<String, f64>,
+fn compute_beta_over_observation_intervals(
+    subject_window: &[&(String, f64)],
+    subject_base_prices: &[(String, f64)],
+    benchmark_prices: &[(String, f64)],
 ) -> Option<f64> {
-    if subject.len() != expected_subject.len()
-        || benchmark.len() != expected_subject.len()
-        || expected_subject
-            .keys()
-            .any(|date| !subject.contains_key(date) || !benchmark.contains_key(date))
-    {
+    if subject_window.len() < 2 {
         return None;
     }
-    let aligned = metrics::align_return_series_with_dates_unfiltered(subject, benchmark);
-    (aligned.len() == expected_subject.len())
-        .then(|| {
-            metrics::compute_beta(
-                &aligned.iter().map(|(_, a, _)| *a).collect::<Vec<_>>(),
-                &aligned.iter().map(|(_, _, b)| *b).collect::<Vec<_>>(),
-            )
-        })
-        .flatten()
+    let subject_base: HashMap<&str, f64> = subject_base_prices
+        .iter()
+        .map(|(date, price)| (date.as_str(), *price))
+        .collect();
+    let benchmark: HashMap<&str, f64> = benchmark_prices
+        .iter()
+        .map(|(date, price)| (date.as_str(), *price))
+        .collect();
+    let mut subject_returns = Vec::with_capacity(subject_window.len() - 1);
+    let mut benchmark_returns = Vec::with_capacity(subject_window.len() - 1);
+    for pair in subject_window.windows(2) {
+        let start_date = pair[0].0.as_str();
+        let end_date = pair[1].0.as_str();
+        let mut prior_benchmark = *benchmark.get(start_date)?;
+        for (date, price) in benchmark_prices
+            .iter()
+            .filter(|(date, _)| date.as_str() > start_date && date.as_str() < end_date)
+        {
+            let parsed = NaiveDate::parse_from_str(date, DATE_FORMAT).ok()?;
+            if !matches!(
+                parsed.weekday(),
+                chrono::Weekday::Sat | chrono::Weekday::Sun
+            ) && (*price - prior_benchmark).abs() > f64::EPSILON * prior_benchmark.abs().max(1.0)
+            {
+                // A benchmark move on a weekday omitted from the subject
+                // schedule is a missing subject observation, not a weekend
+                // mark to discard while aligning daily maps.
+                return None;
+            }
+            prior_benchmark = *price;
+        }
+        let subject_start = *subject_base.get(start_date)?;
+        let subject_end = *subject_base.get(end_date)?;
+        let benchmark_start = *benchmark.get(start_date)?;
+        let benchmark_end = *benchmark.get(end_date)?;
+        if [subject_start, subject_end, benchmark_start, benchmark_end]
+            .iter()
+            .any(|price| !price.is_finite() || *price <= 0.0)
+        {
+            return None;
+        }
+        subject_returns.push((subject_end / subject_start).ln());
+        benchmark_returns.push((benchmark_end / benchmark_start).ln());
+    }
+    metrics::compute_beta(&subject_returns, &benchmark_returns)
 }
 
 fn sorted_returns(returns: &HashMap<String, f64>) -> Vec<f64> {

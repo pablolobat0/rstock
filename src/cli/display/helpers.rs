@@ -85,6 +85,41 @@ pub(in crate::cli) fn color_for_value(v: f64) -> Color {
     }
 }
 
+pub(crate) fn write_benchmark_reference_context<W: Write>(
+    writer: &mut W,
+    reference: &crate::models::BenchmarkReferenceInfo,
+    limitations: &[crate::models::MarketDataLimitation],
+) -> anyhow::Result<()> {
+    for line in benchmark_reference_context_lines(reference, limitations) {
+        writeln!(writer, "{line}")?;
+    }
+    Ok(())
+}
+
+pub(crate) fn benchmark_reference_context_lines(
+    reference: &crate::models::BenchmarkReferenceInfo,
+    limitations: &[crate::models::MarketDataLimitation],
+) -> Vec<String> {
+    let mut lines = vec![
+        format!(
+            "Beta reference: {} [{}]",
+            reference.display_name, reference.id
+        ),
+        format!(
+            "  Source: {} {} ({})",
+            reference.source, reference.source_identifier, reference.currency
+        ),
+        format!("  Adjustment: {}", reference.adjustment_provenance),
+        format!("  Return basis: {}", reference.return_basis_qualification),
+    ];
+    lines.extend(
+        limitations
+            .iter()
+            .map(format_market_data_limitation_warning),
+    );
+    lines
+}
+
 /// The user-facing Market data limitation wording shared by the Portfolio
 /// view human Adapter and the correlation and composition renderers.
 pub(crate) fn format_market_data_limitation_warning(
@@ -135,41 +170,6 @@ pub(crate) fn format_market_data_limitation_warning(
             "Market data limitation: FX rate {currency} has latest rate from {latest_available_date}; requested through {requested_end_date}."
         ),
     }
-}
-
-pub(crate) fn benchmark_reference_context_lines(
-    reference: &crate::models::BenchmarkReferenceInfo,
-    limitations: &[crate::models::MarketDataLimitation],
-) -> Vec<String> {
-    let mut lines = vec![
-        format!(
-            "Beta reference: {} [{}]",
-            reference.display_name, reference.id
-        ),
-        format!(
-            "  Source: {} {} ({})",
-            reference.source, reference.source_identifier, reference.currency
-        ),
-        format!("  Adjustment: {}", reference.adjustment_provenance),
-        format!("  Return basis: {}", reference.return_basis_qualification),
-    ];
-    lines.extend(
-        limitations
-            .iter()
-            .map(format_market_data_limitation_warning),
-    );
-    lines
-}
-
-pub(crate) fn write_benchmark_reference_context<W: Write>(
-    writer: &mut W,
-    reference: &crate::models::BenchmarkReferenceInfo,
-    limitations: &[crate::models::MarketDataLimitation],
-) -> anyhow::Result<()> {
-    for line in benchmark_reference_context_lines(reference, limitations) {
-        writeln!(writer, "{line}")?;
-    }
-    Ok(())
 }
 
 #[cfg(test)]
