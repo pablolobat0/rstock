@@ -7,21 +7,25 @@ pub struct Migration;
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         for (column, default) in [
-            ("role", "Investment universe"),
-            ("universe", "Unknown"),
-            ("hedge_policy", "Unknown"),
-            ("source_provenance", "No production source mapping verified"),
-            ("history_boundary", "Unknown"),
-            ("verification_state", "target_only"),
+            (BenchmarkReferences::Role, "Investment universe"),
+            (BenchmarkReferences::Universe, "Unknown"),
+            (BenchmarkReferences::HedgePolicy, "Unknown"),
+            (BenchmarkReferences::SourceProvenance, "No production source mapping verified"),
+            (BenchmarkReferences::HistoryBoundary, "Unknown"),
+            (BenchmarkReferences::VerificationState, "target_only"),
         ] {
-            manager.get_connection().execute_unprepared(&format!(
-                "ALTER TABLE benchmark_references ADD COLUMN {column} TEXT NOT NULL DEFAULT '{default}'"
-            )).await?;
+            manager.alter_table(
+                Table::alter()
+                    .table(BenchmarkReferences::Table)
+                    .add_column(ColumnDef::new(column).string().not_null().default(default))
+                    .to_owned(),
+            ).await?;
         }
-        for column in ["official_comparator", "objective_comparator"] {
-            manager.get_connection().execute_unprepared(&format!(
-                "ALTER TABLE benchmark_references ADD COLUMN {column} TEXT NULL"
-            )).await?;
+        for column in [BenchmarkReferences::OfficialComparator, BenchmarkReferences::ObjectiveComparator] {
+            manager.alter_table(
+                Table::alter().table(BenchmarkReferences::Table)
+                    .add_column(ColumnDef::new(column).string().null()).to_owned(),
+            ).await?;
         }
         manager.create_table(
             Table::create().table(BenchmarkAssignments::Table)
@@ -74,14 +78,19 @@ impl MigrationTrait for Migration {
                 'bloomberg-global-aggregate-1-5y-eur-hedged', 'msci-europe-small-cap-value', 'estr'
             )"
         ).await?;
-        for column in ["objective_comparator", "official_comparator", "verification_state", "history_boundary", "source_provenance", "hedge_policy", "universe", "role"] {
-            manager.get_connection().execute_unprepared(&format!(
-                "ALTER TABLE benchmark_references DROP COLUMN {column}"
-            )).await?;
+        for column in [
+            BenchmarkReferences::ObjectiveComparator, BenchmarkReferences::OfficialComparator,
+            BenchmarkReferences::VerificationState, BenchmarkReferences::HistoryBoundary,
+            BenchmarkReferences::SourceProvenance, BenchmarkReferences::HedgePolicy,
+            BenchmarkReferences::Universe, BenchmarkReferences::Role,
+        ] {
+            manager.alter_table(
+                Table::alter().table(BenchmarkReferences::Table).drop_column(column).to_owned(),
+            ).await?;
         }
         Ok(())
     }
 }
 
 #[derive(DeriveIden)] enum BenchmarkAssignments { Table, SubjectType, SubjectId, ReferenceId, IsOverride, AssignedAt }
-#[derive(DeriveIden)] enum BenchmarkReferences { Table, Id }
+#[derive(DeriveIden)] enum BenchmarkReferences { Table, Id, Role, Universe, HedgePolicy, SourceProvenance, HistoryBoundary, VerificationState, OfficialComparator, ObjectiveComparator }

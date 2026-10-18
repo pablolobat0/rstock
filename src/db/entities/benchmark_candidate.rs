@@ -10,8 +10,11 @@ pub struct Model {
     pub display_name: String,
     pub official_comparator: Option<String>,
     pub official_provenance: String,
+    pub official_document_date: String,
     pub objective_comparator: Option<String>,
     pub objective_provenance: String,
+    pub objective_document_date: String,
+    pub history_boundary: String,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

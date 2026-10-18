@@ -50,6 +50,17 @@ pub async fn find_all_ordered_by_date(
         .collect::<anyhow::Result<Vec<_>>>()
 }
 
+pub async fn find_distinct_asset_ids(db: &impl ConnectionTrait) -> anyhow::Result<Vec<i32>> {
+    use sea_orm::QuerySelect;
+    Ok(transaction::Entity::find()
+        .select_only()
+        .column(transaction::Column::AssetId)
+        .distinct()
+        .into_tuple::<i32>()
+        .all(db)
+        .await?)
+}
+
 pub async fn find_by_asset_id(
     db: &impl ConnectionTrait,
     asset_id: i32,

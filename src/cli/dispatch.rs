@@ -4,13 +4,15 @@
 //! parsed CLI commands through [`run_command`] so production and tests always
 //! exercise the same application module graph.
 
+use std::io::Write;
+
 use sea_orm::DatabaseConnection;
 
 use super::commands;
 use super::output::OutputFormat;
 use super::{
-    AnalyzeCommands, AssetCommands, Commands, CompareCommands, CorrelationCommands,
-    PortfolioCommands, TransactionCommands,
+    AnalyzeCommands, AssetCommands, BenchmarkCommands, Commands, CompareCommands,
+    CorrelationCommands, PortfolioCommands, TransactionCommands,
 };
 use crate::services::market_data::MarketData;
 
@@ -79,6 +81,17 @@ pub async fn run_command(
             commands::benchmarks::run(db, args.command, output_format).await
         }
     }
+}
+
+/// Dispatch one benchmark-management command through the library-owned CLI adapter
+/// while letting callers capture the exact human or JSON output.
+pub async fn run_benchmark_command_with_writer<W: Write>(
+    db: &DatabaseConnection,
+    command: BenchmarkCommands,
+    output_format: OutputFormat,
+    writer: &mut W,
+) -> anyhow::Result<()> {
+    commands::benchmarks::run_with_writer(db, command, output_format, writer).await
 }
 
 async fn run_transaction_command(
