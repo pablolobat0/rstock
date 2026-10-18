@@ -20,6 +20,7 @@ use rstock::services::fund_analysis::{
     compute_top_n_weight,
 };
 use rstock::services::fund_comparison::{compare_funds, compute_common_holdings};
+use rstock::services::fund_metrics::compute_standard_fund_metrics;
 use rstock::services::metrics::compute_cagr;
 use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter};
 use serde_json::{json, Value};
@@ -42,6 +43,52 @@ fn fund_comparison_envelope(result: &rstock::models::FundComparisonResult) -> Va
     assert_eq!(text.lines().count(), 1);
     assert!(!text.contains("\u{1b}["));
     serde_json::from_str(&text).expect("fund comparison output should be valid JSON")
+}
+
+#[tokio::test]
+async fn usd_fund_beta_converts_subject_returns_to_eur_before_alignment() {
+    let db = setup_test_db().await;
+    let mut sources = MockMarketDataSources::new();
+    let dates = date_range(
+        chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
+        chrono::NaiveDate::from_ymd_opt(2025, 1, 30).unwrap(),
+    );
+    let prices: Vec<_> = dates
+        .iter()
+        .enumerate()
+        .map(|(index, date)| {
+            (
+                date.clone(),
+                100.0 + ((index * 7 % 13) as f64) + index as f64 * 0.25,
+            )
+        })
+        .collect();
+    sources
+        .historical_prices
+        .insert(BENCHMARK_TICKER.to_owned(), prices.clone());
+    sources.exchange_rates.insert(
+        "USDEUR".to_owned(),
+        dates
+            .iter()
+            .enumerate()
+            .map(|(index, date)| (date.clone(), 0.75 + (index % 9) as f64 * 0.015))
+            .collect(),
+    );
+    let result = compute_standard_fund_metrics(
+        &db,
+        &market_data_at(
+            &sources,
+            chrono::NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
+        ),
+        &prices,
+        Some("USD"),
+        chrono::NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    assert!((result.all_time.unwrap().beta.unwrap() - 1.0).abs() < 1e-10);
+    assert!(result.benchmark_limitations.is_empty());
 }
 
 #[test]
@@ -430,6 +477,13 @@ async fn test_fund_comparison_json_complete_structure_and_aligned_points() {
     assert_eq!(data["fund_b"]["code"], "XJSONCMP2");
     assert_eq!(data["fund_b"]["name"], "Second Candidate");
     assert_eq!(data["fund_b"]["info"]["currency"], "USD");
+    assert!(data["fund_a"]["benchmark_limitations"].is_array());
+    assert!(data["fund_b"]["benchmark_limitations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|limitation| limitation["subject"]["type"] == "fx_rate"
+            && limitation["subject"]["currency"] == "USD"));
     for fund in ["fund_a", "fund_b"] {
         for period in ["ytd", "one_year", "three_year", "five_year", "all_time"] {
             assert!(
@@ -905,6 +959,12 @@ async fn test_fund_analysis_json_complete_data() {
         .as_str()
         .unwrap()
         .contains("auto_adjust"));
+    assert!(data["benchmark_limitations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|limitation| limitation["subject"]["type"] == "fx_rate"
+            && limitation["subject"]["currency"] == "USD"));
     assert_eq!(data["ms_code"], "XJSONFULL");
     assert_eq!(data["name"], "Complete Candidate Fund");
     assert_eq!(data["fund_currency"], "EUR");
@@ -924,6 +984,8 @@ async fn test_fund_analysis_json_complete_data() {
         assert!(data[period].is_object(), "{period} should contain metrics");
         assert!(data[period]["total_return"].is_number());
     }
+    assert!(data["one_year"]["beta"].is_null());
+    assert!(data["one_year"]["volatility"].is_number());
     assert_eq!(data["candidate_correlation"]["period_label"], "1Y");
     assert!(data["candidate_correlation"]["rows"].is_array());
     assert_eq!(data["holdings_changed"], true);

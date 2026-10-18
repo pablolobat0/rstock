@@ -7,8 +7,10 @@ use textplots::{Chart, Plot, Shape};
 use crate::constants::display_date;
 use crate::models::{CorrelationMatrix, RollingCorrelationResult};
 
-use super::helpers::format_market_data_limitation_warning;
-use super::helpers::{color_for_value, format_eu, format_plain};
+use super::helpers::{
+    benchmark_reference_context_lines, color_for_value, format_eu,
+    format_market_data_limitation_warning, format_plain,
+};
 
 pub fn print_correlation_matrix(matrix: &CorrelationMatrix, period_label: &str) {
     if matrix.names.is_empty() {
@@ -17,24 +19,9 @@ pub fn print_correlation_matrix(matrix: &CorrelationMatrix, period_label: &str) 
     }
 
     println!("\nCorrelation Matrix — {period_label}\n");
-    println!(
-        "Reference: {} [{}]",
-        matrix.benchmark_reference.display_name, matrix.benchmark_reference.id
-    );
-    println!(
-        "  Source: {} {} ({})",
-        matrix.benchmark_reference.source,
-        matrix.benchmark_reference.source_identifier,
-        matrix.benchmark_reference.currency
-    );
-    println!(
-        "  Adjustment: {}",
-        matrix.benchmark_reference.adjustment_provenance
-    );
-    println!(
-        "  Return basis: {}",
-        matrix.benchmark_reference.return_basis_qualification
-    );
+    for line in benchmark_reference_context_lines(&matrix.benchmark_reference, &[]) {
+        println!("{line}");
+    }
 
     let n = matrix.names.len();
 

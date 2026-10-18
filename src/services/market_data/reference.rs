@@ -4,7 +4,7 @@ use chrono::{Duration, NaiveDate};
 use sea_orm::DatabaseConnection;
 
 use crate::constants::{format_date, BASE_CURRENCY, DATE_FORMAT};
-use crate::db::repos::{benchmark_reference_repo, exchange_rate_repo};
+use crate::db::repos::benchmark_reference_repo;
 use crate::models::{BenchmarkReferenceInfo, MarketDataLimitation};
 
 use super::{historical, policy, MarketData};
@@ -51,7 +51,7 @@ pub(crate) async fn prepare(
             let rate = if reference.currency == BASE_CURRENCY {
                 Some(1.0)
             } else {
-                fx_values.range(..=*date).next_back().map(|(_, rate)| *rate)
+                fx_values.get(date).copied()
             }?;
             Some((format_date(*date), price * rate))
         })
@@ -98,62 +98,44 @@ async fn prepare_prices(
     }
 
     let completed_end = end.min(market_data.today() - Duration::days(1));
-    for (gap_start, gap_end) in missing_intervals(start, completed_end, &covered) {
+    for interval in historical::missing_intervals(start, completed_end, &covered) {
         let Ok(mut observations) = market_data
-            .stock_price_history(&reference.source_identifier, gap_start, gap_end)
+            .stock_price_history(&reference.source_identifier, interval.start, interval.end)
             .await
         else {
             continue;
         };
-        if !observations.iter().any(|item| item.date < gap_start)
-            && !known.keys().any(|date| *date < gap_start)
+        if !observations.iter().any(|item| item.date < interval.start)
+            && !known.keys().any(|date| *date < interval.start)
         {
             if let Ok(Some(predecessor)) = market_data
-                .latest_stock_price_before(&reference.source_identifier, gap_start)
+                .latest_stock_price_before(&reference.source_identifier, interval.start)
                 .await
             {
                 observations.push(predecessor);
             }
         }
-        observations.retain(|item| item.date <= completed_end && item.date <= gap_end);
+        observations.retain(|item| item.date <= completed_end && item.date <= interval.end);
         observations.sort_by_key(|item| item.date);
-        let source_values: BTreeMap<NaiveDate, f64> = observations
+        let filled = historical::forward_filled_interval(
+            interval,
+            observations,
+            completed_end,
+            interval.end,
+            true,
+            &mut known,
+        );
+        let writes: Vec<_> = filled
             .into_iter()
-            .map(|item| (item.date, item.value))
-            .collect();
-        let has_later_cached = covered.iter().any(|date| *date > gap_end);
-        let fill_end = if has_later_cached {
-            gap_end
-        } else if let Some(last_source) = source_values.keys().next_back() {
-            (*last_source).min(gap_end)
-        } else {
-            continue;
-        };
-        let mut last_value = source_values
-            .range(..gap_start)
-            .next_back()
-            .map(|(_, value)| *value)
-            .or_else(|| {
-                known
-                    .range(..gap_start)
-                    .next_back()
-                    .map(|(_, value)| *value)
-            });
-        let mut writes = Vec::new();
-        let mut date = gap_start;
-        while date <= fill_end {
-            if let Some(value) = source_values.get(&date).copied().or(last_value) {
-                writes.push(benchmark_reference_repo::ReferencePrice {
-                    date: format_date(date),
-                    price: value,
-                    is_api_failure: false,
-                });
-                known.insert(date, value);
+            .map(|(date, price)| {
                 covered.insert(date);
-                last_value = Some(value);
-            }
-            date += Duration::days(1);
-        }
+                benchmark_reference_repo::ReferencePrice {
+                    date: format_date(date),
+                    price,
+                    is_api_failure: false,
+                }
+            })
+            .collect();
         benchmark_reference_repo::upsert_prices_immutable(db, &reference.id, &writes).await?;
     }
 
@@ -185,7 +167,9 @@ async fn prepare_exchange_rates(
     market_data: &MarketData,
     limitations: &mut Vec<MarketDataLimitation>,
 ) -> anyhow::Result<BTreeMap<NaiveDate, f64>> {
-    if currency != BASE_CURRENCY {
+    let fx_values = if currency == BASE_CURRENCY {
+        BTreeMap::new()
+    } else {
         historical::prepare_reference_exchange_rates(
             db,
             currency,
@@ -193,28 +177,8 @@ async fn prepare_exchange_rates(
             end_date,
             market_data,
         )
-        .await?;
-    }
-    let rows = exchange_rate_repo::find_rates_between_currencies(
-        db,
-        &[currency.to_owned()],
-        BASE_CURRENCY,
-        start_date,
-        end_date,
-    )
-    .await?;
-    let mut fx_values: BTreeMap<NaiveDate, f64> = rows
-        .get(currency)
-        .into_iter()
-        .flatten()
-        .map(|(date, rate)| Ok((NaiveDate::parse_from_str(date, DATE_FORMAT)?, *rate)))
-        .collect::<Result<_, chrono::ParseError>>()?;
-    if let Some((rate, date)) =
-        exchange_rate_repo::find_rate_and_date_at_or_before(db, currency, BASE_CURRENCY, start_date)
-            .await?
-    {
-        fx_values.insert(NaiveDate::parse_from_str(&date, DATE_FORMAT)?, rate);
-    }
+        .await?
+    };
     if currency != BASE_CURRENCY {
         if let Some((date, _)) = fx_values.range(..=end).next_back() {
             if let Some(limitation) = policy::classify_fx_limitation(currency, *date, end) {
@@ -225,31 +189,4 @@ async fn prepare_exchange_rates(
         }
     }
     Ok(fx_values)
-}
-
-fn missing_intervals(
-    start: NaiveDate,
-    end: NaiveDate,
-    covered: &HashSet<NaiveDate>,
-) -> Vec<(NaiveDate, NaiveDate)> {
-    if start > end {
-        return Vec::new();
-    }
-    let mut gaps = Vec::new();
-    let mut date = start;
-    let mut gap_start = None;
-    while date <= end {
-        if covered.contains(&date) {
-            if let Some(begin) = gap_start.take() {
-                gaps.push((begin, date - Duration::days(1)));
-            }
-        } else if gap_start.is_none() {
-            gap_start = Some(date);
-        }
-        date += Duration::days(1);
-    }
-    if let Some(begin) = gap_start {
-        gaps.push((begin, end));
-    }
-    gaps
 }

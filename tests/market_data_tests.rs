@@ -5,7 +5,7 @@ use rstock::constants::{format_date, BENCHMARK_TICKER};
 use rstock::db::entities::asset;
 use rstock::db::repos::asset_repo;
 use rstock::models::{Asset, AssetType, MarketDataLimitationClassification, MarketDataSubject};
-use sea_orm::EntityTrait;
+use sea_orm::{ConnectionTrait, EntityTrait};
 
 async fn make_asset(
     db: &sea_orm::DatabaseConnection,
@@ -94,6 +94,29 @@ async fn test_benchmark_market_data_prepares_required_fx() {
             .unwrap(),
         Some(0.90)
     );
+}
+
+#[tokio::test]
+async fn valuation_market_data_propagates_fx_cache_database_errors() {
+    let db = common::setup_test_db().await;
+    let usd_asset = make_asset(&db, "XFXFAIL", "FX failure fixture", "stock", "USD").await;
+    let mut mock = common::MockMarketDataSources::new();
+    mock.historical_prices
+        .insert("XFXFAIL".to_owned(), vec![("2025-01-02".to_owned(), 10.0)]);
+    mock.exchange_rates
+        .insert("USDEUR".to_owned(), vec![("2025-01-02".to_owned(), 0.9)]);
+    db.execute_unprepared(
+        "CREATE TRIGGER reject_fx BEFORE INSERT ON daily_exchange_rates BEGIN SELECT RAISE(ABORT, 'blocked valuation FX persistence'); END;",
+    )
+    .await
+    .unwrap();
+    let market_data = common::market_data_at(&mock, date(2025, 1, 5));
+
+    let error = market_data
+        .prepare_valuation_market_data(&db, &[usd_asset], "2025-01-02", "2025-01-02")
+        .await
+        .expect_err("FX database insert failure must propagate from NAV valuation prep");
+    assert!(format!("{error:#}").contains("blocked valuation FX persistence"));
 }
 
 #[tokio::test]

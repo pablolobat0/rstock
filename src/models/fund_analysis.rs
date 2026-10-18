@@ -1,4 +1,5 @@
 use super::portfolio::{AllocationEntry, BenchmarkReferenceInfo, FundHolding};
+use super::MarketDataLimitation;
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -22,6 +23,7 @@ pub struct FundAnalysisResult {
     pub five_year: Option<FundPeriodMetrics>,
     pub all_time: Option<FundPeriodMetrics>,
     pub benchmark_reference: BenchmarkReferenceInfo,
+    pub benchmark_limitations: Vec<MarketDataLimitation>,
     pub candidate_correlation: CandidateCorrelationResult,
     pub holdings_changed: bool,
     pub last_snapshot_date: Option<String>,

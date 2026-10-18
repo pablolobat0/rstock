@@ -14,6 +14,7 @@ use rstock::services::metrics::{
     align_return_series_with_dates, align_return_series_with_dates_unfiltered,
     compute_rolling_correlation, summarize_rolling_correlation,
 };
+use sea_orm::ConnectionTrait;
 use serde_json::{json, Value};
 
 fn correlation_market_data(
@@ -402,6 +403,62 @@ async fn fresh_reference_cache_reuses_immutable_prices_without_creating_asset_ro
     assert!(asset_repo::find_all(&db).await.unwrap().is_empty());
 }
 
+#[tokio::test]
+async fn benchmark_reference_does_not_extend_eur_prices_past_final_fx_observation() {
+    let db = setup_test_db().await;
+    let mut sources = MockMarketDataSources::new();
+    sources.historical_prices.insert(
+        BENCHMARK_TICKER.to_owned(),
+        (1..=8)
+            .into_iter()
+            .map(|day| (format!("2025-01-0{day}"), 100.0 + f64::from(day)))
+            .collect(),
+    );
+    sources
+        .exchange_rates
+        .insert("USDEUR".to_owned(), vec![("2025-01-01".to_owned(), 0.9)]);
+    let market_data = common::market_data_at(
+        &sources,
+        chrono::NaiveDate::from_ymd_opt(2025, 1, 10).unwrap(),
+    );
+
+    let result = market_data
+        .benchmark_reference_market_data(&db, "2025-01-01", "2025-01-08")
+        .await
+        .unwrap();
+
+    assert_eq!(
+        result.benchmark_series,
+        vec![("2025-01-01".to_owned(), 90.9)]
+    );
+    assert!(result.limitations.iter().any(|limitation| matches!(
+        &limitation.subject,
+        rstock::models::MarketDataSubject::FxRate { currency } if currency == "USD"
+    )));
+}
+
+#[tokio::test]
+async fn benchmark_fx_persistence_failure_is_a_hard_error() {
+    let db = setup_test_db().await;
+    let mut sources = MockMarketDataSources::new();
+    seed_benchmark_market_data(&mut sources, 3);
+    db.execute_unprepared(
+        "CREATE TRIGGER reject_fx BEFORE INSERT ON daily_exchange_rates BEGIN SELECT RAISE(ABORT, 'blocked FX persistence'); END;",
+    )
+    .await
+    .unwrap();
+    let market_data = common::market_data_at(
+        &sources,
+        chrono::NaiveDate::from_ymd_opt(2025, 1, 5).unwrap(),
+    );
+
+    let error = market_data
+        .benchmark_reference_market_data(&db, "2025-01-01", "2025-01-03")
+        .await
+        .expect_err("FX database write failure must not become missing data");
+    assert!(format!("{error:#}").contains("blocked FX persistence"));
+}
+
 /// Assets with insufficient data should appear in warnings and have None correlation
 #[tokio::test]
 async fn test_insufficient_data_produces_warning() {
@@ -527,6 +584,13 @@ async fn test_correlation_matrix_json_preserves_nulls_warnings_and_limitations()
             && limitation["subject"]["ticker"] == "XFAKE1"
             && limitation["latest_available_date"] == "2025-01-05"
             && limitation["requested_end_date"] == "2025-02-10"
+    }));
+    assert!(limitations.iter().any(|limitation| {
+        limitation["subject"]["type"] == "benchmark_reference"
+            && limitation["subject"]["id"] == "legacy-acwi-etf-proxy"
+    }));
+    assert!(limitations.iter().any(|limitation| {
+        limitation["subject"]["type"] == "fx_rate" && limitation["subject"]["currency"] == "USD"
     }));
     assert!(!text.contains("\u{1b}["));
 }

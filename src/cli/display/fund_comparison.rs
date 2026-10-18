@@ -11,7 +11,10 @@ use crate::models::{
     AllocationComparison, FundComparisonResult, FundComparisonSide, FundPeriodMetrics,
 };
 
-use super::helpers::{format_eu, format_pct, format_plain, format_return_plain};
+use super::helpers::{
+    benchmark_reference_context_lines, format_eu, format_market_data_limitation_warning,
+    format_pct, format_plain, format_return_plain,
+};
 
 pub fn print_fund_comparison(result: &FundComparisonResult) {
     println!();
@@ -100,22 +103,18 @@ fn print_fund_info(result: &FundComparisonResult) {
 fn print_performance(result: &FundComparisonResult) {
     println!("{}", "Performance".bold());
     println!();
-    println!(
-        "Beta reference: {} [{}] — {} {} ({})",
-        result.benchmark_reference.display_name,
-        result.benchmark_reference.id,
-        result.benchmark_reference.source,
-        result.benchmark_reference.source_identifier,
-        result.benchmark_reference.currency
-    );
-    println!(
-        "  Adjustment: {}",
-        result.benchmark_reference.adjustment_provenance
-    );
-    println!(
-        "  Return basis: {}",
-        result.benchmark_reference.return_basis_qualification
-    );
+    for line in benchmark_reference_context_lines(&result.benchmark_reference, &[]) {
+        println!("{line}");
+    }
+    for side in [&result.fund_a, &result.fund_b] {
+        for limitation in &side.benchmark_limitations {
+            println!(
+                "  {}: {}",
+                side.code,
+                format_market_data_limitation_warning(limitation)
+            );
+        }
+    }
     println!();
 
     let return_rows = [

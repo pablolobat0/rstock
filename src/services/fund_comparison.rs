@@ -96,7 +96,12 @@ async fn build_comparison_side(
     let prices = format_source_observations(
         prices_result.with_context(|| format!("failed to fetch price history for {code}"))?,
     );
-    let metrics = compute_standard_fund_metrics(db, market_data, &prices, today).await?;
+    let currency = quote_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.quote_currency.clone())
+        .or_else(|| fund_data.fund_currency.clone());
+    let metrics =
+        compute_standard_fund_metrics(db, market_data, &prices, currency.as_deref(), today).await?;
     let top_10_weight = compute_top_n_weight(&fund_data.holdings, 10);
     record_holdings_snapshot(
         db,
@@ -114,11 +119,6 @@ async fn build_comparison_side(
                 .and_then(|metadata| metadata.name.clone())
         })
         .unwrap_or_else(|| code.to_owned());
-    let currency = quote_metadata
-        .as_ref()
-        .and_then(|metadata| metadata.quote_currency.clone())
-        .or_else(|| fund_data.fund_currency.clone());
-
     let side = FundComparisonSide {
         code: code.to_owned(),
         name,
@@ -140,6 +140,7 @@ async fn build_comparison_side(
         three_year: metrics.three_year,
         five_year: metrics.five_year,
         all_time: metrics.all_time,
+        benchmark_limitations: metrics.benchmark_limitations,
     };
 
     Ok(FundComparisonData {

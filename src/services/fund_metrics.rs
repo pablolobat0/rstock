@@ -6,7 +6,7 @@ use crate::constants::{
     format_date, DATE_FORMAT, FIVE_YEAR_TRADING_DAYS, ONE_YEAR_TRADING_DAYS,
     THREE_YEAR_TRADING_DAYS,
 };
-use crate::models::{BenchmarkReferenceInfo, FundPeriodMetrics};
+use crate::models::{BenchmarkReferenceInfo, FundPeriodMetrics, MarketDataLimitation};
 use crate::services::market_data::{MarketData, SourceObservation};
 use crate::services::metrics;
 use sea_orm::DatabaseConnection;
@@ -18,12 +18,14 @@ pub struct StandardFundMetrics {
     pub five_year: Option<FundPeriodMetrics>,
     pub all_time: Option<FundPeriodMetrics>,
     pub benchmark_reference: BenchmarkReferenceInfo,
+    pub benchmark_limitations: Vec<MarketDataLimitation>,
 }
 
 pub async fn compute_standard_fund_metrics(
     db: &DatabaseConnection,
     market_data: &MarketData,
     prices: &[(String, f64)],
+    currency: Option<&str>,
     today: NaiveDate,
 ) -> anyhow::Result<StandardFundMetrics> {
     let requested_start = prices
@@ -33,27 +35,45 @@ pub async fn compute_standard_fund_metrics(
         .benchmark_reference_market_data(db, &requested_start, &format_date(today))
         .await?;
     let benchmark_returns = metrics::compute_log_returns(&benchmark.benchmark_series);
+    let (base_prices, mut benchmark_limitations) = match currency {
+        Some(currency) => {
+            market_data
+                .prepare_base_currency_prices(db, currency, prices, &format_date(today))
+                .await?
+        }
+        None => (Vec::new(), Vec::new()),
+    };
+    for limitation in benchmark.limitations {
+        if !benchmark_limitations.contains(&limitation) {
+            benchmark_limitations.push(limitation);
+        }
+    }
+    let beta_returns = metrics::compute_log_returns(&base_prices);
     let ytd_start = NaiveDate::from_ymd_opt(today.year(), 1, 1).expect("Jan 1 always valid");
 
     Ok(StandardFundMetrics {
-        ytd: compute_period_metrics(prices, &benchmark_returns, ytd_start, today),
+        ytd: compute_period_metrics(prices, &beta_returns, &benchmark_returns, ytd_start, today),
         one_year: compute_trailing_period_metrics(
             prices,
+            &beta_returns,
             &benchmark_returns,
             ONE_YEAR_TRADING_DAYS,
         ),
         three_year: compute_trailing_period_metrics(
             prices,
+            &beta_returns,
             &benchmark_returns,
             THREE_YEAR_TRADING_DAYS,
         ),
         five_year: compute_trailing_period_metrics(
             prices,
+            &beta_returns,
             &benchmark_returns,
             FIVE_YEAR_TRADING_DAYS,
         ),
-        all_time: compute_all_time_metrics(prices, &benchmark_returns, today),
+        all_time: compute_all_time_metrics(prices, &beta_returns, &benchmark_returns, today),
         benchmark_reference: benchmark.benchmark_reference,
+        benchmark_limitations,
     })
 }
 
@@ -66,15 +86,17 @@ pub fn format_source_observations(observations: Vec<SourceObservation>) -> Vec<(
 
 fn compute_all_time_metrics(
     prices: &[(String, f64)],
+    beta_returns: &HashMap<String, f64>,
     benchmark_returns: &HashMap<String, f64>,
     today: NaiveDate,
 ) -> Option<FundPeriodMetrics> {
     let start = NaiveDate::parse_from_str(&prices.first()?.0, DATE_FORMAT).ok()?;
-    compute_period_metrics(prices, benchmark_returns, start, today)
+    compute_period_metrics(prices, beta_returns, benchmark_returns, start, today)
 }
 
 fn compute_trailing_period_metrics(
     prices: &[(String, f64)],
+    beta_returns: &HashMap<String, f64>,
     benchmark_returns: &HashMap<String, f64>,
     trading_days: usize,
 ) -> Option<FundPeriodMetrics> {
@@ -86,11 +108,12 @@ fn compute_trailing_period_metrics(
     let start = NaiveDate::parse_from_str(&prices[window_start].0, DATE_FORMAT).ok()?;
     let end = NaiveDate::parse_from_str(&prices.last()?.0, DATE_FORMAT).ok()?;
 
-    compute_period_metrics(prices, benchmark_returns, start, end)
+    compute_period_metrics(prices, beta_returns, benchmark_returns, start, end)
 }
 
 fn compute_period_metrics(
     prices: &[(String, f64)],
+    beta_returns: &HashMap<String, f64>,
     benchmark_returns: &HashMap<String, f64>,
     start: NaiveDate,
     end: NaiveDate,
@@ -114,10 +137,15 @@ fn compute_period_metrics(
 
     let window_prices: Vec<(String, f64)> = window.iter().map(|(d, p)| (d.clone(), *p)).collect();
     let fund_returns = metrics::compute_log_returns(&window_prices);
+    let beta_returns = returns_in_window(beta_returns, &start_str, &end_str);
+    let benchmark_returns = returns_in_window(benchmark_returns, &start_str, &end_str);
     let daily_returns = sorted_returns(&fund_returns);
     let nav_values: Vec<f64> = window.iter().map(|(_, p)| *p).collect();
     let (aligned_fund, aligned_benchmark) =
-        metrics::align_return_series(&fund_returns, benchmark_returns);
+        metrics::align_return_series(&beta_returns, &benchmark_returns);
+    let beta = (aligned_fund.len() == fund_returns.len())
+        .then(|| metrics::compute_beta(&aligned_fund, &aligned_benchmark))
+        .flatten();
 
     Some(FundPeriodMetrics {
         total_return: (end_price / start_price - 1.0) * 100.0,
@@ -131,8 +159,20 @@ fn compute_period_metrics(
         sharpe: metrics::compute_sharpe(&daily_returns),
         sortino: metrics::compute_sortino(&daily_returns),
         max_drawdown: metrics::compute_max_drawdown(&nav_values),
-        beta: metrics::compute_beta(&aligned_fund, &aligned_benchmark),
+        beta,
     })
+}
+
+fn returns_in_window(
+    returns: &HashMap<String, f64>,
+    start: &str,
+    end: &str,
+) -> HashMap<String, f64> {
+    returns
+        .iter()
+        .filter(|(date, _)| date.as_str() >= start && date.as_str() <= end)
+        .map(|(date, value)| (date.clone(), *value))
+        .collect()
 }
 
 fn sorted_returns(returns: &HashMap<String, f64>) -> Vec<f64> {

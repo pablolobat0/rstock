@@ -205,6 +205,23 @@ impl MarketData {
         self.today
     }
 
+    pub(crate) async fn prepare_base_currency_prices(
+        &self,
+        db: &DatabaseConnection,
+        currency: &str,
+        native_prices: &[(String, f64)],
+        requested_end_date: &str,
+    ) -> anyhow::Result<(Vec<(String, f64)>, Vec<crate::models::MarketDataLimitation>)> {
+        historical::prepare_base_currency_prices(
+            db,
+            currency,
+            native_prices,
+            requested_end_date,
+            self,
+        )
+        .await
+    }
+
     pub(crate) async fn stock_price_history(
         &self,
         ticker: &str,
