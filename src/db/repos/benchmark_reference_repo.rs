@@ -2,7 +2,7 @@ use sea_orm::{sea_query::OnConflict, ColumnTrait, EntityTrait, QueryFilter, Quer
 
 use crate::db::entities::{benchmark_reference, benchmark_reference_price};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub struct BenchmarkReference {
     pub id: String,
     pub display_name: String,
@@ -12,6 +12,14 @@ pub struct BenchmarkReference {
     pub currency: String,
     pub adjustment_provenance: String,
     pub return_basis_qualification: String,
+    pub role: String,
+    pub universe: String,
+    pub hedge_policy: String,
+    pub source_provenance: String,
+    pub history_boundary: String,
+    pub verification_state: String,
+    pub official_comparator: Option<String>,
+    pub objective_comparator: Option<String>,
 }
 
 impl From<benchmark_reference::Model> for BenchmarkReference {
@@ -25,8 +33,28 @@ impl From<benchmark_reference::Model> for BenchmarkReference {
             currency: model.currency,
             adjustment_provenance: model.adjustment_provenance,
             return_basis_qualification: model.return_basis_qualification,
+            role: model.role,
+            universe: model.universe,
+            hedge_policy: model.hedge_policy,
+            source_provenance: model.source_provenance,
+            history_boundary: model.history_boundary,
+            verification_state: model.verification_state,
+            official_comparator: model.official_comparator,
+            objective_comparator: model.objective_comparator,
         }
     }
+}
+
+pub async fn find_all(
+    db: &impl sea_orm::ConnectionTrait,
+) -> anyhow::Result<Vec<BenchmarkReference>> {
+    Ok(benchmark_reference::Entity::find()
+        .order_by_asc(benchmark_reference::Column::Id)
+        .all(db)
+        .await?
+        .into_iter()
+        .map(BenchmarkReference::from)
+        .collect())
 }
 
 #[derive(Clone, Debug)]

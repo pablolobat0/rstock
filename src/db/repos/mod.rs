@@ -11,6 +11,8 @@ use sea_orm::{DatabaseConnection, TransactionTrait};
 use crate::models::{AssetSnapshot, PortfolioSnapshot};
 
 pub mod asset_repo;
+pub mod benchmark_assignment_repo;
+pub mod benchmark_candidate_repo;
 pub mod benchmark_reference_repo;
 pub mod daily_price_repo;
 pub mod exchange_rate_repo;

@@ -1,4 +1,5 @@
 pub mod analyze;
+pub mod benchmarks;
 pub mod compare;
 pub mod export;
 pub mod import;

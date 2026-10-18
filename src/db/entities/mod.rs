@@ -1,4 +1,6 @@
 pub mod asset;
+pub mod benchmark_assignment;
+pub mod benchmark_candidate;
 pub mod benchmark_reference;
 pub mod benchmark_reference_price;
 pub mod daily_asset_price;

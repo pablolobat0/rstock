@@ -4,7 +4,7 @@ mod dispatch;
 pub mod display;
 pub mod output;
 
-pub use dispatch::run_command;
+pub use dispatch::{run_benchmark_command_with_writer, run_command};
 
 use chrono::NaiveDate;
 use clap::{Args, Parser, Subcommand, ValueEnum};
@@ -121,6 +121,56 @@ pub enum Commands {
 
     /// Compare portfolio-relevant candidates side by side
     Compare(CompareArgs),
+    /// Browse benchmark definitions and manage explicit primary assignments
+    Benchmark(BenchmarkArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct BenchmarkArgs {
+    #[command(subcommand)]
+    pub command: BenchmarkCommands,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum BenchmarkCommands {
+    /// List approved reference definitions and tracked-asset assignment state
+    List {},
+    /// Show one stable reference definition
+    Show { reference_id: String },
+    /// Explicitly assign or replace a Tracked asset's primary reference
+    Assign {
+        #[arg(short = 't', long = "ticker")]
+        ticker: String,
+        reference_id: String,
+        #[arg(long)]
+        override_selection: bool,
+    },
+    /// Explicitly assign a reference to an exact Fund candidate without creating a holding
+    AssignCandidate {
+        #[arg(long)]
+        identifier: String,
+        #[arg(long, value_enum)]
+        vehicle: CandidateVehicle,
+        reference_id: String,
+    },
+    /// Remove a Tracked asset's primary reference
+    Remove {
+        #[arg(short = 't', long = "ticker")]
+        ticker: String,
+    },
+    /// Remove an exact Fund candidate's primary reference
+    RemoveCandidate {
+        #[arg(long)]
+        identifier: String,
+        #[arg(long, value_enum)]
+        vehicle: CandidateVehicle,
+    },
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum CandidateVehicle {
+    Fund,
+    Etf,
 }
 
 #[derive(Debug, Args)]

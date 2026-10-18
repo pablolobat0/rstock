@@ -12,6 +12,14 @@ pub struct Model {
     pub currency: String,
     pub adjustment_provenance: String,
     pub return_basis_qualification: String,
+    pub role: String,
+    pub universe: String,
+    pub hedge_policy: String,
+    pub source_provenance: String,
+    pub history_boundary: String,
+    pub verification_state: String,
+    pub official_comparator: Option<String>,
+    pub objective_comparator: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
