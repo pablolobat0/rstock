@@ -8,19 +8,12 @@ use crate::db::repos::{
 
 pub use crate::db::repos::benchmark_reference_repo::BenchmarkReference;
 
+pub const ASSIGNMENT_SEMANTICS: &str = "Explicit primary assignments apply retrospectively to the selected comparison window and do not mutate portfolio history.";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FundCandidateVehicle {
     Fund,
     Etf,
-}
-
-impl FundCandidateVehicle {
-    fn as_subject_prefix(self) -> &'static str {
-        match self {
-            Self::Fund => "fund",
-            Self::Etf => "etf",
-        }
-    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -50,6 +43,8 @@ pub struct AssignmentView {
     pub subject_id: String,
     pub reference_id: String,
     pub is_override: bool,
+    pub retrospective: bool,
+    pub creates_holding: bool,
     pub definition: BenchmarkReference,
 }
 
@@ -63,10 +58,18 @@ pub struct UnassignedTrackedAsset {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct BenchmarkCatalog {
+    pub assignment_semantics: &'static str,
     pub definitions: Vec<CatalogDefinition>,
     pub candidates: Vec<CandidateComparator>,
     pub assignments: Vec<AssignmentView>,
     pub unassigned_tracked_assets: Vec<UnassignedTrackedAsset>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct BenchmarkShow {
+    #[serde(flatten)]
+    pub definition: BenchmarkReference,
+    pub assignment_semantics: &'static str,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -101,6 +104,8 @@ pub async fn list_benchmark_catalog(db: &impl ConnectionTrait) -> anyhow::Result
             subject_id: assignment.subject_id,
             reference_id: assignment.reference_id.clone(),
             is_override: assignment.is_override,
+            retrospective: true,
+            creates_holding: false,
             definition: benchmark_reference_repo::find_by_id(db, &assignment.reference_id).await?,
         });
     }
@@ -149,6 +154,7 @@ pub async fn list_benchmark_catalog(db: &impl ConnectionTrait) -> anyhow::Result
         .collect();
 
     Ok(BenchmarkCatalog {
+        assignment_semantics: ASSIGNMENT_SEMANTICS,
         definitions,
         candidates,
         assignments: assignment_views,
@@ -159,8 +165,11 @@ pub async fn list_benchmark_catalog(db: &impl ConnectionTrait) -> anyhow::Result
 pub async fn show_benchmark_reference(
     db: &impl ConnectionTrait,
     reference_id: &str,
-) -> anyhow::Result<BenchmarkReference> {
-    benchmark_reference_repo::find_by_id(db, reference_id).await
+) -> anyhow::Result<BenchmarkShow> {
+    Ok(BenchmarkShow {
+        definition: benchmark_reference_repo::find_by_id(db, reference_id).await?,
+        assignment_semantics: ASSIGNMENT_SEMANTICS,
+    })
 }
 
 pub async fn assign_tracked_asset(
@@ -246,6 +255,15 @@ async fn remove_assignment(
         subject_id: subject_id.to_owned(),
         removed: benchmark_assignment_repo::delete_by_subject(db, subject_type, subject_id).await?,
     })
+}
+
+impl FundCandidateVehicle {
+    fn as_subject_prefix(self) -> &'static str {
+        match self {
+            Self::Fund => "fund",
+            Self::Etf => "etf",
+        }
+    }
 }
 
 fn normalized_candidate_identifier(identifier: &str) -> anyhow::Result<String> {

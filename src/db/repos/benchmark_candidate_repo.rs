@@ -16,6 +16,18 @@ pub struct FundCandidateComparator {
     pub history_boundary: String,
 }
 
+pub async fn find_all(
+    db: &impl sea_orm::ConnectionTrait,
+) -> anyhow::Result<Vec<FundCandidateComparator>> {
+    Ok(benchmark_candidate::Entity::find()
+        .order_by_asc(benchmark_candidate::Column::Identifier)
+        .all(db)
+        .await?
+        .into_iter()
+        .map(from_model)
+        .collect())
+}
+
 fn from_model(model: benchmark_candidate::Model) -> FundCandidateComparator {
     FundCandidateComparator {
         vehicle: model.vehicle,
@@ -29,16 +41,4 @@ fn from_model(model: benchmark_candidate::Model) -> FundCandidateComparator {
         objective_document_date: model.objective_document_date,
         history_boundary: model.history_boundary,
     }
-}
-
-pub async fn find_all(
-    db: &impl sea_orm::ConnectionTrait,
-) -> anyhow::Result<Vec<FundCandidateComparator>> {
-    Ok(benchmark_candidate::Entity::find()
-        .order_by_asc(benchmark_candidate::Column::Identifier)
-        .all(db)
-        .await?
-        .into_iter()
-        .map(from_model)
-        .collect())
 }

@@ -5,23 +5,10 @@ use serde::Serialize;
 use crate::{
     cli::{output, BenchmarkCommands, CandidateVehicle},
     services::benchmark_references::{
-        self, AssignmentOutcome, BenchmarkCatalog, BenchmarkReference, CandidateComparator,
-        FundCandidateVehicle, RemovalOutcome,
+        self, AssignmentOutcome, BenchmarkCatalog, BenchmarkReference, BenchmarkShow,
+        CandidateComparator, FundCandidateVehicle, RemovalOutcome,
     },
 };
-
-pub fn write_output<W: Write, T: Serialize>(
-    writer: &mut W,
-    format: output::OutputFormat,
-    command: &str,
-    data: &T,
-    human: &str,
-) -> anyhow::Result<()> {
-    match format {
-        output::OutputFormat::Json => output::write_json(writer, command, data),
-        output::OutputFormat::Human => writeln!(writer, "{human}").map_err(Into::into),
-    }
-}
 
 pub async fn run(
     db: &sea_orm::DatabaseConnection,
@@ -58,7 +45,7 @@ pub async fn run_with_writer<W: Write>(
                 format,
                 "benchmark.show",
                 &reference,
-                &reference_human(&reference),
+                &show_human(&reference),
             )
         }
         BenchmarkCommands::Assign {
@@ -108,6 +95,19 @@ pub async fn run_with_writer<W: Write>(
     }
 }
 
+pub fn write_output<W: Write, T: Serialize>(
+    writer: &mut W,
+    format: output::OutputFormat,
+    command: &str,
+    data: &T,
+    human: &str,
+) -> anyhow::Result<()> {
+    match format {
+        output::OutputFormat::Json => output::write_json(writer, command, data),
+        output::OutputFormat::Human => writeln!(writer, "{human}").map_err(Into::into),
+    }
+}
+
 fn fund_vehicle(vehicle: CandidateVehicle) -> FundCandidateVehicle {
     match vehicle {
         CandidateVehicle::Fund => FundCandidateVehicle::Fund,
@@ -145,23 +145,22 @@ fn write_removal<W: Write>(
 }
 
 fn list_human(catalog: &BenchmarkCatalog) -> String {
-    let mut lines = vec![
-        "Approved benchmark definitions (target-only entries are not admitted usable series):"
-            .to_owned(),
-    ];
+    let mut lines = vec![format!(
+        "Approved benchmark definitions (target-only entries are not admitted usable series). {}",
+        catalog.assignment_semantics
+    )];
     for row in &catalog.definitions {
         lines.push(reference_human(&row.reference));
     }
-    lines.push(
-        "Explicit primary assignments (retrospective for the requested comparison window):"
-            .to_owned(),
-    );
+    lines.push("Explicit primary assignments:".to_owned());
     for assignment in &catalog.assignments {
         lines.push(format!(
-            "{} {} → {}{}",
+            "{} {} → {} (retrospective: {}; creates holding: {}){}",
             assignment.subject_type,
             assignment.subject_id,
             assignment.definition.display_name,
+            assignment.retrospective,
+            assignment.creates_holding,
             if assignment.is_override {
                 " (explicit override)"
             } else {
@@ -183,6 +182,14 @@ fn list_human(catalog: &BenchmarkCatalog) -> String {
         ));
     }
     lines.join("\n")
+}
+
+fn show_human(show: &BenchmarkShow) -> String {
+    format!(
+        "{}; assignment semantics: {}",
+        reference_human(&show.definition),
+        show.assignment_semantics
+    )
 }
 
 fn reference_human(reference: &BenchmarkReference) -> String {
