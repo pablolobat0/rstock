@@ -1,4 +1,8 @@
-use rstock::services::benchmark::compare_aligned_eur_series;
+use chrono::{Datelike, Duration, NaiveDate};
+use rstock::models::{BenchmarkComparisonPeriod, ComparisonFact};
+use rstock::services::benchmark::{
+    compare_aligned_eur_series, compute_standard_fund_benchmark_periods,
+};
 
 #[test]
 fn aligned_comparison_rebases_both_series_and_reports_cumulative_returns() {
@@ -74,4 +78,270 @@ fn aligned_comparison_does_not_shorten_missing_anchor_or_end_with_two_common_dat
         .unwrap_err()
         .to_string()
         .contains("end 2025-01-09"));
+}
+
+#[test]
+fn standard_comparison_metrics_use_hand_checkable_aligned_daily_returns() {
+    let dates = weekdays("2025-10-01", 21);
+    let mut subject = vec![(dates[0].clone(), 100.0)];
+    let mut reference = vec![(dates[0].clone(), 100.0)];
+    let mut subject_returns = Vec::new();
+    let mut reference_returns = Vec::new();
+    for index in 0..20 {
+        let reference_return = if index % 2 == 0 { 0.01 } else { 0.02 };
+        let subject_return = if index % 2 == 0 { 0.03 } else { 0.01 };
+        reference_returns.push(reference_return);
+        subject_returns.push(subject_return);
+        subject.push((
+            dates[index + 1].clone(),
+            subject.last().unwrap().1 * (1.0 + subject_return),
+        ));
+        reference.push((
+            dates[index + 1].clone(),
+            reference.last().unwrap().1 * (1.0 + reference_return),
+        ));
+    }
+
+    let periods = compute_standard_fund_benchmark_periods(
+        &subject,
+        &reference,
+        &dates[0],
+        dates.last().unwrap(),
+    )
+    .unwrap();
+    let since = periods
+        .iter()
+        .find(|period| period.period == BenchmarkComparisonPeriod::SinceComparisonStart)
+        .unwrap();
+
+    let daily_active: Vec<f64> = subject_returns
+        .iter()
+        .zip(&reference_returns)
+        .map(|(subject, reference)| subject - reference)
+        .collect();
+    let active_mean = daily_active.iter().sum::<f64>() / daily_active.len() as f64;
+    let active_std = (daily_active
+        .iter()
+        .map(|value| (value - active_mean).powi(2))
+        .sum::<f64>()
+        / (daily_active.len() - 1) as f64)
+        .sqrt();
+    let expected_tracking_error = active_std * 252.0_f64.sqrt() * 100.0;
+    let expected_information_ratio = active_mean / active_std * 252.0_f64.sqrt();
+    let log_subject: Vec<f64> = subject_returns.iter().map(|value| value.ln_1p()).collect();
+    let log_reference: Vec<f64> = reference_returns
+        .iter()
+        .map(|value| value.ln_1p())
+        .collect();
+    let expected_beta =
+        sample_covariance(&log_subject, &log_reference) / sample_variance(&log_reference);
+    let expected_correlation = sample_covariance(&log_subject, &log_reference)
+        / (sample_variance(&log_subject) * sample_variance(&log_reference)).sqrt();
+
+    assert_eq!(since.start_date.as_deref(), Some(dates[0].as_str()));
+    assert_eq!(since.end_date.as_deref(), Some(dates[20].as_str()));
+    assert_close(
+        available(&since.fund_return_pct),
+        (subject[20].1 / 100.0 - 1.0) * 100.0,
+    );
+    assert_close(
+        available(&since.reference_return_pct),
+        (reference[20].1 / 100.0 - 1.0) * 100.0,
+    );
+    assert_close(
+        available(&since.excess_return_percentage_points),
+        (subject[20].1 / 100.0 - reference[20].1 / 100.0) * 100.0,
+    );
+    assert_close(available(&since.beta), expected_beta);
+    assert_close(available(&since.correlation), expected_correlation);
+    assert_close(
+        available(&since.tracking_error_annualized_pct),
+        expected_tracking_error,
+    );
+    assert_close(
+        available(&since.information_ratio),
+        expected_information_ratio,
+    );
+}
+
+#[test]
+fn standard_comparison_distinguishes_short_history_zero_variance_and_internal_gaps() {
+    let dates = weekdays("2025-01-06", 22);
+    let subject = dates
+        .iter()
+        .enumerate()
+        .map(|(index, date)| (date.clone(), 100.0 * 1.011_f64.powi(index as i32)))
+        .collect::<Vec<_>>();
+    let reference = dates
+        .iter()
+        .enumerate()
+        .map(|(index, date)| (date.clone(), 100.0 * 1.01_f64.powi(index as i32)))
+        .collect::<Vec<_>>();
+    let periods = compute_standard_fund_benchmark_periods(
+        &subject,
+        &reference,
+        &dates[0],
+        dates.last().unwrap(),
+    )
+    .unwrap();
+    let since = periods
+        .iter()
+        .find(|period| period.period == BenchmarkComparisonPeriod::SinceComparisonStart)
+        .unwrap();
+    assert_eq!(available(&since.tracking_error_annualized_pct), 0.0);
+    assert!(matches!(
+        since.information_ratio,
+        ComparisonFact::NotApplicable { .. }
+    ));
+    assert!(matches!(since.beta, ComparisonFact::NotApplicable { .. }));
+    assert!(matches!(
+        since.correlation,
+        ComparisonFact::NotApplicable { .. }
+    ));
+    let varied_subject = dates
+        .iter()
+        .enumerate()
+        .map(|(index, date)| (date.clone(), if index % 2 == 0 { 100.0 } else { 102.0 }))
+        .collect::<Vec<_>>();
+    let zero_variance_benchmark = compute_standard_fund_benchmark_periods(
+        &varied_subject,
+        &reference,
+        &dates[0],
+        dates.last().unwrap(),
+    )
+    .unwrap();
+    let zero_benchmark_since = zero_variance_benchmark
+        .iter()
+        .find(|period| period.period == BenchmarkComparisonPeriod::SinceComparisonStart)
+        .unwrap();
+    assert!(matches!(
+        zero_benchmark_since.beta,
+        ComparisonFact::NotApplicable { .. }
+    ));
+    assert!(matches!(
+        zero_benchmark_since.correlation,
+        ComparisonFact::NotApplicable { .. }
+    ));
+    let zero_variance_subject = compute_standard_fund_benchmark_periods(
+        &reference,
+        &varied_subject,
+        &dates[0],
+        dates.last().unwrap(),
+    )
+    .unwrap();
+    let zero_subject_since = zero_variance_subject
+        .iter()
+        .find(|period| period.period == BenchmarkComparisonPeriod::SinceComparisonStart)
+        .unwrap();
+    assert!(matches!(
+        zero_subject_since.beta,
+        ComparisonFact::Available { value } if value.abs() < 1e-9
+    ));
+    assert!(matches!(
+        zero_subject_since.correlation,
+        ComparisonFact::NotApplicable { .. }
+    ));
+    let one_year = periods
+        .iter()
+        .find(|period| period.period == BenchmarkComparisonPeriod::OneYear)
+        .unwrap();
+    assert!(matches!(
+        one_year.fund_return_pct,
+        ComparisonFact::NotApplicable { .. }
+    ));
+
+    let mut gapped_subject = subject.clone();
+    gapped_subject.remove(10);
+    let gapped = compute_standard_fund_benchmark_periods(
+        &gapped_subject,
+        &reference,
+        &dates[0],
+        dates.last().unwrap(),
+    )
+    .unwrap();
+    let gapped_since = gapped
+        .iter()
+        .find(|period| period.period == BenchmarkComparisonPeriod::SinceComparisonStart)
+        .unwrap();
+    assert!(matches!(
+        gapped_since.fund_return_pct,
+        ComparisonFact::Unavailable { .. }
+    ));
+    assert!(matches!(
+        gapped_since.tracking_error_annualized_pct,
+        ComparisonFact::Unavailable { .. }
+    ));
+
+    let missing_reference =
+        compute_standard_fund_benchmark_periods(&subject, &[], &dates[0], dates.last().unwrap())
+            .unwrap();
+    let missing_since = missing_reference
+        .iter()
+        .find(|period| period.period == BenchmarkComparisonPeriod::SinceComparisonStart)
+        .unwrap();
+    assert!(matches!(
+        missing_since.reference_return_pct,
+        ComparisonFact::Unavailable { .. }
+    ));
+}
+
+#[test]
+fn standard_comparison_rejects_nonfinite_inputs() {
+    let subject = vec![
+        ("2025-01-06".to_owned(), 100.0),
+        ("2025-01-07".to_owned(), f64::INFINITY),
+    ];
+    let reference = vec![
+        ("2025-01-06".to_owned(), 100.0),
+        ("2025-01-07".to_owned(), 101.0),
+    ];
+    assert!(compute_standard_fund_benchmark_periods(
+        &subject,
+        &reference,
+        "2025-01-06",
+        "2025-01-07",
+    )
+    .is_err());
+}
+
+fn weekdays(start: &str, count: usize) -> Vec<String> {
+    let mut date = NaiveDate::parse_from_str(start, "%Y-%m-%d").unwrap();
+    let mut dates = Vec::with_capacity(count);
+    while dates.len() < count {
+        if !matches!(date.weekday(), chrono::Weekday::Sat | chrono::Weekday::Sun) {
+            dates.push(date.format("%Y-%m-%d").to_string());
+        }
+        date += Duration::days(1);
+    }
+    dates
+}
+
+fn available(fact: &ComparisonFact<f64>) -> f64 {
+    match fact {
+        ComparisonFact::Available { value } => *value,
+        other => panic!("expected available fact, got {other:?}"),
+    }
+}
+
+fn sample_variance(values: &[f64]) -> f64 {
+    let mean = values.iter().sum::<f64>() / values.len() as f64;
+    values
+        .iter()
+        .map(|value| (value - mean).powi(2))
+        .sum::<f64>()
+        / (values.len() - 1) as f64
+}
+
+fn sample_covariance(left: &[f64], right: &[f64]) -> f64 {
+    let left_mean = left.iter().sum::<f64>() / left.len() as f64;
+    let right_mean = right.iter().sum::<f64>() / right.len() as f64;
+    left.iter()
+        .zip(right)
+        .map(|(left, right)| (left - left_mean) * (right - right_mean))
+        .sum::<f64>()
+        / (left.len() - 1) as f64
+}
+
+fn assert_close(actual: f64, expected: f64) {
+    assert!((actual - expected).abs() < 1e-9, "{actual} != {expected}");
 }

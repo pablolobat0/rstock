@@ -150,6 +150,12 @@ pub fn write_fund_analysis_reference_context<W: Write>(
             comparison.excess_return_percentage_points
         )?;
     }
+    super::helpers::write_fund_benchmark_periods(
+        writer,
+        result.name.as_deref().unwrap_or(&result.ms_code),
+        comparison,
+    )?;
+    super::helpers::write_risk_free_assumption(writer, &result.risk_free_assumption)?;
     if let Some(name) = &comparison.reference_name {
         writeln!(
             writer,

@@ -73,13 +73,80 @@ pub struct FundBenchmarkComparison {
     pub excess_return_percentage_points: Option<f64>,
     pub fund_wealth: Vec<DatedWealthPoint>,
     pub reference_wealth: Vec<DatedWealthPoint>,
+    pub standard_periods: Vec<FundBenchmarkPeriod>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BenchmarkComparisonPeriod {
+    Ytd,
+    OneYear,
+    ThreeYear,
+    FiveYear,
+    SinceComparisonStart,
+}
+
+impl BenchmarkComparisonPeriod {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Ytd => "YTD",
+            Self::OneYear => "1Y",
+            Self::ThreeYear => "3Y",
+            Self::FiveYear => "5Y",
+            Self::SinceComparisonStart => "Since Comparison Start",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum ComparisonFact<T> {
+    Available { value: T },
+    Unavailable { reason: String },
+    NotApplicable { reason: String },
+}
+
+impl<T> ComparisonFact<T> {
+    pub fn available(value: T) -> Self {
+        Self::Available { value }
+    }
+
+    pub fn unavailable(reason: impl Into<String>) -> Self {
+        Self::Unavailable {
+            reason: reason.into(),
+        }
+    }
+
+    pub fn not_applicable(reason: impl Into<String>) -> Self {
+        Self::NotApplicable {
+            reason: reason.into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct FundBenchmarkPeriod {
+    pub period: BenchmarkComparisonPeriod,
+    pub requested_start_date: Option<String>,
+    pub start_date: Option<String>,
+    pub end_date: Option<String>,
+    pub fund_return_pct: ComparisonFact<f64>,
+    pub reference_return_pct: ComparisonFact<f64>,
+    pub excess_return_percentage_points: ComparisonFact<f64>,
+    pub beta: ComparisonFact<f64>,
+    pub correlation: ComparisonFact<f64>,
+    /// Sample deviation of arithmetic active returns, annualized and expressed in percent.
+    pub tracking_error_annualized_pct: ComparisonFact<f64>,
+    /// Annualized information ratio from arithmetic daily active returns.
+    pub information_ratio: ComparisonFact<f64>,
 }
 
 impl FundBenchmarkComparison {
     pub fn unavailable(reason: impl Into<String>) -> Self {
+        let reason = reason.into();
         Self {
             availability: ComparisonAvailability::Unavailable {
-                reason: reason.into(),
+                reason: reason.clone(),
             },
             role: "primary".to_owned(),
             reference_id: None,
@@ -102,6 +169,52 @@ impl FundBenchmarkComparison {
             excess_return_percentage_points: None,
             fund_wealth: Vec::new(),
             reference_wealth: Vec::new(),
+            standard_periods: [
+                BenchmarkComparisonPeriod::Ytd,
+                BenchmarkComparisonPeriod::OneYear,
+                BenchmarkComparisonPeriod::ThreeYear,
+                BenchmarkComparisonPeriod::FiveYear,
+                BenchmarkComparisonPeriod::SinceComparisonStart,
+            ]
+            .into_iter()
+            .map(|period| FundBenchmarkPeriod::unavailable(period, reason.clone()))
+            .collect(),
+        }
+    }
+}
+
+impl FundBenchmarkPeriod {
+    pub fn not_applicable(period: BenchmarkComparisonPeriod, reason: impl Into<String>) -> Self {
+        let reason = reason.into();
+        Self {
+            period,
+            requested_start_date: None,
+            start_date: None,
+            end_date: None,
+            fund_return_pct: ComparisonFact::not_applicable(reason.clone()),
+            reference_return_pct: ComparisonFact::not_applicable(reason.clone()),
+            excess_return_percentage_points: ComparisonFact::not_applicable(reason.clone()),
+            beta: ComparisonFact::not_applicable(reason.clone()),
+            correlation: ComparisonFact::not_applicable(reason.clone()),
+            tracking_error_annualized_pct: ComparisonFact::not_applicable(reason.clone()),
+            information_ratio: ComparisonFact::not_applicable(reason),
+        }
+    }
+
+    pub fn unavailable(period: BenchmarkComparisonPeriod, reason: impl Into<String>) -> Self {
+        let reason = reason.into();
+        Self {
+            period,
+            requested_start_date: None,
+            start_date: None,
+            end_date: None,
+            fund_return_pct: ComparisonFact::unavailable(reason.clone()),
+            reference_return_pct: ComparisonFact::unavailable(reason.clone()),
+            excess_return_percentage_points: ComparisonFact::unavailable(reason.clone()),
+            beta: ComparisonFact::unavailable(reason.clone()),
+            correlation: ComparisonFact::unavailable(reason.clone()),
+            tracking_error_annualized_pct: ComparisonFact::unavailable(reason.clone()),
+            information_ratio: ComparisonFact::unavailable(reason),
         }
     }
 }
@@ -129,10 +242,28 @@ pub struct FundAnalysisResult {
     pub benchmark_reference: BenchmarkReferenceInfo,
     pub benchmark_limitations: Vec<MarketDataLimitation>,
     pub primary_benchmark_comparison: FundBenchmarkComparison,
+    pub risk_free_assumption: RiskFreeAssumption,
     pub candidate_correlation: CandidateCorrelationResult,
     pub holdings_changed: bool,
     pub last_snapshot_date: Option<String>,
     pub holding_diff: Vec<HoldingChange>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct RiskFreeAssumption {
+    pub annual_rate_pct: f64,
+    pub applies_to: Vec<String>,
+    pub not_applied_to: Vec<String>,
+}
+
+impl RiskFreeAssumption {
+    pub fn current() -> Self {
+        Self {
+            annual_rate_pct: crate::constants::ANNUAL_RISK_FREE_RATE * 100.0,
+            applies_to: vec!["Sharpe".to_owned(), "Sortino".to_owned()],
+            not_applied_to: vec!["€STR".to_owned(), "retained cash return".to_owned()],
+        }
+    }
 }
 
 #[derive(Serialize)]

@@ -165,6 +165,9 @@ async fn assigned_fund_comparison_uses_qualified_shared_market_data_path() {
         .await
         .unwrap();
     let data = fund_analysis_envelope(&result)["data"].clone();
+    assert_eq!(data["risk_free_assumption"]["annual_rate_pct"], 3.0);
+    assert_eq!(data["risk_free_assumption"]["applies_to"][0], "Sharpe");
+    assert_eq!(data["risk_free_assumption"]["not_applied_to"][0], "€STR");
     assert_eq!(
         data["primary_benchmark_comparison"]["availability"]["status"],
         "available"
@@ -245,6 +248,27 @@ async fn assigned_fund_comparison_uses_qualified_shared_market_data_path() {
     assert_eq!(comparison.start_date.as_deref(), Some("2025-01-06"));
     assert_eq!(comparison.end_date.as_deref(), Some("2025-01-07"));
     assert!((comparison.excess_return_percentage_points.unwrap() - 3.0).abs() < 1e-10);
+    let since = comparison
+        .standard_periods
+        .iter()
+        .find(|period| {
+            period.period == rstock::models::BenchmarkComparisonPeriod::SinceComparisonStart
+        })
+        .unwrap();
+    assert_eq!(since.start_date.as_deref(), Some("2025-01-06"));
+    assert_eq!(since.end_date.as_deref(), Some("2025-01-07"));
+    assert!(matches!(
+        since.fund_return_pct,
+        rstock::models::ComparisonFact::Available { value } if (value - 12.0).abs() < 1e-9
+    ));
+    assert!(matches!(
+        since.reference_return_pct,
+        rstock::models::ComparisonFact::Available { value } if (value - 9.0).abs() < 1e-9
+    ));
+    assert!(matches!(
+        since.beta,
+        rstock::models::ComparisonFact::NotApplicable { .. }
+    ));
     assert_eq!(comparison.fund_wealth[0].wealth, 100.0);
     assert_eq!(comparison.reference_wealth[0].wealth, 100.0);
     assert_eq!(
@@ -265,6 +289,8 @@ async fn assigned_fund_comparison_uses_qualified_shared_market_data_path() {
     rstock::cli::display::write_fund_analysis_reference_context(&mut human, &result).unwrap();
     let human = String::from_utf8(human).unwrap();
     assert!(human.contains("Primary comparison: available"));
+    assert!(human.contains("Since Comparison Start"));
+    assert!(human.contains("Risk-free assumption: 3.00% annual"));
     assert!(human.contains(
         "Role: primary; wealth currency: EUR; native reference currency: EUR; cadence: daily"
     ));
@@ -294,6 +320,140 @@ async fn assigned_fund_comparison_uses_qualified_shared_market_data_path() {
         .await
         .unwrap();
     }
+}
+
+#[tokio::test]
+async fn compare_funds_standard_benchmark_rows_are_independent_of_graph_period() {
+    let (db, mut sources) = assigned_comparison_fixture().await;
+    sources.fund_data.insert("XCLASS2".to_owned(), fund_data());
+    sources.fund_quote_metadata.insert(
+        "XCLASS2".to_owned(),
+        FundQuoteMetadata {
+            quote_currency: Some("EUR".to_owned()),
+            ..Default::default()
+        },
+    );
+    sources.historical_prices.insert(
+        "XCLASS2".to_owned(),
+        vec![
+            ("2025-01-06".to_owned(), 100.0),
+            ("2025-01-07".to_owned(), 103.0),
+        ],
+    );
+    sources.series_qualifications.insert(
+        ("morningstar".to_owned(), "XCLASS2".to_owned()),
+        qualification(
+            "EUR",
+            "total_return",
+            "dividends_reinvested_once",
+            "Unhedged",
+            "daily",
+        ),
+    );
+    let market = market_data_at(
+        &sources,
+        chrono::NaiveDate::from_ymd_opt(2025, 1, 8).unwrap(),
+    );
+    let short_graph = compare_funds(
+        &db,
+        &market,
+        "XCLASS",
+        "XCLASS2",
+        FundComparisonPeriod {
+            label: "30D",
+            days: 30,
+        },
+    )
+    .await
+    .unwrap();
+    let long_graph = compare_funds(
+        &db,
+        &market,
+        "XCLASS",
+        "XCLASS2",
+        FundComparisonPeriod {
+            label: "1Y",
+            days: 365,
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        short_graph
+            .fund_a
+            .primary_benchmark_comparison
+            .standard_periods,
+        long_graph
+            .fund_a
+            .primary_benchmark_comparison
+            .standard_periods
+    );
+    assert!(matches!(
+        short_graph.fund_a.primary_benchmark_comparison.availability,
+        rstock::models::ComparisonAvailability::Available
+    ));
+    let json = fund_comparison_envelope(&short_graph);
+    let mut human = Vec::new();
+    rstock::cli::display::write_fund_comparison_reference_context(&mut human, &short_graph)
+        .unwrap();
+    let human = String::from_utf8(human).unwrap();
+    assert!(human.contains("Fund primary reference: Verified Fake Reference"));
+    assert!(human.contains("Since Comparison Start"));
+    assert!(human.contains("Risk-free assumption: 3.00% annual"));
+    assert_eq!(json["data"]["correlation"]["period_label"], "30D");
+    assert!(
+        (json["data"]["fund_a"]["primary_benchmark_comparison"]["standard_periods"][4]
+            ["fund_return_pct"]["value"]
+            .as_f64()
+            .unwrap()
+            - 12.0)
+            .abs()
+            < 1e-9
+    );
+    assert_eq!(
+        json["data"]["fund_b"]["primary_benchmark_comparison"]["availability"]["status"],
+        "unavailable"
+    );
+}
+
+#[tokio::test]
+async fn standard_benchmark_periods_end_on_the_latest_completed_weekday() {
+    let (db, mut sources) = assigned_comparison_fixture().await;
+    sources.historical_prices.insert(
+        "XCLASS".to_owned(),
+        vec![
+            ("2025-01-09".to_owned(), 99.0),
+            ("2025-01-10".to_owned(), 100.0),
+        ],
+    );
+    sources.historical_prices.insert(
+        "XREF".to_owned(),
+        vec![
+            ("2025-01-09".to_owned(), 49.0),
+            ("2025-01-10".to_owned(), 50.0),
+        ],
+    );
+    let market = market_data_at(
+        &sources,
+        chrono::NaiveDate::from_ymd_opt(2025, 1, 13).unwrap(),
+    );
+    let result = compute_fund_analysis(&db, &market, "XCLASS", one_year_candidate_period())
+        .await
+        .unwrap();
+
+    assert_eq!(
+        result.primary_benchmark_comparison.end_date.as_deref(),
+        Some("2025-01-10")
+    );
+    let ytd = result
+        .primary_benchmark_comparison
+        .standard_periods
+        .iter()
+        .find(|period| period.period == rstock::models::BenchmarkComparisonPeriod::Ytd)
+        .unwrap();
+    assert_eq!(ytd.start_date.as_deref(), Some("2025-01-09"));
+    assert_eq!(ytd.end_date.as_deref(), Some("2025-01-10"));
 }
 
 #[tokio::test]
@@ -1757,9 +1917,30 @@ async fn test_fund_comparison_json_complete_structure_and_aligned_points() {
     let data = &envelope["data"];
     assert_eq!(data["benchmark_reference"]["id"], "legacy-acwi-etf-proxy");
     assert_eq!(
+        data["fund_a"]["primary_benchmark_comparison"]["standard_periods"]
+            .as_array()
+            .unwrap()
+            .len(),
+        5
+    );
+    assert_eq!(
+        data["fund_b"]["primary_benchmark_comparison"]["standard_periods"]
+            .as_array()
+            .unwrap()
+            .len(),
+        5
+    );
+    assert!(human.contains("Risk-free assumption: 3.00% annual"));
+    assert_eq!(
         data["benchmark_reference"]["display_name"],
         "iShares MSCI ACWI ETF (ACWI) proxy"
     );
+    assert_eq!(data["risk_free_assumption"]["annual_rate_pct"], 3.0);
+    assert!(data["risk_free_assumption"]["not_applied_to"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item == "retained cash return"));
     assert!(data["benchmark_reference"]["return_basis_qualification"]
         .as_str()
         .unwrap()
