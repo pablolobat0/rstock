@@ -11,6 +11,7 @@ pub struct BenchmarkReference {
     pub source_identifier: String,
     pub currency: String,
     pub adjustment_provenance: String,
+    pub adjustment_qualification: String,
     pub return_basis_qualification: String,
     pub role: String,
     pub universe: String,
@@ -32,6 +33,7 @@ impl From<benchmark_reference::Model> for BenchmarkReference {
             source_identifier: model.source_identifier,
             currency: model.currency,
             adjustment_provenance: model.adjustment_provenance,
+            adjustment_qualification: model.adjustment_qualification,
             return_basis_qualification: model.return_basis_qualification,
             role: model.role,
             universe: model.universe,
@@ -134,6 +136,7 @@ pub async fn upsert_prices_immutable(
             .update_columns([
                 benchmark_reference_price::Column::ClosingPrice,
                 benchmark_reference_price::Column::IsApiFailure,
+                benchmark_reference_price::Column::IsSourceObservation,
             ])
             .action_and_where(
                 sea_orm::sea_query::Expr::col(benchmark_reference_price::Column::IsApiFailure)

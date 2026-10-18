@@ -497,6 +497,7 @@ pub struct MockMarketDataSources {
     pub failing_price_sources: HashSet<String>,
     pub historical_source_calls: Arc<AtomicUsize>,
     pub historical_price_requests: Arc<Mutex<Vec<(String, chrono::NaiveDate, chrono::NaiveDate)>>>,
+    pub benchmark_price_source_requests: Arc<Mutex<Vec<(String, String)>>>,
     pub historical_fx_requests: Arc<Mutex<Vec<(String, chrono::NaiveDate, chrono::NaiveDate)>>>,
     pub exchange_rate_delay: std::time::Duration,
     pub historical_predecessor_requests: Arc<Mutex<Vec<(String, chrono::NaiveDate)>>>,
@@ -517,6 +518,7 @@ impl MockMarketDataSources {
             failing_price_sources: HashSet::new(),
             historical_source_calls: Arc::new(AtomicUsize::new(0)),
             historical_price_requests: Arc::new(Mutex::new(Vec::new())),
+            benchmark_price_source_requests: Arc::new(Mutex::new(Vec::new())),
             historical_fx_requests: Arc::new(Mutex::new(Vec::new())),
             exchange_rate_delay: std::time::Duration::ZERO,
             historical_predecessor_requests: Arc::new(Mutex::new(Vec::new())),
@@ -576,6 +578,59 @@ impl Clock for TestClock {
 
 #[async_trait::async_trait]
 impl MarketDataSources for MockMarketDataSources {
+    async fn benchmark_price_history(
+        &self,
+        source: &str,
+        identifier: &str,
+        start: chrono::NaiveDate,
+        end: chrono::NaiveDate,
+    ) -> anyhow::Result<Vec<SourceObservation>> {
+        self.historical_source_calls.fetch_add(1, Ordering::Relaxed);
+        self.benchmark_price_source_requests
+            .lock()
+            .expect("historical price request mutex poisoned")
+            .push((source.to_owned(), identifier.to_owned()));
+        self.historical_price_requests
+            .lock()
+            .expect("historical price request mutex poisoned")
+            .push((identifier.to_owned(), start, end));
+        if self.failing_price_sources.contains(identifier) {
+            anyhow::bail!("mock benchmark price source failure for {source}/{identifier}");
+        }
+        Ok(self
+            .historical_prices
+            .get(identifier)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|(date, value)| {
+                let date = chrono::NaiveDate::parse_from_str(&date, "%Y-%m-%d").ok()?;
+                (date >= start && date <= end).then_some(SourceObservation { date, value })
+            })
+            .collect())
+    }
+
+    async fn latest_benchmark_price_before(
+        &self,
+        _source: &str,
+        identifier: &str,
+        before: chrono::NaiveDate,
+    ) -> anyhow::Result<Option<SourceObservation>> {
+        Ok(self
+            .historical_prices
+            .get(identifier)
+            .into_iter()
+            .flatten()
+            .filter_map(|(date, value)| {
+                let date = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").ok()?;
+                (date < before).then_some(SourceObservation {
+                    date,
+                    value: *value,
+                })
+            })
+            .max_by_key(|observation| observation.date))
+    }
+
     async fn series_qualification(
         &self,
         source: &str,

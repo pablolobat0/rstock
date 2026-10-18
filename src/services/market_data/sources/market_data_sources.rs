@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use chrono::NaiveDate;
 
-use crate::models::{FundData, FundQuoteMetadata, StockInfo};
+use crate::models::{FundData, FundQuoteMetadata, SeriesQualification, StockInfo};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct SourceObservation {
@@ -12,15 +12,6 @@ pub struct SourceObservation {
 
 /// Provider-reported properties of an observed price series. These describe
 /// the data, not the financial meaning or eligibility of a benchmark target.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SeriesQualification {
-    pub currency: String,
-    pub return_basis: String,
-    pub adjustment: String,
-    pub hedge_policy: String,
-    pub cadence: String,
-}
-
 #[async_trait::async_trait]
 pub trait MarketDataSources: Send + Sync {
     async fn series_qualification(
@@ -30,6 +21,36 @@ pub trait MarketDataSources: Send + Sync {
     ) -> anyhow::Result<Option<SeriesQualification>> {
         let _ = (source, identifier);
         Ok(None)
+    }
+
+    /// Fetch one benchmark reference through the adapter named by its
+    /// persisted source identity; qualification and observations share this
+    /// exact source key.
+    async fn benchmark_price_history(
+        &self,
+        source: &str,
+        identifier: &str,
+        start: NaiveDate,
+        end: NaiveDate,
+    ) -> anyhow::Result<Vec<SourceObservation>> {
+        match source {
+            "yahoo_finance" => self.stock_price_history(identifier, start, end).await,
+            "morningstar" => self.fund_price_history(identifier, start, end).await,
+            _ => anyhow::bail!("unsupported benchmark price source '{source}'"),
+        }
+    }
+
+    async fn latest_benchmark_price_before(
+        &self,
+        source: &str,
+        identifier: &str,
+        before: NaiveDate,
+    ) -> anyhow::Result<Option<SourceObservation>> {
+        match source {
+            "yahoo_finance" => self.latest_stock_price_before(identifier, before).await,
+            "morningstar" => self.latest_fund_price_before(identifier, before).await,
+            _ => anyhow::bail!("unsupported benchmark price source '{source}'"),
+        }
     }
 
     async fn stock_price_history(

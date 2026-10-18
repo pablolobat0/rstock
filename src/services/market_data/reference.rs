@@ -13,6 +13,7 @@ pub(crate) struct PreparedBenchmarkReference {
     pub info: BenchmarkReferenceInfo,
     pub series: Vec<(String, f64)>,
     pub genuine_series: Vec<(String, f64)>,
+    pub source_qualification: Option<crate::models::SeriesQualification>,
     pub limitations: Vec<MarketDataLimitation>,
 }
 
@@ -22,14 +23,27 @@ struct CachedPriceSeries {
     covered: HashSet<NaiveDate>,
 }
 
+type ConvertedReferenceSeries = (Vec<(String, f64)>, Vec<(String, f64)>);
+
 pub(crate) async fn prepare(
     db: &DatabaseConnection,
     reference_id: &str,
     start_date: &str,
     end_date: &str,
+    require_requested_end: bool,
     market_data: &MarketData,
 ) -> anyhow::Result<PreparedBenchmarkReference> {
     let reference = benchmark_reference_repo::find_by_id(db, reference_id).await?;
+    let source_qualification = match market_data
+        .series_qualification(&reference.source, &reference.source_identifier)
+        .await
+    {
+        Ok(qualification) => qualification,
+        Err(error) => {
+            tracing::warn!(source = reference.source, identifier = reference.source_identifier, error = %error, "benchmark reference qualification unavailable");
+            None
+        }
+    };
     let start = NaiveDate::parse_from_str(start_date, DATE_FORMAT)?;
     let end = NaiveDate::parse_from_str(end_date, DATE_FORMAT)?;
     let (known, genuine, mut limitations) = prepare_prices(
@@ -52,45 +66,10 @@ pub(crate) async fn prepare(
         &mut limitations,
     )
     .await?;
-    for (date, rate) in &fx_values {
-        anyhow::ensure!(
-            rate.is_finite() && *rate > 0.0,
-            "invalid persisted FX rate for {} on {}",
-            reference.currency,
-            date
-        );
-    }
-    let series = known
-        .range(start..=end)
-        .filter_map(|(date, price)| {
-            let rate = if reference.currency == BASE_CURRENCY {
-                Some(1.0)
-            } else {
-                fx_values.get(date).copied()
-            }?;
-            let converted = price * rate;
-            Some((format_date(*date), converted))
-        })
-        .collect::<Vec<_>>();
-    let genuine_series = genuine
-        .range(start..=end)
-        .filter_map(|(date, price)| {
-            let rate = if reference.currency == BASE_CURRENCY {
-                Some(1.0)
-            } else {
-                fx_values.get(date).copied()
-            }?;
-            Some((format_date(*date), price * rate))
-        })
-        .collect::<Vec<_>>();
-    for (date, converted) in &series {
-        anyhow::ensure!(
-            converted.is_finite() && *converted > 0.0,
-            "invalid converted benchmark reference price for {} on {}: {}",
-            reference.id,
-            date,
-            converted
-        );
+    let (series, genuine_series) =
+        convert_reference_series(&reference, start, end, &known, &genuine, &fx_values)?;
+    if require_requested_end && !series.iter().any(|(date, _)| date == end_date) {
+        record_missing_requested_end(&reference, end, &known, &fx_values, &mut limitations);
     }
     Ok(PreparedBenchmarkReference {
         info: BenchmarkReferenceInfo {
@@ -105,8 +84,85 @@ pub(crate) async fn prepare(
         },
         series,
         genuine_series,
+        source_qualification,
         limitations,
     })
+}
+
+fn convert_reference_series(
+    reference: &benchmark_reference_repo::BenchmarkReference,
+    start: NaiveDate,
+    end: NaiveDate,
+    known: &BTreeMap<NaiveDate, f64>,
+    genuine: &BTreeMap<NaiveDate, f64>,
+    fx_values: &BTreeMap<NaiveDate, f64>,
+) -> anyhow::Result<ConvertedReferenceSeries> {
+    for (date, rate) in fx_values {
+        anyhow::ensure!(
+            rate.is_finite() && *rate > 0.0,
+            "invalid persisted FX rate for {} on {}",
+            reference.currency,
+            date
+        );
+    }
+    let convert = |prices: &BTreeMap<NaiveDate, f64>| {
+        prices
+            .range(start..=end)
+            .filter_map(|(date, price)| {
+                let rate = if reference.currency == BASE_CURRENCY {
+                    Some(1.0)
+                } else {
+                    fx_values.get(date).copied()
+                }?;
+                Some((format_date(*date), price * rate))
+            })
+            .collect::<Vec<_>>()
+    };
+    let series = convert(known);
+    let genuine_series = convert(genuine);
+    for (date, converted) in &series {
+        anyhow::ensure!(
+            converted.is_finite() && *converted > 0.0,
+            "invalid converted benchmark reference price for {} on {}: {}",
+            reference.id,
+            date,
+            converted
+        );
+    }
+    Ok((series, genuine_series))
+}
+
+fn record_missing_requested_end(
+    reference: &benchmark_reference_repo::BenchmarkReference,
+    end: NaiveDate,
+    known: &BTreeMap<NaiveDate, f64>,
+    fx_values: &BTreeMap<NaiveDate, f64>,
+    limitations: &mut Vec<MarketDataLimitation>,
+) {
+    let has_native_mark = known.contains_key(&end);
+    let (subject, latest_available_date) = if reference.currency != BASE_CURRENCY && has_native_mark
+    {
+        (
+            crate::models::MarketDataSubject::FxRate {
+                currency: reference.currency.clone(),
+            },
+            fx_values.keys().next_back().copied(),
+        )
+    } else {
+        (
+            crate::models::MarketDataSubject::BenchmarkReference {
+                id: reference.id.clone(),
+                display_name: reference.display_name.clone(),
+            },
+            known.keys().next_back().copied(),
+        )
+    };
+    limitations.push(MarketDataLimitation {
+        subject,
+        latest_available_date,
+        requested_end_date: end,
+        classification: crate::models::MarketDataLimitationClassification::ActionableMissingData,
+    });
 }
 
 async fn prepare_prices(
@@ -199,7 +255,12 @@ async fn fetch_reference_interval(
     market_data: &MarketData,
 ) -> anyhow::Result<()> {
     let Ok(mut observations) = market_data
-        .stock_price_history(&reference.source_identifier, interval.start, interval.end)
+        .benchmark_reference_price_history(
+            &reference.source,
+            &reference.source_identifier,
+            interval.start,
+            interval.end,
+        )
         .await
     else {
         return Ok(());
@@ -208,7 +269,11 @@ async fn fetch_reference_interval(
         && !cached.known.keys().any(|date| *date < interval.start)
     {
         if let Ok(Some(predecessor)) = market_data
-            .latest_stock_price_before(&reference.source_identifier, interval.start)
+            .latest_benchmark_reference_price_before(
+                &reference.source,
+                &reference.source_identifier,
+                interval.start,
+            )
             .await
         {
             observations.push(predecessor);

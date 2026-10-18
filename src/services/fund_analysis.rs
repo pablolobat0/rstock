@@ -69,7 +69,7 @@ pub async fn compute_fund_analysis(
         market_data,
         ms_code,
         asset.as_ref().map(|asset| asset.ticker.as_str()),
-        &fund_prices,
+        fund_currency.as_deref(),
         today,
     )
     .await?;

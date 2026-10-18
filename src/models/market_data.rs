@@ -1,6 +1,25 @@
 use chrono::NaiveDate;
 use serde::Serialize;
 
+/// Explicit source properties of one observed price series.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SeriesQualification {
+    pub currency: String,
+    pub return_basis: String,
+    pub adjustment: String,
+    pub hedge_policy: String,
+    pub cadence: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct FundComparisonMarketData {
+    pub qualification: Option<SeriesQualification>,
+    pub completed_observation_count: usize,
+    pub first_observation_date: Option<String>,
+    pub eur_series: BaseCurrencyPriceSeries,
+    pub limitations: Vec<MarketDataLimitation>,
+}
+
 use crate::models::AssetType;
 
 pub type BaseCurrencyPriceSeries = Vec<(String, f64)>;
@@ -63,6 +82,7 @@ pub struct BenchmarkRiskMarketData {
     pub benchmark_series: BaseCurrencyPriceSeries,
     /// Only source-reported observations; forward-filled rows are excluded.
     pub genuine_benchmark_series: BaseCurrencyPriceSeries,
+    pub source_qualification: Option<SeriesQualification>,
     pub benchmark_reference: super::portfolio::BenchmarkReferenceInfo,
     pub limitations: Vec<MarketDataLimitation>,
 }

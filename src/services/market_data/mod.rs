@@ -15,8 +15,9 @@ use tokio::sync::Semaphore;
 
 use crate::models::{
     normalize_currency, Asset, BenchmarkRiskMarketData, CorrelationMarketData,
-    CorrelationMarketDataSeries, FundData, FundQuoteMetadata, IndividualPriceAvailability,
-    MarketDataValuation, StockInfo, ValuationMarketData, ValuationMarketDataAvailability,
+    CorrelationMarketDataSeries, FundComparisonMarketData, FundData, FundQuoteMetadata,
+    IndividualPriceAvailability, MarketDataValuation, StockInfo, ValuationMarketData,
+    ValuationMarketDataAvailability,
 };
 use crate::services::clock::{Clock, SystemClock};
 
@@ -162,6 +163,8 @@ enum HistoricalRequest {
     Fx(String, String, NaiveDate, NaiveDate),
     LatestStockBefore(String, NaiveDate),
     LatestFundBefore(String, NaiveDate),
+    BenchmarkReference(String, String, NaiveDate, NaiveDate),
+    LatestBenchmarkReferenceBefore(String, String, NaiveDate),
     LatestFxBefore(String, String, NaiveDate),
 }
 
@@ -176,6 +179,15 @@ pub struct MarketData {
     historical_source_slots: Arc<Semaphore>,
     nav_price_attempt_ends: Mutex<HashMap<i32, NaiveDate>>,
     today: NaiveDate,
+}
+
+pub(crate) struct FundComparisonRequest<'a> {
+    pub ms_code: &'a str,
+    pub ticker: &'a str,
+    pub currency: Option<&'a str>,
+    pub start_date: NaiveDate,
+    pub end_date: NaiveDate,
+    pub requested_end_date: &'a str,
 }
 
 /// Historical inputs for one open holding. Price preparation is scoped to its
@@ -271,6 +283,39 @@ impl MarketData {
             .next())
     }
 
+    pub(crate) async fn benchmark_reference_price_history(
+        &self,
+        source: &str,
+        identifier: &str,
+        start: NaiveDate,
+        end: NaiveDate,
+    ) -> anyhow::Result<Vec<SourceObservation>> {
+        self.request_historical_data(HistoricalRequest::BenchmarkReference(
+            source.to_owned(),
+            identifier.to_owned(),
+            start,
+            end,
+        ))
+        .await
+    }
+
+    pub(crate) async fn latest_benchmark_reference_price_before(
+        &self,
+        source: &str,
+        identifier: &str,
+        before: NaiveDate,
+    ) -> anyhow::Result<Option<SourceObservation>> {
+        Ok(self
+            .request_historical_data(HistoricalRequest::LatestBenchmarkReferenceBefore(
+                source.to_owned(),
+                identifier.to_owned(),
+                before,
+            ))
+            .await?
+            .into_iter()
+            .next())
+    }
+
     pub async fn exchange_rate_history(
         &self,
         from: &str,
@@ -338,12 +383,103 @@ impl MarketData {
         self.sources.fund_quote_metadata(code).await
     }
 
-    pub async fn series_qualification(
+    pub(crate) async fn series_qualification(
         &self,
         source: &str,
         identifier: &str,
     ) -> anyhow::Result<Option<SeriesQualification>> {
         self.sources.series_qualification(source, identifier).await
+    }
+
+    pub(crate) async fn prepare_fund_comparison_market_data(
+        &self,
+        db: &DatabaseConnection,
+        request: FundComparisonRequest<'_>,
+    ) -> anyhow::Result<FundComparisonMarketData> {
+        let observations = self
+            .fund_price_history(request.ms_code, request.start_date, request.end_date)
+            .await?;
+        let prices = observations
+            .iter()
+            .map(|observation| {
+                (
+                    crate::constants::format_date(observation.date),
+                    observation.value,
+                )
+            })
+            .collect::<Vec<_>>();
+        let requested_end = chrono::NaiveDate::parse_from_str(
+            request.requested_end_date,
+            crate::constants::DATE_FORMAT,
+        )?;
+        let completed_observation_count = prices
+            .iter()
+            .filter_map(|(date, _)| {
+                chrono::NaiveDate::parse_from_str(date, crate::constants::DATE_FORMAT).ok()
+            })
+            .filter(|date| *date <= requested_end)
+            .count();
+        let first_observation_date = prices.first().map(|(date, _)| date.clone());
+        let qualification = match self
+            .series_qualification("morningstar", request.ms_code)
+            .await
+        {
+            Ok(qualification) => qualification,
+            Err(error) => {
+                tracing::warn!(ms_code = request.ms_code, error = %error, "fund comparison qualification unavailable");
+                None
+            }
+        };
+        let (eur_series, mut limitations) = match (qualification.as_ref(), request.currency) {
+            (Some(qualification), Some(currency)) if currency == qualification.currency => {
+                self.prepare_base_currency_prices(
+                    db,
+                    &qualification.currency,
+                    &prices,
+                    request.requested_end_date,
+                )
+                .await?
+            }
+            _ => (Vec::new(), Vec::new()),
+        };
+        if let Some(currency) = request.currency {
+            if !eur_series
+                .iter()
+                .any(|(date, _)| date == request.requested_end_date)
+            {
+                let latest = eur_series
+                    .last()
+                    .map(|(date, _)| {
+                        chrono::NaiveDate::parse_from_str(date, crate::constants::DATE_FORMAT)
+                    })
+                    .transpose()?;
+                let subject = if currency == crate::constants::BASE_CURRENCY {
+                    crate::models::MarketDataSubject::Asset {
+                        ticker: request.ticker.to_owned(),
+                        name: request.ms_code.to_owned(),
+                        asset_type: crate::models::AssetType::Fund,
+                    }
+                } else {
+                    crate::models::MarketDataSubject::FxRate {
+                        currency: currency.to_owned(),
+                    }
+                };
+                limitations.push(crate::models::MarketDataLimitation {
+                    subject,
+                    latest_available_date: latest,
+                    requested_end_date: requested_end,
+                    classification:
+                        crate::models::MarketDataLimitationClassification::ActionableMissingData,
+                });
+            }
+        }
+        Ok(FundComparisonMarketData {
+            qualification,
+            completed_observation_count,
+            first_observation_date,
+            eur_series,
+            limitations,
+        })
     }
 
     pub async fn prepare_valuation_market_data(
@@ -445,8 +581,15 @@ impl MarketData {
         let prepared = self
             .prepare_valuation_market_data(db, &tracked_assets, start_date, end_date)
             .await?;
-        let reference =
-            reference::prepare(db, LEGACY_ACWI_REFERENCE_ID, start_date, end_date, self).await?;
+        let reference = reference::prepare(
+            db,
+            LEGACY_ACWI_REFERENCE_ID,
+            start_date,
+            end_date,
+            false,
+            self,
+        )
+        .await?;
         let mut all_series = historical::get_base_currency_price_series_for_assets(
             db,
             &tracked_assets,
@@ -520,12 +663,20 @@ impl MarketData {
         start_date: &str,
         end_date: &str,
     ) -> anyhow::Result<BenchmarkRiskMarketData> {
-        let reference =
-            reference::prepare(db, LEGACY_ACWI_REFERENCE_ID, start_date, end_date, self).await?;
+        let reference = reference::prepare(
+            db,
+            LEGACY_ACWI_REFERENCE_ID,
+            start_date,
+            end_date,
+            false,
+            self,
+        )
+        .await?;
 
         Ok(BenchmarkRiskMarketData {
             benchmark_series: reference.series,
             genuine_benchmark_series: reference.genuine_series,
+            source_qualification: reference.source_qualification,
             benchmark_reference: reference.info,
             limitations: reference.limitations,
         })
@@ -540,10 +691,12 @@ impl MarketData {
         start_date: &str,
         end_date: &str,
     ) -> anyhow::Result<BenchmarkRiskMarketData> {
-        let reference = reference::prepare(db, reference_id, start_date, end_date, self).await?;
+        let reference =
+            reference::prepare(db, reference_id, start_date, end_date, true, self).await?;
         Ok(BenchmarkRiskMarketData {
             benchmark_series: reference.series,
             genuine_benchmark_series: reference.genuine_series,
+            source_qualification: reference.source_qualification,
             benchmark_reference: reference.info,
             limitations: reference.limitations,
         })
@@ -586,6 +739,24 @@ impl MarketData {
                                 .map(|observation| observation.into_iter().collect()),
                             HistoricalRequest::LatestFundBefore(code, before) => sources
                                 .latest_fund_price_before(&code, before)
+                                .await
+                                .map(|observation| observation.into_iter().collect()),
+                            HistoricalRequest::BenchmarkReference(
+                                source,
+                                identifier,
+                                start,
+                                end,
+                            ) => {
+                                sources
+                                    .benchmark_price_history(&source, &identifier, start, end)
+                                    .await
+                            }
+                            HistoricalRequest::LatestBenchmarkReferenceBefore(
+                                source,
+                                identifier,
+                                before,
+                            ) => sources
+                                .latest_benchmark_price_before(&source, &identifier, before)
                                 .await
                                 .map(|observation| observation.into_iter().collect()),
                             HistoricalRequest::LatestFxBefore(from, to, before) => sources

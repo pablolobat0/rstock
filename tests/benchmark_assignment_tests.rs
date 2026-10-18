@@ -18,7 +18,7 @@ use rstock::{
 use sea_orm::EntityTrait;
 use sea_orm::QueryOrder;
 
-const BENCHMARK_MIGRATION_BOUNDARY: u32 = 3;
+const BENCHMARK_MIGRATION_BOUNDARY: u32 = 4;
 
 #[tokio::test]
 async fn catalog_and_candidate_provenance_render_from_persisted_outcomes() {

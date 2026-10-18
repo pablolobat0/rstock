@@ -9,7 +9,7 @@ async fn reference_migration_copies_legacy_proxy_cache_without_mutating_accounti
         .await
         .expect("in-memory SQLite");
     let migrations = Migrator::migrations().len();
-    Migrator::up(&db, Some((migrations - 4) as u32))
+    Migrator::up(&db, Some((migrations - 5) as u32))
         .await
         .expect("schema before reference migration");
 

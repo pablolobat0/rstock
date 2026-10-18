@@ -11,6 +11,7 @@ pub struct Model {
     pub source_identifier: String,
     pub currency: String,
     pub adjustment_provenance: String,
+    pub adjustment_qualification: String,
     pub return_basis_qualification: String,
     pub role: String,
     pub universe: String,
