@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use sea_orm::DatabaseConnection;
 
-use crate::constants::{is_benchmark_ticker, FLOAT_EPSILON, MIN_DATA_POINTS};
+use crate::constants::{FLOAT_EPSILON, MIN_DATA_POINTS};
 use crate::db::repos::{asset_repo, transaction_repo};
 use crate::models::{Asset, CorrelationMatrix, RollingCorrelationResult};
 use crate::services::market_data::MarketData;
@@ -55,6 +55,7 @@ pub async fn compute_correlation_data(
         matrix,
         warnings,
         market_data_limitations: correlation_market_data.limitations,
+        benchmark_reference: correlation_market_data.benchmark_reference,
     })
 }
 
@@ -74,7 +75,7 @@ async fn current_correlation_assets(
     let assets = asset_repo::find_by_ids(db, transactions_by_asset.keys().copied()).await?;
     let mut current_assets = Vec::new();
     for asset in assets {
-        if asset.is_monetary() || is_benchmark_ticker(&asset.ticker) {
+        if asset.is_monetary() {
             continue;
         }
         let Some(transactions) = transactions_by_asset.get(&asset.id) else {

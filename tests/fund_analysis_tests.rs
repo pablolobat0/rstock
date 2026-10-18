@@ -2,7 +2,7 @@
 
 pub mod common;
 
-use chrono::Duration;
+use chrono::{Datelike, Duration};
 use common::{
     insert_asset, insert_fund_asset, insert_portfolio_asset_snapshot, insert_portfolio_snapshot,
     insert_transaction, market_data, market_data_at, setup_test_db, MockMarketDataSources,
@@ -10,6 +10,7 @@ use common::{
 use rstock::constants::format_date;
 use rstock::constants::BENCHMARK_TICKER;
 use rstock::db::entities::fund_holdings_snapshot;
+use rstock::db::repos::exchange_rate_repo::{self, ExchangeRateWrite};
 use rstock::db::repos::{fund_holdings_snapshot_repo, portfolio_history_repo};
 use rstock::models::{
     CandidateCorrelationPeriod, FundComparisonPeriod, FundData, FundHolding, FundQuoteMetadata,
@@ -20,6 +21,7 @@ use rstock::services::fund_analysis::{
     compute_top_n_weight,
 };
 use rstock::services::fund_comparison::{compare_funds, compute_common_holdings};
+use rstock::services::fund_metrics::compute_standard_fund_metrics;
 use rstock::services::metrics::compute_cagr;
 use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter};
 use serde_json::{json, Value};
@@ -42,6 +44,273 @@ fn fund_comparison_envelope(result: &rstock::models::FundComparisonResult) -> Va
     assert_eq!(text.lines().count(), 1);
     assert!(!text.contains("\u{1b}["));
     serde_json::from_str(&text).expect("fund comparison output should be valid JSON")
+}
+
+#[tokio::test]
+async fn usd_fund_beta_converts_subject_returns_to_eur_before_alignment() {
+    let db = setup_test_db().await;
+    let mut sources = MockMarketDataSources::new();
+    let dates = date_range(
+        chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
+        chrono::NaiveDate::from_ymd_opt(2025, 1, 30).unwrap(),
+    );
+    let prices: Vec<_> = dates
+        .iter()
+        .enumerate()
+        .map(|(index, date)| {
+            (
+                date.clone(),
+                100.0 + ((index * 7 % 13) as f64) + index as f64 * 0.25,
+            )
+        })
+        .collect();
+    sources
+        .historical_prices
+        .insert(BENCHMARK_TICKER.to_owned(), prices.clone());
+    sources.exchange_rates.insert(
+        "USDEUR".to_owned(),
+        dates
+            .iter()
+            .enumerate()
+            .map(|(index, date)| (date.clone(), 0.75 + (index % 9) as f64 * 0.015))
+            .collect(),
+    );
+    let result = compute_standard_fund_metrics(
+        &db,
+        &market_data_at(
+            &sources,
+            chrono::NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
+        ),
+        &prices,
+        Some("USD"),
+        chrono::NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    assert!((result.all_time.unwrap().beta.unwrap() - 1.0).abs() < 1e-10);
+    assert!(result.benchmark_limitations.is_empty());
+}
+
+#[tokio::test]
+async fn fund_beta_uses_complete_identical_window_intervals_including_flat_days() {
+    let db = setup_test_db().await;
+    let today = chrono::NaiveDate::from_ymd_opt(2026, 2, 5).unwrap();
+    let start = today - Duration::days(400);
+    let dates = date_range(start, today);
+    let mut prices: Vec<_> = dates
+        .iter()
+        .enumerate()
+        .map(|(index, date)| {
+            (
+                date.clone(),
+                100.0 + index as f64 + (index % 7) as f64 * 0.2,
+            )
+        })
+        .collect();
+    prices[175].1 = prices[174].1;
+    let mut sources = MockMarketDataSources::new();
+    sources
+        .historical_prices
+        .insert(BENCHMARK_TICKER.to_owned(), prices.clone());
+    sources.exchange_rates.insert(
+        "USDEUR".to_owned(),
+        dates.iter().map(|date| (date.clone(), 1.0)).collect(),
+    );
+    let result = compute_standard_fund_metrics(
+        &db,
+        &market_data_at(&sources, today + Duration::days(1)),
+        &prices,
+        Some("EUR"),
+        today + Duration::days(1),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result.all_time.unwrap().beta, Some(1.0));
+    assert_eq!(result.one_year.unwrap().beta, Some(1.0));
+    assert_eq!(result.ytd.unwrap().beta, Some(1.0));
+
+    let weekday_prices: Vec<_> = prices
+        .iter()
+        .filter(|(date, _)| {
+            !matches!(
+                chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
+                    .unwrap()
+                    .weekday(),
+                chrono::Weekday::Sat | chrono::Weekday::Sun
+            )
+        })
+        .cloned()
+        .collect();
+    let weekday_result = compute_standard_fund_metrics(
+        &db,
+        &market_data_at(&sources, today + Duration::days(1)),
+        &weekday_prices,
+        Some("EUR"),
+        today + Duration::days(1),
+    )
+    .await
+    .unwrap();
+    assert_eq!(weekday_result.all_time.unwrap().beta, Some(1.0));
+    assert_eq!(weekday_result.one_year.unwrap().beta, Some(1.0));
+    assert_eq!(weekday_result.ytd.unwrap().beta, Some(1.0));
+    assert!(weekday_prices
+        .windows(2)
+        .any(|pair| { pair[0].0 == dates[170] && pair[1].0 == dates[173] }));
+
+    let missing_flat_weekday: Vec<_> = prices
+        .iter()
+        .filter(|(date, _)| date != &dates[175])
+        .cloned()
+        .collect();
+    let missing_flat = compute_standard_fund_metrics(
+        &db,
+        &market_data_at(&sources, today + Duration::days(1)),
+        &missing_flat_weekday,
+        Some("EUR"),
+        today + Duration::days(1),
+    )
+    .await
+    .unwrap();
+    assert!(missing_flat.all_time.unwrap().beta.is_none());
+    assert!(missing_flat.one_year.unwrap().beta.is_none());
+
+    let incomplete_prices: Vec<_> = prices
+        .iter()
+        .filter(|(date, _)| date != &dates[176])
+        .cloned()
+        .collect();
+    let incomplete = compute_standard_fund_metrics(
+        &db,
+        &market_data_at(&sources, today + Duration::days(1)),
+        &incomplete_prices,
+        Some("EUR"),
+        today + Duration::days(1),
+    )
+    .await
+    .unwrap();
+    let incomplete_all = incomplete.all_time.unwrap();
+    assert!(incomplete_all.beta.is_none());
+    assert!(incomplete_all.volatility.is_some());
+    assert!(incomplete.one_year.unwrap().beta.is_none());
+}
+
+#[tokio::test]
+async fn malformed_persisted_fund_fx_is_a_hard_error_in_analysis_and_comparison() {
+    let dates = date_range(
+        chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
+        chrono::NaiveDate::from_ymd_opt(2025, 1, 5).unwrap(),
+    );
+    for invalid_rate in [0.0, -1.0, f64::INFINITY] {
+        let db = setup_test_db().await;
+        let mut sources = MockMarketDataSources::new();
+        for code in ["XGBP_BAD_A", "XGBP_BAD_B"] {
+            sources.fund_data.insert(
+                code.to_owned(),
+                FundData {
+                    fund_currency: Some("GBP".to_owned()),
+                    ..fund_data()
+                },
+            );
+            sources.historical_prices.insert(
+                code.to_owned(),
+                dates.iter().map(|date| (date.clone(), 100.0)).collect(),
+            );
+        }
+        sources.historical_prices.insert(
+            BENCHMARK_TICKER.to_owned(),
+            dates.iter().map(|date| (date.clone(), 200.0)).collect(),
+        );
+        sources.exchange_rates.insert(
+            "USDEUR".to_owned(),
+            dates.iter().map(|date| (date.clone(), 0.9)).collect(),
+        );
+        exchange_rate_repo::insert_many_immutable(
+            &db,
+            &dates
+                .iter()
+                .map(|date| ExchangeRateWrite {
+                    from_currency: "GBP".to_owned(),
+                    to_currency: "EUR".to_owned(),
+                    date: date.clone(),
+                    rate: invalid_rate,
+                })
+                .collect::<Vec<_>>(),
+        )
+        .await
+        .unwrap();
+        let market_data = market_data_at(
+            &sources,
+            chrono::NaiveDate::from_ymd_opt(2025, 1, 6).unwrap(),
+        );
+
+        let analysis_result =
+            compute_fund_analysis(&db, &market_data, "XGBP_BAD_A", one_year_candidate_period())
+                .await;
+        let analysis_error = match analysis_result {
+            Err(error) => error,
+            Ok(_) => panic!("fund analysis must propagate malformed persisted FX"),
+        };
+        assert!(format!("{analysis_error:#}").contains("invalid persisted GBP/EUR FX rate"));
+
+        let comparison_result = compare_funds(
+            &db,
+            &market_data,
+            "XGBP_BAD_A",
+            "XGBP_BAD_B",
+            thirty_day_fund_comparison_period(),
+        )
+        .await;
+        let comparison_error = match comparison_result {
+            Err(error) => error,
+            Ok(_) => panic!("fund comparison must propagate malformed persisted FX"),
+        };
+        assert!(format!("{comparison_error:#}").contains("invalid persisted GBP/EUR FX rate"));
+    }
+}
+
+#[tokio::test]
+async fn unavailable_fund_fx_remains_a_scoped_limitation_not_a_hard_error() {
+    let db = setup_test_db().await;
+    let dates = date_range(
+        chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
+        chrono::NaiveDate::from_ymd_opt(2025, 2, 15).unwrap(),
+    );
+    let prices: Vec<_> = dates
+        .iter()
+        .enumerate()
+        .map(|(index, date)| (date.clone(), 100.0 + index as f64))
+        .collect();
+    let mut sources = MockMarketDataSources::new();
+    sources
+        .historical_prices
+        .insert(BENCHMARK_TICKER.to_owned(), prices.clone());
+    sources.exchange_rates.insert(
+        "USDEUR".to_owned(),
+        dates.iter().map(|date| (date.clone(), 0.9)).collect(),
+    );
+    let result = compute_standard_fund_metrics(
+        &db,
+        &market_data_at(
+            &sources,
+            chrono::NaiveDate::from_ymd_opt(2025, 2, 16).unwrap(),
+        ),
+        &prices,
+        Some("GBP"),
+        chrono::NaiveDate::from_ymd_opt(2025, 2, 16).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    assert!(result.all_time.unwrap().beta.is_none());
+    assert!(result
+        .benchmark_limitations
+        .iter()
+        .any(|limitation| matches!(
+            &limitation.subject,
+            rstock::models::MarketDataSubject::FxRate { currency } if currency == "GBP"
+        )));
 }
 
 #[test]
@@ -407,9 +676,25 @@ async fn test_fund_comparison_json_complete_structure_and_aligned_points() {
     .await
     .unwrap();
     let envelope = fund_comparison_envelope(&result);
+    let mut human = Vec::new();
+    rstock::cli::display::write_fund_comparison_reference_context(&mut human, &result).unwrap();
+    let human = String::from_utf8(human).unwrap();
+    assert!(human.contains("legacy-acwi-etf-proxy"));
+    assert!(human.contains("auto_adjust"));
+    assert!(human.contains("unverified"));
+    assert!(human.contains("FX rate USD"));
 
     assert_eq!(envelope["command"], "compare.funds");
     let data = &envelope["data"];
+    assert_eq!(data["benchmark_reference"]["id"], "legacy-acwi-etf-proxy");
+    assert_eq!(
+        data["benchmark_reference"]["display_name"],
+        "iShares MSCI ACWI ETF (ACWI) proxy"
+    );
+    assert!(data["benchmark_reference"]["return_basis_qualification"]
+        .as_str()
+        .unwrap()
+        .contains("unverified"));
     assert_eq!(data["fund_a"]["code"], "XJSONCMP1");
     assert_eq!(data["fund_a"]["name"], "First Candidate");
     assert_eq!(data["fund_a"]["info"]["aum"], json!(1_000_000.0));
@@ -421,6 +706,13 @@ async fn test_fund_comparison_json_complete_structure_and_aligned_points() {
     assert_eq!(data["fund_b"]["code"], "XJSONCMP2");
     assert_eq!(data["fund_b"]["name"], "Second Candidate");
     assert_eq!(data["fund_b"]["info"]["currency"], "USD");
+    assert!(data["fund_a"]["benchmark_limitations"].is_array());
+    assert!(data["fund_b"]["benchmark_limitations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|limitation| limitation["subject"]["type"] == "fx_rate"
+            && limitation["subject"]["currency"] == "USD"));
     for fund in ["fund_a", "fund_b"] {
         for period in ["ytd", "one_year", "three_year", "five_year", "all_time"] {
             assert!(
@@ -888,9 +1180,27 @@ async fn test_fund_analysis_json_complete_data() {
     .await
     .unwrap();
     let envelope = fund_analysis_envelope(&result);
+    let mut human = Vec::new();
+    rstock::cli::display::write_fund_analysis_reference_context(&mut human, &result).unwrap();
+    let human = String::from_utf8(human).unwrap();
+    assert!(human.contains("legacy-acwi-etf-proxy"));
+    assert!(human.contains("auto_adjust"));
+    assert!(human.contains("unverified"));
+    assert!(human.contains("FX rate USD"));
 
     assert_eq!(envelope["command"], "analyze.fund");
     let data = &envelope["data"];
+    assert_eq!(data["benchmark_reference"]["id"], "legacy-acwi-etf-proxy");
+    assert!(data["benchmark_reference"]["adjustment_provenance"]
+        .as_str()
+        .unwrap()
+        .contains("auto_adjust"));
+    assert!(data["benchmark_limitations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|limitation| limitation["subject"]["type"] == "fx_rate"
+            && limitation["subject"]["currency"] == "USD"));
     assert_eq!(data["ms_code"], "XJSONFULL");
     assert_eq!(data["name"], "Complete Candidate Fund");
     assert_eq!(data["fund_currency"], "EUR");
@@ -910,6 +1220,8 @@ async fn test_fund_analysis_json_complete_data() {
         assert!(data[period].is_object(), "{period} should contain metrics");
         assert!(data[period]["total_return"].is_number());
     }
+    assert!(data["one_year"]["beta"].is_null());
+    assert!(data["one_year"]["volatility"].is_number());
     assert_eq!(data["candidate_correlation"]["period_label"], "1Y");
     assert!(data["candidate_correlation"]["rows"].is_array());
     assert_eq!(data["holdings_changed"], true);

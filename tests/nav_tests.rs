@@ -2869,6 +2869,7 @@ async fn checkpoint_resume_reports_later_buy_sell_and_dividend_fx_blockers() {
         .filter_map(|limitation| match &limitation.subject {
             MarketDataSubject::FxRate { currency } => Some(currency.as_str()),
             MarketDataSubject::Asset { .. } => None,
+            MarketDataSubject::BenchmarkReference { .. } => None,
         })
         .collect();
     assert_eq!(
@@ -3302,6 +3303,7 @@ async fn missing_fx_reports_all_same_day_currency_limitations() {
         .filter_map(|limitation| match &limitation.subject {
             MarketDataSubject::FxRate { currency } => Some(currency.as_str()),
             MarketDataSubject::Asset { .. } => None,
+            MarketDataSubject::BenchmarkReference { .. } => None,
         })
         .collect();
     assert_eq!(currencies, ["GBP", "USD"].into_iter().collect());

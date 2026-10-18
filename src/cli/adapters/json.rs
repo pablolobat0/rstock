@@ -257,6 +257,7 @@ enum PerformanceJson<'a> {
         synchronized_value: f64,
         nav: f64,
         inception_date: String,
+        benchmark_reference: &'a crate::models::BenchmarkReferenceInfo,
         /// Boxed because the five period outcomes dwarf the enum's other
         /// variants; serialization is unchanged.
         periods: Box<PeriodsJson>,
@@ -277,6 +278,7 @@ impl<'a> From<&'a PortfolioPerformance> for PerformanceJson<'a> {
                 synchronized_value: available.synchronized_value,
                 nav: available.nav,
                 inception_date: available.inception_date.clone(),
+                benchmark_reference: &available.benchmark_reference,
                 periods: Box::new(PeriodsJson::from(&available.periods)),
                 nav_history_limitations: available.nav_history_limitations.iter().collect(),
                 benchmark_risk_limitations: available.benchmark_risk_limitations.iter().collect(),

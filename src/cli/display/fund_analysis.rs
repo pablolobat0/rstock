@@ -1,5 +1,6 @@
 use chrono::Local;
 use colored::Colorize;
+use std::io::Write;
 use tabled::settings::object::Columns;
 use tabled::settings::style::HorizontalLine;
 use tabled::settings::{Alignment, Style};
@@ -76,6 +77,9 @@ fn display_aum(result: &FundAnalysisResult) -> String {
 fn print_performance(result: &FundAnalysisResult) {
     println!("{}", "Performance".bold());
     println!();
+    write_fund_analysis_reference_context(&mut std::io::stdout().lock(), result)
+        .expect("writing fund-analysis reference context to stdout");
+    println!();
 
     let periods = [
         ("YTD", &result.ytd),
@@ -109,6 +113,17 @@ fn print_performance(result: &FundAnalysisResult) {
     }
     println!("{table}");
     println!();
+}
+
+pub fn write_fund_analysis_reference_context<W: Write>(
+    writer: &mut W,
+    result: &FundAnalysisResult,
+) -> anyhow::Result<()> {
+    super::helpers::write_benchmark_reference_context(
+        writer,
+        &result.benchmark_reference,
+        &result.benchmark_limitations,
+    )
 }
 
 fn print_top_holdings(result: &FundAnalysisResult) {

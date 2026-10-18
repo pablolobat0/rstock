@@ -178,7 +178,7 @@ async fn semantic_migration_round_trips_every_transaction_kind_and_identity() {
     let db = sea_orm::Database::connect("sqlite::memory:")
         .await
         .expect("in-memory database");
-    let prefix = (Migrator::migrations().len() - 1) as u32;
+    let prefix = (Migrator::migrations().len() - 2) as u32;
     Migrator::up(&db, Some(prefix))
         .await
         .expect("legacy migration prefix");
@@ -218,6 +218,9 @@ async fn semantic_migration_round_trips_every_transaction_kind_and_identity() {
     assert_eq!(rows[3].units, Some(3.0));
     assert_eq!(rows[3].unit_price_cents, Some(1500));
 
+    Migrator::down(&db, Some(1))
+        .await
+        .expect("drop reference migration");
     Migrator::down(&db, Some(1))
         .await
         .expect("legacy down migration");
@@ -321,7 +324,7 @@ async fn semantic_constraints_reject_irrelevant_fields_and_invalid_signs() {
 #[tokio::test]
 async fn migration_preserves_deleted_highest_transaction_id_through_up_and_down() {
     let db = sea_orm::Database::connect("sqlite::memory:").await.unwrap();
-    let prefix = (Migrator::migrations().len() - 1) as u32;
+    let prefix = (Migrator::migrations().len() - 2) as u32;
     Migrator::up(&db, Some(prefix)).await.unwrap();
     db.execute_unprepared("INSERT INTO assets (id,ticker,name,asset_type,currency,created_at) VALUES (1,'XSEQ','Sequence','stock','EUR','now')").await.unwrap();
     db.execute_unprepared("INSERT INTO transactions (id,asset_id,tx_type,date,quantity,price_cents,fees_cents,created_at) VALUES (7,1,'buy','2025-01-01',1.0,100,0,'now'),(100,1,'buy','2025-01-02',1.0,100,0,'now')").await.unwrap();
@@ -335,6 +338,7 @@ async fn migration_preserves_deleted_highest_transaction_id_through_up_and_down(
     assert!(generated > 100);
 
     Migrator::down(&db, Some(1)).await.unwrap();
+    Migrator::down(&db, Some(1)).await.unwrap();
     assert_eq!(
         transaction_sequence(&db).await,
         (1, i64::try_from(generated).unwrap())
@@ -346,7 +350,7 @@ async fn migration_preserves_deleted_highest_transaction_id_through_up_and_down(
 #[tokio::test]
 async fn migration_preserves_empty_table_sequence_through_up_and_down() {
     let db = sea_orm::Database::connect("sqlite::memory:").await.unwrap();
-    let prefix = (Migrator::migrations().len() - 1) as u32;
+    let prefix = (Migrator::migrations().len() - 2) as u32;
     Migrator::up(&db, Some(prefix)).await.unwrap();
     db.execute_unprepared("INSERT INTO assets (id,ticker,name,asset_type,currency,created_at) VALUES (1,'XEMPTYSEQ','Empty Sequence','stock','EUR','now')").await.unwrap();
     db.execute_unprepared("INSERT INTO transactions (id,asset_id,tx_type,date,quantity,price_cents,fees_cents,created_at) VALUES (50,1,'buy','2025-01-01',1.0,100,0,'now')").await.unwrap();
@@ -363,6 +367,7 @@ async fn migration_preserves_empty_table_sequence_through_up_and_down() {
         .unwrap();
 
     Migrator::down(&db, Some(1)).await.unwrap();
+    Migrator::down(&db, Some(1)).await.unwrap();
     assert_eq!(
         transaction_sequence(&db).await,
         (1, i64::try_from(generated).unwrap())
@@ -374,7 +379,7 @@ async fn migration_preserves_empty_table_sequence_through_up_and_down() {
 #[tokio::test]
 async fn failed_up_rolls_back_rebuild_and_bookkeeping_then_retries() {
     let db = sea_orm::Database::connect("sqlite::memory:").await.unwrap();
-    let prefix = (Migrator::migrations().len() - 1) as u32;
+    let prefix = (Migrator::migrations().len() - 2) as u32;
     Migrator::up(&db, Some(prefix)).await.unwrap();
     db.execute_unprepared("INSERT INTO assets (id,ticker,name,asset_type,currency,created_at) VALUES (1,'XUPFAIL','Up failure','stock','EUR','now')").await.unwrap();
     db.execute_unprepared("INSERT INTO transactions (id,asset_id,tx_type,date,quantity,price_cents,fees_cents,notes,created_at) VALUES (7,1,'buy','2025-01-01',1.0,100,0,'legacy note','legacy created'),(100,1,'sell','2025-01-02',1.0,110,1,NULL,'legacy sell')").await.unwrap();
@@ -421,7 +426,7 @@ async fn failed_up_rolls_back_rebuild_and_bookkeeping_then_retries() {
 #[tokio::test]
 async fn failed_down_rolls_back_rebuild_and_bookkeeping_then_retries() {
     let db = sea_orm::Database::connect("sqlite::memory:").await.unwrap();
-    let prefix = (Migrator::migrations().len() - 1) as u32;
+    let prefix = (Migrator::migrations().len() - 2) as u32;
     Migrator::up(&db, Some(prefix)).await.unwrap();
     db.execute_unprepared("INSERT INTO assets (id,ticker,name,asset_type,currency,created_at) VALUES (1,'XDOWNFAIL','Down failure','stock','EUR','now')").await.unwrap();
     db.execute_unprepared("INSERT INTO transactions (id,asset_id,tx_type,date,quantity,price_cents,fees_cents,notes,created_at) VALUES (7,1,'buy','2025-01-01',1.0,100,0,'semantic note','semantic created'),(100,1,'sell','2025-01-02',1.0,110,1,NULL,'semantic sell')").await.unwrap();
@@ -429,6 +434,7 @@ async fn failed_down_rolls_back_rebuild_and_bookkeeping_then_retries() {
         .await
         .unwrap();
     Migrator::up(&db, None).await.unwrap();
+    Migrator::down(&db, Some(1)).await.unwrap();
 
     let before = (
         table_columns(&db).await,

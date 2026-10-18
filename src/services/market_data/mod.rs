@@ -1,6 +1,7 @@
 mod historical;
 mod individual_price;
 mod policy;
+mod reference;
 pub mod sources;
 
 use std::collections::{BTreeMap, HashMap};
@@ -12,16 +13,16 @@ use futures::future::{BoxFuture, FutureExt, Shared};
 use sea_orm::DatabaseConnection;
 use tokio::sync::Semaphore;
 
-use crate::db::repos::asset_repo;
 use crate::models::{
-    normalize_currency, Asset, AssetClassification, BenchmarkRiskMarketData, CorrelationMarketData,
+    normalize_currency, Asset, BenchmarkRiskMarketData, CorrelationMarketData,
     CorrelationMarketDataSeries, FundData, FundQuoteMetadata, IndividualPriceAvailability,
     MarketDataValuation, StockInfo, ValuationMarketData, ValuationMarketDataAvailability,
 };
 use crate::services::clock::{Clock, SystemClock};
-use crate::services::metrics;
 
 pub use sources::{DefaultMarketDataSources, MarketDataSources, SourceObservation};
+
+pub(crate) const LEGACY_ACWI_REFERENCE_ID: &str = "legacy-acwi-etf-proxy";
 
 pub(crate) struct NavValuationData {
     asset_prices: HashMap<i32, BTreeMap<NaiveDate, f64>>,
@@ -202,6 +203,23 @@ impl MarketData {
 
     pub fn today(&self) -> NaiveDate {
         self.today
+    }
+
+    pub(crate) async fn prepare_base_currency_prices(
+        &self,
+        db: &DatabaseConnection,
+        currency: &str,
+        native_prices: &[(String, f64)],
+        requested_end_date: &str,
+    ) -> anyhow::Result<(Vec<(String, f64)>, Vec<crate::models::MarketDataLimitation>)> {
+        historical::prepare_base_currency_prices(
+            db,
+            currency,
+            native_prices,
+            requested_end_date,
+            self,
+        )
+        .await
     }
 
     pub(crate) async fn stock_price_history(
@@ -414,17 +432,14 @@ impl MarketData {
         start_date: &str,
         end_date: &str,
     ) -> anyhow::Result<CorrelationMarketData> {
-        let benchmark = get_or_create_benchmark_asset(db).await?;
-        let mut all_assets = tracked_assets.clone();
-        all_assets.push(benchmark.clone());
-
         let prepared = self
-            .prepare_valuation_market_data(db, &all_assets, start_date, end_date)
+            .prepare_valuation_market_data(db, &tracked_assets, start_date, end_date)
             .await?;
-
+        let reference =
+            reference::prepare(db, LEGACY_ACWI_REFERENCE_ID, start_date, end_date, self).await?;
         let mut all_series = historical::get_base_currency_price_series_for_assets(
             db,
-            &all_assets,
+            &tracked_assets,
             start_date,
             end_date,
         )
@@ -435,17 +450,21 @@ impl MarketData {
                 correlation_series(asset, all_series.remove(&asset.id).unwrap_or_default())
             })
             .collect();
-        let benchmark_series = correlation_series(
-            &benchmark,
-            all_series.remove(&benchmark.id).unwrap_or_default(),
-        );
+        let benchmark_series = CorrelationMarketDataSeries {
+            asset_id: 0,
+            name: reference.info.display_name.clone(),
+            prices: reference.series.clone(),
+        };
+        let mut limitations = prepared.limitations;
+        limitations.extend(reference.limitations);
 
         Ok(CorrelationMarketData {
             requested_start_date: start_date.to_owned(),
             requested_end_date: end_date.to_owned(),
             tracked_asset_series,
             benchmark_series,
-            limitations: prepared.limitations,
+            benchmark_reference: reference.info,
+            limitations,
         })
     }
 
@@ -485,34 +504,19 @@ impl MarketData {
     /// benchmark data is reported through empty series parts and classified
     /// limitations instead of failing, so a benchmark gap removes only the
     /// benchmark-dependent facts and never the portfolio-only ones.
-    pub async fn benchmark_risk_market_data(
+    pub async fn benchmark_reference_market_data(
         &self,
         db: &DatabaseConnection,
         start_date: &str,
         end_date: &str,
     ) -> anyhow::Result<BenchmarkRiskMarketData> {
-        let benchmark = get_or_create_benchmark_asset(db).await?;
-        let prepared = self
-            .prepare_valuation_market_data_if_available(
-                db,
-                std::slice::from_ref(&benchmark),
-                start_date,
-                end_date,
-            )
-            .await?;
-        let benchmark_series = historical::get_base_currency_price_series_for_assets(
-            db,
-            std::slice::from_ref(&benchmark),
-            start_date,
-            end_date,
-        )
-        .await?
-        .remove(&benchmark.id)
-        .unwrap_or_default();
+        let reference =
+            reference::prepare(db, LEGACY_ACWI_REFERENCE_ID, start_date, end_date, self).await?;
 
         Ok(BenchmarkRiskMarketData {
-            benchmark_series,
-            limitations: prepared.limitations,
+            benchmark_series: reference.series,
+            benchmark_reference: reference.info,
+            limitations: reference.limitations,
         })
     }
 
@@ -576,13 +580,6 @@ impl MarketData {
             .map(|observations| observations.as_ref().clone())
             .map_err(|error| anyhow::anyhow!(error.as_str().to_owned()))
     }
-}
-
-async fn get_or_create_benchmark_asset(db: &DatabaseConnection) -> anyhow::Result<Asset> {
-    let info = metrics::benchmark_asset_info();
-    let id = asset_repo::create_or_find_by_ticker(db, &info, &AssetClassification::default(), None)
-        .await?;
-    Ok(metrics::benchmark_asset(id))
 }
 
 fn correlation_series(

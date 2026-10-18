@@ -146,6 +146,72 @@ pub(crate) async fn get_exchange_rates_for_asset(
     Ok(rates)
 }
 
+pub(crate) async fn prepare_base_currency_prices(
+    db: &DatabaseConnection,
+    currency: &str,
+    native_prices: &[(String, f64)],
+    requested_end_date: &str,
+    market_data: &MarketData,
+) -> anyhow::Result<(Vec<(String, f64)>, Vec<crate::models::MarketDataLimitation>)> {
+    for (date, price) in native_prices {
+        anyhow::ensure!(
+            price.is_finite() && *price > 0.0,
+            "invalid successful {currency} fund price on {date}: {price}"
+        );
+    }
+    if currency == BASE_CURRENCY {
+        return Ok((native_prices.to_vec(), Vec::new()));
+    }
+    let requested_end =
+        policy::parse_market_data_date(requested_end_date, "price series end date")?;
+    let start_date = native_prices
+        .first()
+        .map_or(requested_end_date, |(date, _)| date.as_str());
+    let rates =
+        prepare_reference_exchange_rates(db, currency, start_date, requested_end_date, market_data)
+            .await?;
+    for (date, rate) in &rates {
+        anyhow::ensure!(
+            rate.is_finite() && *rate > 0.0,
+            "invalid persisted {currency}/{BASE_CURRENCY} FX rate on {date}: {rate}"
+        );
+    }
+    let limitations = match rates.range(..=requested_end).next_back() {
+        Some((date, _)) => policy::classify_fx_limitation(currency, *date, requested_end)
+            .into_iter()
+            .collect(),
+        None => vec![policy::missing_fx_limitation(currency, requested_end)],
+    };
+    let mut converted = Vec::with_capacity(native_prices.len());
+    for (date, price) in native_prices {
+        let parsed = policy::parse_market_data_date(date, "fund price date")?;
+        if let Some(rate) = rates.get(&parsed) {
+            let base_price = price * rate;
+            anyhow::ensure!(
+                base_price.is_finite() && base_price > 0.0,
+                "invalid converted {currency} fund price on {date}: {base_price}"
+            );
+            converted.push((date.clone(), base_price));
+        }
+    }
+    Ok((converted, limitations))
+}
+
+pub(crate) async fn prepare_reference_exchange_rates(
+    db: &DatabaseConnection,
+    currency: &str,
+    start_date: &str,
+    end_date: &str,
+    market_data: &MarketData,
+) -> anyhow::Result<BTreeMap<NaiveDate, f64>> {
+    Ok(
+        fill_historical_exchange_rates(db, currency, start_date, end_date, false, market_data)
+            .await?
+            .map(|values| values.values)
+            .unwrap_or_default(),
+    )
+}
+
 pub(crate) async fn get_base_currency_price_series_for_assets(
     db: &DatabaseConnection,
     assets: &[Asset],
@@ -647,7 +713,9 @@ async fn fill_nav_exchange_rates(
                 tracing::warn!(%currency, to_currency = BASE_CURRENCY, "no cached exchange rate data available at all");
             }
             Err(e) => {
-                tracing::warn!(%currency, to_currency = BASE_CURRENCY, error = %e, "failed to fill exchange rates, falling back to latest cached date");
+                return Err(e).with_context(|| {
+                    format!("failed to prepare {currency}/{BASE_CURRENCY} exchange rates")
+                });
             }
         }
     }
@@ -749,9 +817,9 @@ async fn fill_historical_exchange_rates(
 }
 
 #[derive(Clone, Copy)]
-struct DateInterval {
-    start: NaiveDate,
-    end: NaiveDate,
+pub(super) struct DateInterval {
+    pub(super) start: NaiveDate,
+    pub(super) end: NaiveDate,
 }
 
 #[derive(Clone, Copy)]
@@ -762,7 +830,7 @@ struct AssetFillScope {
     discover_boundary: bool,
 }
 
-fn missing_intervals(
+pub(super) fn missing_intervals(
     start: NaiveDate,
     end: NaiveDate,
     cached_dates: &HashSet<NaiveDate>,
@@ -852,7 +920,7 @@ fn append_fx_interval_writes(
     );
 }
 
-fn forward_filled_interval(
+pub(super) fn forward_filled_interval(
     interval: DateInterval,
     observations: Vec<SourceObservation>,
     latest_completed_date: NaiveDate,

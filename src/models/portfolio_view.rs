@@ -105,6 +105,7 @@ pub struct AvailablePortfolioPerformance {
     /// The YTD, 1Y, 3Y, 5Y, and All period outcomes measured over the ready
     /// NAV history through the Effective valuation date.
     pub periods: PerformancePeriods,
+    pub benchmark_reference: super::portfolio::BenchmarkReferenceInfo,
     /// NAV/history readiness Market data limitations. They are independent
     /// from fact availability and may coexist with this older snapshot.
     pub nav_history_limitations: Vec<MarketDataLimitation>,

@@ -8,12 +8,14 @@ use common::{
 };
 use rstock::constants::BENCHMARK_TICKER;
 use rstock::db::repos::asset_repo;
+use rstock::db::repos::benchmark_reference_repo::{self, ReferencePrice};
 use rstock::models::{MarketDataSubject, StockInfo};
 use rstock::services::analytics::{compute_correlation_data, compute_rolling_correlation_data};
 use rstock::services::metrics::{
     align_return_series_with_dates, align_return_series_with_dates_unfiltered,
     compute_rolling_correlation, summarize_rolling_correlation,
 };
+use sea_orm::ConnectionTrait;
 use serde_json::{json, Value};
 
 fn correlation_market_data(
@@ -309,7 +311,10 @@ async fn test_correlation_market_data_returns_tracked_and_benchmark_series_separ
     assert_eq!(result.requested_start_date, "2025-01-01");
     assert_eq!(result.requested_end_date, "2025-01-25");
     assert_eq!(result.tracked_asset_series.len(), 2);
-    assert_eq!(result.benchmark_series.name, "MSCI ACWI Benchmark");
+    assert_eq!(
+        result.benchmark_series.name,
+        "iShares MSCI ACWI ETF (ACWI) proxy"
+    );
     assert!(!result
         .tracked_asset_series
         .iter()
@@ -322,6 +327,197 @@ async fn test_correlation_market_data_returns_tracked_and_benchmark_series_separ
         .unwrap();
     assert_eq!(usd_series.prices.len(), 25);
     assert!((usd_series.prices[0].1 - 46.0).abs() < 1e-9);
+}
+
+#[tokio::test]
+async fn tracked_acwi_holding_shares_market_history_with_reference() {
+    let db = setup_test_db().await;
+    let mut sources = MockMarketDataSources::new();
+    seed_benchmark_market_data(&mut sources, 25);
+    let acwi_id = insert_asset(&db, "ACWI", "iShares MSCI ACWI ETF", "stock", "USD").await;
+    insert_transaction(&db, acwi_id, "2025-01-01", 2.0, 100.0, 0.0).await;
+    let market_data = common::market_data_at(
+        &sources,
+        chrono::NaiveDate::from_ymd_opt(2025, 1, 26).unwrap(),
+    );
+
+    let inventory =
+        rstock::services::portfolio_inventory::get_portfolio_inventory(&db, &market_data)
+            .await
+            .unwrap();
+    assert_eq!(inventory.performance_holdings.positions.len(), 1);
+    assert_eq!(inventory.performance_holdings.positions[0].ticker, "ACWI");
+
+    let readiness = rstock::services::nav::ensure_portfolio_history(&db, &market_data)
+        .await
+        .unwrap();
+    assert!(readiness.latest_snapshot.is_some());
+    assert_eq!(asset_repo::find_all(&db).await.unwrap().len(), 1);
+
+    let acwi = asset_repo::find_by_ids(&db, [acwi_id]).await.unwrap();
+
+    let result = market_data
+        .correlation_market_data(&db, acwi, "2025-01-01", "2025-01-25")
+        .await
+        .unwrap();
+
+    assert_eq!(result.tracked_asset_series.len(), 1);
+    assert_eq!(result.tracked_asset_series[0].prices.len(), 25);
+    assert_eq!(result.benchmark_series.prices.len(), 25);
+    assert_ne!(
+        result.tracked_asset_series[0].asset_id,
+        result.benchmark_series.asset_id
+    );
+    assert_eq!(
+        result.tracked_asset_series[0].prices,
+        result.benchmark_series.prices
+    );
+    assert_eq!(result.benchmark_reference.id, "legacy-acwi-etf-proxy");
+    assert_eq!(asset_repo::find_all(&db).await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn fresh_reference_cache_reuses_immutable_prices_without_creating_asset_rows() {
+    let db = setup_test_db().await;
+    let mut sources = MockMarketDataSources::new();
+    seed_benchmark_market_data(&mut sources, 25);
+    let market_data = common::market_data_at(
+        &sources,
+        chrono::NaiveDate::from_ymd_opt(2025, 1, 26).unwrap(),
+    );
+
+    let first = market_data
+        .benchmark_reference_market_data(&db, "2025-01-01", "2025-01-25")
+        .await
+        .unwrap();
+    assert_eq!(first.benchmark_series.len(), 25);
+    assert_eq!(first.benchmark_reference.id, "legacy-acwi-etf-proxy");
+    assert!(asset_repo::find_all(&db).await.unwrap().is_empty());
+    let requests = sources.historical_source_call_count();
+
+    let second = market_data
+        .benchmark_reference_market_data(&db, "2025-01-01", "2025-01-25")
+        .await
+        .unwrap();
+    assert_eq!(second.benchmark_series, first.benchmark_series);
+    assert_eq!(sources.historical_source_call_count(), requests);
+    assert!(asset_repo::find_all(&db).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn benchmark_reference_does_not_extend_eur_prices_past_final_fx_observation() {
+    let db = setup_test_db().await;
+    let mut sources = MockMarketDataSources::new();
+    sources.historical_prices.insert(
+        BENCHMARK_TICKER.to_owned(),
+        (1..=8)
+            .into_iter()
+            .map(|day| (format!("2025-01-0{day}"), 100.0 + f64::from(day)))
+            .collect(),
+    );
+    sources
+        .exchange_rates
+        .insert("USDEUR".to_owned(), vec![("2025-01-01".to_owned(), 0.9)]);
+    let market_data = common::market_data_at(
+        &sources,
+        chrono::NaiveDate::from_ymd_opt(2025, 1, 10).unwrap(),
+    );
+
+    let result = market_data
+        .benchmark_reference_market_data(&db, "2025-01-01", "2025-01-08")
+        .await
+        .unwrap();
+
+    assert_eq!(
+        result.benchmark_series,
+        vec![("2025-01-01".to_owned(), 90.9)]
+    );
+    assert!(result.limitations.iter().any(|limitation| matches!(
+        &limitation.subject,
+        rstock::models::MarketDataSubject::FxRate { currency } if currency == "USD"
+    )));
+}
+
+#[tokio::test]
+async fn benchmark_fx_persistence_failure_is_a_hard_error() {
+    let db = setup_test_db().await;
+    let mut sources = MockMarketDataSources::new();
+    seed_benchmark_market_data(&mut sources, 3);
+    db.execute_unprepared(
+        "CREATE TRIGGER reject_fx BEFORE INSERT ON daily_exchange_rates BEGIN SELECT RAISE(ABORT, 'blocked FX persistence'); END;",
+    )
+    .await
+    .unwrap();
+    let market_data = common::market_data_at(
+        &sources,
+        chrono::NaiveDate::from_ymd_opt(2025, 1, 5).unwrap(),
+    );
+
+    let error = market_data
+        .benchmark_reference_market_data(&db, "2025-01-01", "2025-01-03")
+        .await
+        .expect_err("FX database write failure must not become missing data");
+    assert!(format!("{error:#}").contains("blocked FX persistence"));
+}
+
+#[tokio::test]
+async fn malformed_successful_reference_cache_prices_are_hard_errors() {
+    for invalid_price in [0.0, -100.0, f64::INFINITY] {
+        let db = setup_test_db().await;
+        benchmark_reference_repo::upsert_prices_immutable(
+            &db,
+            "legacy-acwi-etf-proxy",
+            &[ReferencePrice {
+                date: "2025-01-01".to_owned(),
+                price: invalid_price,
+                is_api_failure: false,
+            }],
+        )
+        .await
+        .unwrap();
+        let mut sources = MockMarketDataSources::new();
+        sources
+            .historical_prices
+            .insert(BENCHMARK_TICKER.to_owned(), vec![]);
+        let market_data = common::market_data_at(
+            &sources,
+            chrono::NaiveDate::from_ymd_opt(2025, 1, 3).unwrap(),
+        );
+
+        let error = market_data
+            .benchmark_reference_market_data(&db, "2025-01-01", "2025-01-01")
+            .await
+            .expect_err("malformed successful cache row must not become a valid series");
+        assert!(format!("{error:#}").contains("invalid persisted benchmark reference price"));
+    }
+}
+
+#[tokio::test]
+async fn benchmark_reference_failure_marker_is_not_a_malformed_success() {
+    let db = setup_test_db().await;
+    benchmark_reference_repo::upsert_prices_immutable(
+        &db,
+        "legacy-acwi-etf-proxy",
+        &[ReferencePrice {
+            date: "2025-01-01".to_owned(),
+            price: 0.0,
+            is_api_failure: true,
+        }],
+    )
+    .await
+    .unwrap();
+    let sources = MockMarketDataSources::new();
+    let market_data = common::market_data_at(
+        &sources,
+        chrono::NaiveDate::from_ymd_opt(2025, 1, 3).unwrap(),
+    );
+
+    let result = market_data
+        .benchmark_reference_market_data(&db, "2025-01-01", "2025-01-01")
+        .await
+        .unwrap();
+    assert!(result.benchmark_series.is_empty());
+    assert!(!result.limitations.is_empty());
 }
 
 /// Assets with insufficient data should appear in warnings and have None correlation
@@ -400,8 +596,44 @@ async fn test_correlation_matrix_json_preserves_nulls_warnings_and_limitations()
     .await
     .unwrap();
     let (text, envelope) = correlation_envelope("analyze.correlation.matrix", &matrix);
+    let mut human = Vec::new();
+    rstock::cli::display::write_correlation_reference_context(&mut human, &matrix).unwrap();
+    rstock::cli::display::write_correlation_market_data_limitations(
+        &mut human,
+        &matrix.market_data_limitations,
+    )
+    .unwrap();
+    let human = String::from_utf8(human).unwrap();
+    assert!(human.contains("legacy-acwi-etf-proxy"));
+    assert!(human.contains("auto_adjust"));
+    assert!(human.contains("unverified"));
+    assert!(human.contains("FX rate USD"));
 
     assert_eq!(envelope["command"], "analyze.correlation.matrix");
+    assert_eq!(
+        envelope["data"]["benchmark_reference"]["id"],
+        "legacy-acwi-etf-proxy"
+    );
+    assert_eq!(
+        envelope["data"]["benchmark_reference"]["display_name"],
+        "iShares MSCI ACWI ETF (ACWI) proxy"
+    );
+    assert_eq!(
+        envelope["data"]["benchmark_reference"]["instrument_ticker"],
+        "ACWI"
+    );
+    assert!(
+        envelope["data"]["benchmark_reference"]["adjustment_provenance"]
+            .as_str()
+            .unwrap()
+            .contains("auto_adjust")
+    );
+    assert!(
+        envelope["data"]["benchmark_reference"]["return_basis_qualification"]
+            .as_str()
+            .unwrap()
+            .contains("unverified")
+    );
     assert!(envelope["data"]["names"]
         .as_array()
         .unwrap()
@@ -425,6 +657,13 @@ async fn test_correlation_matrix_json_preserves_nulls_warnings_and_limitations()
             && limitation["subject"]["ticker"] == "XFAKE1"
             && limitation["latest_available_date"] == "2025-01-05"
             && limitation["requested_end_date"] == "2025-02-10"
+    }));
+    assert!(limitations.iter().any(|limitation| {
+        limitation["subject"]["type"] == "benchmark_reference"
+            && limitation["subject"]["id"] == "legacy-acwi-etf-proxy"
+    }));
+    assert!(limitations.iter().any(|limitation| {
+        limitation["subject"]["type"] == "fx_rate" && limitation["subject"]["currency"] == "USD"
     }));
     assert!(!text.contains("\u{1b}["));
 }

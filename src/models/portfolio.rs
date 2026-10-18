@@ -55,6 +55,20 @@ pub struct CorrelationMatrix {
     /// Names with insufficient data for the requested period
     pub warnings: Vec<String>,
     pub market_data_limitations: Vec<MarketDataLimitation>,
+    /// Identity and qualification of the legacy reference series.
+    pub benchmark_reference: BenchmarkReferenceInfo,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct BenchmarkReferenceInfo {
+    pub id: String,
+    pub display_name: String,
+    pub instrument_ticker: String,
+    pub source: String,
+    pub source_identifier: String,
+    pub currency: String,
+    pub adjustment_provenance: String,
+    pub return_basis_qualification: String,
 }
 
 #[derive(Serialize)]

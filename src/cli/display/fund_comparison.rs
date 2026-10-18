@@ -1,4 +1,5 @@
 use colored::Colorize;
+use std::io::Write;
 use tabled::builder::Builder;
 use tabled::settings::object::Columns;
 use tabled::settings::style::HorizontalLine;
@@ -100,6 +101,9 @@ fn print_fund_info(result: &FundComparisonResult) {
 fn print_performance(result: &FundComparisonResult) {
     println!("{}", "Performance".bold());
     println!();
+    write_fund_comparison_reference_context(&mut std::io::stdout().lock(), result)
+        .expect("writing fund-comparison reference context to stdout");
+    println!();
 
     let return_rows = [
         build_performance_rows("Total Return", result, |m| {
@@ -130,6 +134,24 @@ fn print_performance(result: &FundComparisonResult) {
     .flatten()
     .collect::<Vec<_>>();
     print_performance_table("Risk-Adjusted", risk_adjusted_rows, &[3]);
+}
+
+pub fn write_fund_comparison_reference_context<W: Write>(
+    writer: &mut W,
+    result: &FundComparisonResult,
+) -> anyhow::Result<()> {
+    super::helpers::write_benchmark_reference_context(writer, &result.benchmark_reference, &[])?;
+    for side in [&result.fund_a, &result.fund_b] {
+        for limitation in &side.benchmark_limitations {
+            writeln!(
+                writer,
+                "{}: {}",
+                side.code,
+                super::helpers::format_market_data_limitation_warning(limitation)
+            )?;
+        }
+    }
+    Ok(())
 }
 
 fn print_allocations(title: &str, entries: &[AllocationComparison], result: &FundComparisonResult) {

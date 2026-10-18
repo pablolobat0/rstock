@@ -21,10 +21,10 @@ use crate::cli::display::helpers::{
 };
 use crate::constants::display_date;
 use crate::models::{
-    AssetType, DailyMovementExclusionReason, FactAvailability, InventoryPosition,
-    InventorySectionAggregates, MarketDataLimitation, NavHistoryRequest, PeriodOutcome,
-    PortfolioInventory, PortfolioInventorySection, PortfolioPerformance, PortfolioSnapshot,
-    PortfolioView,
+    AssetType, BenchmarkReferenceInfo, DailyMovementExclusionReason, FactAvailability,
+    InventoryPosition, InventorySectionAggregates, MarketDataLimitation, NavHistoryRequest,
+    PeriodOutcome, PortfolioInventory, PortfolioInventorySection, PortfolioPerformance,
+    PortfolioSnapshot, PortfolioView,
 };
 
 /// Renders the complete Portfolio view through the injected writer. The view
@@ -240,6 +240,7 @@ fn write_performance<W: Write>(
         "Inception: {}",
         display_date(&available.inception_date)
     )?;
+    write_benchmark_reference(writer, &available.benchmark_reference)?;
 
     let periods = [
         ("YTD", &available.periods.ytd),
@@ -250,6 +251,28 @@ fn write_performance<W: Write>(
     ];
     write_metrics_table(writer, &periods)?;
     write_nav_chart(writer, nav_history, nav_history_request)
+}
+
+fn write_benchmark_reference<W: Write>(
+    writer: &mut W,
+    reference: &BenchmarkReferenceInfo,
+) -> anyhow::Result<()> {
+    writeln!(
+        writer,
+        "Beta reference: {} [{}] — {} {} ({})",
+        reference.display_name,
+        reference.id,
+        reference.source,
+        reference.source_identifier,
+        reference.currency
+    )?;
+    writeln!(writer, "  Adjustment: {}", reference.adjustment_provenance)?;
+    writeln!(
+        writer,
+        "  Return basis: {}",
+        reference.return_basis_qualification
+    )?;
+    Ok(())
 }
 
 /// The YTD, 1Y, 3Y, 5Y, and All period outcomes with their independently
