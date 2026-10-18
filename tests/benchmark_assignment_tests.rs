@@ -43,8 +43,38 @@ async fn dispatch_persists_candidate_and_tracked_assignments_without_ledger_or_n
         command(&[
             "rstock",
             "benchmark",
+            "assign",
+            "XFAKE1",
+            "msci-europe-small-cap-net-eur",
+        ]),
+        OutputFormat::Json,
+    )
+    .await
+    .unwrap();
+    rstock::cli::run_command(
+        &db,
+        &market_data,
+        command(&[
+            "rstock",
+            "benchmark",
             "assign-candidate",
             "LU1598719752",
+            "--vehicle",
+            "fund",
+            "msci-acwi-small-cap-value-net-eur",
+        ]),
+        OutputFormat::Json,
+    )
+    .await
+    .unwrap();
+    rstock::cli::run_command(
+        &db,
+        &market_data,
+        command(&[
+            "rstock",
+            "benchmark",
+            "assign-candidate",
+            "ES0119199018",
             "--vehicle",
             "fund",
             "msci-acwi-small-cap-value-net-eur",
@@ -57,7 +87,7 @@ async fn dispatch_persists_candidate_and_tracked_assignments_without_ledger_or_n
         benchmark_reference_repo::find_assignment(&db, "tracked", "XFAKE1")
             .await
             .unwrap(),
-        Some(("msci-world-net-eur-unhedged".to_owned(), true))
+        Some(("msci-europe-small-cap-net-eur".to_owned(), false))
     );
     assert_eq!(
         benchmark_reference_repo::find_assignment(&db, "fund_candidate", "fund:LU1598719752")
@@ -77,7 +107,15 @@ async fn dispatch_persists_candidate_and_tracked_assignments_without_ledger_or_n
         0
     );
     let assignments = benchmark_assignment::Entity::find().all(&db).await.unwrap();
-    assert_eq!(assignments.len(), 2);
+    assert_eq!(assignments.len(), 3);
+    assert_eq!(
+        benchmark_reference_repo::find_assignment(&db, "fund_candidate", "fund:ES0119199018")
+            .await
+            .unwrap()
+            .unwrap()
+            .0,
+        "msci-acwi-small-cap-value-net-eur"
+    );
     rstock::cli::run_command(
         &db,
         &market_data,
@@ -94,6 +132,14 @@ async fn dispatch_persists_candidate_and_tracked_assignments_without_ledger_or_n
     );
     assert_eq!(
         benchmark_reference_repo::find_assignment(&db, "fund_candidate", "fund:LU1598719752")
+            .await
+            .unwrap()
+            .unwrap()
+            .0,
+        "msci-acwi-small-cap-value-net-eur"
+    );
+    assert_eq!(
+        benchmark_reference_repo::find_assignment(&db, "fund_candidate", "fund:ES0119199018")
             .await
             .unwrap()
             .unwrap()
