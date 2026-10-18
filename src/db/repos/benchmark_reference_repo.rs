@@ -62,6 +62,7 @@ pub struct ReferencePrice {
     pub date: String,
     pub price: f64,
     pub is_api_failure: bool,
+    pub is_source_observation: bool,
 }
 
 pub async fn find_by_id(
@@ -104,6 +105,7 @@ pub async fn find_prices_with_seed(
             date: record.date,
             price: record.closing_price,
             is_api_failure: record.is_api_failure,
+            is_source_observation: record.is_source_observation,
         })
         .collect())
 }
@@ -120,6 +122,7 @@ pub async fn upsert_prices_immutable(
                 date: Set(price.date.clone()),
                 closing_price: Set(price.price),
                 is_api_failure: Set(price.is_api_failure),
+                is_source_observation: Set(price.is_source_observation),
                 ..Default::default()
             }
         }))

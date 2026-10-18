@@ -24,8 +24,10 @@ use rstock::services::fund_analysis::{
 use rstock::services::fund_comparison::{compare_funds, compute_common_holdings};
 use rstock::services::fund_metrics::compute_standard_fund_metrics;
 use rstock::services::metrics::compute_cagr;
-use sea_orm::Set;
-use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
+    Set,
+};
 use serde_json::{json, Value};
 
 fn fund_analysis_envelope(result: &rstock::models::FundAnalysisResult) -> Value {
@@ -46,6 +48,109 @@ fn fund_comparison_envelope(result: &rstock::models::FundComparisonResult) -> Va
     assert_eq!(text.lines().count(), 1);
     assert!(!text.contains("\u{1b}["));
     serde_json::from_str(&text).expect("fund comparison output should be valid JSON")
+}
+
+async fn assigned_comparison_fixture() -> (DatabaseConnection, MockMarketDataSources) {
+    let db = setup_test_db().await;
+    insert_fund_asset(&db, "XISINFAKE1", "Fund", "EUR", "XCLASS").await;
+    benchmark_reference::Entity::insert(benchmark_reference::ActiveModel {
+        id: Set("verified-fake-reference".to_owned()),
+        display_name: Set("Verified Fake Reference".to_owned()),
+        instrument_ticker: Set("XREF".to_owned()),
+        source: Set("test_source".to_owned()),
+        source_identifier: Set("XREF".to_owned()),
+        currency: Set("EUR".to_owned()),
+        adjustment_provenance: Set("explicit fake total-return observations".to_owned()),
+        return_basis_qualification: Set("total_return".to_owned()),
+        role: Set("Investment universe".to_owned()),
+        universe: Set("test".to_owned()),
+        hedge_policy: Set("Unhedged".to_owned()),
+        source_provenance: Set("deterministic test source".to_owned()),
+        history_boundary: Set("2025-01-06 exact fixture class".to_owned()),
+        verification_state: Set("verified".to_owned()),
+        ..Default::default()
+    })
+    .exec(&db)
+    .await
+    .unwrap();
+    benchmark_assignment::Entity::insert(benchmark_assignment::ActiveModel {
+        subject_type: Set("tracked".to_owned()),
+        subject_id: Set("XISINFAKE1".to_owned()),
+        reference_id: Set("verified-fake-reference".to_owned()),
+        is_override: Set(false),
+        assigned_at: Set("2025-01-01T00:00:00Z".to_owned()),
+    })
+    .exec(&db)
+    .await
+    .unwrap();
+    let mut sources = MockMarketDataSources::new();
+    sources.historical_prices.insert(
+        "XCLASS".to_owned(),
+        vec![
+            ("2025-01-06".to_owned(), 100.0),
+            ("2025-01-07".to_owned(), 112.0),
+        ],
+    );
+    sources.historical_prices.insert(
+        "XREF".to_owned(),
+        vec![
+            ("2025-01-06".to_owned(), 50.0),
+            ("2025-01-07".to_owned(), 54.5),
+        ],
+    );
+    sources.series_qualifications.insert(
+        ("morningstar".to_owned(), "XCLASS".to_owned()),
+        qualification(
+            "EUR",
+            "total_return",
+            "dividends_reinvested_once",
+            "Unhedged",
+            "daily",
+        ),
+    );
+    sources.series_qualifications.insert(
+        ("test_source".to_owned(), "XREF".to_owned()),
+        qualification(
+            "EUR",
+            "total_return",
+            "dividends_reinvested_once",
+            "Unhedged",
+            "daily",
+        ),
+    );
+    sources.fund_data.insert(
+        "XCLASS".to_owned(),
+        FundData {
+            fund_currency: Some("EUR".to_owned()),
+            total_holdings: None,
+            portfolio_date: None,
+            holdings: vec![],
+        },
+    );
+    sources.fund_quote_metadata.insert(
+        "XCLASS".to_owned(),
+        FundQuoteMetadata {
+            quote_currency: Some("EUR".to_owned()),
+            ..Default::default()
+        },
+    );
+    (db, sources)
+}
+
+fn qualification(
+    currency: &str,
+    basis: &str,
+    adjustment: &str,
+    hedge: &str,
+    cadence: &str,
+) -> rstock::services::market_data::SeriesQualification {
+    rstock::services::market_data::SeriesQualification {
+        currency: currency.to_owned(),
+        return_basis: basis.to_owned(),
+        adjustment: adjustment.to_owned(),
+        hedge_policy: hedge.to_owned(),
+        cadence: cadence.to_owned(),
+    }
 }
 
 #[tokio::test]
@@ -143,12 +248,524 @@ async fn assigned_fund_comparison_uses_qualified_shared_market_data_path() {
     );
     assert_eq!(data["primary_benchmark_comparison"]["currency"], "EUR");
     assert_eq!(data["primary_benchmark_comparison"]["role"], "primary");
-    let comparison = result.primary_benchmark_comparison;
+    assert_eq!(
+        data["primary_benchmark_comparison"]["start_date"],
+        "2025-01-06"
+    );
+    assert_eq!(
+        data["primary_benchmark_comparison"]["end_date"],
+        "2025-01-07"
+    );
+    assert!(
+        (data["primary_benchmark_comparison"]["fund_return_pct"]
+            .as_f64()
+            .unwrap()
+            - 12.0)
+            .abs()
+            < 1e-9
+    );
+    assert!(
+        (data["primary_benchmark_comparison"]["reference_return_pct"]
+            .as_f64()
+            .unwrap()
+            - 9.0)
+            .abs()
+            < 1e-9
+    );
+    assert!(
+        (data["primary_benchmark_comparison"]["excess_return_percentage_points"]
+            .as_f64()
+            .unwrap()
+            - 3.0)
+            .abs()
+            < 1e-9
+    );
+    assert_eq!(
+        data["primary_benchmark_comparison"]["return_basis"],
+        "total_return"
+    );
+    assert_eq!(
+        data["primary_benchmark_comparison"]["source_provenance"],
+        "deterministic test source"
+    );
+    let comparison = &result.primary_benchmark_comparison;
     assert_eq!(comparison.start_date.as_deref(), Some("2025-01-06"));
     assert_eq!(comparison.end_date.as_deref(), Some("2025-01-07"));
     assert!((comparison.excess_return_percentage_points.unwrap() - 3.0).abs() < 1e-10);
     assert_eq!(comparison.fund_wealth[0].wealth, 100.0);
     assert_eq!(comparison.reference_wealth[0].wealth, 100.0);
+    assert_eq!(
+        sources
+            .historical_price_request_ranges()
+            .iter()
+            .filter(|(identity, _, _)| identity == "XREF")
+            .count(),
+        1,
+        "the assigned reference must use one ranged source request, not one request per date"
+    );
+    let mut human = Vec::new();
+    rstock::cli::display::write_fund_analysis_reference_context(&mut human, &result).unwrap();
+    let human = String::from_utf8(human).unwrap();
+    assert!(human.contains("Primary comparison: available"));
+    assert!(human.contains("Role: primary; currency: EUR; cadence: daily"));
+    assert!(
+        human.contains("Source: deterministic test source")
+            || human.contains("deterministic test source")
+    );
+
+    // Exercise both public dispatch formats against the same assigned public
+    // fund-analysis path; writer assertions above validate the complete facts.
+    for output_format in [
+        rstock::cli::output::OutputFormat::Human,
+        rstock::cli::output::OutputFormat::Json,
+    ] {
+        rstock::cli::run_command(
+            &db,
+            &market,
+            rstock::cli::Commands::Analyze(rstock::cli::AnalyzeArgs {
+                command: rstock::cli::AnalyzeCommands::Fund {
+                    code: "XCLASS".to_owned(),
+                    period: rstock::cli::CorrelationPeriod::OneYear,
+                },
+            }),
+            output_format,
+        )
+        .await
+        .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn assigned_fund_comparison_rejects_incompatible_source_conventions_without_hiding_fund_facts(
+) {
+    let cases = [
+        (
+            "USD",
+            "total_return",
+            "dividends_reinvested_once",
+            "Unhedged",
+            "daily",
+        ),
+        (
+            "EUR",
+            "price_only",
+            "dividends_reinvested_once",
+            "Unhedged",
+            "daily",
+        ),
+        ("EUR", "total_return", "split_adjusted", "Unhedged", "daily"),
+        (
+            "EUR",
+            "total_return",
+            "dividends_reinvested_once",
+            "EUR_hedged",
+            "daily",
+        ),
+        (
+            "EUR",
+            "total_return",
+            "dividends_reinvested_once",
+            "Unhedged",
+            "weekly",
+        ),
+    ];
+    for (currency, basis, adjustment, hedge, cadence) in cases {
+        let (db, mut sources) = assigned_comparison_fixture().await;
+        sources.series_qualifications.insert(
+            ("test_source".to_owned(), "XREF".to_owned()),
+            qualification(currency, basis, adjustment, hedge, cadence),
+        );
+        let market = market_data_at(
+            &sources,
+            chrono::NaiveDate::from_ymd_opt(2025, 1, 8).unwrap(),
+        );
+        let result = compute_fund_analysis(&db, &market, "XCLASS", one_year_candidate_period())
+            .await
+            .unwrap();
+        assert!(result.ytd.is_some(), "fund-only return should remain available for {currency}/{basis}/{adjustment}/{hedge}/{cadence}");
+        let data = fund_analysis_envelope(&result)["data"].clone();
+        assert_eq!(
+            data["primary_benchmark_comparison"]["availability"]["status"],
+            "unavailable"
+        );
+        let mut human = Vec::new();
+        rstock::cli::display::write_fund_analysis_reference_context(&mut human, &result).unwrap();
+        let human = String::from_utf8(human).unwrap();
+        assert!(human.contains("Primary comparison: unavailable"));
+        assert!(human.contains("total_return"));
+    }
+}
+
+#[tokio::test]
+async fn reference_source_failure_isolated_from_fund_only_analysis() {
+    let (db, mut sources) = assigned_comparison_fixture().await;
+    sources.failing_price_sources.insert("XREF".to_owned());
+    let market = market_data_at(
+        &sources,
+        chrono::NaiveDate::from_ymd_opt(2025, 1, 8).unwrap(),
+    );
+    let result = compute_fund_analysis(&db, &market, "XCLASS", one_year_candidate_period())
+        .await
+        .unwrap();
+    assert!(result.ytd.is_some());
+    assert_eq!(result.primary_benchmark_comparison.availability, rstock::models::ComparisonAvailability::Unavailable {
+        reason: "required EUR comparison coverage is incomplete; see fund/reference market-data limitations".to_owned(),
+    });
+    sources.failing_price_sources.remove("XREF");
+    let next_command = market_data_at(
+        &sources,
+        chrono::NaiveDate::from_ymd_opt(2025, 1, 8).unwrap(),
+    );
+    let retried = compute_fund_analysis(&db, &next_command, "XCLASS", one_year_candidate_period())
+        .await
+        .unwrap();
+    assert_eq!(
+        retried.primary_benchmark_comparison.availability,
+        rstock::models::ComparisonAvailability::Available
+    );
+    assert_eq!(
+        sources
+            .historical_price_request_ranges()
+            .iter()
+            .filter(|(identity, _, _)| identity == "XREF")
+            .count(),
+        2,
+        "a later MarketData command must retry the failed reference request"
+    );
+}
+
+#[tokio::test]
+async fn qualification_failure_isolated_from_fund_only_analysis() {
+    let (db, mut sources) = assigned_comparison_fixture().await;
+    sources
+        .failing_qualifications
+        .insert(("test_source".to_owned(), "XREF".to_owned()));
+    let market = market_data_at(
+        &sources,
+        chrono::NaiveDate::from_ymd_opt(2025, 1, 8).unwrap(),
+    );
+    let result = compute_fund_analysis(&db, &market, "XCLASS", one_year_candidate_period())
+        .await
+        .unwrap();
+    assert!(result.ytd.is_some());
+    assert!(matches!(result.primary_benchmark_comparison.availability,
+        rstock::models::ComparisonAvailability::Unavailable { ref reason } if reason.contains("selected reference source has no verified")));
+}
+
+#[tokio::test]
+async fn exact_class_history_boundary_is_not_extended_from_another_class() {
+    let (db, mut sources) = assigned_comparison_fixture().await;
+    sources.historical_prices.insert(
+        "XOTHERCLASS".to_owned(),
+        vec![
+            ("2025-01-02".to_owned(), 80.0),
+            ("2025-01-03".to_owned(), 90.0),
+        ],
+    );
+    let market = market_data_at(
+        &sources,
+        chrono::NaiveDate::from_ymd_opt(2025, 1, 8).unwrap(),
+    );
+    let result = compute_fund_analysis(&db, &market, "XCLASS", one_year_candidate_period())
+        .await
+        .unwrap();
+    assert_eq!(
+        result.primary_benchmark_comparison.start_date.as_deref(),
+        Some("2025-01-06")
+    );
+    assert!(!sources
+        .historical_price_request_ranges()
+        .iter()
+        .any(|(identity, _, _)| identity == "XOTHERCLASS"));
+}
+
+#[tokio::test]
+async fn unassigned_and_unverified_primary_definitions_never_fall_back_to_legacy_proxy() {
+    let (db, sources) = assigned_comparison_fixture().await;
+    benchmark_assignment::Entity::delete_by_id(("tracked".to_owned(), "XISINFAKE1".to_owned()))
+        .exec(&db)
+        .await
+        .unwrap();
+    let market = market_data_at(
+        &sources,
+        chrono::NaiveDate::from_ymd_opt(2025, 1, 8).unwrap(),
+    );
+    let result = compute_fund_analysis(&db, &market, "XCLASS", one_year_candidate_period())
+        .await
+        .unwrap();
+    assert!(matches!(result.primary_benchmark_comparison.availability,
+        rstock::models::ComparisonAvailability::Unavailable { ref reason } if reason.contains("no explicit primary")));
+
+    let (db, sources) = assigned_comparison_fixture().await;
+    let reference = benchmark_reference::Entity::find_by_id("verified-fake-reference")
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut active: benchmark_reference::ActiveModel = reference.into();
+    active.verification_state = Set("target_only".to_owned());
+    active.update(&db).await.unwrap();
+    let market = market_data_at(
+        &sources,
+        chrono::NaiveDate::from_ymd_opt(2025, 1, 8).unwrap(),
+    );
+    let result = compute_fund_analysis(&db, &market, "XCLASS", one_year_candidate_period())
+        .await
+        .unwrap();
+    let comparison = &result.primary_benchmark_comparison;
+    assert_eq!(
+        comparison.reference_id.as_deref(),
+        Some("verified-fake-reference")
+    );
+    assert!(comparison.reference_wealth.is_empty());
+    assert!(matches!(comparison.availability,
+        rstock::models::ComparisonAvailability::Unavailable { ref reason } if reason.contains("unverified production mapping")));
+}
+
+#[tokio::test]
+async fn missing_internal_interval_sparse_cadence_short_history_and_fx_are_distinct_outcomes() {
+    let (db, mut sources) = assigned_comparison_fixture().await;
+    sources.historical_prices.insert(
+        "XCLASS".to_owned(),
+        vec![
+            ("2025-01-06".to_owned(), 100.0),
+            ("2025-01-08".to_owned(), 112.0),
+        ],
+    );
+    sources.historical_prices.insert(
+        "XREF".to_owned(),
+        vec![
+            ("2025-01-06".to_owned(), 50.0),
+            ("2025-01-08".to_owned(), 54.5),
+        ],
+    );
+    let market = market_data_at(
+        &sources,
+        chrono::NaiveDate::from_ymd_opt(2025, 1, 9).unwrap(),
+    );
+    let result = compute_fund_analysis(&db, &market, "XCLASS", one_year_candidate_period())
+        .await
+        .unwrap();
+    assert!(matches!(result.primary_benchmark_comparison.availability,
+        rstock::models::ComparisonAvailability::Unavailable { ref reason } if reason.contains("internal weekday observation missing")));
+
+    let (db, mut sources) = assigned_comparison_fixture().await;
+    sources.historical_prices.insert(
+        "XCLASS".to_owned(),
+        vec![
+            ("2025-01-06".to_owned(), 100.0),
+            ("2025-01-07".to_owned(), 106.0),
+            ("2025-01-08".to_owned(), 112.0),
+        ],
+    );
+    sources.historical_prices.insert(
+        "XREF".to_owned(),
+        vec![
+            ("2025-01-06".to_owned(), 50.0),
+            ("2025-01-08".to_owned(), 54.5),
+        ],
+    );
+    let market = market_data_at(
+        &sources,
+        chrono::NaiveDate::from_ymd_opt(2025, 1, 9).unwrap(),
+    );
+    let result = compute_fund_analysis(&db, &market, "XCLASS", one_year_candidate_period())
+        .await
+        .unwrap();
+    assert!(matches!(result.primary_benchmark_comparison.availability,
+        rstock::models::ComparisonAvailability::Unavailable { ref reason } if reason.contains("internal weekday observation missing")));
+    let next_command = market_data_at(
+        &sources,
+        chrono::NaiveDate::from_ymd_opt(2025, 1, 9).unwrap(),
+    );
+    let cached = compute_fund_analysis(&db, &next_command, "XCLASS", one_year_candidate_period())
+        .await
+        .unwrap();
+    assert!(matches!(cached.primary_benchmark_comparison.availability,
+        rstock::models::ComparisonAvailability::Unavailable { ref reason } if reason.contains("internal weekday observation missing")),
+        "persisted forward-fill rows must not become eligible genuine observations on later commands");
+
+    let (db, mut sources) = assigned_comparison_fixture().await;
+    sources.historical_prices.insert(
+        "XCLASS".to_owned(),
+        vec![
+            ("2025-01-06".to_owned(), 100.0),
+            ("2025-01-07".to_owned(), 106.0),
+            ("2025-01-08".to_owned(), 112.0),
+        ],
+    );
+    sources.historical_prices.insert(
+        "XREF".to_owned(),
+        vec![
+            ("2025-01-06".to_owned(), 50.0),
+            ("2025-01-08".to_owned(), 54.5),
+        ],
+    );
+    let market = market_data_at(
+        &sources,
+        chrono::NaiveDate::from_ymd_opt(2025, 1, 9).unwrap(),
+    );
+    let result = compute_fund_analysis(&db, &market, "XCLASS", one_year_candidate_period())
+        .await
+        .unwrap();
+    assert!(
+        matches!(result.primary_benchmark_comparison.availability,
+        rstock::models::ComparisonAvailability::Unavailable { ref reason } if reason.contains("internal weekday observation missing")),
+        "a reference-side weekday gap must not be made usable by bounded presentation forward-fill"
+    );
+
+    let (db, mut sources) = assigned_comparison_fixture().await;
+    sources
+        .historical_prices
+        .insert("XCLASS".to_owned(), vec![("2025-01-06".to_owned(), 100.0)]);
+    let market = market_data_at(
+        &sources,
+        chrono::NaiveDate::from_ymd_opt(2025, 1, 8).unwrap(),
+    );
+    let result = compute_fund_analysis(&db, &market, "XCLASS", one_year_candidate_period())
+        .await
+        .unwrap();
+    assert!(matches!(
+        result.primary_benchmark_comparison.availability,
+        rstock::models::ComparisonAvailability::NotApplicable { .. }
+    ));
+    let data = fund_analysis_envelope(&result)["data"].clone();
+    assert_eq!(
+        data["primary_benchmark_comparison"]["availability"]["status"],
+        "not_applicable"
+    );
+    let mut human = Vec::new();
+    rstock::cli::display::write_fund_analysis_reference_context(&mut human, &result).unwrap();
+    assert!(String::from_utf8(human)
+        .unwrap()
+        .contains("Primary comparison: not applicable"));
+
+    let (db, mut sources) = assigned_comparison_fixture().await;
+    sources.series_qualifications.insert(
+        ("test_source".to_owned(), "XREF".to_owned()),
+        qualification(
+            "EUR",
+            "total_return",
+            "dividends_reinvested_once",
+            "Unhedged",
+            "weekly",
+        ),
+    );
+    let market = market_data_at(
+        &sources,
+        chrono::NaiveDate::from_ymd_opt(2025, 1, 8).unwrap(),
+    );
+    let result = compute_fund_analysis(&db, &market, "XCLASS", one_year_candidate_period())
+        .await
+        .unwrap();
+    assert!(matches!(result.primary_benchmark_comparison.availability,
+        rstock::models::ComparisonAvailability::Unavailable { ref reason } if reason.contains("sparse cadence")));
+}
+
+#[tokio::test]
+async fn malformed_persisted_primary_reference_price_remains_a_hard_error() {
+    let (db, sources) = assigned_comparison_fixture().await;
+    rstock::db::entities::benchmark_reference_price::Entity::insert(
+        rstock::db::entities::benchmark_reference_price::ActiveModel {
+            reference_id: Set("verified-fake-reference".to_owned()),
+            date: Set("2025-01-06".to_owned()),
+            closing_price: Set(0.0),
+            is_api_failure: Set(false),
+            ..Default::default()
+        },
+    )
+    .exec(&db)
+    .await
+    .unwrap();
+    let market = market_data_at(
+        &sources,
+        chrono::NaiveDate::from_ymd_opt(2025, 1, 8).unwrap(),
+    );
+    let result = compute_fund_analysis(&db, &market, "XCLASS", one_year_candidate_period()).await;
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn missing_reference_end_observation_and_fx_are_unavailable_not_truncated_or_guessed() {
+    let (db, mut sources) = assigned_comparison_fixture().await;
+    sources
+        .historical_prices
+        .insert("XREF".to_owned(), vec![("2025-01-06".to_owned(), 50.0)]);
+    let market = market_data_at(
+        &sources,
+        chrono::NaiveDate::from_ymd_opt(2025, 1, 8).unwrap(),
+    );
+    let result = compute_fund_analysis(&db, &market, "XCLASS", one_year_candidate_period())
+        .await
+        .unwrap();
+    assert!(matches!(
+        result.primary_benchmark_comparison.availability,
+        rstock::models::ComparisonAvailability::Unavailable { .. }
+    ));
+    assert!(result
+        .primary_benchmark_comparison
+        .reference_wealth
+        .is_empty());
+
+    let (db, mut sources) = assigned_comparison_fixture().await;
+    let reference = benchmark_reference::Entity::find_by_id("verified-fake-reference")
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut active: benchmark_reference::ActiveModel = reference.into();
+    active.currency = Set("USD".to_owned());
+    active.update(&db).await.unwrap();
+    sources.series_qualifications.insert(
+        ("morningstar".to_owned(), "XCLASS".to_owned()),
+        qualification(
+            "USD",
+            "total_return",
+            "dividends_reinvested_once",
+            "Unhedged",
+            "daily",
+        ),
+    );
+    sources.series_qualifications.insert(
+        ("test_source".to_owned(), "XREF".to_owned()),
+        qualification(
+            "USD",
+            "total_return",
+            "dividends_reinvested_once",
+            "Unhedged",
+            "daily",
+        ),
+    );
+    sources.fund_data.get_mut("XCLASS").unwrap().fund_currency = Some("USD".to_owned());
+    sources
+        .fund_quote_metadata
+        .get_mut("XCLASS")
+        .unwrap()
+        .quote_currency = Some("USD".to_owned());
+    let market = market_data_at(
+        &sources,
+        chrono::NaiveDate::from_ymd_opt(2025, 1, 8).unwrap(),
+    );
+    let result = compute_fund_analysis(&db, &market, "XCLASS", one_year_candidate_period())
+        .await
+        .unwrap();
+    assert!(matches!(result.primary_benchmark_comparison.availability,
+        rstock::models::ComparisonAvailability::Unavailable { ref reason } if reason.contains("EUR comparison coverage is incomplete")));
+}
+
+#[tokio::test]
+async fn comparison_database_failures_remain_errors() {
+    let (db, sources) = assigned_comparison_fixture().await;
+    db.clone().close().await.unwrap();
+    let market = market_data_at(
+        &sources,
+        chrono::NaiveDate::from_ymd_opt(2025, 1, 8).unwrap(),
+    );
+    assert!(
+        compute_fund_analysis(&db, &market, "XCLASS", one_year_candidate_period())
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]

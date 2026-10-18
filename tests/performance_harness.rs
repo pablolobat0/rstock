@@ -208,7 +208,7 @@ async fn automatic_migration_covers_fresh_partial_and_current_schemas() {
             ))
             .await
             .expect("historical schema should accept persisted asset data");
-            let transaction_insert = if applied_count < migration_count - 3 {
+            let transaction_insert = if applied_count < migration_count - 4 {
                 "INSERT INTO transactions (asset_id, tx_type, date, quantity, price_cents, fees_cents, created_at) VALUES (1, 'buy', '2025-01-01', 1.0, 10000, 0, '2025-01-01T00:00:00')"
             } else {
                 "INSERT INTO transactions (asset_id, tx_type, date, units, unit_price_cents, fees_cents, created_at) VALUES (1, 'buy', '2025-01-01', 1.0, 10000, 0, '2025-01-01T00:00:00')"
@@ -219,7 +219,7 @@ async fn automatic_migration_covers_fresh_partial_and_current_schemas() {
             ))
             .await
             .expect("historical schema should accept persisted ledger data");
-            if applied_count == migration_count - 3 {
+            if applied_count == migration_count - 4 {
                 for sql in [
                     "INSERT INTO daily_asset_prices (asset_id, date, closing_price, is_api_failure) VALUES (1, '2025-01-02', 101.0, 0)",
                     "INSERT INTO daily_exchange_rates (from_currency, to_currency, date, rate) VALUES ('USD', 'EUR', '2025-01-02', 0.91)",
@@ -271,7 +271,7 @@ async fn automatic_migration_covers_fresh_partial_and_current_schemas() {
                 .expect("persisted transaction count");
             assert_eq!((asset_count, transaction_count), (1, 1));
         }
-        if applied_count == migration_count - 3 {
+        if applied_count == migration_count - 4 {
             let reference_identity: String = db
                 .query_one(Statement::from_string(
                     DbBackend::Sqlite,
@@ -318,7 +318,7 @@ async fn automatic_migration_rolls_back_a_failed_destructive_migration() {
     let db = Database::connect(format!("sqlite://{}?mode=rwc", path.display()))
         .await
         .expect("temporary file-backed database");
-    Migrator::up(&db, Some((Migrator::migrations().len() - 4) as u32))
+    Migrator::up(&db, Some((Migrator::migrations().len() - 5) as u32))
         .await
         .expect("historical migration prefix should apply");
     db.execute(Statement::from_string(
@@ -346,7 +346,7 @@ async fn automatic_migration_rolls_back_a_failed_destructive_migration() {
             .await
             .expect("migration state after rollback")
             .len(),
-        4
+        5
     );
     let rate: f64 = db
         .query_one(Statement::from_string(

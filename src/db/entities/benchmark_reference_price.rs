@@ -9,6 +9,7 @@ pub struct Model {
     pub date: String,
     pub closing_price: f64,
     pub is_api_failure: bool,
+    pub is_source_observation: bool,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

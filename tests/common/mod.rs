@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc, Mutex,
@@ -493,6 +493,8 @@ pub struct MockMarketDataSources {
     pub fund_data: HashMap<String, FundData>,
     pub fund_quote_metadata: HashMap<String, FundQuoteMetadata>,
     pub series_qualifications: HashMap<(String, String), SeriesQualification>,
+    pub failing_qualifications: HashSet<(String, String)>,
+    pub failing_price_sources: HashSet<String>,
     pub historical_source_calls: Arc<AtomicUsize>,
     pub historical_price_requests: Arc<Mutex<Vec<(String, chrono::NaiveDate, chrono::NaiveDate)>>>,
     pub historical_fx_requests: Arc<Mutex<Vec<(String, chrono::NaiveDate, chrono::NaiveDate)>>>,
@@ -511,6 +513,8 @@ impl MockMarketDataSources {
             fund_data: HashMap::new(),
             fund_quote_metadata: HashMap::new(),
             series_qualifications: HashMap::new(),
+            failing_qualifications: HashSet::new(),
+            failing_price_sources: HashSet::new(),
             historical_source_calls: Arc::new(AtomicUsize::new(0)),
             historical_price_requests: Arc::new(Mutex::new(Vec::new())),
             historical_fx_requests: Arc::new(Mutex::new(Vec::new())),
@@ -577,6 +581,12 @@ impl MarketDataSources for MockMarketDataSources {
         source: &str,
         identifier: &str,
     ) -> anyhow::Result<Option<SeriesQualification>> {
+        if self
+            .failing_qualifications
+            .contains(&(source.to_owned(), identifier.to_owned()))
+        {
+            anyhow::bail!("mock qualification failure for {source}/{identifier}");
+        }
         Ok(self
             .series_qualifications
             .get(&(source.to_owned(), identifier.to_owned()))
@@ -594,6 +604,9 @@ impl MarketDataSources for MockMarketDataSources {
             .lock()
             .expect("historical price request mutex poisoned")
             .push((ticker.to_owned(), start, end));
+        if self.failing_price_sources.contains(ticker) {
+            anyhow::bail!("mock price source failure for {ticker}");
+        }
         Ok(to_source_observations(
             self.historical_prices
                 .get(ticker)
@@ -616,6 +629,9 @@ impl MarketDataSources for MockMarketDataSources {
             .lock()
             .expect("historical price request mutex poisoned")
             .push((code.to_owned(), start, end));
+        if self.failing_price_sources.contains(code) {
+            anyhow::bail!("mock fund source failure for {code}");
+        }
         Ok(to_source_observations(
             self.historical_prices
                 .get(code)

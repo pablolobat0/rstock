@@ -525,6 +525,7 @@ impl MarketData {
 
         Ok(BenchmarkRiskMarketData {
             benchmark_series: reference.series,
+            genuine_benchmark_series: reference.genuine_series,
             benchmark_reference: reference.info,
             limitations: reference.limitations,
         })
@@ -542,6 +543,7 @@ impl MarketData {
         let reference = reference::prepare(db, reference_id, start_date, end_date, self).await?;
         Ok(BenchmarkRiskMarketData {
             benchmark_series: reference.series,
+            genuine_benchmark_series: reference.genuine_series,
             benchmark_reference: reference.info,
             limitations: reference.limitations,
         })

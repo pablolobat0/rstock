@@ -450,7 +450,7 @@ async fn failed_down_rolls_back_rebuild_and_bookkeeping_then_retries() {
     .await
     .unwrap();
 
-    assert!(Migrator::down(&db, Some(1)).await.is_err());
+    assert!(Migrator::down(&db, Some(4)).await.is_err());
     db.execute_unprepared("DROP TRIGGER fail_contract_down")
         .await
         .unwrap();
@@ -461,7 +461,7 @@ async fn failed_down_rolls_back_rebuild_and_bookkeeping_then_retries() {
     assert_eq!(transaction_sequence(&db).await, before.4);
     assert_eq!(migration_versions(&db).await, before.5);
 
-    Migrator::down(&db, Some(1)).await.unwrap();
+    Migrator::down(&db, Some(4)).await.unwrap();
     assert_eq!(legacy_rows(&db).await.len(), 1);
     assert_eq!(transaction_sequence(&db).await, (1, 100));
     assert!(!migration_versions(&db)

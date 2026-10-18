@@ -90,7 +90,19 @@ pub async fn compare_fund_to_primary(
     if !fund_limitations.is_empty() || !reference_market.limitations.is_empty() {
         return Ok(unavailable(outcome, "required EUR comparison coverage is incomplete; see fund/reference market-data limitations"));
     }
-    match compare_aligned_eur_series(&fund_eur, &reference_market.benchmark_series) {
+    if fund_eur.len() < 2 {
+        outcome.availability = ComparisonAvailability::NotApplicable {
+            reason: "fund has fewer than two qualified completed observations; cumulative return is not measurable".to_owned(),
+        };
+        return Ok(outcome);
+    }
+    if reference_market.benchmark_series.len() < 2 {
+        return Ok(unavailable(
+            outcome,
+            "primary reference has fewer than two qualified completed observations",
+        ));
+    }
+    match compare_aligned_eur_series(&fund_eur, &reference_market.genuine_benchmark_series) {
         Ok((fund_wealth, reference_wealth, fund_return, reference_return)) => {
             outcome.start_date = fund_wealth.first().map(|point| point.date.clone());
             outcome.end_date = fund_wealth.last().map(|point| point.date.clone());

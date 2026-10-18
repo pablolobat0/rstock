@@ -12,7 +12,14 @@ use super::{historical, policy, MarketData};
 pub(crate) struct PreparedBenchmarkReference {
     pub info: BenchmarkReferenceInfo,
     pub series: Vec<(String, f64)>,
+    pub genuine_series: Vec<(String, f64)>,
     pub limitations: Vec<MarketDataLimitation>,
+}
+
+struct CachedPriceSeries {
+    known: BTreeMap<NaiveDate, f64>,
+    genuine: BTreeMap<NaiveDate, f64>,
+    covered: HashSet<NaiveDate>,
 }
 
 pub(crate) async fn prepare(
@@ -25,7 +32,7 @@ pub(crate) async fn prepare(
     let reference = benchmark_reference_repo::find_by_id(db, reference_id).await?;
     let start = NaiveDate::parse_from_str(start_date, DATE_FORMAT)?;
     let end = NaiveDate::parse_from_str(end_date, DATE_FORMAT)?;
-    let (known, mut limitations) = prepare_prices(
+    let (known, genuine, mut limitations) = prepare_prices(
         db,
         &reference,
         start,
@@ -65,6 +72,17 @@ pub(crate) async fn prepare(
             Some((format_date(*date), converted))
         })
         .collect::<Vec<_>>();
+    let genuine_series = genuine
+        .range(start..=end)
+        .filter_map(|(date, price)| {
+            let rate = if reference.currency == BASE_CURRENCY {
+                Some(1.0)
+            } else {
+                fx_values.get(date).copied()
+            }?;
+            Some((format_date(*date), price * rate))
+        })
+        .collect::<Vec<_>>();
     for (date, converted) in &series {
         anyhow::ensure!(
             converted.is_finite() && *converted > 0.0,
@@ -86,6 +104,7 @@ pub(crate) async fn prepare(
             return_basis_qualification: reference.return_basis_qualification,
         },
         series,
+        genuine_series,
         limitations,
     })
 }
@@ -98,82 +117,27 @@ async fn prepare_prices(
     start_date: &str,
     end_date: &str,
     market_data: &MarketData,
-) -> anyhow::Result<(BTreeMap<NaiveDate, f64>, Vec<MarketDataLimitation>)> {
-    let price_rows =
-        benchmark_reference_repo::find_prices_with_seed(db, &reference.id, start_date, end_date)
-            .await?;
-    let mut known = BTreeMap::new();
-    let mut covered: HashSet<NaiveDate> = price_rows
-        .iter()
-        .filter(|row| !row.is_api_failure)
-        .map(|row| NaiveDate::parse_from_str(&row.date, DATE_FORMAT))
-        .collect::<Result<_, _>>()?;
-    for row in price_rows.iter().filter(|row| !row.is_api_failure) {
-        anyhow::ensure!(
-            row.price.is_finite() && row.price > 0.0,
-            "invalid persisted benchmark reference price for {} on {}: {}",
-            reference.id,
-            row.date,
-            row.price
-        );
-        known.insert(
-            NaiveDate::parse_from_str(&row.date, DATE_FORMAT)?,
-            row.price,
-        );
-    }
+) -> anyhow::Result<(
+    BTreeMap<NaiveDate, f64>,
+    BTreeMap<NaiveDate, f64>,
+    Vec<MarketDataLimitation>,
+)> {
+    let mut cached = load_cached_prices(db, &reference.id, start_date, end_date).await?;
 
     let completed_end = end.min(market_data.today() - Duration::days(1));
-    for interval in historical::missing_intervals(start, completed_end, &covered) {
-        let Ok(mut observations) = market_data
-            .stock_price_history(&reference.source_identifier, interval.start, interval.end)
-            .await
-        else {
-            continue;
-        };
-        if !observations.iter().any(|item| item.date < interval.start)
-            && !known.keys().any(|date| *date < interval.start)
-        {
-            if let Ok(Some(predecessor)) = market_data
-                .latest_stock_price_before(&reference.source_identifier, interval.start)
-                .await
-            {
-                observations.push(predecessor);
-            }
-        }
-        observations.retain(|item| item.date <= completed_end && item.date <= interval.end);
-        observations.sort_by_key(|item| item.date);
-        for observation in &observations {
-            anyhow::ensure!(
-                observation.value.is_finite() && observation.value > 0.0,
-                "invalid successful benchmark reference source price for {} on {}: {}",
-                reference.id,
-                observation.date,
-                observation.value
-            );
-        }
-        let filled = historical::forward_filled_interval(
+    for interval in historical::missing_intervals(start, completed_end, &cached.covered) {
+        fetch_reference_interval(
+            db,
+            reference,
             interval,
-            observations,
             completed_end,
-            interval.end,
-            true,
-            &mut known,
-        );
-        let writes: Vec<_> = filled
-            .into_iter()
-            .map(|(date, price)| {
-                covered.insert(date);
-                benchmark_reference_repo::ReferencePrice {
-                    date: format_date(date),
-                    price,
-                    is_api_failure: false,
-                }
-            })
-            .collect();
-        benchmark_reference_repo::upsert_prices_immutable(db, &reference.id, &writes).await?;
+            &mut cached,
+            market_data,
+        )
+        .await?;
     }
 
-    let last_price = known.range(..=end).next_back();
+    let last_price = cached.known.range(..=end).next_back();
     let limitations = match last_price {
         Some((date, _)) => policy::classify_benchmark_reference_limitation(
             &reference.id,
@@ -189,7 +153,101 @@ async fn prepare_prices(
             end,
         )],
     };
-    Ok((known, limitations))
+    Ok((cached.known, cached.genuine, limitations))
+}
+
+async fn load_cached_prices(
+    db: &DatabaseConnection,
+    reference_id: &str,
+    start_date: &str,
+    end_date: &str,
+) -> anyhow::Result<CachedPriceSeries> {
+    let rows =
+        benchmark_reference_repo::find_prices_with_seed(db, reference_id, start_date, end_date)
+            .await?;
+    let mut known = BTreeMap::new();
+    let mut genuine = BTreeMap::new();
+    let mut covered = HashSet::new();
+    for row in rows.iter().filter(|row| !row.is_api_failure) {
+        let date = NaiveDate::parse_from_str(&row.date, DATE_FORMAT)?;
+        anyhow::ensure!(
+            row.price.is_finite() && row.price > 0.0,
+            "invalid persisted benchmark reference price for {} on {}: {}",
+            reference_id,
+            row.date,
+            row.price
+        );
+        known.insert(date, row.price);
+        covered.insert(date);
+        if row.is_source_observation {
+            genuine.insert(date, row.price);
+        }
+    }
+    Ok(CachedPriceSeries {
+        known,
+        genuine,
+        covered,
+    })
+}
+
+async fn fetch_reference_interval(
+    db: &DatabaseConnection,
+    reference: &benchmark_reference_repo::BenchmarkReference,
+    interval: historical::DateInterval,
+    completed_end: NaiveDate,
+    cached: &mut CachedPriceSeries,
+    market_data: &MarketData,
+) -> anyhow::Result<()> {
+    let Ok(mut observations) = market_data
+        .stock_price_history(&reference.source_identifier, interval.start, interval.end)
+        .await
+    else {
+        return Ok(());
+    };
+    if !observations.iter().any(|item| item.date < interval.start)
+        && !cached.known.keys().any(|date| *date < interval.start)
+    {
+        if let Ok(Some(predecessor)) = market_data
+            .latest_stock_price_before(&reference.source_identifier, interval.start)
+            .await
+        {
+            observations.push(predecessor);
+        }
+    }
+    observations.retain(|item| item.date <= completed_end && item.date <= interval.end);
+    observations.sort_by_key(|item| item.date);
+    for observation in &observations {
+        anyhow::ensure!(
+            observation.value.is_finite() && observation.value > 0.0,
+            "invalid successful benchmark reference source price for {} on {}: {}",
+            reference.id,
+            observation.date,
+            observation.value
+        );
+        cached.genuine.insert(observation.date, observation.value);
+    }
+    let filled = historical::forward_filled_interval(
+        interval,
+        observations,
+        completed_end,
+        interval.end,
+        true,
+        &mut cached.known,
+    );
+    let writes: Vec<_> = filled
+        .into_iter()
+        .map(|(date, price)| {
+            cached.covered.insert(date);
+            benchmark_reference_repo::ReferencePrice {
+                date: format_date(date),
+                price,
+                is_api_failure: false,
+                is_source_observation: cached.genuine.contains_key(&date),
+            }
+        })
+        .collect();
+    benchmark_reference_repo::upsert_prices_immutable(db, &reference.id, &writes).await?;
+    Ok(())
 }
 
 async fn prepare_exchange_rates(

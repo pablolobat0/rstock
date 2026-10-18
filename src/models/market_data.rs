@@ -61,6 +61,8 @@ pub struct CorrelationMarketData {
 pub struct BenchmarkRiskMarketData {
     /// Benchmark Base currency price series for the requested window.
     pub benchmark_series: BaseCurrencyPriceSeries,
+    /// Only source-reported observations; forward-filled rows are excluded.
+    pub genuine_benchmark_series: BaseCurrencyPriceSeries,
     pub benchmark_reference: super::portfolio::BenchmarkReferenceInfo,
     pub limitations: Vec<MarketDataLimitation>,
 }
