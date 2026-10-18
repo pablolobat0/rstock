@@ -118,6 +118,15 @@ pub(crate) fn format_market_data_limitation_warning(
         ) => format!(
             "Market data limitation: {asset_type} {ticker} ({name}) has latest price from {latest_available_date}; requested through {requested_end_date}."
         ),
+        (MarketDataSubject::BenchmarkReference { id, display_name }, None) => format!(
+            "Market data limitation: benchmark reference {display_name} [{id}] has no available price through {requested_end_date}."
+        ),
+        (
+            MarketDataSubject::BenchmarkReference { id, display_name },
+            Some(latest_available_date),
+        ) => format!(
+            "Market data limitation: benchmark reference {display_name} [{id}] has latest price from {latest_available_date}; requested through {requested_end_date}."
+        ),
         (MarketDataSubject::FxRate { currency }, None) => format!(
             "Market data limitation: FX rate {currency} has no available rate through {requested_end_date}."
         ),

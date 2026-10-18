@@ -1,4 +1,4 @@
-use super::FundPeriodMetrics;
+use super::{portfolio::BenchmarkReferenceInfo, FundPeriodMetrics};
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -10,6 +10,7 @@ pub struct FundComparisonResult {
     pub currency_allocations: Vec<AllocationComparison>,
     pub common_holdings: Vec<CommonFundHolding>,
     pub correlation: FundComparisonCorrelation,
+    pub benchmark_reference: BenchmarkReferenceInfo,
 }
 
 #[derive(Clone, Copy)]

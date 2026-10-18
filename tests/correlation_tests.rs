@@ -332,12 +332,29 @@ async fn tracked_acwi_holding_shares_market_history_with_reference() {
     let db = setup_test_db().await;
     let mut sources = MockMarketDataSources::new();
     seed_benchmark_market_data(&mut sources, 25);
-    // The reference's lookup instrument may also be a user-tracked security;
-    // reference status must not hide its Transaction-ledger observation.
     let acwi_id = insert_asset(&db, "ACWI", "iShares MSCI ACWI ETF", "stock", "USD").await;
+    insert_transaction(&db, acwi_id, "2025-01-01", 2.0, 100.0, 0.0).await;
+    let market_data = common::market_data_at(
+        &sources,
+        chrono::NaiveDate::from_ymd_opt(2025, 1, 26).unwrap(),
+    );
+
+    let inventory =
+        rstock::services::portfolio_inventory::get_portfolio_inventory(&db, &market_data)
+            .await
+            .unwrap();
+    assert_eq!(inventory.performance_holdings.positions.len(), 1);
+    assert_eq!(inventory.performance_holdings.positions[0].ticker, "ACWI");
+
+    let readiness = rstock::services::nav::ensure_portfolio_history(&db, &market_data)
+        .await
+        .unwrap();
+    assert!(readiness.latest_snapshot.is_some());
+    assert_eq!(asset_repo::find_all(&db).await.unwrap().len(), 1);
+
     let acwi = asset_repo::find_by_ids(&db, [acwi_id]).await.unwrap();
 
-    let result = correlation_market_data(&sources)
+    let result = market_data
         .correlation_market_data(&db, acwi, "2025-01-01", "2025-01-25")
         .await
         .unwrap();
@@ -345,10 +362,44 @@ async fn tracked_acwi_holding_shares_market_history_with_reference() {
     assert_eq!(result.tracked_asset_series.len(), 1);
     assert_eq!(result.tracked_asset_series[0].prices.len(), 25);
     assert_eq!(result.benchmark_series.prices.len(), 25);
-    assert_eq!(
+    assert_ne!(
         result.tracked_asset_series[0].asset_id,
         result.benchmark_series.asset_id
     );
+    assert_eq!(
+        result.tracked_asset_series[0].prices,
+        result.benchmark_series.prices
+    );
+    assert_eq!(result.benchmark_reference.id, "legacy-acwi-etf-proxy");
+    assert_eq!(asset_repo::find_all(&db).await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn fresh_reference_cache_reuses_immutable_prices_without_creating_asset_rows() {
+    let db = setup_test_db().await;
+    let mut sources = MockMarketDataSources::new();
+    seed_benchmark_market_data(&mut sources, 25);
+    let market_data = common::market_data_at(
+        &sources,
+        chrono::NaiveDate::from_ymd_opt(2025, 1, 26).unwrap(),
+    );
+
+    let first = market_data
+        .benchmark_reference_market_data(&db, "2025-01-01", "2025-01-25")
+        .await
+        .unwrap();
+    assert_eq!(first.benchmark_series.len(), 25);
+    assert_eq!(first.benchmark_reference.id, "legacy-acwi-etf-proxy");
+    assert!(asset_repo::find_all(&db).await.unwrap().is_empty());
+    let requests = sources.historical_source_call_count();
+
+    let second = market_data
+        .benchmark_reference_market_data(&db, "2025-01-01", "2025-01-25")
+        .await
+        .unwrap();
+    assert_eq!(second.benchmark_series, first.benchmark_series);
+    assert_eq!(sources.historical_source_call_count(), requests);
+    assert!(asset_repo::find_all(&db).await.unwrap().is_empty());
 }
 
 /// Assets with insufficient data should appear in warnings and have None correlation
@@ -430,7 +481,11 @@ async fn test_correlation_matrix_json_preserves_nulls_warnings_and_limitations()
 
     assert_eq!(envelope["command"], "analyze.correlation.matrix");
     assert_eq!(
-        envelope["data"]["benchmark_reference"]["identity"],
+        envelope["data"]["benchmark_reference"]["id"],
+        "legacy-acwi-etf-proxy"
+    );
+    assert_eq!(
+        envelope["data"]["benchmark_reference"]["display_name"],
         "iShares MSCI ACWI ETF (ACWI) proxy"
     );
     assert_eq!(

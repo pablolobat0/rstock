@@ -56,7 +56,7 @@ pub async fn compute_fund_analysis(
         .cloned()
         .collect();
 
-    let metrics = compute_standard_fund_metrics(market_data, &fund_prices, today).await;
+    let metrics = compute_standard_fund_metrics(db, market_data, &fund_prices, today).await?;
 
     let sector_breakdown = compute_breakdown(&equity_holdings, |h| h.sector.clone());
     let country_breakdown = compute_breakdown(&equity_holdings, |h| h.country.clone());
@@ -101,6 +101,7 @@ pub async fn compute_fund_analysis(
         three_year: metrics.three_year,
         five_year: metrics.five_year,
         all_time: metrics.all_time,
+        benchmark_reference: metrics.benchmark_reference,
         candidate_correlation,
         holdings_changed,
         last_snapshot_date,

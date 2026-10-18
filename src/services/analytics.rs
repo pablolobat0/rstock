@@ -2,12 +2,9 @@ use std::collections::HashMap;
 
 use sea_orm::DatabaseConnection;
 
-use crate::constants::{
-    BENCHMARK_ADJUSTMENT_PROVENANCE, BENCHMARK_NAME, BENCHMARK_RETURN_BASIS_QUALIFICATION,
-    BENCHMARK_TICKER, FLOAT_EPSILON, MIN_DATA_POINTS,
-};
+use crate::constants::{FLOAT_EPSILON, MIN_DATA_POINTS};
 use crate::db::repos::{asset_repo, transaction_repo};
-use crate::models::{Asset, BenchmarkReferenceInfo, CorrelationMatrix, RollingCorrelationResult};
+use crate::models::{Asset, CorrelationMatrix, RollingCorrelationResult};
 use crate::services::market_data::MarketData;
 use crate::services::{ledger, metrics};
 
@@ -58,12 +55,7 @@ pub async fn compute_correlation_data(
         matrix,
         warnings,
         market_data_limitations: correlation_market_data.limitations,
-        benchmark_reference: BenchmarkReferenceInfo {
-            identity: BENCHMARK_NAME.to_owned(),
-            instrument_ticker: BENCHMARK_TICKER.to_owned(),
-            adjustment_provenance: BENCHMARK_ADJUSTMENT_PROVENANCE.to_owned(),
-            return_basis_qualification: BENCHMARK_RETURN_BASIS_QUALIFICATION.to_owned(),
-        },
+        benchmark_reference: correlation_market_data.benchmark_reference,
     })
 }
 

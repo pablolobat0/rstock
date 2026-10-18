@@ -75,6 +75,8 @@ All business logic lives here. Key modules:
 
 **`market_data/historical.rs`** — Private implementation for reproducible Historical market data used by NAV and benchmark analytics. It reads persisted coverage, requests only missing contiguous asset and FX intervals, resolves strict-before predecessor observations through the source Interface when needed, bulk-persists successful observations without replacing covered dates, prepares NAV valuation series for NAV-owned Positive-holding intervals and transaction FX requirements, hides provider-specific FX pair construction from external callers, and exposes strict valuation reads through the `market_data` Module root. NAV prepares independent asset series and FX currencies concurrently under the shared four-source-request limit; disjoint intervals for one asset remain sequential to preserve cache/predecessor ordering. A `MarketData` instance shares identical source attempts and their results for the lifetime of one command; a new command can retry failures.
 
+**`market_data/reference.rs`** — Private cache-first preparation of persisted benchmark references. Stable reference definitions and independent reference-price observations do not create asset or Transaction rows; source lookup identity, currency and proxy qualifications come from the reference definition. Completed observations are immutable, missing intervals are requested through the existing `MarketData` source coordinator, and reference prices are converted to EUR through the shared FX cache.
+
 **`market_data/individual_price.rs`** — Private implementation for display-time Individual price values for portfolio rows. Stocks request same-day observations, and ETFs request them through the fund-price capability already exposed by `MarketDataSources`; neither caller depends on a concrete source Adapter. A same-day observation is a Live quote. If an ETF source cannot supply one, the row falls back to the latest Historical market data. Mutual funds retain closing-price semantics and never use same-day Live quotes.
 
 **`portfolio_inventory.rs`** — `get_portfolio_inventory()` is the focused Portfolio inventory Interface and does not request NAV readiness, so it never creates or rebuilds NAV history. Historical preparation uses each asset's own first transaction date rather than another holding's earlier history. `MarketData` reuses NAV price preparation only for assets whose attempted holding interval reaches the requested end date; historical ledger FX remains independently prepared and consolidated by currency. Monetary holdings and new holdings outside NAV's prepared intervals still receive price preparation. One Transaction ledger projection derives quantity, remaining cost, dividends, and Open-position gain/loss identically for performance-holding and Monetary-holding sections, which separately own their positions, complete-or-unavailable aggregates, and Market data limitations; the combined informational Total value is available only when both section values are complete. Calculated financial facts carry explicit available, unavailable, or not-applicable `FactAvailability` states while descriptive metadata stays unwrapped. Composition analysis consumes this Interface directly.
@@ -89,7 +91,7 @@ All business logic lives here. Key modules:
 
 **`assets.rs`** — Tracked asset edits that cross the Monetary/performance boundary invalidate every dependent Complete NAV snapshot from the asset's earliest transaction date. Fund/ETF provider-identity changes also clear that asset's price cache and invalidate the same complete dates. Metadata updates, cache deletion when required, and portfolio/all-per-asset snapshot invalidation commit atomically so readiness can continue trusting the retained checkpoint.
 
-**`market_data/`** — Stateful market data Module. It exposes use-case-shaped Interfaces for valuation market data, correlation market data, benchmark risk market data, Individual price, stock info, and fund data. Yahoo Finance and Morningstar source Adapters are private implementation details behind `MarketDataSources`.
+**`market_data/`** — Stateful market data Module. It exposes use-case-shaped Interfaces for valuation market data, correlation market data, benchmark-reference market data, Individual price, stock info, and fund data. Yahoo Finance and Morningstar source Adapters are private implementation details behind `MarketDataSources`.
 
 **`metrics.rs`** — Shared math helpers for volatility, max drawdown, Sharpe, Sortino, beta, Pearson correlation, log returns, return alignment, and CAGR. Uses daily log returns, 252 trading days/year, 3% annual risk-free rate, and actual elapsed dates for CAGR. A metric that is mathematically undefined for the given series (zero-variance benchmark beta, zero-dispersion Sharpe, no-downside Sortino) is `None`, so consumers can distinguish undefined metrics from computed values.
 
@@ -178,7 +180,7 @@ Centralized constants: `BASE_CURRENCY`, `INITIAL_NAV`, period durations, benchma
 
 ## Database Schema
 
-Current schema includes the original portfolio tables plus watchlist and fund holdings snapshots.
+Current schema includes the original portfolio tables plus watchlist, fund holdings snapshots, and reference-only benchmark definitions and cached prices.
 
 ### Core Tables (Migration 1)
 
@@ -277,6 +279,8 @@ assets 1──* portfolio_asset_history
 ```
 
 `portfolio_history`, `daily_exchange_rates`, and `watchlist` are standalone (no foreign keys to assets).
+
+`benchmark_references` owns stable reference identity and source/return-basis provenance; `benchmark_reference_prices` stores its immutable completed-date observations independently of `assets` and holdings. The additive legacy-proxy migration copies compatible existing ACWI/USD stock-cache rows into the identified ETF-proxy cache without deleting or relabeling their original rows.
 
 ## NAV Unitization Algorithm
 

@@ -146,6 +146,24 @@ pub(crate) async fn get_exchange_rates_for_asset(
     Ok(rates)
 }
 
+pub(crate) async fn prepare_reference_exchange_rates(
+    db: &DatabaseConnection,
+    currency: &str,
+    start_date: &str,
+    end_date: &str,
+    market_data: &MarketData,
+) -> anyhow::Result<()> {
+    fill_nav_exchange_rates(
+        db,
+        &[currency.to_owned()],
+        start_date,
+        end_date,
+        market_data,
+    )
+    .await?;
+    Ok(())
+}
+
 pub(crate) async fn get_base_currency_price_series_for_assets(
     db: &DatabaseConnection,
     assets: &[Asset],

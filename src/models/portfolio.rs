@@ -59,10 +59,14 @@ pub struct CorrelationMatrix {
     pub benchmark_reference: BenchmarkReferenceInfo,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct BenchmarkReferenceInfo {
-    pub identity: String,
+    pub id: String,
+    pub display_name: String,
     pub instrument_ticker: String,
+    pub source: String,
+    pub source_identifier: String,
+    pub currency: String,
     pub adjustment_provenance: String,
     pub return_basis_qualification: String,
 }

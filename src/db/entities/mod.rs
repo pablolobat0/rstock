@@ -1,4 +1,6 @@
 pub mod asset;
+pub mod benchmark_reference;
+pub mod benchmark_reference_price;
 pub mod daily_asset_price;
 pub mod daily_exchange_rate;
 pub mod fund_holdings_snapshot;

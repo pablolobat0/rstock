@@ -76,6 +76,23 @@ fn display_aum(result: &FundAnalysisResult) -> String {
 fn print_performance(result: &FundAnalysisResult) {
     println!("{}", "Performance".bold());
     println!();
+    println!(
+        "Beta reference: {} [{}] — {} {} ({})",
+        result.benchmark_reference.display_name,
+        result.benchmark_reference.id,
+        result.benchmark_reference.source,
+        result.benchmark_reference.source_identifier,
+        result.benchmark_reference.currency
+    );
+    println!(
+        "  Adjustment: {}",
+        result.benchmark_reference.adjustment_provenance
+    );
+    println!(
+        "  Return basis: {}",
+        result.benchmark_reference.return_basis_qualification
+    );
+    println!();
 
     let periods = [
         ("YTD", &result.ytd),

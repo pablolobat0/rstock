@@ -773,7 +773,7 @@ async fn missing_benchmark_data_makes_only_beta_unavailable() {
     assert!(performance
         .benchmark_risk_limitations
         .iter()
-        .any(|limitation| matches!(&limitation.subject, MarketDataSubject::Asset { ticker, .. } if ticker == "ACWI")));
+        .any(|limitation| matches!(&limitation.subject, MarketDataSubject::BenchmarkReference { id, .. } if id == "legacy-acwi-etf-proxy")));
     assert!(performance.nav_history_limitations.is_empty());
 }
 
@@ -837,7 +837,7 @@ async fn view_reports_four_independent_limitation_scopes() {
     assert!(performance
         .benchmark_risk_limitations
         .iter()
-        .any(|limitation| matches!(&limitation.subject, MarketDataSubject::Asset { ticker, .. } if ticker == "ACWI")));
+        .any(|limitation| matches!(&limitation.subject, MarketDataSubject::BenchmarkReference { id, .. } if id == "legacy-acwi-etf-proxy")));
 
     // A limitation in one scope does not invalidate another scope's facts:
     // the synchronized performance facts remain available at the older

@@ -3,12 +3,13 @@ use std::collections::HashMap;
 use chrono::{Datelike, NaiveDate};
 
 use crate::constants::{
-    format_date, BENCHMARK_TICKER, DATE_FORMAT, FIVE_YEAR_TRADING_DAYS, ONE_YEAR_TRADING_DAYS,
+    format_date, DATE_FORMAT, FIVE_YEAR_TRADING_DAYS, ONE_YEAR_TRADING_DAYS,
     THREE_YEAR_TRADING_DAYS,
 };
-use crate::models::FundPeriodMetrics;
+use crate::models::{BenchmarkReferenceInfo, FundPeriodMetrics};
 use crate::services::market_data::{MarketData, SourceObservation};
 use crate::services::metrics;
+use sea_orm::DatabaseConnection;
 
 pub struct StandardFundMetrics {
     pub ytd: Option<FundPeriodMetrics>,
@@ -16,17 +17,25 @@ pub struct StandardFundMetrics {
     pub three_year: Option<FundPeriodMetrics>,
     pub five_year: Option<FundPeriodMetrics>,
     pub all_time: Option<FundPeriodMetrics>,
+    pub benchmark_reference: BenchmarkReferenceInfo,
 }
 
 pub async fn compute_standard_fund_metrics(
+    db: &DatabaseConnection,
     market_data: &MarketData,
     prices: &[(String, f64)],
     today: NaiveDate,
-) -> StandardFundMetrics {
-    let benchmark_returns = benchmark_returns(market_data, prices, today).await;
+) -> anyhow::Result<StandardFundMetrics> {
+    let requested_start = prices
+        .first()
+        .map_or_else(|| format_date(today), |(date, _)| date.clone());
+    let benchmark = market_data
+        .benchmark_reference_market_data(db, &requested_start, &format_date(today))
+        .await?;
+    let benchmark_returns = metrics::compute_log_returns(&benchmark.benchmark_series);
     let ytd_start = NaiveDate::from_ymd_opt(today.year(), 1, 1).expect("Jan 1 always valid");
 
-    StandardFundMetrics {
+    Ok(StandardFundMetrics {
         ytd: compute_period_metrics(prices, &benchmark_returns, ytd_start, today),
         one_year: compute_trailing_period_metrics(
             prices,
@@ -44,7 +53,8 @@ pub async fn compute_standard_fund_metrics(
             FIVE_YEAR_TRADING_DAYS,
         ),
         all_time: compute_all_time_metrics(prices, &benchmark_returns, today),
-    }
+        benchmark_reference: benchmark.benchmark_reference,
+    })
 }
 
 pub fn format_source_observations(observations: Vec<SourceObservation>) -> Vec<(String, f64)> {
@@ -52,26 +62,6 @@ pub fn format_source_observations(observations: Vec<SourceObservation>) -> Vec<(
         .into_iter()
         .map(|observation| (format_date(observation.date), observation.value))
         .collect()
-}
-
-async fn benchmark_returns(
-    market_data: &MarketData,
-    prices: &[(String, f64)],
-    today: NaiveDate,
-) -> HashMap<String, f64> {
-    let Some((earliest_date, _)) = prices.first() else {
-        return HashMap::new();
-    };
-    let Ok(benchmark_start) = NaiveDate::parse_from_str(earliest_date, DATE_FORMAT) else {
-        return HashMap::new();
-    };
-
-    market_data
-        .stock_price_history(BENCHMARK_TICKER, benchmark_start, today)
-        .await
-        .map(format_source_observations)
-        .map(|prices| metrics::compute_log_returns(&prices))
-        .unwrap_or_default()
 }
 
 fn compute_all_time_metrics(

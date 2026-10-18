@@ -50,6 +50,7 @@ pub struct CorrelationMarketData {
     pub requested_end_date: String,
     pub tracked_asset_series: Vec<CorrelationMarketDataSeries>,
     pub benchmark_series: CorrelationMarketDataSeries,
+    pub benchmark_reference: super::portfolio::BenchmarkReferenceInfo,
     pub limitations: Vec<MarketDataLimitation>,
 }
 
@@ -60,6 +61,7 @@ pub struct CorrelationMarketData {
 pub struct BenchmarkRiskMarketData {
     /// Benchmark Base currency price series for the requested window.
     pub benchmark_series: BaseCurrencyPriceSeries,
+    pub benchmark_reference: super::portfolio::BenchmarkReferenceInfo,
     pub limitations: Vec<MarketDataLimitation>,
 }
 
@@ -78,6 +80,10 @@ pub enum MarketDataSubject {
         ticker: String,
         name: String,
         asset_type: AssetType,
+    },
+    BenchmarkReference {
+        id: String,
+        display_name: String,
     },
     FxRate {
         currency: String,

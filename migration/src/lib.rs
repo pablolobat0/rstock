@@ -14,8 +14,8 @@ mod m20260413_000001_create_fund_holdings_snapshots;
 mod m20260414_000001_drop_watchlist;
 mod m20260521_000001_migrate_exchange_rates_to_currency_columns;
 mod m20260815_000001_add_transaction_indexes;
-mod m20261018_000001_add_legacy_benchmark_reference;
 mod m20260905_000001_contract_transaction_schema;
+mod m20261018_000001_add_legacy_benchmark_reference;
 
 pub struct Migrator;
 
@@ -46,8 +46,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20260414_000001_drop_watchlist::Migration),
             Box::new(m20260521_000001_migrate_exchange_rates_to_currency_columns::Migration),
             Box::new(m20260815_000001_add_transaction_indexes::Migration),
-            Box::new(m20261018_000001_add_legacy_benchmark_reference::Migration),
             Box::new(m20260905_000001_contract_transaction_schema::Migration),
+            Box::new(m20261018_000001_add_legacy_benchmark_reference::Migration),
         ]
     }
 

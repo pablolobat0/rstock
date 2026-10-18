@@ -17,7 +17,16 @@ pub fn print_correlation_matrix(matrix: &CorrelationMatrix, period_label: &str) 
     }
 
     println!("\nCorrelation Matrix — {period_label}\n");
-    println!("Reference: {}", matrix.benchmark_reference.identity);
+    println!(
+        "Reference: {} [{}]",
+        matrix.benchmark_reference.display_name, matrix.benchmark_reference.id
+    );
+    println!(
+        "  Source: {} {} ({})",
+        matrix.benchmark_reference.source,
+        matrix.benchmark_reference.source_identifier,
+        matrix.benchmark_reference.currency
+    );
     println!(
         "  Adjustment: {}",
         matrix.benchmark_reference.adjustment_provenance

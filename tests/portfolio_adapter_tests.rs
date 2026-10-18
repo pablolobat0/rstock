@@ -165,6 +165,20 @@ fn limitation(ticker: &str, name: &str) -> rstock::models::MarketDataLimitation 
 fn portfolio_json_maps_available_unavailable_and_not_applicable_facts_into_the_nested_schema() {
     let value = write_json(&populated_view());
     let data = &value["data"];
+    let reference = &data["performance"]["benchmark_reference"];
+    assert_eq!(reference["id"], "legacy-acwi-etf-proxy");
+    assert_eq!(
+        reference["display_name"],
+        "iShares MSCI ACWI ETF (ACWI) proxy"
+    );
+    assert!(reference["adjustment_provenance"]
+        .as_str()
+        .unwrap()
+        .contains("adjusted"));
+    assert!(reference["return_basis_qualification"]
+        .as_str()
+        .unwrap()
+        .contains("not verified"));
 
     // Positions sit inside their sections; ordering is by current value with
     // unvalued positions last.
@@ -571,6 +585,16 @@ fn populated_view() -> PortfolioView {
                 nav: 100.0,
                 inception_date: "2025-06-01".to_owned(),
                 periods: populated_periods(),
+                benchmark_reference: rstock::models::BenchmarkReferenceInfo {
+                    id: "legacy-acwi-etf-proxy".to_owned(),
+                    display_name: "iShares MSCI ACWI ETF (ACWI) proxy".to_owned(),
+                    instrument_ticker: "ACWI".to_owned(),
+                    source: "yahoo_finance".to_owned(),
+                    source_identifier: "ACWI".to_owned(),
+                    currency: "USD".to_owned(),
+                    adjustment_provenance: "adjusted by Yahoo Finance".to_owned(),
+                    return_basis_qualification: "not verified as total return".to_owned(),
+                },
                 nav_history_limitations: vec![nav_limitation],
                 benchmark_risk_limitations: vec![benchmark_limitation],
             },
@@ -677,11 +701,16 @@ fn portfolio_human_presents_sections_synchronized_facts_and_limitation_scopes() 
         .iter()
         .all(|line| line.contains("Performance value:") || line.contains("NAV:")));
     assert!(text.contains("Inception:"));
+    assert!(
+        text.contains("Beta reference: iShares MSCI ACWI ETF (ACWI) proxy [legacy-acwi-etf-proxy]")
+    );
+    assert!(text.contains("Adjustment: adjusted by Yahoo Finance"));
+    assert!(text.contains("Return basis: not verified as total return"));
 
     // Available zero stays numeric while absent states keep distinct labels.
     let sortino_line = line_containing(&text, "Sortino", "").expect("Sortino row should exist");
     assert!(sortino_line.contains("not applicable"), "{sortino_line}");
-    let beta_line = line_containing(&text, "Beta", "").expect("Beta row should exist");
+    let beta_line = line_containing(&text, "Beta", "reference").expect("Beta row should exist");
     assert!(beta_line.contains("unavailable"), "{beta_line}");
     // The money fund's zero lifetime dividends present as the numeric zero.
     assert!(aggregate_lines[1].contains("0,00"), "{text}");

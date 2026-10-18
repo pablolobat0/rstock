@@ -139,7 +139,7 @@ async fn available_performance(
     let inception_date = series[0].date.clone();
 
     let benchmark = market_data
-        .benchmark_risk_market_data(db, &inception_date, &snapshot.date)
+        .benchmark_reference_market_data(db, &inception_date, &snapshot.date)
         .await?;
     let benchmark_returns: HashMap<String, f64> = weekday_log_returns(&benchmark.benchmark_series)?
         .into_iter()
@@ -157,6 +157,7 @@ async fn available_performance(
         nav: snapshot.nav,
         inception_date,
         periods,
+        benchmark_reference: benchmark.benchmark_reference,
         nav_history_limitations,
         benchmark_risk_limitations: benchmark.limitations,
     })

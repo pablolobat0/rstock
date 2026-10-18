@@ -1,7 +1,7 @@
 pub mod common;
 
 use chrono::{Duration, Local, NaiveDate};
-use rstock::constants::{format_date, BENCHMARK_NAME, BENCHMARK_TICKER};
+use rstock::constants::{format_date, BENCHMARK_TICKER};
 use rstock::db::entities::asset;
 use rstock::db::repos::asset_repo;
 use rstock::models::{Asset, AssetType, MarketDataLimitationClassification, MarketDataSubject};
@@ -61,16 +61,14 @@ async fn test_benchmark_market_data_prepares_prices_through_market_data() {
         .unwrap();
 
     assert_eq!(benchmark_market_data.limitations, vec![]);
-    assert_eq!(
-        common::find_daily_price(
-            &db,
-            benchmark_market_data.benchmark_series.asset_id,
-            "2025-01-02"
-        )
+    let reference_price = rstock::db::entities::benchmark_reference_price::Entity::find()
+        .one(&db)
         .await
-        .unwrap(),
-        Some(100.0)
-    );
+        .unwrap()
+        .unwrap();
+    assert_eq!(reference_price.reference_id, "legacy-acwi-etf-proxy");
+    assert_eq!(reference_price.date, "2025-01-02");
+    assert_eq!(reference_price.closing_price, 100.0);
 }
 
 #[tokio::test]
@@ -116,18 +114,17 @@ async fn test_benchmark_market_data_stays_distinct_from_holdings() {
         .correlation_market_data(&db, Vec::new(), "2025-01-02", "2025-01-02")
         .await
         .unwrap();
-    let benchmark = asset::Entity::find_by_id(benchmark_market_data.benchmark_series.asset_id)
-        .one(&db)
-        .await
-        .unwrap()
-        .unwrap();
-
-    assert_eq!(benchmark.ticker, BENCHMARK_TICKER);
-    assert_eq!(benchmark.name, BENCHMARK_NAME);
-    assert_ne!(
-        benchmark_market_data.benchmark_series.asset_id,
-        held_asset.id
+    assert_eq!(
+        benchmark_market_data.benchmark_reference.id,
+        "legacy-acwi-etf-proxy"
     );
+    assert_eq!(
+        benchmark_market_data.benchmark_reference.instrument_ticker,
+        BENCHMARK_TICKER
+    );
+    assert_eq!(benchmark_market_data.benchmark_series.asset_id, 0);
+    assert_eq!(asset_repo::find_all(&db).await.unwrap().len(), 1);
+    assert_eq!(held_asset.ticker, "XFAKE1");
     assert!(common::get_asset_snapshots(&db, "2025-01-02")
         .await
         .is_empty());

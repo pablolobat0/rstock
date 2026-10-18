@@ -410,6 +410,15 @@ async fn test_fund_comparison_json_complete_structure_and_aligned_points() {
 
     assert_eq!(envelope["command"], "compare.funds");
     let data = &envelope["data"];
+    assert_eq!(data["benchmark_reference"]["id"], "legacy-acwi-etf-proxy");
+    assert_eq!(
+        data["benchmark_reference"]["display_name"],
+        "iShares MSCI ACWI ETF (ACWI) proxy"
+    );
+    assert!(data["benchmark_reference"]["return_basis_qualification"]
+        .as_str()
+        .unwrap()
+        .contains("unverified"));
     assert_eq!(data["fund_a"]["code"], "XJSONCMP1");
     assert_eq!(data["fund_a"]["name"], "First Candidate");
     assert_eq!(data["fund_a"]["info"]["aum"], json!(1_000_000.0));
@@ -891,6 +900,11 @@ async fn test_fund_analysis_json_complete_data() {
 
     assert_eq!(envelope["command"], "analyze.fund");
     let data = &envelope["data"];
+    assert_eq!(data["benchmark_reference"]["id"], "legacy-acwi-etf-proxy");
+    assert!(data["benchmark_reference"]["adjustment_provenance"]
+        .as_str()
+        .unwrap()
+        .contains("auto_adjust"));
     assert_eq!(data["ms_code"], "XJSONFULL");
     assert_eq!(data["name"], "Complete Candidate Fund");
     assert_eq!(data["fund_currency"], "EUR");

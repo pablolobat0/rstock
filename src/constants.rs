@@ -45,12 +45,6 @@ pub const ROLLING_CORRELATION_WINDOW_DAYS: usize = 60;
 
 // --- Metrics ---
 pub const BENCHMARK_TICKER: &str = "ACWI";
-pub const BENCHMARK_NAME: &str = "iShares MSCI ACWI ETF (ACWI) proxy";
-pub const BENCHMARK_ADJUSTMENT_PROVENANCE: &str =
-    "Yahoo Finance history requested through yfinance_rs; auto_adjust is enabled by default";
-pub const BENCHMARK_RETURN_BASIS_QUALIFICATION: &str =
-    "Adjusted ETF price basis; distribution treatment and total-return equivalence are unverified";
-pub const BENCHMARK_CURRENCY: &str = "USD";
 pub const ANNUAL_RISK_FREE_RATE: f64 = 0.03;
 pub const TRADING_DAYS_PER_YEAR: f64 = 252.0;
 pub const MIN_DATA_POINTS: usize = 20;

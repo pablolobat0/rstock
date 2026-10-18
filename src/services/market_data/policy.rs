@@ -68,6 +68,45 @@ pub(crate) fn classify_fx_limitation(
     })
 }
 
+pub(crate) fn classify_benchmark_reference_limitation(
+    id: &str,
+    display_name: &str,
+    latest_date: NaiveDate,
+    requested_end: NaiveDate,
+) -> Option<MarketDataLimitation> {
+    if latest_date >= requested_end
+        || completed_weekdays_between(latest_date, requested_end)
+            < STALE_COMPLETED_WEEKDAY_WARNING_THRESHOLD
+    {
+        return None;
+    }
+    Some(MarketDataLimitation {
+        subject: MarketDataSubject::BenchmarkReference {
+            id: id.to_owned(),
+            display_name: display_name.to_owned(),
+        },
+        latest_available_date: Some(latest_date),
+        requested_end_date: requested_end,
+        classification: MarketDataLimitationClassification::ActionableStaleData,
+    })
+}
+
+pub(crate) fn missing_benchmark_reference_limitation(
+    id: &str,
+    display_name: &str,
+    requested_end_date: NaiveDate,
+) -> MarketDataLimitation {
+    MarketDataLimitation {
+        subject: MarketDataSubject::BenchmarkReference {
+            id: id.to_owned(),
+            display_name: display_name.to_owned(),
+        },
+        latest_available_date: None,
+        requested_end_date,
+        classification: MarketDataLimitationClassification::ActionableMissingData,
+    }
+}
+
 pub(crate) fn missing_asset_limitation(
     asset: &Asset,
     requested_end_date: NaiveDate,

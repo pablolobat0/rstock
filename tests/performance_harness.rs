@@ -208,7 +208,7 @@ async fn automatic_migration_covers_fresh_partial_and_current_schemas() {
             ))
             .await
             .expect("historical schema should accept persisted asset data");
-            let transaction_insert = if applied_count < migration_count {
+            let transaction_insert = if applied_count < migration_count - 1 {
                 "INSERT INTO transactions (asset_id, tx_type, date, quantity, price_cents, fees_cents, created_at) VALUES (1, 'buy', '2025-01-01', 1.0, 10000, 0, '2025-01-01T00:00:00')"
             } else {
                 "INSERT INTO transactions (asset_id, tx_type, date, units, unit_price_cents, fees_cents, created_at) VALUES (1, 'buy', '2025-01-01', 1.0, 10000, 0, '2025-01-01T00:00:00')"
@@ -318,7 +318,7 @@ async fn automatic_migration_rolls_back_a_failed_destructive_migration() {
     let db = Database::connect(format!("sqlite://{}?mode=rwc", path.display()))
         .await
         .expect("temporary file-backed database");
-    Migrator::up(&db, Some((Migrator::migrations().len() - 1) as u32))
+    Migrator::up(&db, Some((Migrator::migrations().len() - 2) as u32))
         .await
         .expect("historical migration prefix should apply");
     db.execute(Statement::from_string(
@@ -346,7 +346,7 @@ async fn automatic_migration_rolls_back_a_failed_destructive_migration() {
             .await
             .expect("migration state after rollback")
             .len(),
-        1
+        2
     );
     let rate: f64 = db
         .query_one(Statement::from_string(

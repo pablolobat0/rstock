@@ -24,6 +24,7 @@ struct FundComparisonData {
     side: FundComparisonSide,
     holdings: Vec<FundHolding>,
     prices: Vec<(String, f64)>,
+    benchmark_reference: crate::models::BenchmarkReferenceInfo,
 }
 
 pub async fn compare_funds(
@@ -46,6 +47,7 @@ pub async fn compare_funds(
     let equity_a = equity_holdings(&fund_a.holdings);
     let equity_b = equity_holdings(&fund_b.holdings);
 
+    let benchmark_reference = fund_a.benchmark_reference.clone();
     Ok(FundComparisonResult {
         sector_allocations: compare_allocations(
             &compute_breakdown(&equity_a, |h| h.sector.clone()),
@@ -63,6 +65,7 @@ pub async fn compare_funds(
         correlation: compute_correlation(&fund_a.prices, &fund_b.prices, period, today),
         fund_a: fund_a.side,
         fund_b: fund_b.side,
+        benchmark_reference,
     })
 }
 
@@ -93,7 +96,7 @@ async fn build_comparison_side(
     let prices = format_source_observations(
         prices_result.with_context(|| format!("failed to fetch price history for {code}"))?,
     );
-    let metrics = compute_standard_fund_metrics(market_data, &prices, today).await;
+    let metrics = compute_standard_fund_metrics(db, market_data, &prices, today).await?;
     let top_10_weight = compute_top_n_weight(&fund_data.holdings, 10);
     record_holdings_snapshot(
         db,
@@ -143,6 +146,7 @@ async fn build_comparison_side(
         side,
         holdings: fund_data.holdings,
         prices,
+        benchmark_reference: metrics.benchmark_reference,
     })
 }
 

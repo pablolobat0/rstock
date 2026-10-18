@@ -3,10 +3,9 @@ use std::collections::HashMap;
 use chrono::NaiveDate;
 
 use crate::constants::{
-    ANNUAL_RISK_FREE_RATE, BENCHMARK_CURRENCY, BENCHMARK_NAME, BENCHMARK_TICKER, DATE_FORMAT,
-    MIN_DATA_POINTS, ROLLING_CORRELATION_WINDOW_DAYS, TRADING_DAYS_PER_YEAR, ZERO_RETURN_THRESHOLD,
+    ANNUAL_RISK_FREE_RATE, DATE_FORMAT, MIN_DATA_POINTS, ROLLING_CORRELATION_WINDOW_DAYS,
+    TRADING_DAYS_PER_YEAR, ZERO_RETURN_THRESHOLD,
 };
-use crate::models::{Asset, AssetInfo, AssetType};
 
 /// Computes annualized volatility from pre-filtered daily log returns (trading days only).
 /// Returns `None` if fewer than 2 returns.
@@ -293,31 +292,6 @@ pub fn summarize_rolling_correlation(
     let average = Some(values.iter().sum::<f64>() / values.len() as f64);
 
     (latest, min, max, average)
-}
-
-pub fn benchmark_asset_info() -> AssetInfo {
-    AssetInfo {
-        ticker: BENCHMARK_TICKER.to_owned(),
-        name: BENCHMARK_NAME.to_owned(),
-        asset_type: AssetType::Stock,
-        currency: BENCHMARK_CURRENCY.to_owned(),
-    }
-}
-
-pub fn benchmark_asset(id: i32) -> Asset {
-    Asset {
-        id,
-        ticker: BENCHMARK_TICKER.to_owned(),
-        name: BENCHMARK_NAME.to_owned(),
-        asset_type: AssetType::Stock,
-        currency: BENCHMARK_CURRENCY.to_owned(),
-        morningstar_code: None,
-        asset_class: None,
-        equity_style: None,
-        bond_credit: None,
-        bond_duration: None,
-        management: None,
-    }
 }
 
 #[derive(Default)]
