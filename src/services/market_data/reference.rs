@@ -46,6 +46,10 @@ pub(crate) async fn prepare(
     };
     let start = NaiveDate::parse_from_str(start_date, DATE_FORMAT)?;
     let end = NaiveDate::parse_from_str(end_date, DATE_FORMAT)?;
+    anyhow::ensure!(
+        start <= end,
+        "benchmark reference start date {start_date} is after end date {end_date}"
+    );
     let (known, genuine, mut limitations) = prepare_prices(
         db,
         &reference,

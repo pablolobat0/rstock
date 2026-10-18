@@ -15,71 +15,6 @@ use sea_orm::DatabaseConnection;
 pub type AlignedComparison = (Vec<DatedWealthPoint>, Vec<DatedWealthPoint>, f64, f64);
 pub type ComparisonCalculation = anyhow::Result<Result<AlignedComparison, ComparisonCoverageIssue>>;
 
-/// Aligns genuinely common observations across the declared complete interval.
-/// Expected coverage gaps are data outcomes; malformed series remain errors.
-pub fn compare_aligned_eur_series(
-    fund: &[(String, f64)],
-    reference: &[(String, f64)],
-    requested_start: &str,
-    requested_end: &str,
-) -> ComparisonCalculation {
-    let fund = validate_series(fund, "fund")?;
-    let reference = validate_series(reference, "reference")?;
-    let start = chrono::NaiveDate::parse_from_str(requested_start, "%Y-%m-%d")?;
-    let end = chrono::NaiveDate::parse_from_str(requested_end, "%Y-%m-%d")?;
-    anyhow::ensure!(start <= end, "comparison start date is after end date");
-    if !fund.contains_key(requested_start) || !reference.contains_key(requested_start) {
-        return Ok(Err(ComparisonCoverageIssue::MissingAnchor(
-            requested_start.to_owned(),
-        )));
-    }
-    if !fund.contains_key(requested_end) || !reference.contains_key(requested_end) {
-        return Ok(Err(ComparisonCoverageIssue::MissingEnd(
-            requested_end.to_owned(),
-        )));
-    }
-    let mut day = start;
-    while day <= end {
-        let date = day.format("%Y-%m-%d").to_string();
-        if !matches!(day.weekday(), chrono::Weekday::Sat | chrono::Weekday::Sun)
-            && (!fund.contains_key(&date) || !reference.contains_key(&date))
-        {
-            return Ok(Err(ComparisonCoverageIssue::InternalWeekdayGap(date)));
-        }
-        day += chrono::Duration::days(1);
-    }
-    let aligned: Vec<_> = fund
-        .iter()
-        .filter_map(|(date, value)| reference.get(date).map(|other| (date, *value, *other)))
-        .filter(|(date, _, _)| date.as_str() >= requested_start && date.as_str() <= requested_end)
-        .collect();
-    if aligned.len() < 2 {
-        return Ok(Err(ComparisonCoverageIssue::InsufficientCommonObservations));
-    }
-    let first = aligned[0];
-    let last = aligned[aligned.len() - 1];
-    let fund_wealth = aligned
-        .iter()
-        .map(|(date, value, _)| DatedWealthPoint {
-            date: (*date).clone(),
-            wealth: value / first.1 * 100.0,
-        })
-        .collect();
-    let reference_wealth = aligned
-        .iter()
-        .map(|(date, _, value)| DatedWealthPoint {
-            date: (*date).clone(),
-            wealth: value / first.2 * 100.0,
-        })
-        .collect();
-    Ok(Ok((
-        fund_wealth,
-        reference_wealth,
-        (last.1 / first.1 - 1.0) * 100.0,
-        (last.2 / first.2 - 1.0) * 100.0,
-    )))
-}
-
 /// Resolve an explicit assignment, gate each source by its qualification,
 /// prepare EUR series through `MarketData`, then calculate one complete outcome.
 pub async fn compare_fund_to_primary(
@@ -168,12 +103,6 @@ async fn compare_assigned_fund(
         )
         .await?;
     outcome.fund_limitations = subject_market.limitations.clone();
-    let Some(start_date) = subject_market.first_observation_date.as_deref() else {
-        return Ok(unavailable(
-            outcome,
-            "fund history has no source observations in the requested period",
-        ));
-    };
     let Some(subject) = subject_market.qualification.as_ref() else {
         return Ok(unavailable(outcome, "fund source has no verified return-basis, adjustment, currency, hedge, and cadence qualification"));
     };
@@ -191,6 +120,19 @@ async fn compare_assigned_fund(
     {
         return Ok(unavailable(outcome, "fund or selected reference source does not match the selected definition currency, adjustment, return basis, or hedge policy; required convention is unknown or incompatible"));
     }
+    if subject_market.completed_observation_count < 2 {
+        outcome.cadence = Some(subject.cadence.clone());
+        crate::constants::BASE_CURRENCY.clone_into(&mut outcome.currency);
+        outcome.start_date = subject_market.first_observation_date.clone();
+        outcome.end_date = subject_market.last_observation_date.clone();
+        outcome.availability = ComparisonAvailability::NotApplicable {
+            reason: "fund has fewer than two qualified completed observations; cumulative return is not measurable".to_owned(),
+        };
+        return Ok(outcome);
+    }
+    let Some(start_date) = subject_market.first_observation_date.as_deref() else {
+        anyhow::bail!("fund comparison has completed observations but no first observation date");
+    };
     let reference_qualification = market_data
         .selected_benchmark_reference_market_data(db, &definition.id, start_date, &end_date)
         .await?;
@@ -230,12 +172,6 @@ fn calculate_comparison(
     start_date: &str,
     end_date: &str,
 ) -> anyhow::Result<FundBenchmarkComparison> {
-    if subject_market.completed_observation_count < 2 {
-        outcome.availability = ComparisonAvailability::NotApplicable {
-            reason: "fund has fewer than two qualified completed observations; cumulative return is not measurable".to_owned(),
-        };
-        return Ok(outcome);
-    }
     if !outcome.fund_limitations.is_empty() || !outcome.reference_limitations.is_empty() {
         return Ok(unavailable(outcome, "required EUR comparison coverage is incomplete; see scoped fund and reference limitations"));
     }
@@ -264,6 +200,71 @@ fn calculate_comparison(
         }
         Err(reason) => Ok(unavailable(outcome, reason.to_string())),
     }
+}
+
+/// Aligns genuinely common observations across the declared complete interval.
+/// Expected coverage gaps are data outcomes; malformed series remain errors.
+pub fn compare_aligned_eur_series(
+    fund: &[(String, f64)],
+    reference: &[(String, f64)],
+    requested_start: &str,
+    requested_end: &str,
+) -> ComparisonCalculation {
+    let fund = validate_series(fund, "fund")?;
+    let reference = validate_series(reference, "reference")?;
+    let start = chrono::NaiveDate::parse_from_str(requested_start, "%Y-%m-%d")?;
+    let end = chrono::NaiveDate::parse_from_str(requested_end, "%Y-%m-%d")?;
+    anyhow::ensure!(start <= end, "comparison start date is after end date");
+    if !fund.contains_key(requested_start) || !reference.contains_key(requested_start) {
+        return Ok(Err(ComparisonCoverageIssue::MissingAnchor(
+            requested_start.to_owned(),
+        )));
+    }
+    if !fund.contains_key(requested_end) || !reference.contains_key(requested_end) {
+        return Ok(Err(ComparisonCoverageIssue::MissingEnd(
+            requested_end.to_owned(),
+        )));
+    }
+    let mut day = start;
+    while day <= end {
+        let date = day.format("%Y-%m-%d").to_string();
+        if !matches!(day.weekday(), chrono::Weekday::Sat | chrono::Weekday::Sun)
+            && (!fund.contains_key(&date) || !reference.contains_key(&date))
+        {
+            return Ok(Err(ComparisonCoverageIssue::InternalWeekdayGap(date)));
+        }
+        day += chrono::Duration::days(1);
+    }
+    let aligned: Vec<_> = fund
+        .iter()
+        .filter_map(|(date, value)| reference.get(date).map(|other| (date, *value, *other)))
+        .filter(|(date, _, _)| date.as_str() >= requested_start && date.as_str() <= requested_end)
+        .collect();
+    if aligned.len() < 2 {
+        return Ok(Err(ComparisonCoverageIssue::InsufficientCommonObservations));
+    }
+    let first = aligned[0];
+    let last = aligned[aligned.len() - 1];
+    let fund_wealth = aligned
+        .iter()
+        .map(|(date, value, _)| DatedWealthPoint {
+            date: (*date).clone(),
+            wealth: value / first.1 * 100.0,
+        })
+        .collect();
+    let reference_wealth = aligned
+        .iter()
+        .map(|(date, _, value)| DatedWealthPoint {
+            date: (*date).clone(),
+            wealth: value / first.2 * 100.0,
+        })
+        .collect();
+    Ok(Ok((
+        fund_wealth,
+        reference_wealth,
+        (last.1 / first.1 - 1.0) * 100.0,
+        (last.2 / first.2 - 1.0) * 100.0,
+    )))
 }
 
 fn matches_definition(

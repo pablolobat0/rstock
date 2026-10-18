@@ -16,6 +16,7 @@ pub struct FundComparisonMarketData {
     pub qualification: Option<SeriesQualification>,
     pub completed_observation_count: usize,
     pub first_observation_date: Option<String>,
+    pub last_observation_date: Option<String>,
     pub eur_series: BaseCurrencyPriceSeries,
     pub limitations: Vec<MarketDataLimitation>,
 }

@@ -396,6 +396,10 @@ impl MarketData {
         db: &DatabaseConnection,
         request: FundComparisonRequest<'_>,
     ) -> anyhow::Result<FundComparisonMarketData> {
+        anyhow::ensure!(
+            request.start_date <= request.end_date,
+            "fund comparison start date is after end date"
+        );
         let observations = self
             .fund_price_history(request.ms_code, request.start_date, request.end_date)
             .await?;
@@ -412,14 +416,26 @@ impl MarketData {
             request.requested_end_date,
             crate::constants::DATE_FORMAT,
         )?;
-        let completed_observation_count = prices
+        let completed_prices = prices
             .iter()
-            .filter_map(|(date, _)| {
-                chrono::NaiveDate::parse_from_str(date, crate::constants::DATE_FORMAT).ok()
+            .filter_map(|(date, value)| {
+                chrono::NaiveDate::parse_from_str(date, crate::constants::DATE_FORMAT)
+                    .ok()
+                    .filter(|parsed| *parsed <= requested_end)
+                    .map(|parsed| (date.clone(), *value, parsed))
             })
-            .filter(|date| *date <= requested_end)
-            .count();
-        let first_observation_date = prices.first().map(|(date, _)| date.clone());
+            .collect::<Vec<_>>();
+        let completed_observation_count = completed_prices.len();
+        let completed_dates = completed_prices
+            .iter()
+            .map(|(date, _, parsed)| (date.clone(), *parsed))
+            .collect::<Vec<_>>();
+        let comparison_prices = completed_prices
+            .iter()
+            .map(|(date, value, _)| (date.clone(), *value))
+            .collect::<Vec<_>>();
+        let first_observation_date = completed_dates.first().map(|(date, _)| date.clone());
+        let last_observation_date = completed_dates.last().map(|(date, _)| date.clone());
         let qualification = match self
             .series_qualification("morningstar", request.ms_code)
             .await
@@ -435,51 +451,93 @@ impl MarketData {
                 self.prepare_base_currency_prices(
                     db,
                     &qualification.currency,
-                    &prices,
+                    &comparison_prices,
                     request.requested_end_date,
                 )
                 .await?
             }
             _ => (Vec::new(), Vec::new()),
         };
-        if let Some(currency) = request.currency {
-            if !eur_series
-                .iter()
-                .any(|(date, _)| date == request.requested_end_date)
-            {
-                let latest = eur_series
-                    .last()
-                    .map(|(date, _)| {
-                        chrono::NaiveDate::parse_from_str(date, crate::constants::DATE_FORMAT)
-                    })
-                    .transpose()?;
-                let subject = if currency == crate::constants::BASE_CURRENCY {
-                    crate::models::MarketDataSubject::Asset {
-                        ticker: request.ticker.to_owned(),
-                        name: request.ms_code.to_owned(),
-                        asset_type: crate::models::AssetType::Fund,
-                    }
-                } else {
-                    crate::models::MarketDataSubject::FxRate {
-                        currency: currency.to_owned(),
-                    }
-                };
+        limitations = self
+            .comparison_endpoint_limitations(
+                db,
+                &request,
+                &completed_dates,
+                requested_end,
+                limitations,
+            )
+            .await?;
+        Ok(FundComparisonMarketData {
+            qualification,
+            completed_observation_count,
+            first_observation_date,
+            last_observation_date,
+            eur_series,
+            limitations,
+        })
+    }
+
+    async fn comparison_endpoint_limitations(
+        &self,
+        db: &DatabaseConnection,
+        request: &FundComparisonRequest<'_>,
+        completed_dates: &[(String, NaiveDate)],
+        requested_end: NaiveDate,
+        mut limitations: Vec<crate::models::MarketDataLimitation>,
+    ) -> anyhow::Result<Vec<crate::models::MarketDataLimitation>> {
+        let Some(currency) = request.currency else {
+            return Ok(limitations);
+        };
+        if !completed_dates
+            .iter()
+            .any(|(_, date)| *date == requested_end)
+        {
+            limitations.push(crate::models::MarketDataLimitation {
+                subject: crate::models::MarketDataSubject::Asset {
+                    ticker: request.ticker.to_owned(),
+                    name: request.ms_code.to_owned(),
+                    asset_type: crate::models::AssetType::Fund,
+                },
+                latest_available_date: completed_dates.last().map(|(_, date)| *date),
+                requested_end_date: requested_end,
+                classification:
+                    crate::models::MarketDataLimitationClassification::ActionableMissingData,
+            });
+        }
+        if currency != crate::constants::BASE_CURRENCY {
+            let rates = historical::prepare_reference_exchange_rates(
+                db,
+                currency,
+                completed_dates
+                    .first()
+                    .map_or(request.requested_end_date, |(date, _)| date),
+                request.requested_end_date,
+                self,
+            )
+            .await?;
+            if !rates.contains_key(&requested_end) {
+                limitations.retain(|limitation| {
+                    !matches!(
+                        limitation.subject,
+                        crate::models::MarketDataSubject::FxRate { currency: ref rate_currency }
+                            if rate_currency == currency
+                    )
+                });
                 limitations.push(crate::models::MarketDataLimitation {
-                    subject,
-                    latest_available_date: latest,
+                    subject: crate::models::MarketDataSubject::FxRate {
+                        currency: currency.to_owned(),
+                    },
+                    latest_available_date: rates
+                        .range(..requested_end)
+                        .next_back()
+                        .map(|(date, _)| *date),
                     requested_end_date: requested_end,
                     classification:
                         crate::models::MarketDataLimitationClassification::ActionableMissingData,
                 });
             }
         }
-        Ok(FundComparisonMarketData {
-            qualification,
-            completed_observation_count,
-            first_observation_date,
-            eur_series,
-            limitations,
-        })
+        Ok(limitations)
     }
 
     pub async fn prepare_valuation_market_data(

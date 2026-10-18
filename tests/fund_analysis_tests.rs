@@ -297,6 +297,111 @@ async fn assigned_fund_comparison_uses_qualified_shared_market_data_path() {
 }
 
 #[tokio::test]
+async fn comparison_uses_only_completed_observations_and_short_ranges_never_panic() {
+    for (prices, expected_start, expected_end, expected_available) in [
+        (vec![], None, None, false),
+        (vec![("2025-01-08", 120.0)], None, None, false),
+        (vec![("2025-01-09", 121.0)], None, None, false),
+        (
+            vec![("2025-01-07", 110.0)],
+            Some("2025-01-07"),
+            Some("2025-01-07"),
+            false,
+        ),
+        (
+            vec![
+                ("2025-01-06", 100.0),
+                ("2025-01-07", 110.0),
+                ("2025-01-08", 120.0),
+            ],
+            Some("2025-01-06"),
+            Some("2025-01-07"),
+            true,
+        ),
+    ] {
+        let (db, mut sources) = assigned_comparison_fixture().await;
+        sources.historical_prices.insert(
+            "XCLASS".to_owned(),
+            prices
+                .iter()
+                .map(|(date, value)| ((*date).to_owned(), *value))
+                .collect(),
+        );
+        for (date, price) in [("2025-01-06", 50.0), ("2025-01-07", 51.0)] {
+            rstock::db::entities::benchmark_reference_price::Entity::insert(
+                rstock::db::entities::benchmark_reference_price::ActiveModel {
+                    reference_id: Set("verified-fake-reference".to_owned()),
+                    date: Set(date.to_owned()),
+                    closing_price: Set(price),
+                    is_api_failure: Set(false),
+                    is_source_observation: Set(true),
+                    ..Default::default()
+                },
+            )
+            .exec(&db)
+            .await
+            .unwrap();
+        }
+
+        let result = compute_fund_analysis(
+            &db,
+            &market_data_at(
+                &sources,
+                chrono::NaiveDate::from_ymd_opt(2025, 1, 8).unwrap(),
+            ),
+            "XCLASS",
+            one_year_candidate_period(),
+        )
+        .await
+        .expect("short or reversed history must not panic");
+        let comparison = &result.primary_benchmark_comparison;
+        assert_eq!(result.name.as_deref(), Some("Fund"));
+        assert_eq!(result.fund_currency.as_deref(), Some("EUR"));
+        assert_eq!(comparison.start_date.as_deref(), expected_start);
+        assert_eq!(comparison.end_date.as_deref(), expected_end);
+        assert_eq!(
+            comparison.availability,
+            if expected_available {
+                rstock::models::ComparisonAvailability::Available
+            } else {
+                rstock::models::ComparisonAvailability::NotApplicable {
+                    reason: "fund has fewer than two qualified completed observations; cumulative return is not measurable".to_owned(),
+                }
+            }
+        );
+        if !expected_available {
+            assert!(comparison.fund_wealth.is_empty());
+            assert!(comparison.reference_wealth.is_empty());
+        } else {
+            assert_eq!(comparison.fund_wealth.last().unwrap().date, "2025-01-07");
+            assert_eq!(
+                comparison.reference_wealth.last().unwrap().date,
+                "2025-01-07"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn public_reference_preparation_rejects_reversed_date_ranges_without_panicking() {
+    let (db, sources) = assigned_comparison_fixture().await;
+    let market = market_data_at(
+        &sources,
+        chrono::NaiveDate::from_ymd_opt(2025, 1, 8).unwrap(),
+    );
+    let error = market
+        .selected_benchmark_reference_market_data(
+            &db,
+            "verified-fake-reference",
+            "2025-01-08",
+            "2025-01-07",
+        )
+        .await
+        .expect_err("reversed benchmark range is an invalid request");
+    assert!(error.to_string().contains("start date"));
+}
+
+#[tokio::test]
 async fn assigned_fund_comparison_rejects_incompatible_source_conventions_without_hiding_fund_facts(
 ) {
     let cases = [
@@ -891,6 +996,108 @@ async fn missing_end_fx_keeps_facts_unavailable_even_with_two_earlier_common_dat
             .as_deref(),
         Some("USD")
     );
+}
+
+#[tokio::test]
+async fn comparison_limitations_attribute_missing_native_and_fx_inputs_separately() {
+    for (fund_dates, fx_rates, expect_native_missing, expect_fx_missing) in [
+        (
+            vec!["2025-01-06", "2025-01-07"],
+            vec![
+                ("2025-01-06", 0.9),
+                ("2025-01-07", 0.91),
+                ("2025-01-08", 0.92),
+            ],
+            true,
+            false,
+        ),
+        (
+            vec!["2025-01-06", "2025-01-07", "2025-01-08"],
+            vec![],
+            false,
+            true,
+        ),
+        (vec!["2025-01-06", "2025-01-07"], vec![], true, true),
+    ] {
+        let (db, mut sources) = assigned_comparison_fixture().await;
+        let reference = benchmark_reference::Entity::find_by_id("verified-fake-reference")
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        let mut reference: benchmark_reference::ActiveModel = reference.into();
+        reference.currency = Set("USD".to_owned());
+        reference.update(&db).await.unwrap();
+        sources.historical_prices.insert(
+            "XCLASS".to_owned(),
+            fund_dates
+                .iter()
+                .enumerate()
+                .map(|(index, date)| ((*date).to_owned(), 100.0 + index as f64))
+                .collect(),
+        );
+        sources.historical_prices.insert(
+            "XREF".to_owned(),
+            ["2025-01-06", "2025-01-07", "2025-01-08"]
+                .into_iter()
+                .enumerate()
+                .map(|(index, date)| (date.to_owned(), 50.0 + index as f64))
+                .collect(),
+        );
+        for (source, identity) in [("morningstar", "XCLASS"), ("test_source", "XREF")] {
+            sources.series_qualifications.insert(
+                (source.to_owned(), identity.to_owned()),
+                qualification(
+                    "USD",
+                    "total_return",
+                    "dividends_reinvested_once",
+                    "Unhedged",
+                    "daily",
+                ),
+            );
+        }
+        sources.fund_data.get_mut("XCLASS").unwrap().fund_currency = Some("USD".to_owned());
+        sources
+            .fund_quote_metadata
+            .get_mut("XCLASS")
+            .unwrap()
+            .quote_currency = Some("USD".to_owned());
+        sources.exchange_rates.insert(
+            "USDEUR".to_owned(),
+            fx_rates
+                .iter()
+                .map(|(date, rate)| ((*date).to_owned(), *rate))
+                .collect(),
+        );
+
+        let result = compute_fund_analysis(
+            &db,
+            &market_data_at(
+                &sources,
+                chrono::NaiveDate::from_ymd_opt(2025, 1, 9).unwrap(),
+            ),
+            "XCLASS",
+            one_year_candidate_period(),
+        )
+        .await
+        .unwrap();
+        let comparison = &result.primary_benchmark_comparison;
+        let native_limit = comparison.fund_limitations.iter().find(|limitation|
+            matches!(limitation.subject, rstock::models::MarketDataSubject::Asset { ref ticker, .. } if ticker == "XISINFAKE1"));
+        let fx_limit = comparison.fund_limitations.iter().find(|limitation|
+            matches!(limitation.subject, rstock::models::MarketDataSubject::FxRate { ref currency } if currency == "USD"));
+        assert_eq!(native_limit.is_some(), expect_native_missing);
+        assert_eq!(fx_limit.is_some(), expect_fx_missing);
+        assert_eq!(
+            native_limit.and_then(|limitation| limitation.latest_available_date),
+            expect_native_missing.then(|| chrono::NaiveDate::from_ymd_opt(2025, 1, 7).unwrap())
+        );
+        assert_eq!(
+            fx_limit.and_then(|limitation| limitation.latest_available_date),
+            None,
+            "FX limitation latest date must come from FX coverage, never the converted fund series"
+        );
+    }
 }
 
 #[tokio::test]
