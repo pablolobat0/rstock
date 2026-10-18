@@ -121,6 +121,50 @@ pub enum Commands {
 
     /// Compare portfolio-relevant candidates side by side
     Compare(CompareArgs),
+    /// Browse benchmark definitions and manage explicit primary assignments
+    Benchmark(BenchmarkArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct BenchmarkArgs {
+    #[command(subcommand)]
+    pub command: BenchmarkCommands,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum BenchmarkCommands {
+    /// List approved reference definitions and tracked-asset assignment state
+    List {},
+    /// Show one stable reference definition
+    Show { reference_id: String },
+    /// Explicitly assign or replace a Tracked asset's primary reference
+    Assign {
+        ticker: String,
+        reference_id: String,
+        #[arg(long)]
+        override_selection: bool,
+    },
+    /// Explicitly assign a reference to an exact Fund candidate without creating a holding
+    AssignCandidate {
+        identifier: String,
+        #[arg(long, value_enum)]
+        vehicle: CandidateVehicle,
+        reference_id: String,
+    },
+    /// Remove a Tracked asset's primary reference
+    Remove { ticker: String },
+    /// Remove an exact Fund candidate's primary reference
+    RemoveCandidate {
+        identifier: String,
+        #[arg(long, value_enum)]
+        vehicle: CandidateVehicle,
+    },
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum CandidateVehicle {
+    Fund,
+    Etf,
 }
 
 #[derive(Debug, Args)]

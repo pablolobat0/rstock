@@ -1,8 +1,8 @@
 use sea_orm::{sea_query::OnConflict, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set};
 
-use crate::db::entities::{benchmark_reference, benchmark_reference_price};
+use crate::db::entities::{benchmark_assignment, benchmark_reference, benchmark_reference_price};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub struct BenchmarkReference {
     pub id: String,
     pub display_name: String,
@@ -12,6 +12,14 @@ pub struct BenchmarkReference {
     pub currency: String,
     pub adjustment_provenance: String,
     pub return_basis_qualification: String,
+    pub role: String,
+    pub universe: String,
+    pub hedge_policy: String,
+    pub source_provenance: String,
+    pub history_boundary: String,
+    pub verification_state: String,
+    pub official_comparator: Option<String>,
+    pub objective_comparator: Option<String>,
 }
 
 impl From<benchmark_reference::Model> for BenchmarkReference {
@@ -25,8 +33,87 @@ impl From<benchmark_reference::Model> for BenchmarkReference {
             currency: model.currency,
             adjustment_provenance: model.adjustment_provenance,
             return_basis_qualification: model.return_basis_qualification,
+            role: model.role,
+            universe: model.universe,
+            hedge_policy: model.hedge_policy,
+            source_provenance: model.source_provenance,
+            history_boundary: model.history_boundary,
+            verification_state: model.verification_state,
+            official_comparator: model.official_comparator,
+            objective_comparator: model.objective_comparator,
         }
     }
+}
+
+pub async fn find_all(
+    db: &impl sea_orm::ConnectionTrait,
+) -> anyhow::Result<Vec<BenchmarkReference>> {
+    Ok(benchmark_reference::Entity::find()
+        .order_by_asc(benchmark_reference::Column::Id)
+        .all(db)
+        .await?
+        .into_iter()
+        .map(BenchmarkReference::from)
+        .collect())
+}
+
+pub async fn find_assignment(
+    db: &impl sea_orm::ConnectionTrait,
+    subject_type: &str,
+    subject_id: &str,
+) -> anyhow::Result<Option<(String, bool)>> {
+    Ok(
+        benchmark_assignment::Entity::find_by_id((subject_type.to_owned(), subject_id.to_owned()))
+            .one(db)
+            .await?
+            .map(|row| (row.reference_id, row.is_override)),
+    )
+}
+
+pub async fn put_assignment(
+    db: &impl sea_orm::ConnectionTrait,
+    subject_type: &str,
+    subject_id: &str,
+    reference_id: &str,
+    is_override: bool,
+) -> anyhow::Result<()> {
+    find_by_id(db, reference_id).await?;
+    benchmark_assignment::Entity::insert(benchmark_assignment::ActiveModel {
+        subject_type: Set(subject_type.to_owned()),
+        subject_id: Set(subject_id.to_owned()),
+        reference_id: Set(reference_id.to_owned()),
+        is_override: Set(is_override),
+        assigned_at: Set(chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()),
+    })
+    .on_conflict(
+        sea_orm::sea_query::OnConflict::columns([
+            benchmark_assignment::Column::SubjectType,
+            benchmark_assignment::Column::SubjectId,
+        ])
+        .update_columns([
+            benchmark_assignment::Column::ReferenceId,
+            benchmark_assignment::Column::IsOverride,
+            benchmark_assignment::Column::AssignedAt,
+        ])
+        .to_owned(),
+    )
+    .exec_without_returning(db)
+    .await?;
+    Ok(())
+}
+
+pub async fn remove_assignment(
+    db: &impl sea_orm::ConnectionTrait,
+    subject_type: &str,
+    subject_id: &str,
+) -> anyhow::Result<bool> {
+    let result = benchmark_assignment::Entity::delete_by_id((
+        subject_type.to_owned(),
+        subject_id.to_owned(),
+    ))
+    .exec(db)
+    .await?;
+    Ok(result.rows_affected > 0)
 }
 
 #[derive(Clone, Debug)]

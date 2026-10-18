@@ -75,6 +75,9 @@ pub async fn run_command(
                     .await
             }
         },
+        Commands::Benchmark(args) => {
+            commands::benchmarks::run(db, args.command, output_format).await
+        }
     }
 }
 

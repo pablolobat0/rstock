@@ -16,6 +16,8 @@ mod m20260521_000001_migrate_exchange_rates_to_currency_columns;
 mod m20260815_000001_add_transaction_indexes;
 mod m20260905_000001_contract_transaction_schema;
 mod m20261018_000001_add_legacy_benchmark_reference;
+mod m20261018_000002_add_reference_catalog_and_assignments;
+mod m20261018_000003_add_exact_candidate_comparators;
 
 pub struct Migrator;
 
@@ -48,6 +50,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20260815_000001_add_transaction_indexes::Migration),
             Box::new(m20260905_000001_contract_transaction_schema::Migration),
             Box::new(m20261018_000001_add_legacy_benchmark_reference::Migration),
+            Box::new(m20261018_000002_add_reference_catalog_and_assignments::Migration),
+            Box::new(m20261018_000003_add_exact_candidate_comparators::Migration),
         ]
     }
 
