@@ -17,6 +17,15 @@ pub fn print_correlation_matrix(matrix: &CorrelationMatrix, period_label: &str) 
     }
 
     println!("\nCorrelation Matrix — {period_label}\n");
+    println!("Reference: {}", matrix.benchmark_reference.identity);
+    println!(
+        "  Adjustment: {}",
+        matrix.benchmark_reference.adjustment_provenance
+    );
+    println!(
+        "  Return basis: {}",
+        matrix.benchmark_reference.return_basis_qualification
+    );
 
     let n = matrix.names.len();
 

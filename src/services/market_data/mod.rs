@@ -416,7 +416,9 @@ impl MarketData {
     ) -> anyhow::Result<CorrelationMarketData> {
         let benchmark = get_or_create_benchmark_asset(db).await?;
         let mut all_assets = tracked_assets.clone();
-        all_assets.push(benchmark.clone());
+        if !all_assets.iter().any(|asset| asset.id == benchmark.id) {
+            all_assets.push(benchmark.clone());
+        }
 
         let prepared = self
             .prepare_valuation_market_data(db, &all_assets, start_date, end_date)
@@ -429,16 +431,14 @@ impl MarketData {
             end_date,
         )
         .await?;
+        let benchmark_prices = all_series.get(&benchmark.id).cloned().unwrap_or_default();
         let tracked_asset_series = tracked_assets
             .iter()
             .map(|asset| {
                 correlation_series(asset, all_series.remove(&asset.id).unwrap_or_default())
             })
             .collect();
-        let benchmark_series = correlation_series(
-            &benchmark,
-            all_series.remove(&benchmark.id).unwrap_or_default(),
-        );
+        let benchmark_series = correlation_series(&benchmark, benchmark_prices);
 
         Ok(CorrelationMarketData {
             requested_start_date: start_date.to_owned(),

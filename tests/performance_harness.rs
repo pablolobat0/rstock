@@ -219,6 +219,18 @@ async fn automatic_migration_covers_fresh_partial_and_current_schemas() {
             ))
             .await
             .expect("historical schema should accept persisted ledger data");
+            if applied_count == migration_count - 1 {
+                for sql in [
+                    "INSERT INTO daily_asset_prices (asset_id, date, closing_price, is_api_failure) VALUES (1, '2025-01-02', 101.0, 0)",
+                    "INSERT INTO daily_exchange_rates (from_currency, to_currency, date, rate) VALUES ('USD', 'EUR', '2025-01-02', 0.91)",
+                    "INSERT INTO portfolio_history (date, cash_balance, asset_value, total_value, outstanding_shares, nav) VALUES ('2025-01-02', 0, 101, 101, 1, 101)",
+                    "INSERT INTO portfolio_asset_history (date, asset_id, quantity, closing_price, market_value, exchange_rate) VALUES ('2025-01-02', 1, 1, 101, 101, 1)",
+                ] {
+                    db.execute(Statement::from_string(DbBackend::Sqlite, sql))
+                        .await
+                        .expect("legacy cached/accounting observation should be inserted");
+                }
+            }
         }
 
         assert_eq!(
@@ -258,6 +270,43 @@ async fn automatic_migration_covers_fresh_partial_and_current_schemas() {
                 .try_get("", "count")
                 .expect("persisted transaction count");
             assert_eq!((asset_count, transaction_count), (1, 1));
+        }
+        if applied_count == migration_count - 1 {
+            let reference_identity: String = db
+                .query_one(Statement::from_string(
+                    DbBackend::Sqlite,
+                    "SELECT id FROM benchmark_references WHERE instrument_ticker = 'ACWI'",
+                ))
+                .await
+                .expect("legacy proxy reference query")
+                .expect("legacy proxy reference is migrated")
+                .try_get("", "id")
+                .expect("legacy proxy reference identity");
+            assert_eq!(reference_identity, "legacy-acwi-etf-proxy");
+            for (table, expected) in [
+                ("daily_asset_prices", 101.0),
+                ("daily_exchange_rates", 0.91),
+                ("portfolio_history", 101.0),
+                ("portfolio_asset_history", 101.0),
+            ] {
+                let column = match table {
+                    "daily_asset_prices" => "closing_price",
+                    "daily_exchange_rates" => "rate",
+                    "portfolio_history" => "nav",
+                    _ => "closing_price",
+                };
+                let value: f64 = db
+                    .query_one(Statement::from_string(
+                        DbBackend::Sqlite,
+                        format!("SELECT {column} AS value FROM {table}"),
+                    ))
+                    .await
+                    .expect("legacy observation query")
+                    .expect("legacy observation remains present")
+                    .try_get("", "value")
+                    .expect("legacy observation value");
+                assert_eq!(value, expected, "migration changed {table}");
+            }
         }
     }
 }

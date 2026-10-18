@@ -309,7 +309,10 @@ async fn test_correlation_market_data_returns_tracked_and_benchmark_series_separ
     assert_eq!(result.requested_start_date, "2025-01-01");
     assert_eq!(result.requested_end_date, "2025-01-25");
     assert_eq!(result.tracked_asset_series.len(), 2);
-    assert_eq!(result.benchmark_series.name, "MSCI ACWI Benchmark");
+    assert_eq!(
+        result.benchmark_series.name,
+        "iShares MSCI ACWI ETF (ACWI) proxy"
+    );
     assert!(!result
         .tracked_asset_series
         .iter()
@@ -322,6 +325,30 @@ async fn test_correlation_market_data_returns_tracked_and_benchmark_series_separ
         .unwrap();
     assert_eq!(usd_series.prices.len(), 25);
     assert!((usd_series.prices[0].1 - 46.0).abs() < 1e-9);
+}
+
+#[tokio::test]
+async fn tracked_acwi_holding_shares_market_history_with_reference() {
+    let db = setup_test_db().await;
+    let mut sources = MockMarketDataSources::new();
+    seed_benchmark_market_data(&mut sources, 25);
+    // The reference's lookup instrument may also be a user-tracked security;
+    // reference status must not hide its Transaction-ledger observation.
+    let acwi_id = insert_asset(&db, "ACWI", "iShares MSCI ACWI ETF", "stock", "USD").await;
+    let acwi = asset_repo::find_by_ids(&db, [acwi_id]).await.unwrap();
+
+    let result = correlation_market_data(&sources)
+        .correlation_market_data(&db, acwi, "2025-01-01", "2025-01-25")
+        .await
+        .unwrap();
+
+    assert_eq!(result.tracked_asset_series.len(), 1);
+    assert_eq!(result.tracked_asset_series[0].prices.len(), 25);
+    assert_eq!(result.benchmark_series.prices.len(), 25);
+    assert_eq!(
+        result.tracked_asset_series[0].asset_id,
+        result.benchmark_series.asset_id
+    );
 }
 
 /// Assets with insufficient data should appear in warnings and have None correlation
@@ -402,6 +429,26 @@ async fn test_correlation_matrix_json_preserves_nulls_warnings_and_limitations()
     let (text, envelope) = correlation_envelope("analyze.correlation.matrix", &matrix);
 
     assert_eq!(envelope["command"], "analyze.correlation.matrix");
+    assert_eq!(
+        envelope["data"]["benchmark_reference"]["identity"],
+        "iShares MSCI ACWI ETF (ACWI) proxy"
+    );
+    assert_eq!(
+        envelope["data"]["benchmark_reference"]["instrument_ticker"],
+        "ACWI"
+    );
+    assert!(
+        envelope["data"]["benchmark_reference"]["adjustment_provenance"]
+            .as_str()
+            .unwrap()
+            .contains("auto_adjust")
+    );
+    assert!(
+        envelope["data"]["benchmark_reference"]["return_basis_qualification"]
+            .as_str()
+            .unwrap()
+            .contains("unverified")
+    );
     assert!(envelope["data"]["names"]
         .as_array()
         .unwrap()

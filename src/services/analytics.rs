@@ -2,9 +2,12 @@ use std::collections::HashMap;
 
 use sea_orm::DatabaseConnection;
 
-use crate::constants::{is_benchmark_ticker, FLOAT_EPSILON, MIN_DATA_POINTS};
+use crate::constants::{
+    BENCHMARK_ADJUSTMENT_PROVENANCE, BENCHMARK_NAME, BENCHMARK_RETURN_BASIS_QUALIFICATION,
+    BENCHMARK_TICKER, FLOAT_EPSILON, MIN_DATA_POINTS,
+};
 use crate::db::repos::{asset_repo, transaction_repo};
-use crate::models::{Asset, CorrelationMatrix, RollingCorrelationResult};
+use crate::models::{Asset, BenchmarkReferenceInfo, CorrelationMatrix, RollingCorrelationResult};
 use crate::services::market_data::MarketData;
 use crate::services::{ledger, metrics};
 
@@ -55,6 +58,12 @@ pub async fn compute_correlation_data(
         matrix,
         warnings,
         market_data_limitations: correlation_market_data.limitations,
+        benchmark_reference: BenchmarkReferenceInfo {
+            identity: BENCHMARK_NAME.to_owned(),
+            instrument_ticker: BENCHMARK_TICKER.to_owned(),
+            adjustment_provenance: BENCHMARK_ADJUSTMENT_PROVENANCE.to_owned(),
+            return_basis_qualification: BENCHMARK_RETURN_BASIS_QUALIFICATION.to_owned(),
+        },
     })
 }
 
@@ -74,7 +83,7 @@ async fn current_correlation_assets(
     let assets = asset_repo::find_by_ids(db, transactions_by_asset.keys().copied()).await?;
     let mut current_assets = Vec::new();
     for asset in assets {
-        if asset.is_monetary() || is_benchmark_ticker(&asset.ticker) {
+        if asset.is_monetary() {
             continue;
         }
         let Some(transactions) = transactions_by_asset.get(&asset.id) else {

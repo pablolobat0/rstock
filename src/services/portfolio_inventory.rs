@@ -5,9 +5,7 @@ use chrono::{Datelike, Duration, NaiveDate, Weekday};
 use futures::stream::{self, StreamExt};
 use sea_orm::DatabaseConnection;
 
-use crate::constants::{
-    format_date, is_benchmark_ticker, BASE_CURRENCY, DATE_FORMAT, FLOAT_EPSILON,
-};
+use crate::constants::{format_date, BASE_CURRENCY, DATE_FORMAT, FLOAT_EPSILON};
 use crate::db::repos::{asset_repo, transaction_repo};
 use crate::models::{
     DailyMovementCoverage, DailyMovementExclusionReason, DailyPricedHoldingsMovement,
@@ -152,9 +150,6 @@ fn ledger_prepare_scope(
     let mut replays = HashMap::new();
     let mut has_open_holding = false;
     for asset in assets {
-        if is_benchmark_ticker(&asset.ticker) {
-            continue;
-        }
         let Some(transactions) = transactions_by_asset.get(&asset.id) else {
             continue;
         };
@@ -216,9 +211,6 @@ async fn project_open_holdings(
 ) -> anyhow::Result<Vec<HoldingProjection>> {
     let mut projections = Vec::new();
     for asset in assets {
-        if is_benchmark_ticker(&asset.ticker) {
-            continue;
-        }
         let Some(replay) = replays.get(&asset.id) else {
             continue;
         };
