@@ -4,6 +4,7 @@ use serde::Serialize;
 
 use crate::{
     cli::{output, BlendCommands},
+    constants::display_date,
     models::{CustomBlendDefinition, CustomBlendDeletion, CustomBlendPreview},
     services::custom_blends::{self, BlendCreateRequest},
     services::market_data::MarketData,
@@ -126,12 +127,14 @@ fn list_human(blends: &[CustomBlendDefinition]) -> String {
     }
     for blend in blends {
         lines.push(format!(
-            "{} [{}] — {} component(s); admitted {} through {}; basis: {}",
+            "{} [{}] — {} component(s); requested {} through {}; admitted {} through {}; basis: {}",
             blend.display_name,
             blend.id,
             blend.components.len(),
-            blend.admitted_start_date,
-            blend.admitted_end_date,
+            display_date(&blend.requested_start_date),
+            display_date(&blend.requested_end_date),
+            display_date(&blend.admitted_start_date),
+            display_date(&blend.admitted_end_date),
             blend.admission_basis
         ));
     }
@@ -145,7 +148,9 @@ fn definition_human(definition: &CustomBlendDefinition, heading: &str) -> String
     )];
     lines.push(format!(
         "  Created: {}; currency: {}; reset rule: {}",
-        definition.created_at, definition.currency, definition.reset_rule
+        display_created_at(&definition.created_at),
+        definition.currency,
+        definition.reset_rule
     ));
     lines.push(format!(
         "  Weight convention: {}",
@@ -157,25 +162,40 @@ fn definition_human(definition: &CustomBlendDefinition, heading: &str) -> String
         definition.weight_tolerance * 100.0
     ));
     lines.push(format!(
-        "  Admitted window: {} through {}; basis: {}",
-        definition.admitted_start_date, definition.admitted_end_date, definition.admission_basis
+        "  Requested window: {} through {}; basis: {}",
+        display_date(&definition.requested_start_date),
+        display_date(&definition.requested_end_date),
+        definition.admission_basis
+    ));
+    lines.push(format!(
+        "  Admitted window: {} through {}",
+        display_date(&definition.admitted_start_date),
+        display_date(&definition.admitted_end_date)
     ));
     lines.push("  Components:".to_owned());
     for component in &definition.components {
-        lines.push(format!(
-            "    - {} [{}] — target weight: {:.2}%; return basis: {}; currency: {}; hedge policy: {}; universe: {}; source: {}; verification: {}",
-            component.display_name,
-            component.component_key,
-            component.target_weight_percent,
-            component.return_basis,
-            component.currency,
-            component.hedge_policy,
-            component.universe,
-            component.source_provenance,
-            component.verification_state
-        ));
+        lines.push(component_human(component));
     }
     lines.join("\n")
+}
+
+fn component_human(component: &crate::models::BlendComponent) -> String {
+    format!(
+        "    - {} [{}] — target weight: {:.2}%; return basis: {}; adjustment: {}; currency: {}; hedge policy: {}; universe: {}; source: {}; source identifier: {}; cadence: {}; provenance: {}; verification: {}",
+        component.display_name,
+        component.component_key,
+        component.target_weight_percent,
+        component.return_basis,
+        component.adjustment,
+        component.currency,
+        component.hedge_policy,
+        component.universe,
+        component.source,
+        component.source_identifier,
+        component.cadence,
+        component.source_provenance,
+        component.verification_state
+    )
 }
 
 fn preview_human(preview: &CustomBlendPreview) -> String {
@@ -184,12 +204,22 @@ fn preview_human(preview: &CustomBlendPreview) -> String {
         preview.display_name, preview.blend_id
     )];
     lines.push(format!(
-        "  Window: {} through {}; anchor close: {}; rebased to {}",
-        preview.window_start_date, preview.window_end_date, preview.anchor_date, preview.rebased_to
+        "  Requested window: {} through {}; actual anchor {}; actual end {}; rebased to {}",
+        display_date(&preview.requested_start_date),
+        display_date(&preview.requested_end_date),
+        display_date(&preview.anchor_date),
+        display_date(&preview.last_observation_date),
+        preview.rebased_to
     ));
     lines.push(format!(
-        "  Last observation: {}; cumulative return: {:.4}%",
-        preview.last_observation_date, preview.cumulative_return_pct
+        "  Admitted window: {} through {}; basis: {}",
+        display_date(&preview.admitted_start_date),
+        display_date(&preview.admitted_end_date),
+        preview.admission_basis
+    ));
+    lines.push(format!(
+        "  Cumulative return: {:.4}%",
+        preview.cumulative_return_pct
     ));
     lines.push(format!("  Reset rule: {}", preview.reset_rule));
     lines.push(format!(
@@ -198,27 +228,12 @@ fn preview_human(preview: &CustomBlendPreview) -> String {
     ));
     lines.push(format!("  Cash convention: {}", preview.cash_convention));
     lines.push(format!("  Accounting: {}", preview.accounting_note));
-    lines.push(format!(
-        "  Admitted window: {} through {}; basis: {}",
-        preview.admitted_start_date, preview.admitted_end_date, preview.admission_basis
-    ));
     if let Some(limitation) = preview.earlier_period_limitation.as_ref() {
         lines.push(format!("  Earlier-period limitation: {limitation}"));
     }
     lines.push("  Components:".to_owned());
     for component in &preview.components {
-        lines.push(format!(
-            "    - {} [{}] — target weight: {:.2}%; return basis: {}; currency: {}; hedge policy: {}; universe: {}; source: {}; verification: {}",
-            component.display_name,
-            component.component_key,
-            component.target_weight_percent,
-            component.return_basis,
-            component.currency,
-            component.hedge_policy,
-            component.universe,
-            component.source_provenance,
-            component.verification_state
-        ));
+        lines.push(component_human(component));
     }
     lines.push(
         "  Monthly target resets (close immediately before each new calendar month):".to_owned(),
@@ -229,12 +244,17 @@ fn preview_human(preview: &CustomBlendPreview) -> String {
     for reset in &preview.target_resets {
         lines.push(format!(
             "    - reset at the {} close, governing the interval from {}",
-            reset.reset_date, reset.effective_from_date
+            display_date(&reset.reset_date),
+            display_date(&reset.effective_from_date)
         ));
     }
     lines.push("  Dated rebased wealth series:".to_owned());
     for point in &preview.wealth {
-        lines.push(format!("    {}  {:.4}", point.date, point.wealth));
+        lines.push(format!(
+            "    {}  {:.4}",
+            display_date(&point.date),
+            point.wealth
+        ));
     }
     lines.join("\n")
 }
@@ -251,4 +271,12 @@ fn deletion_human(deletion: &CustomBlendDeletion) -> String {
         deletion.blend_id,
         deletion.preserved_history_note
     )
+}
+
+/// The creation date of a saved blend, displayed in the user-facing format.
+fn display_created_at(created_at: &str) -> String {
+    created_at
+        .split('T')
+        .next()
+        .map_or_else(|| created_at.to_owned(), display_date)
 }

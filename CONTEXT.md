@@ -165,8 +165,12 @@ The change of a **Custom blend**'s effective component weights between **Monthly
 _Avoid_: Target weight, weight reset
 
 **Blend admission window**:
-The comparison window over which every **Blend component** of a **Custom blend** must have complete, verified daily history; it is the full portfolio comparison history unless the author explicitly selects a later start.
+The comparison window a **Custom blend** is admitted against: the requested boundary plus the actual completed weekday closes it resolves to. By default it is the portfolio's ready first invested **Complete NAV snapshot** through its effective complete comparison end; an author may explicitly select a later start.
 _Avoid_: Component history, lookback window
+
+**Blend anchor**:
+The actual completed weekday close a **Custom blend** starts at, resolved from the requested start by calendar rule before any component availability is inspected. Every component must hold that close, so a **Custom blend** never opens on a shortened window.
+_Avoid_: First common observation, first available date
 
 ## Relationships
 
@@ -241,7 +245,9 @@ _Avoid_: Component history, lookback window
 - A **Custom blend** is a benchmark definition with its own identity; its **Blend component** identities are exact definition identities, and a saved **Custom blend** may not contain another **Custom blend**.
 - **Blend target weights** are long-only and fully allocated, so a **Custom blend** expresses no leverage and no short.
 - A **Custom blend** is admitted only when every **Blend component** has complete verified daily history over its **Blend admission window**; a component that fails admission is reported and no **Blend component** is omitted or renormalized away.
-- A **Blend admission window** starts at the full portfolio comparison history unless the author explicitly selects a later start, in which case the unavailable earlier periods remain visible.
+- A **Blend admission window** starts at the portfolio's first invested **Complete NAV snapshot** unless the author explicitly selects a later start, in which case the unavailable earlier periods remain visible. A portfolio without a ready invested **Complete NAV snapshot** has no admission window, so no blend is admitted against it and no date is fabricated.
+- A requested **Blend admission window** boundary that falls on a weekend resolves to the preceding completed weekday close by calendar rule, before any component availability is inspected; the requested and the actual dates are both visible.
+- Every **Blend component** must hold the **Blend anchor** and the end close exactly, and every interior completed weekday; a missing close is rejected rather than treated as a market closure.
 - A **Custom blend** is immutable: it is never edited or automatically revised, and a changed strategy is a new definition.
 - A **Monthly blend reset** restores the declared **Blend target weights**; the weights then drift with component wealth until the next reset.
 - A **Custom blend** may be deleted only while no assignment or Strategy selection refers to it; deleting it never removes component price, FX, Transaction ledger, or **NAV** history.

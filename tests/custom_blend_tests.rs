@@ -15,7 +15,7 @@ use rstock::{
 };
 use sea_orm::{
     ActiveModelTrait, ConnectionTrait, Database, DatabaseBackend, DatabaseConnection, EntityTrait,
-    Set, Statement,
+    Set, Statement, TransactionTrait,
 };
 
 use common::{market_data_at, setup_test_db, MockMarketDataSources};
@@ -23,6 +23,11 @@ use common::{market_data_at, setup_test_db, MockMarketDataSources};
 const REFERENCE_A: &str = "x-blend-reference-a";
 const REFERENCE_B: &str = "x-blend-reference-b";
 const SOURCE: &str = "test_source";
+
+/// The clock the modern fixtures use.
+fn clock() -> NaiveDate {
+    NaiveDate::from_ymd_opt(2025, 2, 5).expect("valid clock date")
+}
 
 /// A component definition whose qualification is verified and daily.
 async fn insert_verified_reference(db: &DatabaseConnection, id: &str, identifier: &str) {
@@ -81,6 +86,25 @@ fn weekday_observations(
     observations
 }
 
+/// The weekday observations of one fake component between two dates, minus one
+/// excluded interior weekday.
+fn weekday_observations_excluding(start: &str, end: &str, excluded: &str) -> Vec<(String, f64)> {
+    weekday_observations(
+        start,
+        end,
+        |date| {
+            if date == excluded {
+                0.0
+            } else {
+                100.0
+            }
+        },
+    )
+    .into_iter()
+    .filter(|(date, _)| date != excluded)
+    .collect()
+}
+
 /// A flat component price series over one window.
 fn flat_observations(start: &str, end: &str, price: f64) -> Vec<(String, f64)> {
     weekday_observations(start, end, |_| price)
@@ -117,6 +141,26 @@ fn offline_sources(
         .series_qualifications
         .insert((SOURCE.to_owned(), "XREFB".to_owned()), qualification());
     sources
+}
+
+/// The modern portfolio fixture: an invested Complete closing snapshot from
+/// `first_date` through the effective comparison end `end_date`.
+async fn insert_invested_portfolio(db: &DatabaseConnection, first_date: &str, end_date: &str) {
+    let asset_id = common::insert_asset(db, "XFAKEINV", "Invested fixture", "stock", "EUR").await;
+    common::insert_portfolio_snapshot(db, first_date, 100.0, 1.0).await;
+    common::insert_portfolio_asset_snapshot(db, first_date, asset_id, 1.0, 100.0, 100.0, 1.0).await;
+    common::insert_portfolio_snapshot(db, end_date, 110.0, 1.0).await;
+    common::insert_portfolio_asset_snapshot(db, end_date, asset_id, 1.0, 110.0, 110.0, 1.0).await;
+}
+
+/// The Monetary-only portfolio fixture: a portfolio snapshot whose only
+/// holding is Monetary, so no invested comparison boundary exists.
+async fn insert_monetary_only_portfolio(db: &DatabaseConnection, date: &str) {
+    let asset_id =
+        common::insert_monetary_fund_asset(db, "XFAKEMON", "Monetary fixture", "EUR", "XFON1")
+            .await;
+    common::insert_portfolio_snapshot(db, date, 100.0, 1.0).await;
+    common::insert_portfolio_asset_snapshot(db, date, asset_id, 1.0, 1.0, 100.0, 1.0).await;
 }
 
 /// Parses one blend command.
@@ -170,7 +214,7 @@ async fn saved_blend_round_trips_through_public_commands_with_explicit_conventio
         flat_observations("2025-01-02", "2025-02-04", 100.0),
         flat_observations("2025-01-02", "2025-02-04", 100.0),
     );
-    let today = NaiveDate::from_ymd_opt(2025, 2, 5).expect("valid clock date");
+    let today = clock();
 
     let output = run_blend(
         &db,
@@ -200,6 +244,8 @@ async fn saved_blend_round_trips_through_public_commands_with_explicit_conventio
     assert_eq!(envelope["data"]["currency"], "EUR");
     assert_eq!(envelope["data"]["reset_rule"], "monthly");
     assert_eq!(envelope["data"]["admission_basis"], "explicit_later_start");
+    assert_eq!(envelope["data"]["requested_start_date"], "2025-01-02");
+    assert_eq!(envelope["data"]["requested_end_date"], "2025-02-04");
     assert_eq!(envelope["data"]["admitted_start_date"], "2025-01-02");
     assert_eq!(envelope["data"]["admitted_end_date"], "2025-02-04");
     assert_eq!(envelope["data"]["weight_tolerance"], 1e-4);
@@ -213,7 +259,11 @@ async fn saved_blend_round_trips_through_public_commands_with_explicit_conventio
     assert_eq!(market_component["is_cash"], false);
     assert_eq!(market_component["currency"], "EUR");
     assert_eq!(market_component["return_basis"], "total_return");
+    assert_eq!(market_component["adjustment"], "dividends_reinvested_once");
     assert_eq!(market_component["hedge_policy"], "Unhedged");
+    assert_eq!(market_component["source"], SOURCE);
+    assert_eq!(market_component["source_identifier"], "XREFA");
+    assert_eq!(market_component["cadence"], "daily");
     assert_eq!(market_component["verification_state"], "verified");
     let cash_component = &components[1];
     assert_eq!(cash_component["component_key"], "cash");
@@ -223,6 +273,7 @@ async fn saved_blend_round_trips_through_public_commands_with_explicit_conventio
     );
     assert_eq!(cash_component["is_cash"], true);
     assert_eq!(cash_component["target_weight"], 0.4);
+    assert_eq!(cash_component["cadence"], "synthetic");
     assert!(cash_component["return_basis"]
         .as_str()
         .unwrap()
@@ -254,11 +305,16 @@ async fn saved_blend_round_trips_through_public_commands_with_explicit_conventio
     for expected in [
         "Custom blend 'Global Sixty Forty' [custom-blend-global-sixty-forty]",
         "reset rule: monthly",
-        "Admitted window: 2025-01-02 through 2025-02-04; basis: explicit_later_start",
+        "Requested window: 02-01-2025 through 04-02-2025; basis: explicit_later_start",
+        "Admitted window: 02-01-2025 through 04-02-2025",
         "Blend reference XREFA [x-blend-reference-a]",
         "target weight: 60.00%",
         "return basis: total_return",
+        "adjustment: dividends_reinvested_once",
         "hedge policy: Unhedged",
+        "source: test_source",
+        "source identifier: XREFA",
+        "cadence: daily",
         "verification: verified",
         "Synthetic cash [cash]",
         "target weight: 40.00%",
@@ -268,6 +324,10 @@ async fn saved_blend_round_trips_through_public_commands_with_explicit_conventio
             "the human output omitted {expected}: {human}"
         );
     }
+    assert!(
+        !human.contains("2025-01-02"),
+        "the human output must not show stored ISO dates: {human}"
+    );
 
     let listed = run_blend(
         &db,
@@ -288,6 +348,145 @@ async fn saved_blend_round_trips_through_public_commands_with_explicit_conventio
 }
 
 #[tokio::test]
+async fn the_default_admission_window_is_the_portfolio_comparison_boundary() {
+    let db = setup_test_db().await;
+    insert_verified_reference(&db, REFERENCE_A, "XREFA").await;
+    insert_invested_portfolio(&db, "2025-01-02", "2025-02-04").await;
+    let sources = offline_sources(
+        flat_observations("2025-01-02", "2025-02-04", 100.0),
+        flat_observations("2025-01-02", "2025-02-04", 100.0),
+    );
+    let today = clock();
+
+    let created = run_blend(
+        &db,
+        &sources,
+        today,
+        blend_command(&[
+            "rstock",
+            "blend",
+            "create",
+            "--name",
+            "Portfolio Window Blend",
+            "--component",
+            "x-blend-reference-a:100",
+        ]),
+        OutputFormat::Json,
+    )
+    .await
+    .expect("the blend should be admitted against the portfolio window");
+    let created = common::parse_json_envelope(&created);
+    assert_eq!(
+        created["data"]["admission_basis"],
+        "full_portfolio_comparison_history"
+    );
+    assert_eq!(created["data"]["requested_start_date"], "2025-01-02");
+    assert_eq!(created["data"]["requested_end_date"], "2025-02-04");
+    assert_eq!(created["data"]["admitted_start_date"], "2025-01-02");
+    assert_eq!(created["data"]["admitted_end_date"], "2025-02-04");
+}
+
+#[tokio::test]
+async fn a_pre_2000_portfolio_boundary_is_not_clamped_to_a_fabricated_date() {
+    let db = setup_test_db().await;
+    insert_verified_reference(&db, REFERENCE_A, "XREFA").await;
+    insert_invested_portfolio(&db, "1998-06-01", "1998-06-04").await;
+    let sources = offline_sources(
+        flat_observations("1998-06-01", "1998-06-04", 100.0),
+        flat_observations("1998-06-01", "1998-06-04", 100.0),
+    );
+    let today = NaiveDate::from_ymd_opt(1998, 6, 5).expect("valid clock date");
+
+    let created = run_blend(
+        &db,
+        &sources,
+        today,
+        blend_command(&[
+            "rstock",
+            "blend",
+            "create",
+            "--name",
+            "Pre Two Thousand Blend",
+            "--component",
+            "x-blend-reference-a:100",
+        ]),
+        OutputFormat::Json,
+    )
+    .await
+    .expect("a pre-2000 portfolio boundary must be admitted as it is");
+    let created = common::parse_json_envelope(&created);
+    assert_eq!(created["data"]["requested_start_date"], "1998-06-01");
+    assert_eq!(created["data"]["requested_end_date"], "1998-06-04");
+    assert_eq!(created["data"]["admitted_start_date"], "1998-06-01");
+    assert_eq!(created["data"]["admitted_end_date"], "1998-06-04");
+}
+
+#[tokio::test]
+async fn an_empty_or_monetary_only_portfolio_has_no_admission_window() {
+    let db = setup_test_db().await;
+    insert_verified_reference(&db, REFERENCE_A, "XREFA").await;
+    let sources = offline_sources(
+        flat_observations("2025-01-02", "2025-02-04", 100.0),
+        flat_observations("2025-01-02", "2025-02-04", 100.0),
+    );
+    let today = clock();
+
+    let empty = run_blend(
+        &db,
+        &sources,
+        today,
+        blend_command(&[
+            "rstock",
+            "blend",
+            "create",
+            "--name",
+            "Empty Portfolio Blend",
+            "--component",
+            "x-blend-reference-a:100",
+        ]),
+        OutputFormat::Json,
+    )
+    .await
+    .expect_err("an empty portfolio has no comparison window");
+    assert!(
+        empty
+            .to_string()
+            .contains("no ready complete comparison history"),
+        "the refusal must name the missing portfolio history: {empty}"
+    );
+
+    insert_monetary_only_portfolio(&db, "2025-01-02").await;
+    let monetary = run_blend(
+        &db,
+        &sources,
+        today,
+        blend_command(&[
+            "rstock",
+            "blend",
+            "create",
+            "--name",
+            "Monetary Only Blend",
+            "--component",
+            "x-blend-reference-a:100",
+        ]),
+        OutputFormat::Json,
+    )
+    .await
+    .expect_err("a Monetary-only portfolio has no invested comparison window");
+    assert!(
+        monetary
+            .to_string()
+            .contains("no ready complete comparison history"),
+        "the refusal must name the missing invested history: {monetary}"
+    );
+
+    assert!(
+        custom_blend_repo::find_all(&db).await.unwrap().is_empty(),
+        "a refused admission must not persist a blend"
+    );
+}
+
+#[tokio::test]
 async fn invalid_weights_duplicates_and_nested_blends_are_rejected_without_saving_anything() {
     let db = setup_test_db().await;
     insert_verified_reference(&db, REFERENCE_A, "XREFA").await;
@@ -296,7 +495,7 @@ async fn invalid_weights_duplicates_and_nested_blends_are_rejected_without_savin
         flat_observations("2025-01-02", "2025-02-04", 100.0),
         flat_observations("2025-01-02", "2025-02-04", 100.0),
     );
-    let today = NaiveDate::from_ymd_opt(2025, 2, 5).expect("valid clock date");
+    let today = clock();
 
     let short = run_blend(
         &db,
@@ -455,61 +654,15 @@ async fn invalid_weights_duplicates_and_nested_blends_are_rejected_without_savin
 }
 
 #[tokio::test]
-async fn the_default_admission_window_is_the_full_comparison_history_and_rejects_atomically() {
+async fn a_weekend_request_resolves_to_the_preceding_completed_weekday_close() {
     let db = setup_test_db().await;
     insert_verified_reference(&db, REFERENCE_A, "XREFA").await;
+    // 2025-01-11 is a Saturday, so the window opens at the 2025-01-10 close.
     let sources = offline_sources(
-        flat_observations("2025-01-02", "2025-02-04", 100.0),
-        flat_observations("2025-01-02", "2025-02-04", 100.0),
+        flat_observations("2025-01-10", "2025-02-04", 100.0),
+        flat_observations("2025-01-10", "2025-02-04", 100.0),
     );
-    let today = NaiveDate::from_ymd_opt(2025, 2, 5).expect("valid clock date");
-
-    let rejected = run_blend(
-        &db,
-        &sources,
-        today,
-        blend_command(&[
-            "rstock",
-            "blend",
-            "create",
-            "--name",
-            "Full History Blend",
-            "--component",
-            "x-blend-reference-a:100",
-        ]),
-        OutputFormat::Json,
-    )
-    .await
-    .expect_err("a component without the full comparison history must be rejected");
-    let reason = rejected.to_string();
-    assert!(
-        reason.contains("no source observation on 2000-01-03"),
-        "the rejection must name the first uncovered date: {reason}"
-    );
-
-    assert!(
-        custom_blend_repo::find_all(&db).await.unwrap().is_empty(),
-        "a rejected admission must not persist a partial blend"
-    );
-    assert!(
-        !benchmark_reference::Entity::find_by_id("custom-blend-full-history-blend")
-            .one(&db)
-            .await
-            .unwrap()
-            .is_some(),
-        "a rejected admission must not persist a definition row"
-    );
-}
-
-#[tokio::test]
-async fn an_explicit_later_start_is_admitted_with_honest_earlier_period_limitations() {
-    let db = setup_test_db().await;
-    insert_verified_reference(&db, REFERENCE_A, "XREFA").await;
-    let sources = offline_sources(
-        flat_observations("2025-01-02", "2025-02-04", 100.0),
-        flat_observations("2025-01-02", "2025-02-04", 100.0),
-    );
-    let today = NaiveDate::from_ymd_opt(2025, 2, 5).expect("valid clock date");
+    let today = clock();
 
     let created = run_blend(
         &db,
@@ -520,21 +673,287 @@ async fn an_explicit_later_start_is_admitted_with_honest_earlier_period_limitati
             "blend",
             "create",
             "--name",
-            "Later Start Blend",
+            "Weekend Start Blend",
             "--component",
             "x-blend-reference-a:100",
             "--start",
-            "02-01-2025",
+            "11-01-2025",
         ]),
         OutputFormat::Json,
     )
     .await
-    .expect("an explicitly later start must be admitted");
+    .expect("a weekend request resolves by calendar rule");
     let created = common::parse_json_envelope(&created);
-    assert_eq!(created["data"]["admission_basis"], "explicit_later_start");
-    assert_eq!(created["data"]["admitted_start_date"], "2025-01-02");
+    assert_eq!(created["data"]["requested_start_date"], "2025-01-11");
+    assert_eq!(created["data"]["admitted_start_date"], "2025-01-10");
+    assert_eq!(created["data"]["admitted_end_date"], "2025-02-04");
+}
 
-    let preview = run_blend(
+#[tokio::test]
+async fn a_weekend_end_resolves_to_the_preceding_completed_weekday_close() {
+    let db = setup_test_db().await;
+    insert_verified_reference(&db, REFERENCE_A, "XREFA").await;
+    let sources = offline_sources(
+        flat_observations("2025-01-13", "2025-01-31", 100.0),
+        flat_observations("2025-01-13", "2025-01-31", 100.0),
+    );
+    // 2025-02-03 is a Monday, so the last completed date is the 2025-02-02
+    // Sunday, which resolves to the 2025-01-31 Friday close.
+    let today = NaiveDate::from_ymd_opt(2025, 2, 3).expect("valid clock date");
+
+    let mut created = run_blend(
+        &db,
+        &sources,
+        today,
+        blend_command(&[
+            "rstock",
+            "blend",
+            "create",
+            "--name",
+            "Weekend End Blend",
+            "--component",
+            "x-blend-reference-a:100",
+            "--start",
+            "13-01-2025",
+        ]),
+        OutputFormat::Json,
+    )
+    .await
+    .expect("a weekend end resolves by calendar rule");
+    let created = common::parse_json_envelope(&created);
+    assert_eq!(created["data"]["requested_end_date"], "2025-02-02");
+    assert_eq!(created["data"]["admitted_end_date"], "2025-01-31");
+}
+
+#[tokio::test]
+async fn a_missing_required_close_is_rejected_even_when_every_feed_misses_it() {
+    let db = setup_test_db().await;
+    insert_verified_reference(&db, REFERENCE_A, "XREFA").await;
+    // The Friday close of the requested start is missing from every feed.
+    let sources = offline_sources(
+        flat_observations("2025-01-13", "2025-02-04", 100.0),
+        flat_observations("2025-01-13", "2025-02-04", 100.0),
+    );
+    let today = clock();
+
+    let rejected = run_blend(
+        &db,
+        &sources,
+        today,
+        blend_command(&[
+            "rstock",
+            "blend",
+            "create",
+            "--name",
+            "Missing Friday Blend",
+            "--component",
+            "x-blend-reference-a:100",
+            "--start",
+            "11-01-2025",
+        ]),
+        OutputFormat::Json,
+    )
+    .await
+    .expect_err("a missing required Friday close must be rejected");
+    let reason = rejected.to_string();
+    assert!(
+        reason.contains("no anchor close on 2025-01-10"),
+        "the refusal must name the missing required close: {reason}"
+    );
+    assert!(
+        !reason.contains("market closure"),
+        "a missing close must never be reported as a market closure: {reason}"
+    );
+    assert!(custom_blend_repo::find_all(&db).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_missing_end_close_is_rejected() {
+    let db = setup_test_db().await;
+    insert_verified_reference(&db, REFERENCE_A, "XREFA").await;
+    let today = clock();
+    let sources = offline_sources(
+        flat_observations("2025-01-13", "2025-02-03", 100.0),
+        flat_observations("2025-01-13", "2025-02-04", 100.0),
+    );
+    let missing_end = run_blend(
+        &db,
+        &sources,
+        today,
+        blend_command(&[
+            "rstock",
+            "blend",
+            "create",
+            "--name",
+            "Missing End Blend",
+            "--component",
+            "x-blend-reference-a:100",
+            "--start",
+            "13-01-2025",
+        ]),
+        OutputFormat::Json,
+    )
+    .await
+    .expect_err("a component without the required end close must be rejected");
+    assert!(
+        missing_end
+            .to_string()
+            .contains("no end close on 2025-02-04"),
+        "the refusal must name the missing end close: {missing_end}"
+    );
+    assert!(custom_blend_repo::find_all(&db).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn an_internal_weekday_gap_is_rejected() {
+    let db = setup_test_db().await;
+    insert_verified_reference(&db, REFERENCE_A, "XREFA").await;
+    let today = clock();
+    let sources = offline_sources(
+        weekday_observations_excluding("2025-01-13", "2025-02-04", "2025-01-17"),
+        flat_observations("2025-01-13", "2025-02-04", 100.0),
+    );
+    let internal_gap = run_blend(
+        &db,
+        &sources,
+        today,
+        blend_command(&[
+            "rstock",
+            "blend",
+            "create",
+            "--name",
+            "Internal Gap Blend",
+            "--component",
+            "x-blend-reference-a:100",
+            "--start",
+            "13-01-2025",
+        ]),
+        OutputFormat::Json,
+    )
+    .await
+    .expect_err("an internal weekday gap must be rejected");
+    assert!(
+        internal_gap
+            .to_string()
+            .contains("no observation on 2025-01-17"),
+        "the refusal must name the missing interior observation: {internal_gap}"
+    );
+    assert!(custom_blend_repo::find_all(&db).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn an_incomplete_base_currency_conversion_is_rejected_at_the_anchor() {
+    let db = setup_test_db().await;
+    benchmark_reference::ActiveModel {
+        id: Set(REFERENCE_A.to_owned()),
+        display_name: Set("Blend reference XREFA".to_owned()),
+        instrument_ticker: Set("XREFA".to_owned()),
+        source: Set(SOURCE.to_owned()),
+        source_identifier: Set("XREFA".to_owned()),
+        currency: Set("USD".to_owned()),
+        adjustment_provenance: Set("Adjusted daily closes".to_owned()),
+        adjustment_qualification: Set("dividends_reinvested_once".to_owned()),
+        return_basis_qualification: Set("total_return".to_owned()),
+        role: Set("Investment universe".to_owned()),
+        universe: Set("Equities".to_owned()),
+        hedge_policy: Set("Unhedged".to_owned()),
+        source_provenance: Set("Fake offline source".to_owned()),
+        history_boundary: Set("Fake offline history".to_owned()),
+        verification_state: Set("verified".to_owned()),
+        official_comparator: Set(None),
+        objective_comparator: Set(None),
+        kind: Set("reference".to_owned()),
+    }
+    .insert(&db)
+    .await
+    .unwrap();
+    let mut sources = offline_sources(
+        flat_observations("2025-01-13", "2025-02-04", 100.0),
+        flat_observations("2025-01-13", "2025-02-04", 100.0),
+    );
+    sources.series_qualifications.insert(
+        (SOURCE.to_owned(), "XREFA".to_owned()),
+        SeriesQualification {
+            currency: "USD".to_owned(),
+            return_basis: "total_return".to_owned(),
+            adjustment: "dividends_reinvested_once".to_owned(),
+            hedge_policy: "Unhedged".to_owned(),
+            cadence: "daily".to_owned(),
+        },
+    );
+    // No USD/EUR rate is available, so the Base currency conversion of the
+    // component cannot supply the required closes.
+    let today = clock();
+    let rejected = run_blend(
+        &db,
+        &sources,
+        today,
+        blend_command(&[
+            "rstock",
+            "blend",
+            "create",
+            "--name",
+            "Missing Conversion Blend",
+            "--component",
+            "x-blend-reference-a:100",
+            "--start",
+            "13-01-2025",
+        ]),
+        OutputFormat::Json,
+    )
+    .await
+    .expect_err("a component without its Base currency conversion must be rejected");
+    let reason = rejected.to_string();
+    assert!(
+        reason.contains("no anchor close on 2025-01-13"),
+        "the refusal must name the missing anchor close: {reason}"
+    );
+    assert!(
+        reason.contains("Base currency conversion is missing or incomplete"),
+        "the refusal must name the incomplete conversion: {reason}"
+    );
+}
+
+#[tokio::test]
+async fn an_unverified_or_changed_component_convention_is_rejected() {
+    let db = setup_test_db().await;
+    insert_verified_reference(&db, REFERENCE_A, "XREFA").await;
+    let sources = offline_sources(
+        flat_observations("2025-01-13", "2025-02-04", 100.0),
+        flat_observations("2025-01-13", "2025-02-04", 100.0),
+    );
+    let today = clock();
+
+    run_blend(
+        &db,
+        &sources,
+        today,
+        blend_command(&[
+            "rstock",
+            "blend",
+            "create",
+            "--name",
+            "Convention Blend",
+            "--component",
+            "x-blend-reference-a:100",
+            "--start",
+            "13-01-2025",
+        ]),
+        OutputFormat::Json,
+    )
+    .await
+    .expect("the blend should be saved");
+
+    let mut changed: benchmark_reference::ActiveModel =
+        benchmark_reference::Entity::find_by_id(REFERENCE_A)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap()
+            .into();
+    changed.source_identifier = Set("XREFA-ALT".to_owned());
+    changed.update(&db).await.unwrap();
+    let changed_convention = run_blend(
         &db,
         &sources,
         today,
@@ -542,26 +961,48 @@ async fn an_explicit_later_start_is_admitted_with_honest_earlier_period_limitati
             "rstock",
             "blend",
             "preview",
-            "custom-blend-later-start-blend",
+            "custom-blend-convention-blend",
         ]),
         OutputFormat::Json,
     )
     .await
-    .expect("the blend should preview");
-    let preview = common::parse_json_envelope(&preview);
-    assert_eq!(preview["command"], "blend.preview");
-    let limitation = preview["data"]["earlier_period_limitation"]
-        .as_str()
-        .expect("an explicit later start must disclose its earlier-period limitation");
-    assert!(limitation.contains("2025-01-02"), "{limitation}");
+    .expect_err("a changed lookup identity must invalidate the saved blend");
     assert!(
-        limitation.contains("unavailable"),
-        "the limitation must state that earlier periods are unavailable: {limitation}"
+        changed_convention
+            .to_string()
+            .contains("no longer matches the source, lookup identity"),
+        "the refusal must name the changed convention: {changed_convention}"
     );
-    assert_eq!(preview["data"]["anchor_date"], "2025-01-02");
-    assert_eq!(preview["data"]["rebased_to"], 100.0);
-    assert_eq!(preview["data"]["window_start_date"], "2025-01-02");
-    assert_eq!(preview["data"]["window_end_date"], "2025-02-04");
+
+    let mut unverified: benchmark_reference::ActiveModel =
+        benchmark_reference::Entity::find_by_id(REFERENCE_A)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap()
+            .into();
+    unverified.verification_state = Set("target_only".to_owned());
+    unverified.update(&db).await.unwrap();
+    let unverified_source = run_blend(
+        &db,
+        &sources,
+        today,
+        blend_command(&[
+            "rstock",
+            "blend",
+            "preview",
+            "custom-blend-convention-blend",
+        ]),
+        OutputFormat::Json,
+    )
+    .await
+    .expect_err("an unverified component must invalidate the saved blend");
+    assert!(
+        unverified_source
+            .to_string()
+            .contains("not a verified usable series"),
+        "the refusal must name the unverified state: {unverified_source}"
+    );
 }
 
 #[tokio::test]
@@ -614,6 +1055,7 @@ async fn preview_compounds_arithmetic_beginning_of_interval_returns_with_drift()
     .expect("the drift blend should be saved");
     let created = common::parse_json_envelope(&created);
     assert_eq!(created["data"]["admitted_start_date"], "2025-01-13");
+    assert_eq!(created["data"]["admitted_end_date"], "2025-01-15");
 
     let preview = run_blend(
         &db,
@@ -678,7 +1120,7 @@ async fn monthly_resets_use_the_close_before_the_new_month_and_keep_a_partial_fi
             ],
         ),
     );
-    let today = NaiveDate::from_ymd_opt(2025, 2, 5).expect("valid clock date");
+    let today = clock();
 
     run_blend(
         &db,
@@ -735,7 +1177,7 @@ async fn monthly_resets_use_the_close_before_the_new_month_and_keep_a_partial_fi
 }
 
 #[tokio::test]
-async fn an_in_use_blend_cannot_be_deleted_and_deletion_preserves_history() {
+async fn an_assigned_blend_cannot_be_deleted_and_deletion_preserves_history() {
     let db = setup_test_db().await;
     insert_verified_reference(&db, REFERENCE_A, "XREFA").await;
     let asset_id = common::insert_asset(&db, "XFAKE1", "Blend fixture", "stock", "EUR").await;
@@ -746,7 +1188,7 @@ async fn an_in_use_blend_cannot_be_deleted_and_deletion_preserves_history() {
         flat_observations("2025-01-02", "2025-02-04", 100.0),
         flat_observations("2025-01-02", "2025-02-04", 100.0),
     );
-    let today = NaiveDate::from_ymd_opt(2025, 2, 5).expect("valid clock date");
+    let today = clock();
 
     run_blend(
         &db,
@@ -818,30 +1260,6 @@ async fn an_in_use_blend_cannot_be_deleted_and_deletion_preserves_history() {
     benchmark_assignment_repo::delete_by_subject(&db, "tracked", "XFAKE1")
         .await
         .unwrap();
-    custom_blend_repo::insert_strategy_selection(
-        &db,
-        "custom-blend-assigned-blend",
-        "2025-02-05T00:00:00Z",
-    )
-    .await
-    .unwrap();
-    let selected = run_blend(
-        &db,
-        &sources,
-        today,
-        blend_command(&["rstock", "blend", "delete", "custom-blend-assigned-blend"]),
-        OutputFormat::Json,
-    )
-    .await
-    .expect_err("a selected strategy must not be deleted");
-    assert!(
-        selected.to_string().contains("selected Strategy"),
-        "the refusal must name the selected Strategy: {selected}"
-    );
-
-    custom_blend_repo::delete_strategy_selection(&db)
-        .await
-        .unwrap();
     let output = run_blend(
         &db,
         &sources,
@@ -895,6 +1313,235 @@ async fn an_in_use_blend_cannot_be_deleted_and_deletion_preserves_history() {
             .unwrap()
             .len(),
         1
+    );
+}
+
+#[tokio::test]
+async fn a_failed_late_create_write_leaves_no_saved_blend_behind() {
+    let db = setup_test_db().await;
+    insert_verified_reference(&db, REFERENCE_A, "XREFA").await;
+    let sources = offline_sources(
+        flat_observations("2025-01-02", "2025-02-04", 100.0),
+        flat_observations("2025-01-02", "2025-02-04", 100.0),
+    );
+    let today = clock();
+
+    db.execute(Statement::from_string(
+        DatabaseBackend::Sqlite,
+        "CREATE TRIGGER fail_component_insert BEFORE INSERT ON benchmark_blend_components \
+         BEGIN SELECT RAISE(ABORT, 'injected component write failure'); END",
+    ))
+    .await
+    .unwrap();
+
+    let rejected = run_blend(
+        &db,
+        &sources,
+        today,
+        blend_command(&[
+            "rstock",
+            "blend",
+            "create",
+            "--name",
+            "Late Failure Blend",
+            "--component",
+            "x-blend-reference-a:100",
+            "--start",
+            "02-01-2025",
+        ]),
+        OutputFormat::Json,
+    )
+    .await
+    .expect_err("a failed component write must fail the creation");
+    assert!(rejected
+        .to_string()
+        .contains("injected component write failure"));
+
+    assert!(
+        custom_blend_repo::find_all(&db).await.unwrap().is_empty(),
+        "a failed write must roll the whole definition back"
+    );
+    assert!(
+        !benchmark_reference::Entity::find_by_id("custom-blend-late-failure-blend")
+            .one(&db)
+            .await
+            .unwrap()
+            .is_some(),
+        "a failed write must not leave a catalog definition behind"
+    );
+    assert_eq!(
+        rstock::db::entities::benchmark_blend_component::Entity::find()
+            .all(&db)
+            .await
+            .unwrap()
+            .len(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn a_failed_final_delete_rolls_the_whole_deletion_back() {
+    let db = setup_test_db().await;
+    insert_verified_reference(&db, REFERENCE_A, "XREFA").await;
+    let asset_id = common::insert_asset(&db, "XFAKE1", "Delete fixture", "stock", "EUR").await;
+    common::insert_transaction(&db, asset_id, "2025-01-02", 1.0, 10.0, 0.0).await;
+    common::insert_portfolio_snapshot(&db, "2025-02-04", 100.0, 1.0).await;
+    let sources = offline_sources(
+        flat_observations("2025-01-02", "2025-02-04", 100.0),
+        flat_observations("2025-01-02", "2025-02-04", 100.0),
+    );
+    let today = clock();
+
+    run_blend(
+        &db,
+        &sources,
+        today,
+        blend_command(&[
+            "rstock",
+            "blend",
+            "create",
+            "--name",
+            "Failed Delete Blend",
+            "--component",
+            "x-blend-reference-a:100",
+            "--start",
+            "02-01-2025",
+        ]),
+        OutputFormat::Json,
+    )
+    .await
+    .expect("the blend should be saved");
+
+    db.execute(Statement::from_string(
+        DatabaseBackend::Sqlite,
+        "CREATE TRIGGER fail_definition_delete BEFORE DELETE ON benchmark_references \
+         WHEN OLD.id = 'custom-blend-failed-delete-blend' \
+         BEGIN SELECT RAISE(ABORT, 'injected definition delete failure'); END",
+    ))
+    .await
+    .unwrap();
+
+    let rejected = run_blend(
+        &db,
+        &sources,
+        today,
+        blend_command(&[
+            "rstock",
+            "blend",
+            "delete",
+            "custom-blend-failed-delete-blend",
+        ]),
+        OutputFormat::Json,
+    )
+    .await
+    .expect_err("a failed deletion must be reported");
+    assert!(rejected.to_string().contains("remains saved"));
+
+    assert!(
+        custom_blend_repo::exists(&db, "custom-blend-failed-delete-blend")
+            .await
+            .unwrap(),
+        "a failed deletion must leave the saved definition intact"
+    );
+    assert_eq!(
+        rstock::db::entities::benchmark_blend_component::Entity::find()
+            .all(&db)
+            .await
+            .unwrap()
+            .len(),
+        1,
+        "a failed deletion must restore the component rows"
+    );
+    assert!(
+        benchmark_reference::Entity::find_by_id("custom-blend-failed-delete-blend")
+            .one(&db)
+            .await
+            .unwrap()
+            .is_some(),
+        "a failed deletion must leave the catalog definition intact"
+    );
+    assert_eq!(
+        rstock::db::entities::transaction::Entity::find()
+            .all(&db)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        rstock::db::entities::portfolio_history::Entity::find()
+            .all(&db)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        !rstock::db::entities::benchmark_reference_price::Entity::find()
+            .all(&db)
+            .await
+            .unwrap()
+            .is_empty(),
+        "a failed deletion must leave the cached price history intact"
+    );
+}
+
+#[tokio::test]
+async fn an_assignment_created_after_the_usage_check_still_blocks_the_deletion() {
+    let db = setup_test_db().await;
+    insert_verified_reference(&db, REFERENCE_A, "XREFA").await;
+    let sources = offline_sources(
+        flat_observations("2025-01-02", "2025-02-04", 100.0),
+        flat_observations("2025-01-02", "2025-02-04", 100.0),
+    );
+    let today = clock();
+
+    run_blend(
+        &db,
+        &sources,
+        today,
+        blend_command(&[
+            "rstock",
+            "blend",
+            "create",
+            "--name",
+            "Race Guard Blend",
+            "--component",
+            "x-blend-reference-a:100",
+            "--start",
+            "02-01-2025",
+        ]),
+        OutputFormat::Json,
+    )
+    .await
+    .expect("the blend should be saved");
+
+    // The assignment exists while the definition is deleted inside one
+    // transaction: the reference foreign key is the backstop that keeps the
+    // saved definition intact.
+    let transaction = db.begin().await.unwrap();
+    benchmark_assignment_repo::upsert(
+        &transaction,
+        "tracked",
+        "XFAKE1",
+        "custom-blend-race-guard-blend",
+        false,
+    )
+    .await
+    .unwrap();
+    let deletion =
+        custom_blend_repo::delete_blend(&transaction, "custom-blend-race-guard-blend").await;
+    assert!(
+        deletion.is_err(),
+        "an assignment must block the deletion of its definition"
+    );
+    transaction.rollback().await.unwrap();
+
+    assert!(
+        custom_blend_repo::exists(&db, "custom-blend-race-guard-blend")
+            .await
+            .unwrap(),
+        "the blocked deletion must leave the saved definition intact"
     );
 }
 
@@ -1010,6 +1657,267 @@ async fn a_saved_blend_is_immutable_and_cash_never_invents_a_price_or_a_fee() {
 }
 
 #[tokio::test]
+async fn the_preview_embeds_component_reset_date_and_convention_provenance() {
+    let db = setup_test_db().await;
+    insert_verified_reference(&db, REFERENCE_A, "XREFA").await;
+    insert_verified_reference(&db, REFERENCE_B, "XREFB").await;
+    let sources = offline_sources(
+        stepped_observations(
+            "2025-01-30",
+            "2025-02-04",
+            &[
+                ("2025-01-30", 100.0),
+                ("2025-01-31", 110.0),
+                ("2025-02-03", 121.0),
+                ("2025-02-04", 121.0),
+            ],
+        ),
+        stepped_observations(
+            "2025-01-30",
+            "2025-02-04",
+            &[
+                ("2025-01-30", 100.0),
+                ("2025-01-31", 100.0),
+                ("2025-02-03", 100.0),
+                ("2025-02-04", 100.0),
+            ],
+        ),
+    );
+    let today = clock();
+
+    run_blend(
+        &db,
+        &sources,
+        today,
+        blend_command(&[
+            "rstock",
+            "blend",
+            "create",
+            "--name",
+            "Provenance Blend",
+            "--component",
+            "x-blend-reference-a:50",
+            "--component",
+            "x-blend-reference-b:50",
+            "--start",
+            "30-01-2025",
+        ]),
+        OutputFormat::Json,
+    )
+    .await
+    .expect("the provenance blend should be saved");
+
+    let human = run_blend(
+        &db,
+        &sources,
+        today,
+        blend_command(&[
+            "rstock",
+            "blend",
+            "preview",
+            "custom-blend-provenance-blend",
+        ]),
+        OutputFormat::Human,
+    )
+    .await
+    .expect("the preview should render");
+    let human = String::from_utf8(human).unwrap();
+    for expected in [
+        "Custom blend preview 'Provenance Blend' [custom-blend-provenance-blend]",
+        "Requested window: 30-01-2025 through 04-02-2025; actual anchor 30-01-2025; actual end 04-02-2025; rebased to 100",
+        "Admitted window: 30-01-2025 through 04-02-2025",
+        "Reset rule: monthly",
+        "Weight convention: Beginning-of-interval target weights with return-driven drift",
+        "Cash convention: Synthetic 0% return cash",
+        "Accounting: Monthly target resets are frictionless synthetic accounting",
+        "Blend reference XREFA [x-blend-reference-a]",
+        "return basis: total_return",
+        "adjustment: dividends_reinvested_once",
+        "hedge policy: Unhedged",
+        "universe: Equities",
+        "source: test_source",
+        "source identifier: XREFA",
+        "cadence: daily",
+        "verification: verified",
+        "reset at the 31-01-2025 close, governing the interval from 03-02-2025",
+        "30-01-2025  100.0000",
+        "04-02-2025  110.2500",
+    ] {
+        assert!(
+            human.contains(expected),
+            "the human preview omitted {expected}: {human}"
+        );
+    }
+
+    let json = run_blend(
+        &db,
+        &sources,
+        today,
+        blend_command(&[
+            "rstock",
+            "blend",
+            "preview",
+            "custom-blend-provenance-blend",
+        ]),
+        OutputFormat::Json,
+    )
+    .await
+    .expect("the preview should serialize");
+    let json = common::parse_json_envelope(&json);
+    assert_eq!(json["command"], "blend.preview");
+    assert_eq!(json["data"]["blend_id"], "custom-blend-provenance-blend");
+    assert_eq!(json["data"]["reset_rule"], "monthly");
+    assert_eq!(
+        json["data"]["weight_convention"],
+        "Beginning-of-interval target weights with return-driven drift between monthly resets"
+    );
+    assert_eq!(
+        json["data"]["cash_convention"],
+        "Synthetic 0% return cash; no market data, no fees, and no transactions"
+    );
+    assert_eq!(json["data"]["requested_start_date"], "2025-01-30");
+    assert_eq!(json["data"]["requested_end_date"], "2025-02-04");
+    assert_eq!(json["data"]["anchor_date"], "2025-01-30");
+    assert_eq!(json["data"]["last_observation_date"], "2025-02-04");
+    assert_eq!(json["data"]["target_resets"][0]["reset_date"], "2025-01-31");
+    assert_eq!(
+        json["data"]["target_resets"][0]["effective_from_date"],
+        "2025-02-03"
+    );
+    assert_eq!(json["data"]["components"][0]["component_key"], REFERENCE_A);
+    assert_eq!(
+        json["data"]["components"][0]["return_basis"],
+        "total_return"
+    );
+    assert_eq!(
+        json["data"]["components"][0]["adjustment"],
+        "dividends_reinvested_once"
+    );
+    assert_eq!(json["data"]["components"][0]["hedge_policy"], "Unhedged");
+    assert_eq!(json["data"]["components"][0]["source"], SOURCE);
+    assert_eq!(json["data"]["components"][0]["source_identifier"], "XREFA");
+    assert_eq!(json["data"]["components"][0]["cadence"], "daily");
+    assert_eq!(
+        json["data"]["components"][0]["verification_state"],
+        "verified"
+    );
+    assert_eq!(
+        json["data"]["components"][0]["source_provenance"],
+        "Fake offline source"
+    );
+}
+
+#[tokio::test]
+async fn a_malformed_cached_observation_is_a_hard_error_not_an_unavailable_fact() {
+    let db = setup_test_db().await;
+    insert_verified_reference(&db, REFERENCE_A, "XREFA").await;
+    let sources = offline_sources(
+        flat_observations("2025-01-13", "2025-02-04", 100.0),
+        flat_observations("2025-01-13", "2025-02-04", 100.0),
+    );
+    let today = clock();
+
+    rstock::db::entities::benchmark_reference_price::ActiveModel {
+        reference_id: Set(REFERENCE_A.to_owned()),
+        date: Set("2025-01-13".to_owned()),
+        closing_price: Set(-5.0),
+        is_api_failure: Set(false),
+        ..Default::default()
+    }
+    .insert(&db)
+    .await
+    .unwrap();
+
+    let rejected = run_blend(
+        &db,
+        &sources,
+        today,
+        blend_command(&[
+            "rstock",
+            "blend",
+            "create",
+            "--name",
+            "Malformed Cache Blend",
+            "--component",
+            "x-blend-reference-a:100",
+            "--start",
+            "13-01-2025",
+        ]),
+        OutputFormat::Json,
+    )
+    .await
+    .expect_err("a malformed cached observation must be a hard error");
+    assert!(
+        rejected
+            .to_string()
+            .contains("invalid persisted benchmark reference price"),
+        "the failure must name the malformed cached observation: {rejected}"
+    );
+    assert!(custom_blend_repo::find_all(&db).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_failed_source_can_be_retried_by_a_later_command() {
+    let db = setup_test_db().await;
+    insert_verified_reference(&db, REFERENCE_A, "XREFA").await;
+    let mut sources = offline_sources(
+        flat_observations("2025-01-13", "2025-02-04", 100.0),
+        flat_observations("2025-01-13", "2025-02-04", 100.0),
+    );
+    sources.failing_price_sources.insert("XREFA".to_owned());
+    let today = clock();
+
+    let rejected = run_blend(
+        &db,
+        &sources,
+        today,
+        blend_command(&[
+            "rstock",
+            "blend",
+            "create",
+            "--name",
+            "Retried Blend",
+            "--component",
+            "x-blend-reference-a:100",
+            "--start",
+            "13-01-2025",
+        ]),
+        OutputFormat::Json,
+    )
+    .await
+    .expect_err("a failing source must not admit a blend");
+    assert!(
+        rejected
+            .to_string()
+            .contains("no anchor close on 2025-01-13"),
+        "the refusal must name the missing required close: {rejected}"
+    );
+    assert!(custom_blend_repo::find_all(&db).await.unwrap().is_empty());
+
+    sources.failing_price_sources.remove("XREFA");
+    run_blend(
+        &db,
+        &sources,
+        today,
+        blend_command(&[
+            "rstock",
+            "blend",
+            "create",
+            "--name",
+            "Retried Blend",
+            "--component",
+            "x-blend-reference-a:100",
+            "--start",
+            "13-01-2025",
+        ]),
+        OutputFormat::Json,
+    )
+    .await
+    .expect("a later command must retry the failed source and admit the blend");
+    assert_eq!(custom_blend_repo::find_all(&db).await.unwrap().len(), 1);
+}
+
+#[tokio::test]
 async fn the_blend_migration_preserves_accounting_and_cache_history_in_both_directions() {
     let db = Database::connect("sqlite::memory:")
         .await
@@ -1105,33 +2013,14 @@ async fn the_blend_migration_preserves_accounting_and_cache_history_in_both_dire
 }
 
 #[tokio::test]
-async fn the_preview_embeds_component_reset_date_and_convention_provenance() {
+async fn a_populated_blend_refuses_the_destructive_migration_rollback() {
     let db = setup_test_db().await;
     insert_verified_reference(&db, REFERENCE_A, "XREFA").await;
-    insert_verified_reference(&db, REFERENCE_B, "XREFB").await;
     let sources = offline_sources(
-        stepped_observations(
-            "2025-01-30",
-            "2025-02-04",
-            &[
-                ("2025-01-30", 100.0),
-                ("2025-01-31", 110.0),
-                ("2025-02-03", 121.0),
-                ("2025-02-04", 121.0),
-            ],
-        ),
-        stepped_observations(
-            "2025-01-30",
-            "2025-02-04",
-            &[
-                ("2025-01-30", 100.0),
-                ("2025-01-31", 100.0),
-                ("2025-02-03", 100.0),
-                ("2025-02-04", 100.0),
-            ],
-        ),
+        flat_observations("2025-01-02", "2025-02-04", 100.0),
+        flat_observations("2025-01-02", "2025-02-04", 100.0),
     );
-    let today = NaiveDate::from_ymd_opt(2025, 2, 5).expect("valid clock date");
+    let today = clock();
 
     run_blend(
         &db,
@@ -1142,105 +2031,69 @@ async fn the_preview_embeds_component_reset_date_and_convention_provenance() {
             "blend",
             "create",
             "--name",
-            "Provenance Blend",
+            "Populated Blend",
             "--component",
-            "x-blend-reference-a:50",
-            "--component",
-            "x-blend-reference-b:50",
+            "x-blend-reference-a:100",
             "--start",
-            "30-01-2025",
+            "02-01-2025",
         ]),
         OutputFormat::Json,
     )
     .await
-    .expect("the provenance blend should be saved");
+    .expect("the blend should be saved");
 
-    let human = run_blend(
+    let rollback = Migrator::down(&db, Some(1)).await;
+    assert!(
+        rollback.is_err(),
+        "a destructive rollback must be refused while saved blends exist"
+    );
+    let error = rollback.expect_err("the rollback must fail").to_string();
+    assert!(
+        error.contains("saved Custom blends exist"),
+        "the refusal must explain the refusal: {error}"
+    );
+
+    assert!(
+        custom_blend_repo::exists(&db, "custom-blend-populated-blend")
+            .await
+            .unwrap(),
+        "the refused rollback must keep the saved blend intact"
+    );
+    assert!(
+        benchmark_reference::Entity::find_by_id("custom-blend-populated-blend")
+            .one(&db)
+            .await
+            .unwrap()
+            .is_some(),
+        "the refused rollback must not convert the blend into an ordinary reference"
+    );
+    assert_eq!(
+        rstock::db::entities::benchmark_blend_component::Entity::find()
+            .all(&db)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+
+    // The same refusal holds for an assigned blend, and the assignment
+    // survives the refused rollback untouched.
+    benchmark_assignment_repo::upsert(
         &db,
-        &sources,
-        today,
-        blend_command(&[
-            "rstock",
-            "blend",
-            "preview",
-            "custom-blend-provenance-blend",
-        ]),
-        OutputFormat::Human,
+        "tracked",
+        "XFAKE1",
+        "custom-blend-populated-blend",
+        false,
     )
     .await
-    .expect("the preview should render");
-    let human = String::from_utf8(human).unwrap();
-    for expected in [
-        "Custom blend preview 'Provenance Blend' [custom-blend-provenance-blend]",
-        "Window: 2025-01-30 through 2025-02-04; anchor close: 2025-01-30; rebased to 100",
-        "Last observation: 2025-02-04",
-        "Reset rule: monthly",
-        "Weight convention: Beginning-of-interval target weights with return-driven drift",
-        "Cash convention: Synthetic 0% return cash",
-        "Accounting: Monthly target resets are frictionless synthetic accounting",
-        "Blend reference XREFA [x-blend-reference-a]",
-        "return basis: total_return",
-        "hedge policy: Unhedged",
-        "universe: Equities",
-        "source: Fake offline source",
-        "verification: verified",
-        "reset at the 2025-01-31 close, governing the interval from 2025-02-03",
-        "2025-01-30  100.0000",
-        "2025-02-04  110.2500",
-    ] {
-        assert!(
-            human.contains(expected),
-            "the human preview omitted {expected}: {human}"
-        );
-    }
-
-    let json = run_blend(
-        &db,
-        &sources,
-        today,
-        blend_command(&[
-            "rstock",
-            "blend",
-            "preview",
-            "custom-blend-provenance-blend",
-        ]),
-        OutputFormat::Json,
-    )
-    .await
-    .expect("the preview should serialize");
-    let json = common::parse_json_envelope(&json);
-    assert_eq!(json["command"], "blend.preview");
-    assert_eq!(json["data"]["blend_id"], "custom-blend-provenance-blend");
-    assert_eq!(json["data"]["reset_rule"], "monthly");
+    .unwrap();
+    assert!(Migrator::down(&db, Some(1)).await.is_err());
     assert_eq!(
-        json["data"]["weight_convention"],
-        "Beginning-of-interval target weights with return-driven drift between monthly resets"
-    );
-    assert_eq!(
-        json["data"]["cash_convention"],
-        "Synthetic 0% return cash; no market data, no fees, and no transactions"
-    );
-    assert_eq!(json["data"]["window_start_date"], "2025-01-30");
-    assert_eq!(json["data"]["window_end_date"], "2025-02-04");
-    assert_eq!(json["data"]["anchor_date"], "2025-01-30");
-    assert_eq!(json["data"]["last_observation_date"], "2025-02-04");
-    assert_eq!(json["data"]["target_resets"][0]["reset_date"], "2025-01-31");
-    assert_eq!(
-        json["data"]["target_resets"][0]["effective_from_date"],
-        "2025-02-03"
-    );
-    assert_eq!(json["data"]["components"][0]["component_key"], REFERENCE_A);
-    assert_eq!(
-        json["data"]["components"][0]["return_basis"],
-        "total_return"
-    );
-    assert_eq!(json["data"]["components"][0]["hedge_policy"], "Unhedged");
-    assert_eq!(
-        json["data"]["components"][0]["verification_state"],
-        "verified"
-    );
-    assert_eq!(
-        json["data"]["components"][0]["source_provenance"],
-        "Fake offline source"
+        benchmark_assignment_repo::find_by_reference(&db, "custom-blend-populated-blend")
+            .await
+            .unwrap()
+            .len(),
+        1,
+        "the refused rollback must keep the assignment intact"
     );
 }

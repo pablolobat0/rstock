@@ -15,7 +15,13 @@ pub struct Model {
     pub weight_convention: String,
     pub cash_convention: String,
     pub weight_tolerance: f64,
+    /// The comparison start the blend was requested against.
+    pub requested_start_date: String,
+    /// The comparison end the blend was requested against.
+    pub requested_end_date: String,
+    /// The actual anchor the blend was admitted at.
     pub admitted_start_date: String,
+    /// The actual end the blend was admitted at.
     pub admitted_end_date: String,
     pub admission_basis: String,
 }

@@ -7,6 +7,14 @@
 //! are immutable — there is no edit operation and no automatic revision — and
 //! a saved definition keeps the component conventions it was admitted with.
 //!
+//! The admission window is a real comparison boundary, never a fabricated
+//! date: by default it is the portfolio's ready first invested Complete
+//! closing snapshot through the portfolio's effective complete comparison
+//! end, and an explicitly selected later start keeps its own complete window.
+//! Requested boundaries are resolved to completed weekday closes by calendar
+//! rule before any component availability is inspected, and every component
+//! must hold the required anchor and end closes exactly.
+//!
 //! Market data acquisition and EUR conversion stay in `MarketData`; this
 //! module only admits components, resolves their coverage, and calculates the
 //! blend's own dated wealth.
@@ -18,7 +26,9 @@ use chrono::{Datelike, Duration, NaiveDate, Weekday};
 use sea_orm::{DatabaseConnection, TransactionTrait};
 
 use crate::constants::{format_date, BASE_CURRENCY, DATE_FORMAT};
-use crate::db::repos::{benchmark_assignment_repo, benchmark_reference_repo, custom_blend_repo};
+use crate::db::repos::{
+    benchmark_assignment_repo, benchmark_reference_repo, custom_blend_repo, portfolio_history_repo,
+};
 use crate::models::{
     BlendComponent, BlendComponentArgument, BlendTargetReset, BlendWealthPoint,
     CustomBlendDefinition, CustomBlendDeletion, CustomBlendPreview,
@@ -27,13 +37,6 @@ use crate::services::market_data::MarketData;
 
 /// The reserved component identity of the synthetic cash component.
 pub const CASH_COMPONENT_KEY: &str = "cash";
-
-/// The full portfolio comparison history: the default admission window.
-///
-/// A saved blend is admitted against the whole comparison history unless the
-/// author explicitly selects a later start. The window never shortens
-/// automatically to make a component admissible.
-pub const FULL_COMPARISON_HISTORY_START: &str = "2000-01-01";
 
 /// Absolute tolerance, in target-weight fraction, for the 100% weight sum.
 pub const WEIGHT_TOLERANCE: f64 = 1e-4;
@@ -49,7 +52,7 @@ pub const WEIGHT_CONVENTION: &str =
 pub const CASH_CONVENTION: &str =
     "Synthetic 0% return cash; no market data, no fees, and no transactions";
 
-/// The admission basis of a blend admitted against the full comparison history.
+/// The admission basis of a blend admitted against the portfolio comparison history.
 pub const ADMISSION_BASIS_FULL_HISTORY: &str = "full_portfolio_comparison_history";
 
 /// The admission basis of a blend admitted from an explicitly selected start.
@@ -74,18 +77,54 @@ pub struct BlendComponentRequest {
     pub recorded: Option<BlendComponent>,
 }
 
-/// One admitted component with the aligned Base currency series it uses.
+/// One admitted component with the aligned Base currency closes it uses.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AdmittedComponent {
     pub component: BlendComponent,
-    pub series: Vec<(String, f64)>,
+    pub series: BTreeMap<NaiveDate, f64>,
+    /// Whether the Base currency conversion of this component is incomplete.
+    pub fx_conversion_incomplete: bool,
 }
 
-/// The dated comparison window a blend is admitted against.
+impl AdmittedComponent {
+    /// The Base currency conversion note of this component.
+    fn conversion_note(&self) -> &'static str {
+        if self.fx_conversion_incomplete {
+            " (its Base currency conversion is missing or incomplete)"
+        } else {
+            ""
+        }
+    }
+}
+
+/// The comparison window a blend is admitted against or previewed over.
+///
+/// The requested dates are the boundary the blend was asked for; the actual
+/// dates are the completed weekday closes that boundary resolves to by
+/// calendar rule. The actual dates are the required closes every component
+/// must hold.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BlendWindow {
-    pub start: NaiveDate,
-    pub end: NaiveDate,
+    pub requested_start: NaiveDate,
+    pub requested_end: NaiveDate,
+    pub actual_start: NaiveDate,
+    pub actual_end: NaiveDate,
+}
+
+impl BlendWindow {
+    /// Resolves a requested window to its required completed weekday closes.
+    ///
+    /// A weekend boundary resolves to the preceding completed weekday by
+    /// calendar rule, before any component availability is inspected. The
+    /// window is never advanced or shortened because of missing data.
+    pub fn new(requested_start: NaiveDate, requested_end: NaiveDate) -> Self {
+        Self {
+            requested_start,
+            requested_end,
+            actual_start: resolve_completed_weekday(requested_start),
+            actual_end: resolve_completed_weekday(requested_end),
+        }
+    }
 }
 
 /// The dated wealth series of one Custom blend.
@@ -106,6 +145,15 @@ pub struct BlendCreateRequest {
     pub start_date: Option<NaiveDate>,
 }
 
+/// The portfolio comparison boundary a blend is admitted against.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PortfolioComparisonBoundary {
+    /// The first invested Complete closing snapshot of the portfolio.
+    pub first_invested_date: String,
+    /// The effective complete comparison end of the portfolio history.
+    pub effective_end_date: String,
+}
+
 /// Saves one new immutable Custom blend.
 ///
 /// The definition is admitted and persisted as a whole: a component that
@@ -122,8 +170,8 @@ pub async fn create_custom_blend(
         );
     }
     let requested = requested_components(&request.components)?;
-    let window = admission_window(market_data, request.start_date)?;
-    let admitted = admit_components(db, market_data, &requested, window).await?;
+    let window = admission_window(db, market_data, request.start_date).await?;
+    let admitted = admit_components(db, market_data, &requested, &window).await?;
 
     let definition = CustomBlendDefinition {
         id: blend_id.clone(),
@@ -134,8 +182,10 @@ pub async fn create_custom_blend(
         weight_convention: WEIGHT_CONVENTION.to_owned(),
         cash_convention: CASH_CONVENTION.to_owned(),
         weight_tolerance: WEIGHT_TOLERANCE,
-        admitted_start_date: format_date(window.start),
-        admitted_end_date: format_date(window.end),
+        requested_start_date: format_date(window.requested_start),
+        requested_end_date: format_date(window.requested_end),
+        admitted_start_date: format_date(window.actual_start),
+        admitted_end_date: format_date(window.actual_end),
         admission_basis: admission_basis(request.start_date).to_owned(),
         components: admitted
             .iter()
@@ -169,9 +219,10 @@ pub async fn show_custom_blend(
 
 /// Previews the dated, rebased wealth series of one saved Custom blend.
 ///
-/// The preview covers the blend's admitted start through the latest completed
-/// date. It never shortens the window to hide missing coverage: a component
-/// without complete history over the window is reported as an error.
+/// The preview spans the blend's admitted start through the current completed
+/// end, and validates that whole window exactly: a component without the
+/// required anchor or end close, or with an internal weekday gap, is reported
+/// instead of the preview silently shortening.
 pub async fn preview_custom_blend(
     db: &DatabaseConnection,
     market_data: &MarketData,
@@ -185,10 +236,10 @@ pub async fn preview_custom_blend(
         "Custom blend '{blend_id}' starts on {} but no completed comparison date is available",
         definition.admitted_start_date
     );
-    let window = BlendWindow { start, end };
+    let window = BlendWindow::new(start, end);
     let requested = requested_components_from_definition(&definition)?;
-    let admitted = admit_components(db, market_data, &requested, window).await?;
-    let series = calculate_blend_wealth(&admitted, window)?;
+    let admitted = admit_components(db, market_data, &requested, &window).await?;
+    let series = calculate_blend_wealth(&admitted, &window)?;
     Ok(CustomBlendPreview {
         blend_id: definition.id.clone(),
         display_name: definition.display_name.clone(),
@@ -201,8 +252,8 @@ pub async fn preview_custom_blend(
         admitted_end_date: definition.admitted_end_date.clone(),
         admission_basis: definition.admission_basis.clone(),
         components: definition.components.clone(),
-        window_start_date: format_date(window.start),
-        window_end_date: format_date(window.end),
+        requested_start_date: format_date(window.requested_start),
+        requested_end_date: format_date(window.requested_end),
         anchor_date: series.anchor_date.clone(),
         last_observation_date: series.last_observation_date.clone(),
         rebased_to: 100.0,
@@ -216,31 +267,34 @@ pub async fn preview_custom_blend(
 
 /// Deletes one unused saved Custom blend definition.
 ///
-/// A definition that is still assigned or selected as the Strategy cannot be
-/// deleted. Deleting a definition never removes component price, FX, ledger,
-/// or NAV history.
+/// The usage check and the deletion share one caller-owned transaction, so a
+/// definition that is assigned cannot be deleted and a failed deletion leaves
+/// the saved definition, its components, and every price, FX, ledger, and NAV
+/// row unchanged.
 pub async fn delete_custom_blend(
     db: &DatabaseConnection,
     blend_id: &str,
 ) -> anyhow::Result<CustomBlendDeletion> {
     let definition = custom_blend_repo::find_by_id(db, blend_id).await?;
-    let assignments = benchmark_assignment_repo::find_by_reference(db, blend_id).await?;
+    let transaction = db.begin().await?;
+    let assignments = benchmark_assignment_repo::find_by_reference(&transaction, blend_id).await?;
     if !assignments.is_empty() {
+        transaction.rollback().await?;
         anyhow::bail!(
             "Custom blend '{blend_id}' is in use by {} active assignment(s); remove or replace them before deleting the definition",
             assignments.len()
         );
     }
-    if custom_blend_repo::find_strategy_selection(db)
-        .await?
-        .as_deref()
-        == Some(blend_id)
-    {
-        anyhow::bail!(
-            "Custom blend '{blend_id}' is the selected Strategy; unselect it before deleting the definition"
-        );
-    }
-    let deleted = custom_blend_repo::delete_blend(db, blend_id).await?;
+    let deleted = match custom_blend_repo::delete_blend(&transaction, blend_id).await {
+        Ok(deleted) => deleted,
+        Err(error) => {
+            transaction.rollback().await?;
+            return Err(anyhow::anyhow!(
+                "Custom blend '{blend_id}' could not be deleted and remains saved: {error}"
+            ));
+        }
+    };
+    transaction.commit().await?;
     Ok(CustomBlendDeletion {
         blend_id: blend_id.to_owned(),
         display_name: definition.display_name,
@@ -251,14 +305,6 @@ pub async fn delete_custom_blend(
     })
 }
 
-/// The running state of one blend: component values, drifted weights, wealth.
-struct BlendState {
-    values: Vec<f64>,
-    weights: Vec<f64>,
-    targets: Vec<f64>,
-    wealth: f64,
-}
-
 /// Calculates the dated, rebased wealth series of one blend.
 ///
 /// Component returns are arithmetic beginning-of-interval returns and the
@@ -267,7 +313,7 @@ struct BlendState {
 /// drift with component wealth between resets.
 pub fn calculate_blend_wealth(
     components: &[AdmittedComponent],
-    window: BlendWindow,
+    window: &BlendWindow,
 ) -> anyhow::Result<BlendWealthSeries> {
     anyhow::ensure!(
         !components.is_empty(),
@@ -298,16 +344,6 @@ pub fn calculate_blend_wealth(
         .iter()
         .map(|component| component.component.target_weight / declared_total)
         .collect();
-    let observations: Vec<BTreeMap<String, f64>> = components
-        .iter()
-        .map(|component| {
-            component
-                .series
-                .iter()
-                .map(|(date, value)| (date.clone(), *value))
-                .collect()
-        })
-        .collect();
 
     let mut state = BlendState {
         values: targets.iter().map(|target| target * 100.0).collect(),
@@ -323,7 +359,7 @@ pub fn calculate_blend_wealth(
     let mut target_resets = Vec::new();
 
     for pair in dates.windows(2) {
-        let reset = apply_interval(&mut state, &observations, components, pair[0], pair[1])?;
+        let reset = apply_interval(&mut state, components, pair[0], pair[1])?;
         if let Some(reset) = reset {
             target_resets.push(reset);
         }
@@ -346,6 +382,14 @@ pub fn calculate_blend_wealth(
     })
 }
 
+/// The running state of one blend: component values, drifted weights, wealth.
+struct BlendState {
+    values: Vec<f64>,
+    weights: Vec<f64>,
+    targets: Vec<f64>,
+    wealth: f64,
+}
+
 /// Applies one interval to the blend state.
 ///
 /// The monthly reset happens at the close immediately preceding the new
@@ -354,7 +398,6 @@ pub fn calculate_blend_wealth(
 /// drift with component wealth afterwards.
 fn apply_interval(
     state: &mut BlendState,
-    observations: &[BTreeMap<String, f64>],
     components: &[AdmittedComponent],
     previous: NaiveDate,
     current: NaiveDate,
@@ -371,26 +414,13 @@ fn apply_interval(
             effective_from_date: format_date(current),
         });
     }
-    let previous_date = format_date(previous);
-    let current_date = format_date(current);
     let mut interval_return = 0.0;
     for (index, component) in components.iter().enumerate() {
-        interval_return += state.weights[index]
-            * component_return(
-                &observations[index],
-                &component.component,
-                &previous_date,
-                &current_date,
-            )?;
+        interval_return += state.weights[index] * component_return(component, previous, current)?;
     }
     state.wealth *= 1.0 + interval_return;
     for (index, component) in components.iter().enumerate() {
-        let component_return = component_return(
-            &observations[index],
-            &component.component,
-            &previous_date,
-            &current_date,
-        )?;
+        let component_return = component_return(component, previous, current)?;
         state.values[index] *= 1.0 + component_return;
     }
     // Between resets the weights drift with component wealth.
@@ -404,19 +434,21 @@ fn apply_interval(
 /// Admits every requested component over the window.
 ///
 /// A component is admitted only when its definition is a verified,
-/// non-nested reference whose qualified daily Base currency series covers
-/// every weekday of the window. A component that cannot be admitted is
-/// reported; no component is omitted and no weight is renormalized.
+/// non-nested reference whose qualified daily Base currency series holds the
+/// required anchor and end closes and every interior weekday. A component
+/// that cannot be admitted is reported; no component is omitted and no weight
+/// is renormalized.
 async fn admit_components(
     db: &DatabaseConnection,
     market_data: &MarketData,
     requested: &[BlendComponentRequest],
-    window: BlendWindow,
+    window: &BlendWindow,
 ) -> anyhow::Result<Vec<AdmittedComponent>> {
     let mut admitted = Vec::with_capacity(requested.len());
     for request in requested {
         admitted.push(admit_component(db, market_data, request, window).await?);
     }
+    require_window_coverage(&admitted, window)?;
     Ok(admitted)
 }
 
@@ -425,7 +457,7 @@ async fn admit_component(
     db: &DatabaseConnection,
     market_data: &MarketData,
     request: &BlendComponentRequest,
-    window: BlendWindow,
+    window: &BlendWindow,
 ) -> anyhow::Result<AdmittedComponent> {
     if request.identity == CASH_COMPONENT_KEY {
         return Ok(AdmittedComponent {
@@ -433,9 +465,77 @@ async fn admit_component(
                 .recorded
                 .clone()
                 .unwrap_or_else(|| cash_component(request.weight)),
-            series: Vec::new(),
+            series: BTreeMap::new(),
+            fx_conversion_incomplete: false,
         });
     }
+    let definition = resolve_component_definition(db, request).await?;
+    let prepared = market_data
+        .selected_benchmark_reference_market_data(
+            db,
+            &request.identity,
+            &format_date(window.actual_start),
+            &format_date(window.actual_end),
+        )
+        .await?;
+    let Some(qualification) = prepared.source_qualification.as_ref() else {
+        anyhow::bail!(
+            "component '{}' has no verified return-basis, adjustment, currency, hedge, and cadence qualification",
+            request.identity
+        );
+    };
+    anyhow::ensure!(
+        qualification.currency == definition.currency
+            && qualification.return_basis == definition.return_basis_qualification
+            && qualification.adjustment == definition.adjustment_qualification
+            && qualification.hedge_policy == definition.hedge_policy,
+        "component '{}' does not match its declared currency, adjustment, return basis, or hedge policy",
+        request.identity
+    );
+    anyhow::ensure!(
+        qualification.cadence == "daily",
+        "component '{}' is not a daily series (cadence: {}); a Custom blend needs daily component history",
+        request.identity,
+        qualification.cadence
+    );
+    if let Some(recorded) = request.recorded.as_ref() {
+        anyhow::ensure!(
+            recorded.cadence == qualification.cadence,
+            "component '{}' no longer reports the cadence recorded for this blend (recorded: {}; reported: {})",
+            request.identity,
+            recorded.cadence,
+            qualification.cadence
+        );
+    }
+    let series = parsed_series(&prepared.genuine_benchmark_series)?;
+    let component = match request.recorded.as_ref() {
+        Some(recorded) => BlendComponent {
+            target_weight: request.weight,
+            target_weight_percent: request.weight * 100.0,
+            ..recorded.clone()
+        },
+        None => component_from_definition(&definition, &qualification.cadence, request.weight),
+    };
+    Ok(AdmittedComponent {
+        component,
+        series,
+        fx_conversion_incomplete: prepared.limitations.iter().any(|limitation| {
+            matches!(
+                limitation.subject,
+                crate::models::MarketDataSubject::FxRate { .. }
+            )
+        }),
+    })
+}
+
+/// Resolves the catalog definition of one requested component.
+///
+/// A component must be a known, verified, non-nested reference, and a saved
+/// definition must still match the conventions it was admitted with.
+async fn resolve_component_definition(
+    db: &DatabaseConnection,
+    request: &BlendComponentRequest,
+) -> anyhow::Result<benchmark_reference_repo::BenchmarkReference> {
     if !benchmark_reference_repo::exists(db, &request.identity).await? {
         if custom_blend_repo::exists(db, &request.identity).await? {
             anyhow::bail!(
@@ -462,59 +562,60 @@ async fn admit_component(
     );
     if let Some(recorded) = request.recorded.as_ref() {
         anyhow::ensure!(
-            recorded.currency == definition.currency
+            recorded.source == definition.source
+                && recorded.source_identifier == definition.source_identifier
+                && recorded.currency == definition.currency
                 && recorded.return_basis == definition.return_basis_qualification
+                && recorded.adjustment == definition.adjustment_qualification
                 && recorded.hedge_policy == definition.hedge_policy,
-            "component '{}' no longer matches the conventions recorded for this blend",
+            "component '{}' no longer matches the source, lookup identity, currency, return basis, adjustment, or hedge policy recorded for this blend",
             request.identity
         );
     }
-    let prepared = market_data
-        .selected_benchmark_reference_market_data(
-            db,
-            &request.identity,
-            &format_date(window.start),
-            &format_date(window.end),
-        )
-        .await?;
-    let Some(qualification) = prepared.source_qualification.as_ref() else {
-        anyhow::bail!(
-            "component '{}' has no verified return-basis, adjustment, currency, hedge, and cadence qualification",
-            request.identity
+    Ok(definition)
+}
+
+/// Requires the anchor and end closes and strict interior weekday coverage.
+fn require_window_coverage(
+    components: &[AdmittedComponent],
+    window: &BlendWindow,
+) -> anyhow::Result<()> {
+    for component in components {
+        if component.component.is_cash {
+            continue;
+        }
+        let key = component.component.component_key.clone();
+        let conversion = component.conversion_note();
+        anyhow::ensure!(
+            component.series.contains_key(&window.actual_start),
+            "component '{key}' has no anchor close on {}; a Custom blend requires every component to hold the required anchor close{conversion}",
+            format_date(window.actual_start)
         );
-    };
-    anyhow::ensure!(
-        qualification.currency == definition.currency
-            && qualification.return_basis == definition.return_basis_qualification
-            && qualification.adjustment == definition.adjustment_qualification
-            && qualification.hedge_policy == definition.hedge_policy,
-        "component '{}' does not match its declared currency, adjustment, return basis, or hedge policy",
-        request.identity
-    );
-    anyhow::ensure!(
-        qualification.cadence == "daily",
-        "component '{}' is not a daily series (cadence: {}); a Custom blend needs daily component history",
-        request.identity,
-        qualification.cadence
-    );
-    let series = prepared.genuine_benchmark_series;
-    let observed: BTreeSet<String> = series.iter().map(|(date, _)| date.clone()).collect();
-    if let Some(missing) = first_missing_weekday(&observed, window) {
-        anyhow::bail!(
-            "component '{}' has no source observation on {}; a Custom blend requires complete daily history over the declared window",
-            request.identity,
-            missing
+        anyhow::ensure!(
+            component.series.contains_key(&window.actual_end),
+            "component '{key}' has no end close on {}; a Custom blend requires every component to hold the required end close{conversion}",
+            format_date(window.actual_end)
         );
     }
-    let component = match request.recorded.as_ref() {
-        Some(recorded) => BlendComponent {
-            target_weight: request.weight,
-            target_weight_percent: request.weight * 100.0,
-            ..recorded.clone()
-        },
-        None => component_from_definition(&definition, request.weight),
-    };
-    Ok(AdmittedComponent { component, series })
+    let mut day = window.actual_start + Duration::days(1);
+    while day < window.actual_end {
+        if is_weekday(day) {
+            for component in components {
+                if component.component.is_cash {
+                    continue;
+                }
+                anyhow::ensure!(
+                    component.series.contains_key(&day),
+                    "component '{}' has no observation on {}; a Custom blend requires complete daily coverage over the whole window{}",
+                    component.component.component_key,
+                    format_date(day),
+                    component.conversion_note()
+                );
+            }
+        }
+        day += Duration::days(1);
+    }
+    Ok(())
 }
 
 /// Validates the declared components: finite nonnegative weights that total
@@ -599,24 +700,68 @@ fn requested_components_from_definition(
     Ok(requested)
 }
 
-/// The admission window: the full comparison history unless the author
-/// explicitly selected a later start.
-fn admission_window(
+/// The comparison window a new blend is admitted against.
+///
+/// The default window is the portfolio's ready comparison boundary: its first
+/// invested Complete closing snapshot through its effective complete
+/// comparison end. An explicitly selected later start keeps its own complete
+/// window and does not need a portfolio boundary.
+async fn admission_window(
+    db: &DatabaseConnection,
     market_data: &MarketData,
     start_date: Option<NaiveDate>,
 ) -> anyhow::Result<BlendWindow> {
-    let start = match start_date {
-        Some(start) => start,
-        None => parse_date(FULL_COMPARISON_HISTORY_START)?,
+    let current_end = market_data.today() - Duration::days(1);
+    if let Some(start) = start_date {
+        anyhow::ensure!(
+            start <= current_end,
+            "the declared comparison start {} is after the last completed date {}",
+            format_date(start),
+            format_date(current_end)
+        );
+        return Ok(BlendWindow::new(start, current_end));
+    }
+    let Some(boundary) = portfolio_comparison_boundary(db).await? else {
+        anyhow::bail!(
+            "the portfolio has no ready complete comparison history, so there is no full comparison window to admit a Custom blend against; build the portfolio history first or select an explicit later start"
+        );
     };
-    let end = market_data.today() - Duration::days(1);
+    let start = parse_date(&boundary.first_invested_date)?;
+    let end = parse_date(&boundary.effective_end_date)?;
     anyhow::ensure!(
         start <= end,
-        "the declared comparison start {} is after the last completed date {}",
-        format_date(start),
-        format_date(end)
+        "the portfolio comparison history is inconsistent: its first invested closing snapshot {} is after its effective comparison end {}",
+        boundary.first_invested_date,
+        boundary.effective_end_date
     );
-    Ok(BlendWindow { start, end })
+    Ok(BlendWindow::new(start, end))
+}
+
+/// The portfolio's ready comparison boundary.
+///
+/// The boundary reads the already-persisted Complete NAV history: the first
+/// invested Complete closing snapshot of a positive non-Monetary holding
+/// through the effective complete comparison end. It never rebuilds NAV and
+/// never replays the Transaction ledger.
+pub async fn portfolio_comparison_boundary(
+    db: &DatabaseConnection,
+) -> anyhow::Result<Option<PortfolioComparisonBoundary>> {
+    let Some(first_invested) = custom_blend_repo::find_first_invested_closing_date(db).await?
+    else {
+        return Ok(None);
+    };
+    let snapshot = portfolio_history_repo::find_at_or_before(db, &first_invested).await?;
+    anyhow::ensure!(
+        snapshot.is_some_and(|snapshot| snapshot.date == first_invested),
+        "the first invested closing snapshot {first_invested} has no Complete NAV snapshot; the portfolio history is inconsistent"
+    );
+    let Some(latest) = portfolio_history_repo::find_latest(db).await? else {
+        return Ok(None);
+    };
+    Ok(Some(PortfolioComparisonBoundary {
+        first_invested_date: first_invested,
+        effective_end_date: latest.date,
+    }))
 }
 
 /// The admission basis of a window.
@@ -627,15 +772,18 @@ fn admission_basis(start_date: Option<NaiveDate>) -> &'static str {
     }
 }
 
-/// The honest earlier-period limitation of a blend admitted from a later start.
+/// The honest earlier-period limitation of a saved blend.
 fn earlier_period_limitation(definition: &CustomBlendDefinition) -> Option<String> {
-    if definition.admission_basis == ADMISSION_BASIS_EXPLICIT_START {
-        Some(format!(
-            "periods before {} are unavailable for this blend: its comparison was explicitly started on {}",
-            definition.admitted_start_date, definition.admitted_start_date
-        ))
-    } else {
-        None
+    match definition.admission_basis.as_str() {
+        ADMISSION_BASIS_EXPLICIT_START => Some(format!(
+            "the comparison was explicitly started on {}; the periods before that date are unavailable for this blend",
+            definition.requested_start_date
+        )),
+        ADMISSION_BASIS_FULL_HISTORY => Some(format!(
+            "the comparison starts at the portfolio's first invested closing snapshot {}; the periods before it are outside the portfolio's invested history",
+            definition.requested_start_date
+        )),
+        _ => None,
     }
 }
 
@@ -683,7 +831,7 @@ fn catalog_definition(
         source_identifier: String::new(),
         currency: definition.currency.clone(),
         adjustment_provenance:
-            "Component conventions are recorded per component; no blend-level adjustment is applied"
+            "Component adjustment conventions are recorded per component; no blend-level adjustment is applied"
                 .to_owned(),
         adjustment_qualification:
             "Component adjustment conventions are recorded per component".to_owned(),
@@ -709,6 +857,7 @@ fn catalog_definition(
 /// The component snapshot of one catalog definition.
 fn component_from_definition(
     definition: &benchmark_reference_repo::BenchmarkReference,
+    cadence: &str,
     weight: f64,
 ) -> BlendComponent {
     BlendComponent {
@@ -720,8 +869,12 @@ fn component_from_definition(
         is_cash: false,
         currency: definition.currency.clone(),
         return_basis: definition.return_basis_qualification.clone(),
+        adjustment: definition.adjustment_qualification.clone(),
         hedge_policy: definition.hedge_policy.clone(),
         universe: definition.universe.clone(),
+        source: definition.source.clone(),
+        source_identifier: definition.source_identifier.clone(),
+        cadence: cadence.to_owned(),
         source_provenance: definition.source_provenance.clone(),
         verification_state: definition.verification_state.clone(),
     }
@@ -738,8 +891,12 @@ fn cash_component(weight: f64) -> BlendComponent {
         is_cash: true,
         currency: BASE_CURRENCY.to_owned(),
         return_basis: "Synthetic 0% return; no price, no distribution, and no fee".to_owned(),
+        adjustment: "Not applicable; no price is adjusted".to_owned(),
         hedge_policy: "Not applicable".to_owned(),
         universe: "Cash".to_owned(),
+        source: "Synthetic cash component".to_owned(),
+        source_identifier: CASH_COMPONENT_KEY.to_owned(),
+        cadence: "synthetic".to_owned(),
         source_provenance: "Synthetic cash component of a Custom blend; no market data source"
             .to_owned(),
         verification_state: "synthetic".to_owned(),
@@ -748,41 +905,44 @@ fn cash_component(weight: f64) -> BlendComponent {
 
 /// The arithmetic return of one component over one interval.
 fn component_return(
-    observations: &BTreeMap<String, f64>,
-    component: &BlendComponent,
-    previous: &str,
-    current: &str,
+    component: &AdmittedComponent,
+    previous: NaiveDate,
+    current: NaiveDate,
 ) -> anyhow::Result<f64> {
-    if component.is_cash {
+    if component.component.is_cash {
         return Ok(0.0);
     }
-    let previous_value = observations.get(previous).copied().with_context(|| {
+    let previous_value = component.series.get(&previous).copied().with_context(|| {
         format!(
-            "component '{}' has no observation on {previous}",
-            component.component_key
+            "component '{}' has no observation on {}",
+            component.component.component_key,
+            format_date(previous)
         )
     })?;
-    let current_value = observations.get(current).copied().with_context(|| {
+    let current_value = component.series.get(&current).copied().with_context(|| {
         format!(
-            "component '{}' has no observation on {current}",
-            component.component_key
+            "component '{}' has no observation on {}",
+            component.component.component_key,
+            format_date(current)
         )
     })?;
     anyhow::ensure!(
         previous_value.is_finite() && previous_value > 0.0,
-        "invalid observation for component '{}' on {previous}",
-        component.component_key
+        "invalid observation for component '{}' on {}",
+        component.component.component_key,
+        format_date(previous)
     );
     anyhow::ensure!(
         current_value.is_finite() && current_value > 0.0,
-        "invalid observation for component '{}' on {current}",
-        component.component_key
+        "invalid observation for component '{}' on {}",
+        component.component.component_key,
+        format_date(current)
     );
     Ok(current_value / previous_value - 1.0)
 }
 
 /// The dates every market component observed inside the window.
-fn aligned_dates(components: &[AdmittedComponent], window: BlendWindow) -> Vec<NaiveDate> {
+fn aligned_dates(components: &[AdmittedComponent], window: &BlendWindow) -> Vec<NaiveDate> {
     let mut common: Option<BTreeSet<NaiveDate>> = None;
     for component in components {
         if component.component.is_cash {
@@ -790,9 +950,9 @@ fn aligned_dates(components: &[AdmittedComponent], window: BlendWindow) -> Vec<N
         }
         let dates: BTreeSet<NaiveDate> = component
             .series
-            .iter()
-            .filter_map(|(date, _)| parse_date(date).ok())
-            .filter(|date| *date >= window.start && *date <= window.end)
+            .keys()
+            .copied()
+            .filter(|date| *date >= window.actual_start && *date <= window.actual_end)
             .collect();
         common = Some(match common {
             Some(existing) => existing.intersection(&dates).copied().collect(),
@@ -802,18 +962,38 @@ fn aligned_dates(components: &[AdmittedComponent], window: BlendWindow) -> Vec<N
     common.unwrap_or_default().into_iter().collect()
 }
 
-/// The first weekday of the window without a source observation.
-fn first_missing_weekday(observed: &BTreeSet<String>, window: BlendWindow) -> Option<String> {
-    let mut day = window.start;
-    while day <= window.end {
-        if !matches!(day.weekday(), Weekday::Sat | Weekday::Sun)
-            && !observed.contains(&format_date(day))
-        {
-            return Some(format_date(day));
-        }
-        day += Duration::days(1);
+/// The parsed Base currency observations of one component.
+fn parsed_series(series: &[(String, f64)]) -> anyhow::Result<BTreeMap<NaiveDate, f64>> {
+    let mut parsed = BTreeMap::new();
+    for (date, value) in series {
+        let day = parse_date(date)?;
+        anyhow::ensure!(
+            value.is_finite() && *value > 0.0,
+            "invalid Base currency observation for component series on {date}: {value}"
+        );
+        anyhow::ensure!(
+            parsed.insert(day, *value).is_none(),
+            "duplicate Base currency observation on {date}"
+        );
     }
-    None
+    Ok(parsed)
+}
+
+/// The completed weekday a requested boundary resolves to.
+///
+/// A weekend boundary resolves to the preceding completed weekday by calendar
+/// rule, before any component availability is inspected.
+fn resolve_completed_weekday(date: NaiveDate) -> NaiveDate {
+    let mut resolved = date;
+    while !is_weekday(resolved) {
+        resolved -= Duration::days(1);
+    }
+    resolved
+}
+
+/// Whether a date is a completed weekday.
+fn is_weekday(date: NaiveDate) -> bool {
+    !matches!(date.weekday(), Weekday::Sat | Weekday::Sun)
 }
 
 /// Parses one stored date.

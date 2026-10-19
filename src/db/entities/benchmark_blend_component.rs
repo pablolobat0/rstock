@@ -2,9 +2,10 @@ use sea_orm::entity::prelude::*;
 
 /// One component of a saved Custom benchmark blend.
 ///
-/// The component carries a convention snapshot so the saved blend keeps an
-/// explicit meaning for each component. Cash is synthetic: it has no reference
-/// identity and earns a 0% return.
+/// The component carries the convention snapshot the blend was admitted with:
+/// the exact source and lookup identity, the adjustment basis, the
+/// observation cadence, the currency, the return basis, and the hedge policy.
+/// Cash is synthetic: it has no reference identity and earns a 0% return.
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
 #[sea_orm(table_name = "benchmark_blend_components")]
 pub struct Model {
@@ -20,8 +21,12 @@ pub struct Model {
     pub is_cash: bool,
     pub component_currency: String,
     pub component_return_basis: String,
+    pub component_adjustment: String,
     pub component_hedge_policy: String,
     pub component_universe: String,
+    pub component_source: String,
+    pub component_source_identifier: String,
+    pub component_cadence: String,
     pub component_source_provenance: String,
     pub component_verification_state: String,
 }

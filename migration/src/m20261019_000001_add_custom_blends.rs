@@ -1,4 +1,5 @@
 use sea_orm_migration::prelude::*;
+use sea_orm_migration::sea_orm::{DatabaseBackend, Statement};
 
 #[derive(DeriveMigrationName)]
 pub struct Migration;
@@ -25,7 +26,7 @@ impl MigrationTrait for Migration {
 
         // Blend-specific definition facts. The definition row itself stays in
         // the reference catalog so a blend keeps one stable identity that
-        // assignments, Strategy selection, and deletion guards can reference.
+        // assignments and deletion guards can reference.
         manager
             .create_table(
                 Table::create()
@@ -49,6 +50,16 @@ impl MigrationTrait for Migration {
                             .not_null(),
                     )
                     .col(ColumnDef::new(BenchmarkBlends::WeightTolerance).double().not_null())
+                    .col(
+                        ColumnDef::new(BenchmarkBlends::RequestedStartDate)
+                            .string()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(BenchmarkBlends::RequestedEndDate)
+                            .string()
+                            .not_null(),
+                    )
                     .col(
                         ColumnDef::new(BenchmarkBlends::AdmittedStartDate)
                             .string()
@@ -76,8 +87,10 @@ impl MigrationTrait for Migration {
             .await?;
 
         // Component convention snapshots keep a blend's meaning explicit and
-        // fixed. Cash is synthetic: it carries no reference identity and earns
-        // a 0% return.
+        // fixed: the exact source and lookup identity, the adjustment basis,
+        // the observation cadence, and the currency, return basis, and hedge
+        // policy. Cash is synthetic: it carries no reference identity and
+        // earns a 0% return.
         manager
             .create_table(
                 Table::create()
@@ -128,12 +141,32 @@ impl MigrationTrait for Migration {
                             .not_null(),
                     )
                     .col(
+                        ColumnDef::new(BenchmarkBlendComponents::ComponentAdjustment)
+                            .string()
+                            .not_null(),
+                    )
+                    .col(
                         ColumnDef::new(BenchmarkBlendComponents::ComponentHedgePolicy)
                             .string()
                             .not_null(),
                     )
                     .col(
                         ColumnDef::new(BenchmarkBlendComponents::ComponentUniverse)
+                            .string()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(BenchmarkBlendComponents::ComponentSource)
+                            .string()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(BenchmarkBlendComponents::ComponentSourceIdentifier)
+                            .string()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(BenchmarkBlendComponents::ComponentCadence)
                             .string()
                             .not_null(),
                     )
@@ -173,60 +206,33 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
-        // A selected Strategy is one optional reference to a saved definition.
-        // The row exists so a selected definition can never be deleted out from
-        // under that selection.
-        manager
-            .create_table(
-                Table::create()
-                    .table(BenchmarkStrategySelection::Table)
-                    .col(
-                        ColumnDef::new(BenchmarkStrategySelection::Id)
-                            .string()
-                            .not_null()
-                            .primary_key(),
-                    )
-                    .col(
-                        ColumnDef::new(BenchmarkStrategySelection::ReferenceId)
-                            .string()
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(BenchmarkStrategySelection::SelectedAt)
-                            .string()
-                            .not_null(),
-                    )
-                    .foreign_key(
-                        ForeignKey::create()
-                            .name("fk_benchmark_strategy_selection_reference")
-                            .from(
-                                BenchmarkStrategySelection::Table,
-                                BenchmarkStrategySelection::ReferenceId,
-                            )
-                            .to(BenchmarkReferences::Table, BenchmarkReferences::Id)
-                            .on_delete(ForeignKeyAction::Restrict),
-                    )
-                    .to_owned(),
-            )
-            .await?;
-
         Ok(())
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        manager
-            .drop_table(
-                Table::drop()
-                    .table(BenchmarkStrategySelection::Table)
+        // Rolling this migration back would drop the blend definition facts and
+        // the definition kind, which would silently turn a saved Custom blend
+        // into an ordinary catalog reference. Refuse the destructive rollback
+        // while saved blends exist instead of losing their meaning.
+        let saved_blends = manager
+            .get_connection()
+            .query_one(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT COUNT(*) AS count FROM benchmark_blends",
+            ))
+            .await?
+            .map(|row| row.try_get::<i64>("", "count").unwrap_or_default())
+            .unwrap_or_default();
+        if saved_blends > 0 {
+            return Err(DbErr::Custom(
+                "the Custom blend migration cannot be rolled back while saved Custom blends exist: \
+                 delete the saved blends first so no definition is silently converted into an ordinary \
+                 catalog reference"
                     .to_owned(),
-            )
-            .await?;
+            ));
+        }
         manager
-            .drop_table(
-                Table::drop()
-                    .table(BenchmarkBlendComponents::Table)
-                    .to_owned(),
-            )
+            .drop_table(Table::drop().table(BenchmarkBlendComponents::Table).to_owned())
             .await?;
         manager
             .drop_table(Table::drop().table(BenchmarkBlends::Table).to_owned())
@@ -259,6 +265,8 @@ enum BenchmarkBlends {
     WeightConvention,
     CashConvention,
     WeightTolerance,
+    RequestedStartDate,
+    RequestedEndDate,
     AdmittedStartDate,
     AdmittedEndDate,
     AdmissionBasis,
@@ -276,16 +284,12 @@ enum BenchmarkBlendComponents {
     IsCash,
     ComponentCurrency,
     ComponentReturnBasis,
+    ComponentAdjustment,
     ComponentHedgePolicy,
     ComponentUniverse,
+    ComponentSource,
+    ComponentSourceIdentifier,
+    ComponentCadence,
     ComponentSourceProvenance,
     ComponentVerificationState,
-}
-
-#[derive(DeriveIden)]
-enum BenchmarkStrategySelection {
-    Table,
-    Id,
-    ReferenceId,
-    SelectedAt,
 }

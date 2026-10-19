@@ -2,12 +2,11 @@ use std::collections::BTreeMap;
 
 use anyhow::Context;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder, Set,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseBackend, EntityTrait, QueryFilter,
+    QueryOrder, Set, Statement,
 };
 
-use crate::db::entities::{
-    benchmark_blend, benchmark_blend_component, benchmark_reference, benchmark_strategy_selection,
-};
+use crate::db::entities::{benchmark_blend, benchmark_blend_component, benchmark_reference};
 use crate::models::{BlendComponent, CustomBlendDefinition};
 
 /// Whether one saved Custom blend exists.
@@ -53,6 +52,8 @@ pub async fn find_all(db: &impl ConnectionTrait) -> anyhow::Result<Vec<CustomBle
             weight_convention: blend.weight_convention,
             cash_convention: blend.cash_convention,
             weight_tolerance: blend.weight_tolerance,
+            requested_start_date: blend.requested_start_date,
+            requested_end_date: blend.requested_end_date,
             admitted_start_date: blend.admitted_start_date,
             admitted_end_date: blend.admitted_end_date,
             admission_basis: blend.admission_basis,
@@ -94,11 +95,36 @@ pub async fn find_by_id(
         weight_convention: blend.weight_convention,
         cash_convention: blend.cash_convention,
         weight_tolerance: blend.weight_tolerance,
+        requested_start_date: blend.requested_start_date,
+        requested_end_date: blend.requested_end_date,
         admitted_start_date: blend.admitted_start_date,
         admitted_end_date: blend.admitted_end_date,
         admission_basis: blend.admission_basis,
         components,
     })
+}
+
+/// The earliest date with a positive invested closing snapshot of a
+/// non-Monetary holding.
+///
+/// The query inspects positive invested exposure rather than mere row
+/// presence: a zero or exited holding can still carry a historical row. It
+/// reads the already-persisted Complete NAV history and never replays the
+/// Transaction ledger or rebuilds NAV.
+pub async fn find_first_invested_closing_date(
+    db: &impl ConnectionTrait,
+) -> anyhow::Result<Option<String>> {
+    let row = db
+        .query_one(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "SELECT MIN(pah.date) AS date \
+             FROM portfolio_asset_history pah \
+             JOIN assets a ON a.id = pah.asset_id \
+             WHERE pah.market_value > 0 \
+               AND (a.asset_class IS NULL OR LOWER(a.asset_class) <> 'monetary')",
+        ))
+        .await?;
+    Ok(row.and_then(|row| row.try_get::<Option<String>>("", "date").ok().flatten()))
 }
 
 /// Persists the blend-specific definition facts of one saved blend.
@@ -113,6 +139,8 @@ pub async fn insert_blend_attributes(
         weight_convention: Set(definition.weight_convention.clone()),
         cash_convention: Set(definition.cash_convention.clone()),
         weight_tolerance: Set(definition.weight_tolerance),
+        requested_start_date: Set(definition.requested_start_date.clone()),
+        requested_end_date: Set(definition.requested_end_date.clone()),
         admitted_start_date: Set(definition.admitted_start_date.clone()),
         admitted_end_date: Set(definition.admitted_end_date.clone()),
         admission_basis: Set(definition.admission_basis.clone()),
@@ -142,8 +170,12 @@ pub async fn insert_components(
             is_cash: Set(component.is_cash),
             component_currency: Set(component.currency.clone()),
             component_return_basis: Set(component.return_basis.clone()),
+            component_adjustment: Set(component.adjustment.clone()),
             component_hedge_policy: Set(component.hedge_policy.clone()),
             component_universe: Set(component.universe.clone()),
+            component_source: Set(component.source.clone()),
+            component_source_identifier: Set(component.source_identifier.clone()),
+            component_cadence: Set(component.cadence.clone()),
             component_source_provenance: Set(component.source_provenance.clone()),
             component_verification_state: Set(component.verification_state.clone()),
         }
@@ -157,7 +189,8 @@ pub async fn insert_components(
 ///
 /// Only the blend's own definition, component, and cached-price-free rows are
 /// removed. Component definitions and their price, FX, ledger, and NAV
-/// history are never touched.
+/// history are never touched. The caller's transaction owns the whole
+/// deletion, so a failed deletion leaves the saved definition intact.
 pub async fn delete_blend(db: &impl ConnectionTrait, blend_id: &str) -> anyhow::Result<bool> {
     let components = benchmark_blend_component::Entity::delete_many()
         .filter(benchmark_blend_component::Column::BlendId.eq(blend_id))
@@ -172,38 +205,6 @@ pub async fn delete_blend(db: &impl ConnectionTrait, blend_id: &str) -> anyhow::
     Ok(definition.rows_affected > 0 || blend.rows_affected > 0 || components.rows_affected > 0)
 }
 
-/// The reference currently selected as the portfolio Strategy, if any.
-pub async fn find_strategy_selection(db: &impl ConnectionTrait) -> anyhow::Result<Option<String>> {
-    Ok(benchmark_strategy_selection::Entity::find()
-        .one(db)
-        .await?
-        .map(|selection| selection.reference_id))
-}
-
-/// Records the reference selected as the portfolio Strategy.
-pub async fn insert_strategy_selection(
-    db: &impl ConnectionTrait,
-    reference_id: &str,
-    selected_at: &str,
-) -> anyhow::Result<()> {
-    benchmark_strategy_selection::ActiveModel {
-        id: Set("portfolio-strategy".to_owned()),
-        reference_id: Set(reference_id.to_owned()),
-        selected_at: Set(selected_at.to_owned()),
-    }
-    .insert(db)
-    .await?;
-    Ok(())
-}
-
-/// Removes the selected portfolio Strategy, if one is selected.
-pub async fn delete_strategy_selection(db: &impl ConnectionTrait) -> anyhow::Result<bool> {
-    let result = benchmark_strategy_selection::Entity::delete_many()
-        .exec(db)
-        .await?;
-    Ok(result.rows_affected > 0)
-}
-
 /// The component snapshot of one persisted component row.
 fn component_from_row(component: benchmark_blend_component::Model) -> BlendComponent {
     BlendComponent {
@@ -215,8 +216,12 @@ fn component_from_row(component: benchmark_blend_component::Model) -> BlendCompo
         is_cash: component.is_cash,
         currency: component.component_currency,
         return_basis: component.component_return_basis,
+        adjustment: component.component_adjustment,
         hedge_policy: component.component_hedge_policy,
         universe: component.component_universe,
+        source: component.component_source,
+        source_identifier: component.component_source_identifier,
+        cadence: component.component_cadence,
         source_provenance: component.component_source_provenance,
         verification_state: component.component_verification_state,
     }
