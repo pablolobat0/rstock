@@ -12,9 +12,9 @@ use serde::Serialize;
 
 use crate::cli::output::write_json;
 use crate::models::{
-    DailyMovementCoverage, DailyPricedHoldingsMovement, FactAvailability, IndividualPrice,
-    InventoryPosition, MarketDataLimitation, PortfolioInventorySection, PortfolioPerformance,
-    PortfolioSnapshot, PortfolioView,
+    DailyMovementCoverage, DailyPricedHoldingsMovement, ExposureBenchmarkComparison,
+    FactAvailability, IndividualPrice, InventoryPosition, MarketDataLimitation,
+    PortfolioInventorySection, PortfolioPerformance, PortfolioSnapshot, PortfolioView,
 };
 
 /// Maps the composed Portfolio view onto the nested JSON schema and writes one
@@ -30,6 +30,9 @@ struct PortfolioViewJson<'a> {
     inventory: InventoryJson<'a>,
     performance: PerformanceJson<'a>,
     nav_history: Vec<NavSnapshotJson>,
+    /// The exposure-matched primary benchmark with its availability, aligned
+    /// subject/reference series, standard rows, and reference provenance.
+    exposure_benchmark: &'a ExposureBenchmarkComparison,
 }
 
 impl<'a> From<&'a PortfolioView> for PortfolioViewJson<'a> {
@@ -47,6 +50,7 @@ impl<'a> From<&'a PortfolioView> for PortfolioViewJson<'a> {
             },
             performance: PerformanceJson::from(&view.performance),
             nav_history: view.nav_history.iter().map(NavSnapshotJson::from).collect(),
+            exposure_benchmark: &view.exposure_benchmark,
         }
     }
 }

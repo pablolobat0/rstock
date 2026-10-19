@@ -154,7 +154,6 @@ pub(crate) fn write_fund_benchmark_periods<W: Write>(
     fund_name: &str,
     comparison: &crate::models::FundBenchmarkComparison,
 ) -> anyhow::Result<()> {
-    use crate::constants::display_date;
     use crate::models::ComparisonAvailability;
 
     match &comparison.availability {
@@ -193,8 +192,30 @@ pub(crate) fn write_fund_benchmark_periods<W: Write>(
             comparison.source_provenance.as_deref().unwrap_or("unknown"),
         )?;
     }
-    writeln!(writer, "  Period | Requested start; actual anchor – end | Fund return | Reference return | Excess | Beta | Correlation | Tracking error (% annualized) | Information ratio")?;
-    for period in &comparison.standard_periods {
+    write_benchmark_period_rows(
+        writer,
+        "Fund",
+        &comparison
+            .standard_periods
+            .iter()
+            .map(crate::models::BenchmarkPeriod::from)
+            .collect::<Vec<_>>(),
+    )
+}
+
+/// The standard comparison rows shared by the fund and exposure comparisons.
+///
+/// The subject label names the compared side; the reference side keeps one
+/// name because every comparison measures against its reference.
+pub(crate) fn write_benchmark_period_rows<W: Write>(
+    writer: &mut W,
+    subject_label: &str,
+    periods: &[crate::models::BenchmarkPeriod],
+) -> anyhow::Result<()> {
+    use crate::constants::display_date;
+
+    writeln!(writer, "  Period | Requested start; actual anchor – end | {subject_label} return | Reference return | Excess | Beta | Correlation | Tracking error (% annualized) | Information ratio")?;
+    for period in periods {
         let dates = match (&period.start_date, &period.end_date) {
             (Some(start), Some(end)) => format!(
                 "{}; {} – {}",
@@ -218,7 +239,7 @@ pub(crate) fn write_fund_benchmark_periods<W: Write>(
             "  {} | {} | {} | {} | {} | {} | {} | {} | {}",
             period.period.label(),
             dates,
-            format_comparison_fact(&period.fund_return_pct, |value| format_pct(Some(value))),
+            format_comparison_fact(&period.subject_return_pct, |value| format_pct(Some(value))),
             format_comparison_fact(&period.reference_return_pct, |value| format_pct(Some(
                 value
             ))),

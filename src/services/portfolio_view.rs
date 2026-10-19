@@ -20,12 +20,12 @@ use crate::constants::{
 };
 use crate::db::repos::{asset_repo, portfolio_history_repo, transaction_repo};
 use crate::models::{
-    Asset, AvailablePortfolioPerformance, FactAvailability, MarketDataLimitation,
-    NavHistoryRequest, PerformancePeriods, PeriodOutcome, PortfolioPerformance, PortfolioSnapshot,
-    PortfolioView,
+    Asset, AvailablePortfolioPerformance, ExposureBenchmarkComparison, FactAvailability,
+    MarketDataLimitation, NavHistoryRequest, PerformancePeriods, PeriodOutcome,
+    PortfolioPerformance, PortfolioSnapshot, PortfolioView,
 };
 use crate::services::market_data::MarketData;
-use crate::services::{ledger, metrics, nav, portfolio_inventory};
+use crate::services::{exposure_benchmark, ledger, metrics, nav, portfolio_inventory};
 
 /// Composes one complete, presentation-neutral [`PortfolioView`] for the
 /// requested NAV history period.
@@ -111,10 +111,31 @@ pub async fn get_portfolio_view(
     // is returned instead of after presentation began.
     let nav_history = requested_nav_history(&ready_snapshots, market_data, nav_history_request)?;
 
+    // The exposure-matched comparison reuses the ready NAV history and the
+    // persisted per-asset exposures. A benchmark failure isolates the
+    // comparison: the inventory, the NAV readiness, and the portfolio-only
+    // outcomes stay intact.
+    let exposure_benchmark = match exposure_benchmark::compute_exposure_matched_comparison(
+        db,
+        market_data,
+        &ready_snapshots,
+    )
+    .await
+    {
+        Ok(comparison) => comparison,
+        Err(error) => {
+            tracing::warn!(error = %error, "exposure-matched benchmark unavailable");
+            ExposureBenchmarkComparison::unavailable(format!(
+                "exposure-matched benchmark could not be computed: {error}"
+            ))
+        }
+    };
+
     Ok(PortfolioView {
         inventory,
         performance,
         nav_history,
+        exposure_benchmark,
     })
 }
 

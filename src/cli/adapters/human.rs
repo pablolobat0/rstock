@@ -18,13 +18,14 @@ use textplots::{Chart, Plot, Shape};
 
 use crate::cli::display::helpers::{
     color_for_value, color_value, format_eu, format_market_data_limitation_warning,
+    write_benchmark_period_rows,
 };
 use crate::constants::display_date;
 use crate::models::{
-    AssetType, BenchmarkReferenceInfo, DailyMovementExclusionReason, FactAvailability,
-    InventoryPosition, InventorySectionAggregates, MarketDataLimitation, NavHistoryRequest,
-    PeriodOutcome, PortfolioInventory, PortfolioInventorySection, PortfolioPerformance,
-    PortfolioSnapshot, PortfolioView,
+    AssetType, BenchmarkReferenceInfo, ComparisonAvailability, DailyMovementExclusionReason,
+    ExposureBenchmarkComparison, FactAvailability, InventoryPosition, InventorySectionAggregates,
+    MarketDataLimitation, NavHistoryRequest, PeriodOutcome, PortfolioInventory,
+    PortfolioInventorySection, PortfolioPerformance, PortfolioSnapshot, PortfolioView,
 };
 
 /// Renders the complete Portfolio view through the injected writer. The view
@@ -42,6 +43,7 @@ pub fn write_portfolio_human<W: Write>(
         &view.nav_history,
         nav_history_request,
     )?;
+    write_exposure_benchmark(writer, &view.exposure_benchmark)?;
     write_limitations(writer, view)?;
     Ok(())
 }
@@ -405,8 +407,171 @@ fn period_label(nav_history_request: NavHistoryRequest) -> &'static str {
     }
 }
 
-// --- Limitation scopes ---
+// --- Exposure-matched benchmark ---
 
+/// The exposure-matched primary benchmark: its availability, the aligned
+/// subject/reference graph, the standard return and risk rows, and the
+/// provenance of every contributing reference.
+///
+/// A benchmark failure keeps its own state and never implies that the
+/// inventory, the NAV readiness, or the portfolio-only outcomes are invalid.
+fn write_exposure_benchmark<W: Write>(
+    writer: &mut W,
+    comparison: &ExposureBenchmarkComparison,
+) -> anyhow::Result<()> {
+    writeln!(writer, "\nExposure-matched benchmark:")?;
+    match &comparison.availability {
+        ComparisonAvailability::Available => {
+            writeln!(writer, "  Primary exposure comparison: available")?;
+        }
+        ComparisonAvailability::Unavailable { reason } => {
+            writeln!(
+                writer,
+                "  Primary exposure comparison: unavailable ({})",
+                super::super::display::helpers::display_reason(reason)
+            )?;
+        }
+        ComparisonAvailability::NotApplicable { reason } => {
+            writeln!(
+                writer,
+                "  Primary exposure comparison: not applicable ({})",
+                super::super::display::helpers::display_reason(reason)
+            )?;
+        }
+    }
+    if let (Some(start), Some(end)) = (&comparison.start_date, &comparison.end_date) {
+        writeln!(
+            writer,
+            "  Comparison window: {} → {} (both series anchored at 100 on {})",
+            display_date(start),
+            display_date(end),
+            display_date(start)
+        )?;
+    }
+    if let Some(inception) = &comparison.inception_date {
+        writeln!(
+            writer,
+            "  NAV inception (unchanged): {}",
+            display_date(inception)
+        )?;
+    }
+    if let Some(omitted) = &comparison.omitted_seed_interval {
+        writeln!(
+            writer,
+            "  Omitted seed-to-first-close interval: {} → {}",
+            display_date(&omitted.seed_date),
+            display_date(&omitted.anchor_date)
+        )?;
+    }
+    if comparison.retrospective {
+        writeln!(
+            writer,
+            "  Primary references were selected retrospectively and apply to the whole comparison window"
+        )?;
+    }
+    if let (Some(subject), Some(reference)) = (
+        comparison.subject_return_pct,
+        comparison.reference_return_pct,
+    ) {
+        writeln!(
+            writer,
+            "  {} return: {}  {} return: {}  Excess: {}",
+            comparison.subject_label,
+            format_eu(&format!("{subject:+.2}%")),
+            comparison.reference_label,
+            format_eu(&format!("{reference:+.2}%")),
+            format_eu(&format!("{:+.2} pp", subject - reference))
+        )?;
+    }
+    write_exposure_references(writer, comparison)?;
+    write_benchmark_period_rows(
+        writer,
+        comparison.subject_label.as_str(),
+        &comparison.standard_periods,
+    )?;
+    write_exposure_graph(writer, comparison)?;
+    for limitation in &comparison.reference_limitations {
+        writeln!(
+            writer,
+            "  reference limitation: {}",
+            format_market_data_limitation_warning(limitation)
+        )?;
+    }
+    Ok(())
+}
+
+/// The provenance of every contributing reference: its identity, its
+/// aggregated weights, and the conventions it was measured under.
+fn write_exposure_references<W: Write>(
+    writer: &mut W,
+    comparison: &ExposureBenchmarkComparison,
+) -> anyhow::Result<()> {
+    for reference in &comparison.references {
+        writeln!(
+            writer,
+            "  Reference: {} [{}] — weight {}% ({}% at the anchor, max {}%); assets {}; currency {}; basis {}; adjustment {}; hedge {}; cadence {}; source {} {}; provenance {}; verification {}; assigned {}",
+            reference.display_name,
+            reference.reference_id,
+            format_eu(&format!("{:.2}", reference.last_weight_pct)),
+            format_eu(&format!("{:.2}", reference.first_weight_pct)),
+            format_eu(&format!("{:.2}", reference.max_weight_pct)),
+            if reference.assets.is_empty() {
+                "none".to_owned()
+            } else {
+                reference.assets.join(", ")
+            },
+            reference.native_currency,
+            reference.return_basis,
+            reference.adjustment,
+            reference.hedge_policy,
+            reference.cadence.as_deref().unwrap_or("unknown"),
+            reference.source,
+            reference.source_identifier,
+            reference.source_provenance,
+            reference.verification_state,
+            reference.assigned_at.as_deref().unwrap_or("unknown"),
+        )?;
+    }
+    Ok(())
+}
+
+/// The aligned subject/reference graph of the exposure-matched comparison.
+fn write_exposure_graph<W: Write>(
+    writer: &mut W,
+    comparison: &ExposureBenchmarkComparison,
+) -> anyhow::Result<()> {
+    if comparison.subject_wealth.len() < 2 || comparison.reference_wealth.len() < 2 {
+        return Ok(());
+    }
+    let subject_points: Vec<(f32, f32)> = comparison
+        .subject_wealth
+        .iter()
+        .enumerate()
+        .map(|(index, point)| (index as f32, point.wealth as f32))
+        .collect();
+    let reference_points: Vec<(f32, f32)> = comparison
+        .reference_wealth
+        .iter()
+        .enumerate()
+        .map(|(index, point)| (index as f32, point.wealth as f32))
+        .collect();
+    let xmax = (subject_points.len() - 1) as f32;
+    let subject_shape = Shape::Lines(&subject_points);
+    let reference_shape = Shape::Points(&reference_points);
+    let mut chart = Chart::new(180, 40, 0.0, xmax);
+    let plotted = chart.lineplot(&subject_shape).lineplot(&reference_shape);
+    plotted.axis();
+    plotted.figures();
+    writeln!(writer, "{plotted}")?;
+    writeln!(
+        writer,
+        "  Legend: {} = line, {} = points",
+        comparison.subject_label, comparison.reference_label
+    )?;
+    Ok(())
+}
+
+// --- Limitation scopes ---
 /// Prints the four independent Market data limitation scopes under distinct
 /// labels. A limitation in one scope never implies that another scope is
 /// invalid, and an empty scope prints nothing.

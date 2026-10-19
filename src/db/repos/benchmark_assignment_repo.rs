@@ -1,4 +1,4 @@
-use sea_orm::{sea_query::OnConflict, EntityTrait, QueryOrder, Set};
+use sea_orm::{sea_query::OnConflict, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set};
 
 use crate::db::entities::benchmark_assignment;
 
@@ -8,6 +8,9 @@ pub struct PrimaryAssignment {
     pub subject_id: String,
     pub reference_id: String,
     pub is_override: bool,
+    /// When the explicit assignment was recorded. The assignment applies
+    /// retrospectively to the whole comparison window.
+    pub assigned_at: String,
 }
 
 pub async fn find_all(
@@ -19,12 +22,7 @@ pub async fn find_all(
         .all(db)
         .await?
         .into_iter()
-        .map(|row| PrimaryAssignment {
-            subject_type: row.subject_type,
-            subject_id: row.subject_id,
-            reference_id: row.reference_id,
-            is_override: row.is_override,
-        })
+        .map(assignment_from_row)
         .collect())
 }
 
@@ -37,13 +35,38 @@ pub async fn find_by_subject(
         benchmark_assignment::Entity::find_by_id((subject_type.to_owned(), subject_id.to_owned()))
             .one(db)
             .await?
-            .map(|row| PrimaryAssignment {
-                subject_type: row.subject_type,
-                subject_id: row.subject_id,
-                reference_id: row.reference_id,
-                is_override: row.is_override,
-            }),
+            .map(assignment_from_row),
     )
+}
+
+/// Reads the explicit primary assignments of the given subjects in one query.
+pub async fn find_by_subjects(
+    db: &impl sea_orm::ConnectionTrait,
+    subject_type: &str,
+    subject_ids: &[String],
+) -> anyhow::Result<Vec<PrimaryAssignment>> {
+    if subject_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(benchmark_assignment::Entity::find()
+        .filter(benchmark_assignment::Column::SubjectType.eq(subject_type))
+        .filter(benchmark_assignment::Column::SubjectId.is_in(subject_ids.to_vec()))
+        .order_by_asc(benchmark_assignment::Column::SubjectId)
+        .all(db)
+        .await?
+        .into_iter()
+        .map(assignment_from_row)
+        .collect())
+}
+
+fn assignment_from_row(row: benchmark_assignment::Model) -> PrimaryAssignment {
+    PrimaryAssignment {
+        subject_type: row.subject_type,
+        subject_id: row.subject_id,
+        reference_id: row.reference_id,
+        is_override: row.is_override,
+        assigned_at: row.assigned_at,
+    }
 }
 
 pub async fn upsert(

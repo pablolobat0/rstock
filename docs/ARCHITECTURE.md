@@ -83,6 +83,10 @@ All business logic lives here. Key modules:
 
 **`portfolio_view.rs`** — `get_portfolio_view()` is the presentation-neutral Portfolio view composer. It owns NAV readiness, composes the focused inventory, expresses core Portfolio performance as not applicable/unavailable/available, and includes the requested ready NAV history before returning. Available performance carries cohesive YTD, 1Y, 3Y, 5Y, and All period outcomes over the ready NAV series with independently available return and risk facts, and exposes the benchmark-dependent risk limitations as their own scope.
 
+**`benchmark.rs`** — Shared comparison calculation. `compute_standard_benchmark_periods()` measures the YTD, 1Y, 3Y, 5Y, and since-comparison-start rows over aligned subject/reference series, independent of the graph selection, and returns the shared neutral `BenchmarkPeriod` row with its independent availability. The fund comparison maps that row into its own accepted `FundBenchmarkPeriod` output row, and the exposure-matched portfolio comparison uses the shared row directly; both carry the same computed facts. Trailing anchors use the latest common close on or before the requested date so a weekend or market holiday never shortens the period, and every row exposes its actual anchor.
+
+**`exposure_benchmark.rs`** — The exposure-matched primary benchmark of the Portfolio dashboard. `compute_exposure_matched_comparison()` combines the explicitly assigned primary reference of every held asset through the EUR exposures of the *preceding* Complete NAV snapshot, so past intervals are weighted by the exposures that were actually held at the previous close. The complete NAV scope is the denominator of every weight, Monetary holdings are excluded, and the retained Net dividend income inside NAV is carried as a 0%-return residual. Assets sharing one primary reference aggregate their weights, secondary and candidate references never enter them, and a missing assignment or component makes the comparison unavailable instead of renormalizing the remaining weights. Both series are anchored at 100 on the first invested closing snapshot, the omitted seed-to-first-close interval is disclosed, and explicit assignments are reported as retrospective without splicing. The comparison reuses the already ready NAV history, reads the per-asset exposures with one ordered range query, prepares each contributing reference once through the shared `MarketData` path, and performs no ledger replay, no second NAV rebuild, no per-date query, and no per-date source request. Its own availability is independent: a benchmark failure never removes the inventory, the NAV readiness, or the portfolio-only outcomes. See [exposure-matched benchmark performance evidence](exposure-benchmark-performance-evidence.md) for the recorded work evidence.
+
 **`analytics.rs`** — Computes asset-series correlation from current Transaction ledger holdings and historical Base currency series, and computes portfolio risk metrics from NAV history and benchmark prices. Asset-series correlation does not rebuild NAV history.
 
 **`composition.rs`** — Builds portfolio composition analytics with look-through aggregation and top holdings.
@@ -107,8 +111,8 @@ All business logic lives here. Key modules:
 
 Pure output formatting with no business logic. `OutputFormat` selects human or JSON output at the CLI boundary. The Portfolio dashboard commands use the dedicated output Adapters, which write one complete Portfolio view through an injected `Write` target; the other human renderers print through `display` submodules:
 
-- **`adapters/human.rs`** — the human Portfolio view Adapter: per-section inventory tables and aggregates, synchronized performance facts with the Effective valuation date, the metrics table, the NAV chart for the requested history, semantic not-applicable/unavailable fact labels, and the four limitation scopes
-- **`adapters/json.rs`** — the JSON Portfolio view Adapter: one compact envelope over the nested inventory/performance schema, `null` mapping for unavailable and not-applicable scalar facts, requested NAV history, and the four structured limitation scopes
+- **`adapters/human.rs`** — the human Portfolio view Adapter: per-section inventory tables and aggregates, synchronized performance facts with the Effective valuation date, the metrics table, the NAV chart for the requested history, the exposure-matched benchmark section with its aligned subject/reference graph, standard rows, and reference provenance, semantic not-applicable/unavailable fact labels, and the four limitation scopes
+- **`adapters/json.rs`** — the JSON Portfolio view Adapter: one compact envelope over the nested inventory/performance schema, the exposure-matched benchmark with its availability, aligned series, standard rows, and reference provenance, `null` mapping for unavailable and not-applicable scalar facts, requested NAV history, and the four structured limitation scopes
 - **`helpers.rs`** — Shared formatting utilities (price, quantity, percentage, color helpers, limitation wording)
 - **`correlation.rs`** — `print_correlation_matrix()` renders N×N correlation matrix with color-coded values
 - **`composition.rs`** — `print_composition()` renders composition breakdowns and top holdings
@@ -151,10 +155,22 @@ Domain structs organized by concept:
 - `PeriodOutcome` / `PerformancePeriods` — One period's return, volatility, max drawdown, beta, Sharpe, and Sortino facts with independent availability, and the YTD/1Y/3Y/5Y/All group
 - `PortfolioView` — Always-present Portfolio inventory, core performance state, and requested ready NAV history
 
+**`benchmark.rs`**:
+- `BenchmarkPeriod` — The shared computed comparison period: subject/reference return and risk facts with independent availability
+- `BenchmarkComparisonPeriod` — The YTD, 1Y, 3Y, 5Y, and since-comparison-start periods
+- `ComparisonAvailability`, `ComparisonFact<T>` — The explicit available/unavailable/not-applicable states of a comparison and of one calculated fact
+- `DatedWealthPoint` — One dated point of an aligned wealth series
+
 **`fund_analysis.rs`**:
+- `FundBenchmarkComparison`, `FundBenchmarkPeriod` — The fund comparison outcome and its accepted `fund_return_pct` period row, mapped from the shared computed row without changing the fund's JSON contract
 - `FundAnalysisResult` — Full fund report including top holdings, allocations, period metrics, and holdings snapshot diff
 - `FundPeriodMetrics` — Total return, CAGR, volatility, max drawdown, beta, Sharpe, and Sortino
 - `HoldingChange`, `HoldingChangeType`, `FundData` — Snapshot diff and Morningstar payload models
+
+**`exposure_benchmark.rs`**:
+- `ExposureBenchmarkComparison` — The exposure-matched primary benchmark: its availability, the aligned subject/reference wealth series, the standard periods, the contributing references, and the omitted seed-to-first-close interval
+- `ExposureBenchmarkReference` — One contributing primary reference with its assets, aggregated weights, and full provenance
+- `OmittedSeedInterval` — The seed-to-first-close interval the comparison omits
 
 **`monitor.rs`**:
 - `StockInfo` — Fundamentals (price, P/E, EPS, dividend yield, market cap, sector, etc.)
