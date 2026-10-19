@@ -87,6 +87,7 @@ All business logic lives here. Key modules:
 
 **`composition.rs`** — Builds portfolio composition analytics with look-through aggregation and top holdings.
 
+**`custom_blends.rs`** — Saved Custom benchmark blends. A blend is a flat, long-only, fully allocated definition of explicit components with optional synthetic 0%-return cash; it is saved once and never edited or automatically revised. Creation admits every component against the declared window, rejecting an unverified, nested, or incompletely covered component as a whole so no partial blend is persisted; the default admission window is the full portfolio comparison history, and an explicitly selected later start is admitted with its earlier periods disclosed as unavailable. The preview compounds arithmetic beginning-of-interval component returns, resets target weights at the close immediately preceding each new calendar month, lets the weights drift with component wealth between resets, and reports the component, reset, date, and convention provenance of the result. A blend that is still assigned or selected as the Strategy cannot be deleted, and deleting one never removes component price, FX, ledger, or NAV history.
 **`transactions.rs`** — `buy()`, `sell()`, `dividend()`, `split()`, `edit()`, and `delete()` tentatively apply each Transaction ledger change, replay every affected asset ledger from zero, and commit the mutation with all dependent invalidation in one database transaction. Ordinary mutations invalidate Complete NAV snapshots from the earliest affected transaction date (the old or new date for edits); split creation, editing, or deletion also clears the asset's entire split-adjusted price cache and invalidates snapshots from the asset's earliest transaction date. Ledger reads use explicit `(date, id)` chronology, while replay owns canonical ordering and prefix validity.
 
 **`assets.rs`** — Tracked asset edits that cross the Monetary/performance boundary invalidate every dependent Complete NAV snapshot from the asset's earliest transaction date. Fund/ETF provider-identity changes also clear that asset's price cache and invalidate the same complete dates. Metadata updates, cache deletion when required, and portfolio/all-per-asset snapshot invalidation commit atomically so readiness can continue trusting the retained checkpoint.
@@ -281,6 +282,8 @@ assets 1──* portfolio_asset_history
 `portfolio_history`, `daily_exchange_rates`, and `watchlist` are standalone (no foreign keys to assets).
 
 `benchmark_references` owns stable reference identity and source/return-basis provenance; `benchmark_reference_prices` stores its immutable completed-date observations independently of `assets` and holdings. The additive legacy-proxy migration copies compatible existing ACWI/USD stock-cache rows into the identified ETF-proxy cache without deleting or relabeling their original rows.
+
+`benchmark_blends` holds the blend-specific facts of a saved Custom blend, `benchmark_blend_components` holds its component membership, target weights, and per-component convention snapshots, and `benchmark_strategy_selection` holds the single optional Strategy selection. A saved blend is a `benchmark_references` row of kind `custom_blend`, so it keeps one stable definition identity; its components reference other definitions, never itself.
 
 ## NAV Unitization Algorithm
 

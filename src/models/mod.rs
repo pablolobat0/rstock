@@ -1,5 +1,6 @@
 mod asset;
 mod classification;
+mod custom_blend;
 mod fund_analysis;
 mod fund_comparison;
 mod market_data;
@@ -13,6 +14,10 @@ pub(crate) use asset::normalize_currency;
 pub use asset::{Asset, AssetInfo, AssetType};
 pub use classification::{
     enum_to_db, AssetClass, AssetClassification, BondCredit, BondDuration, EquityStyle, Management,
+};
+pub use custom_blend::{
+    BlendComponent, BlendComponentArgument, BlendTargetReset, BlendWealthPoint,
+    CustomBlendDefinition, CustomBlendDeletion, CustomBlendPreview,
 };
 pub use fund_analysis::{
     CandidateCorrelationPeriod, CandidateCorrelationResult, CandidateCorrelationRow,

@@ -140,6 +140,34 @@ _Avoid_: Per-share dividend rate, net dividend income
 The Gross dividend distribution remaining after transaction fees or deductions.
 _Avoid_: Gross dividend distribution, per-share dividend rate
 
+**Custom blend**:
+A named, immutable benchmark definition with a stable identity that combines explicit components into synthetic reference wealth; it is flat, long-only, and fully allocated, and it is not official index data, an adjusted fund return, or a raw price.
+_Avoid_: Benchmark reference, ETF proxy
+
+**Blend component**:
+One explicit member of a **Custom blend**, identified by exact definition identity rather than by name or ticker, and recorded with its own currency, return basis, hedge policy, and source provenance.
+_Avoid_: Holding, benchmark assignment
+
+**Blend target weight**:
+The declared share of a **Custom blend** held by one **Blend component**, expressed as a percentage of the whole blend; the declared weights must be finite, nonnegative, and total 100% within the documented tolerance.
+_Avoid_: Allocation, portfolio weight
+
+**Blend cash component**:
+The optional synthetic **Blend component** that earns a 0% return; it has no market data, no fee, and no transaction.
+_Avoid_: Monetary holding, cash position
+
+**Monthly blend reset**:
+The frictionless synthetic rebalancing of a **Custom blend** to its declared **Blend target weights** at the close immediately preceding each new calendar month; it creates no transaction, fee, or rebalancing event.
+_Avoid_: Rebalance trade, dividend reinvestment
+
+**Blend weight drift**:
+The change of a **Custom blend**'s effective component weights between **Monthly blend resets**, caused by component wealth moving at different rates.
+_Avoid_: Target weight, weight reset
+
+**Blend admission window**:
+The comparison window over which every **Blend component** of a **Custom blend** must have complete, verified daily history; it is the full portfolio comparison history unless the author explicitly selects a later start.
+_Avoid_: Component history, lookback window
+
 ## Relationships
 
 - A **Portfolio view** always contains **Portfolio inventory** and reports **Portfolio performance** as a distinct outcome.
@@ -210,6 +238,13 @@ _Avoid_: Gross dividend distribution, per-share dividend rate
 - In fund comparison, standard performance metrics use YTD, 1Y, 3Y, 5Y, and all-time periods, while the selected period controls only the correlation and aligned return graph.
 - **Fund candidate correlation** is omitted for the portfolio NAV or any held **Tracked asset** that does not have return coverage for the requested correlation period.
 - Fund comparison correlation and aligned return graph require full coverage for the selected period; they do not fall back to shorter overlapping history.
+- A **Custom blend** is a benchmark definition with its own identity; its **Blend component** identities are exact definition identities, and a saved **Custom blend** may not contain another **Custom blend**.
+- **Blend target weights** are long-only and fully allocated, so a **Custom blend** expresses no leverage and no short.
+- A **Custom blend** is admitted only when every **Blend component** has complete verified daily history over its **Blend admission window**; a component that fails admission is reported and no **Blend component** is omitted or renormalized away.
+- A **Blend admission window** starts at the full portfolio comparison history unless the author explicitly selects a later start, in which case the unavailable earlier periods remain visible.
+- A **Custom blend** is immutable: it is never edited or automatically revised, and a changed strategy is a new definition.
+- A **Monthly blend reset** restores the declared **Blend target weights**; the weights then drift with component wealth until the next reset.
+- A **Custom blend** may be deleted only while no assignment or Strategy selection refers to it; deleting it never removes component price, FX, Transaction ledger, or **NAV** history.
 - Fund comparison updates holdings snapshot history for each compared fund but does not show holdings snapshot diffs.
 - Assets entering the portfolio ledger should have **Asset classification** available at creation time, including when created by import.
 - **Asset classification** attributes should be consistent with the top-level asset class; equity-specific attributes belong to equity assets, and fixed-income-specific attributes belong to fixed-income assets.

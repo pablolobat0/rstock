@@ -21,6 +21,9 @@ pub struct Model {
     pub verification_state: String,
     pub official_comparator: Option<String>,
     pub objective_comparator: Option<String>,
+    /// `reference` for source-backed definitions, `custom_blend` for saved
+    /// Custom blends, which are synthetic reference wealth.
+    pub kind: String,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

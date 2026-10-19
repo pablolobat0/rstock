@@ -1,8 +1,11 @@
 pub mod asset;
 pub mod benchmark_assignment;
+pub mod benchmark_blend;
+pub mod benchmark_blend_component;
 pub mod benchmark_candidate;
 pub mod benchmark_reference;
 pub mod benchmark_reference_price;
+pub mod benchmark_strategy_selection;
 pub mod daily_asset_price;
 pub mod daily_exchange_rate;
 pub mod fund_holdings_snapshot;
