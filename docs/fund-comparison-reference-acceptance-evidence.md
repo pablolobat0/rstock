@@ -17,6 +17,52 @@ No test performs a network call and no test opens the real portfolio
 database. Every test uses in-memory SQLite, a fixed clock, and the fake
 `MarketDataSources` seam.
 
+## Review findings and how each one is answered
+
+### The public identity writer sat below the private identity printer
+
+`src/cli/display/fund_comparison.rs` now keeps the public
+`write_fund_comparison_identity` above the private `print_identity`, as
+`docs/CONVENTIONS.md` (Function Ordering) requires. The change is a move
+only; no logic changed.
+
+### The fund comparison was never exercised through the production dispatch
+
+The JSON assertions used a test helper that called the service and wrote the
+envelope by hand with a hardcoded `compare.funds` command name, so the
+production command and the library dispatch were not covered. The correction
+adds the real production path:
+
+- `commands::compare::funds_with_writer` is the production command
+  implementation. It writes the JSON envelope through the injected writer
+  with the same `compare.funds` command identity the command always used, and
+  `commands::compare::funds` keeps the existing stdout behaviour by locking
+  stdout and delegating to it.
+- The `Commands::Compare` branch of `src/cli/dispatch.rs` routes through that
+  command, so the existing public `run_command_with_writer` now carries the
+  fund comparison's envelope as well. The coordinator authorized this additive
+  compare branch and its doc comment; the strategy, portfolio, adapter,
+  migration, and root-CLI paths are untouched.
+- Every JSON assertion in `tests/fund_comparison_reference_tests.rs` now
+  comes from the library dispatch of a real `Commands::Compare` value, so the
+  command identity and the document shape are the production ones and no test
+  hand-builds an envelope.
+- `the_compare_funds_command_dispatches_one_json_envelope` asserts that the
+  dispatched command writes exactly one envelope (one line, one JSON value, no
+  ANSI sequences beside it), that the command identity is the production
+  `compare.funds`, that one side keeps its own reference identity while the
+  other side's missing reference stays isolated, and that the human facts
+  agree with the dispatched document.
+
+**Recorded limitation:** the human renderer itself is not captured. It prints
+the correlation graph with the chart library, which has no writer API, so the
+human output keeps writing to the process stdout. The test therefore asserts
+the human facts through the production human writers
+(`write_fund_comparison_identity` and
+`write_fund_comparison_reference_context`), which are the production
+renderers of the identity and reference sections; it does not claim a
+captured human stdout.
+
 ## Acceptance criteria and where each one is covered
 
 ### Existing direct fund-versus-fund analysis remains available alongside each fund's selected primary reference, aligned graph and standard-period relative results
@@ -87,8 +133,9 @@ database. Every test uses in-memory SQLite, a fixed clock, and the fake
 
 `tests/fund_comparison_reference_tests.rs` holds eleven public tests: unlike
 references, one-sided failure, class distinctions, an untracked candidate, the
-full-period enforcement, one successful JSON envelope, and the shared
-preparation reuse (one ranged request per fund and per reference).
+full-period enforcement, one successful JSON envelope through the production
+dispatch, and the shared preparation reuse (one ranged request per fund and
+per reference).
 
 ## Decisions taken inside the acceptance criteria
 

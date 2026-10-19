@@ -9,23 +9,48 @@ pub mod common;
 
 use chrono::Datelike;
 use common::{insert_fund_asset, market_data_at, setup_test_db, MockMarketDataSources};
+use rstock::cli::CorrelationPeriod;
 use rstock::constants::format_date;
 use rstock::db::entities::{benchmark_assignment, benchmark_reference, transaction};
 use rstock::models::{FundComparisonPeriod, FundData, FundQuoteMetadata};
 use rstock::services::fund_comparison::compare_funds;
+use rstock::services::market_data::MarketData;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, Set};
 use serde_json::Value;
 
 const TODAY: chrono::NaiveDate = chrono::NaiveDate::from_ymd_opt(2025, 1, 9).unwrap();
 
-fn fund_comparison_envelope(result: &rstock::models::FundComparisonResult) -> Value {
+/// The JSON envelope of the production fund-comparison command.
+///
+/// The envelope comes from the library dispatch of a real command value, so
+/// the command identity and the document shape are the production ones.
+async fn fund_comparison_envelope(
+    db: &DatabaseConnection,
+    market_data: &MarketData,
+    code_a: &str,
+    code_b: &str,
+    period: CorrelationPeriod,
+) -> Value {
     let mut output = Vec::new();
-    rstock::cli::output::write_json(&mut output, "compare.funds", result)
-        .expect("fund comparison JSON should serialize");
-    let text = String::from_utf8(output).expect("fund comparison JSON should be UTF-8");
+    rstock::cli::run_command_with_writer(
+        db,
+        market_data,
+        rstock::cli::Commands::Compare(rstock::cli::CompareArgs {
+            command: rstock::cli::CompareCommands::Funds {
+                code_a: code_a.to_owned(),
+                code_b: code_b.to_owned(),
+                period,
+            },
+        }),
+        rstock::cli::output::OutputFormat::Json,
+        &mut output,
+    )
+    .await
+    .expect("the fund comparison command should succeed");
+    let text = String::from_utf8(output).expect("the command output should be UTF-8");
     assert_eq!(text.lines().count(), 1);
     assert!(!text.contains("\u{1b}["));
-    serde_json::from_str(&text).expect("fund comparison output should be valid JSON")
+    serde_json::from_str(&text).expect("the command output should be valid JSON")
 }
 
 fn human_context(result: &rstock::models::FundComparisonResult) -> String {
@@ -246,7 +271,15 @@ async fn each_fund_is_measured_against_its_own_reference() {
         .await
         .expect("fund comparison should succeed");
 
-    let data = fund_comparison_envelope(&result)["data"].clone();
+    let data = fund_comparison_envelope(
+        &db,
+        &market,
+        "XCLASS1",
+        "XCLASS2",
+        CorrelationPeriod::ThirtyDays,
+    )
+    .await["data"]
+        .clone();
 
     // Each side keeps its own reference identity, purpose, and conventions.
     let alpha = &data["fund_a"]["primary_benchmark_comparison"];
@@ -343,11 +376,15 @@ async fn an_unusable_reference_affects_only_its_own_side() {
         .expect("failed to remove the second assignment");
 
     let market = market_data_at(&sources, TODAY);
-    let result = compare_funds(&db, &market, "XCLASS1", "XCLASS2", thirty_day_period())
-        .await
-        .expect("fund comparison should succeed");
-
-    let data = fund_comparison_envelope(&result)["data"].clone();
+    let data = fund_comparison_envelope(
+        &db,
+        &market,
+        "XCLASS1",
+        "XCLASS2",
+        CorrelationPeriod::ThirtyDays,
+    )
+    .await["data"]
+        .clone();
     assert_eq!(
         data["fund_a"]["primary_benchmark_comparison"]["availability"]["status"],
         "available"
@@ -389,11 +426,15 @@ async fn exact_classes_and_vehicles_stay_distinct_and_create_no_holding() {
         .expect("failed to count transactions");
 
     let market = market_data_at(&sources, TODAY);
-    let result = compare_funds(&db, &market, "XCLASS1", "XCLASS2", thirty_day_period())
-        .await
-        .expect("fund comparison should succeed");
-
-    let data = fund_comparison_envelope(&result)["data"].clone();
+    let data = fund_comparison_envelope(
+        &db,
+        &market,
+        "XCLASS1",
+        "XCLASS2",
+        CorrelationPeriod::ThirtyDays,
+    )
+    .await["data"]
+        .clone();
     assert_eq!(
         data["fund_a"]["class_identity"]["tracked_identity"],
         "XSIEIN0001"
@@ -444,7 +485,15 @@ async fn an_untracked_candidate_keeps_its_absence_visible() {
         .await
         .expect("fund comparison should succeed");
 
-    let data = fund_comparison_envelope(&result)["data"].clone();
+    let data = fund_comparison_envelope(
+        &db,
+        &market,
+        "XCANDIDATE",
+        "XCLASS1",
+        CorrelationPeriod::ThirtyDays,
+    )
+    .await["data"]
+        .clone();
     assert!(data["fund_a"]["class_identity"]["tracked_identity"].is_null());
     assert!(data["fund_a"]["class_identity"]["vehicle"].is_null());
     assert_eq!(
@@ -520,11 +569,15 @@ async fn the_direct_comparison_keeps_its_full_period_coverage_rule() {
     );
 
     let market = market_data_at(&sources, TODAY);
-    let result = compare_funds(&db, &market, "XCLASS1", "XCLASS2", thirty_day_period())
-        .await
-        .expect("fund comparison should succeed");
-
-    let data = fund_comparison_envelope(&result)["data"].clone();
+    let data = fund_comparison_envelope(
+        &db,
+        &market,
+        "XCLASS1",
+        "XCLASS2",
+        CorrelationPeriod::ThirtyDays,
+    )
+    .await["data"]
+        .clone();
     assert!(data["correlation"]["correlation"].is_null());
     assert!(data["correlation"]["points"].as_array().unwrap().is_empty());
     assert!(data["correlation"]["reason"]
@@ -558,7 +611,15 @@ async fn a_scoped_limitation_stays_in_its_own_scope() {
         .await
         .expect("fund comparison should succeed");
 
-    let data = fund_comparison_envelope(&result)["data"].clone();
+    let data = fund_comparison_envelope(
+        &db,
+        &market,
+        "XCLASS1",
+        "XCLASS2",
+        CorrelationPeriod::ThirtyDays,
+    )
+    .await["data"]
+        .clone();
     let alpha = &data["fund_a"]["primary_benchmark_comparison"];
     assert_eq!(alpha["availability"]["status"], "unavailable");
     assert!(alpha["fund_limitations"].as_array().unwrap().is_empty());
@@ -579,22 +640,80 @@ async fn a_scoped_limitation_stays_in_its_own_scope() {
 }
 
 #[tokio::test]
-async fn the_json_output_is_one_successful_envelope() {
+async fn the_compare_funds_command_dispatches_one_json_envelope() {
     let (db, sources) = unlike_references_fixture().await;
-    let market = market_data_at(&sources, TODAY);
-    let result = compare_funds(&db, &market, "XCLASS1", "XCLASS2", thirty_day_period())
+    // The second fund keeps its class but loses its assignment, so the
+    // dispatched document shows one usable reference and one isolated failure.
+    benchmark_assignment::Entity::delete_many()
+        .filter(benchmark_assignment::Column::SubjectId.eq("XSIEIN0002"))
+        .exec(&db)
         .await
-        .expect("fund comparison should succeed");
+        .expect("failed to remove the second assignment");
+    let market = market_data_at(&sources, TODAY);
 
     let mut output = Vec::new();
-    rstock::cli::output::write_json(&mut output, "compare.funds", &result)
-        .expect("fund comparison JSON should serialize");
-    let text = String::from_utf8(output).expect("fund comparison JSON should be UTF-8");
+    rstock::cli::run_command_with_writer(
+        &db,
+        &market,
+        rstock::cli::Commands::Compare(rstock::cli::CompareArgs {
+            command: rstock::cli::CompareCommands::Funds {
+                code_a: "XCLASS1".to_owned(),
+                code_b: "XCLASS2".to_owned(),
+                period: CorrelationPeriod::ThirtyDays,
+            },
+        }),
+        rstock::cli::output::OutputFormat::Json,
+        &mut output,
+    )
+    .await
+    .expect("the fund comparison command should succeed");
+
+    // The successful output of the command is exactly one envelope: one line,
+    // one JSON value, no human text and no ANSI sequences beside it.
+    let text = String::from_utf8(output).expect("the command output should be UTF-8");
     assert_eq!(text.lines().count(), 1);
+    assert!(text.ends_with('\n'));
+    assert!(!text.contains("\u{1b}["));
     let envelope: Value = serde_json::from_str(&text).expect("valid JSON envelope");
     assert_eq!(envelope["command"], "compare.funds");
     assert!(envelope["data"].is_object());
     assert!(envelope.get("error").is_none());
+
+    // The dispatched document keeps the per-side reference facts and the
+    // isolated failure of the side without a reference.
+    let data = &envelope["data"];
+    assert_eq!(
+        data["fund_a"]["primary_benchmark_comparison"]["reference_id"],
+        "reference-alpha"
+    );
+    assert_eq!(
+        data["fund_a"]["primary_benchmark_comparison"]["reference_name"],
+        "MSCI World"
+    );
+    assert_eq!(
+        data["fund_b"]["primary_benchmark_comparison"]["availability"]["status"],
+        "unavailable"
+    );
+    assert!(data["fund_b"]["primary_benchmark_comparison"]["reference_id"].is_null());
+    assert!(data["fund_b"]["primary_benchmark_comparison"]["purpose"].is_null());
+    assert!(data["correlation"]["correlation"].is_number());
+
+    // The human output carries the same facts through the production human
+    // writers. The human renderer itself keeps printing to the process
+    // stdout, because the chart library has no writer API, so this test does
+    // not claim a captured human stdout.
+    let result = compare_funds(&db, &market, "XCLASS1", "XCLASS2", thirty_day_period())
+        .await
+        .expect("fund comparison should succeed");
+    let identity = human_identity(&result);
+    let context = human_context(&result);
+    assert!(identity.contains("Exact class: XSIEIN0001 (fund, tracked in this portfolio)"));
+    assert!(identity.contains("Exact class: XSIEIN0002 (fund, tracked in this portfolio)"));
+    let reference_name = data["fund_a"]["primary_benchmark_comparison"]["reference_name"]
+        .as_str()
+        .expect("the dispatched reference should have a name");
+    assert!(context.contains(reference_name));
+    assert!(context.contains("assigned primary comparison: unavailable"));
 }
 
 #[tokio::test]
@@ -653,11 +772,15 @@ async fn a_native_currency_fund_is_never_compared_with_an_unconverted_reference(
     );
 
     let market = market_data_at(&sources, TODAY);
-    let result = compare_funds(&db, &market, "XCLASS1", "XCLASS2", thirty_day_period())
-        .await
-        .expect("fund comparison should succeed");
-
-    let data = fund_comparison_envelope(&result)["data"].clone();
+    let data = fund_comparison_envelope(
+        &db,
+        &market,
+        "XCLASS1",
+        "XCLASS2",
+        CorrelationPeriod::ThirtyDays,
+    )
+    .await["data"]
+        .clone();
     let comparison = &data["fund_a"]["primary_benchmark_comparison"];
     assert_eq!(comparison["availability"]["status"], "unavailable");
     assert!(comparison["fund_wealth"].as_array().unwrap().is_empty());

@@ -27,13 +27,6 @@ pub fn print_fund_comparison(result: &FundComparisonResult) {
     println!();
 }
 
-fn print_identity(result: &FundComparisonResult) {
-    println!("{}", "Fund Comparison".bold().underline());
-    write_fund_comparison_identity(&mut std::io::stdout().lock(), result)
-        .expect("writing fund-comparison identity to stdout");
-    println!();
-}
-
 /// Writes the identity of the two compared funds.
 ///
 /// Two share classes of the same fund are different investments, so each side
@@ -52,6 +45,13 @@ pub fn write_fund_comparison_identity<W: Write>(
         writeln!(writer, "  Exact class: {}", class_identity_line(side))?;
     }
     Ok(())
+}
+
+fn print_identity(result: &FundComparisonResult) {
+    println!("{}", "Fund Comparison".bold().underline());
+    write_fund_comparison_identity(&mut std::io::stdout().lock(), result)
+        .expect("writing fund-comparison identity to stdout");
+    println!();
 }
 
 fn print_fund_info(result: &FundComparisonResult) {
