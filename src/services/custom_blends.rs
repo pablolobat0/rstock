@@ -65,6 +65,39 @@ pub const ACCOUNTING_NOTE: &str = "Monthly target resets are frictionless synthe
 /// The saved-definition kind of a Custom blend in the reference catalog.
 pub const CUSTOM_BLEND_KIND: &str = "custom_blend";
 
+/// A recorded convention of an immutable saved definition no longer holds.
+///
+/// The failure is a violated invariant of the saved definition, not a missing
+/// market observation. A caller that separates an unavailable comparison from
+/// a broken definition can tell the two apart through this type.
+#[derive(Debug)]
+pub struct BlendConventionViolation(pub String);
+
+impl std::fmt::Display for BlendConventionViolation {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}", self.0)
+    }
+}
+
+impl std::error::Error for BlendConventionViolation {}
+
+/// The dated wealth series of one saved Custom blend.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SavedBlendSeries {
+    /// The anchor close the series starts at.
+    pub anchor_date: String,
+    /// The last close the series reaches.
+    pub last_observation_date: String,
+    /// The dated rebased wealth series.
+    pub wealth: Vec<BlendWealthPoint>,
+    /// The monthly target resets of the series.
+    pub target_resets: Vec<BlendTargetReset>,
+    /// The cumulative return over the series.
+    pub cumulative_return_pct: f64,
+    /// The honest limitation of the periods the blend cannot cover.
+    pub earlier_period_limitation: Option<String>,
+}
+
 /// The source identity of a Custom blend: it has no market data source.
 const CUSTOM_BLEND_SOURCE: &str = "custom_blend";
 
@@ -495,20 +528,22 @@ async fn admit_component(
     };
     if let Some(recorded) = request.recorded.as_ref() {
         anyhow::ensure!(
-            recorded.cadence == qualification.cadence,
-            "component '{}' no longer reports the cadence recorded for this blend (recorded: {}; reported: {})",
-            request.identity,
-            recorded.cadence,
-            qualification.cadence
-        );
+        recorded.cadence == qualification.cadence,
+        BlendConventionViolation(format!(
+                "component '{}' no longer reports the cadence recorded for this blend (recorded: {}; reported: {})",
+                request.identity, recorded.cadence, qualification.cadence
+            ))
+    );
     }
     anyhow::ensure!(
         qualification.currency == definition.currency
             && qualification.return_basis == definition.return_basis_qualification
             && qualification.adjustment == definition.adjustment_qualification
             && qualification.hedge_policy == definition.hedge_policy,
-        "component '{}' does not match its declared currency, adjustment, return basis, or hedge policy",
-        request.identity
+        BlendConventionViolation(format!(
+            "component '{}' does not match its declared currency, adjustment, return basis, or hedge policy",
+            request.identity
+        ))
     );
     anyhow::ensure!(
         qualification.cadence == "daily",
@@ -547,21 +582,23 @@ async fn resolve_component_definition(
 ) -> anyhow::Result<benchmark_reference_repo::BenchmarkReference> {
     if !benchmark_reference_repo::exists(db, &request.identity).await? {
         if custom_blend_repo::exists(db, &request.identity).await? {
-            anyhow::bail!(
+            anyhow::bail!(BlendConventionViolation(format!(
                 "component '{}' is a saved Custom blend; nested blends are not supported",
                 request.identity
-            );
+            )));
         }
-        anyhow::bail!(
+        anyhow::bail!(BlendConventionViolation(format!(
             "component '{}' is not a known benchmark definition",
             request.identity
-        );
+        )));
     }
     let definition = benchmark_reference_repo::find_by_id(db, &request.identity).await?;
     anyhow::ensure!(
         definition.kind != CUSTOM_BLEND_KIND,
-        "component '{}' is a saved Custom blend; nested blends are not supported",
-        request.identity
+        BlendConventionViolation(format!(
+            "component '{}' is a saved Custom blend; nested blends are not supported",
+            request.identity
+        ))
     );
     anyhow::ensure!(
         definition.verification_state == "verified",
@@ -571,15 +608,17 @@ async fn resolve_component_definition(
     );
     if let Some(recorded) = request.recorded.as_ref() {
         anyhow::ensure!(
-            recorded.source == definition.source
+        recorded.source == definition.source
                 && recorded.source_identifier == definition.source_identifier
                 && recorded.currency == definition.currency
                 && recorded.return_basis == definition.return_basis_qualification
                 && recorded.adjustment == definition.adjustment_qualification
                 && recorded.hedge_policy == definition.hedge_policy,
-            "component '{}' no longer matches the source, lookup identity, currency, return basis, adjustment, or hedge policy recorded for this blend",
-            request.identity
-        );
+        BlendConventionViolation(format!(
+                "component '{}' no longer matches the source, lookup identity, currency, return basis, adjustment, or hedge policy recorded for this blend",
+                request.identity
+            ))
+    );
     }
     Ok(definition)
 }
@@ -675,30 +714,29 @@ fn requested_components(
     Ok(requested)
 }
 
-/// Validates the persisted facts of one saved blend.
+/// Prepares the dated wealth series of one saved Custom blend over a window.
 ///
-/// A saved blend is immutable, so its recorded weights and components are
-/// invariants: a definition whose weights do not total 100% or that repeats a
-/// component is malformed persisted data, not a coverage gap.
-pub fn validate_saved_blend(
-    definition: &CustomBlendDefinition,
-) -> anyhow::Result<Vec<BlendComponentRequest>> {
-    requested_components_from_definition(definition)
-}
-
-/// Admits the components of one saved blend over a window.
-///
-/// The admission is the same one the blend's own creation used: every
-/// component must hold the required anchor and end closes and every interior
-/// weekday. No component is omitted and no weight is renormalized.
-pub async fn admit_saved_blend(
+/// The saved definition's own persisted facts are validated first, so a
+/// malformed saved definition remains an error. The market-data stage
+/// afterwards reports only a missing required observation, and a recorded
+/// convention that no longer holds remains a violated invariant.
+pub async fn prepare_saved_blend_series(
     db: &DatabaseConnection,
     market_data: &MarketData,
     definition: &CustomBlendDefinition,
     window: &BlendWindow,
-) -> anyhow::Result<Vec<AdmittedComponent>> {
+) -> anyhow::Result<SavedBlendSeries> {
     let requested = requested_components_from_definition(definition)?;
-    admit_components(db, market_data, &requested, window).await
+    let admitted = admit_components(db, market_data, &requested, window).await?;
+    let series = calculate_blend_wealth(&admitted, window)?;
+    Ok(SavedBlendSeries {
+        anchor_date: series.anchor_date,
+        last_observation_date: series.last_observation_date,
+        wealth: series.wealth,
+        target_resets: series.target_resets,
+        cumulative_return_pct: series.cumulative_return_pct,
+        earlier_period_limitation: earlier_period_limitation(definition),
+    })
 }
 
 /// Rebuilds the component requests of a saved definition.
@@ -711,9 +749,10 @@ fn requested_components_from_definition(
     for component in &definition.components {
         anyhow::ensure!(
             seen.insert(component.component_key.to_ascii_lowercase()),
-            "saved Custom blend '{}' repeats component '{}'",
-            definition.id,
-            component.component_key
+            BlendConventionViolation(format!(
+                "saved Custom blend '{}' repeats component '{}'",
+                definition.id, component.component_key
+            ))
         );
         total += component.target_weight;
         requested.push(BlendComponentRequest {
@@ -727,10 +766,12 @@ fn requested_components_from_definition(
     }
     anyhow::ensure!(
         (total - 1.0).abs() <= WEIGHT_TOLERANCE,
-        "saved Custom blend '{}' target weights total {:.4}%; they must total 100% within {:.2} percentage points",
-        definition.id,
-        total * 100.0,
-        WEIGHT_TOLERANCE * 100.0
+        BlendConventionViolation(format!(
+            "saved Custom blend '{}' target weights total {:.4}%; they must total 100% within {:.2} percentage points",
+            definition.id,
+            total * 100.0,
+            WEIGHT_TOLERANCE * 100.0
+        ))
     );
     Ok(requested)
 }

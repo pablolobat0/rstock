@@ -354,6 +354,10 @@ async fn the_dashboard_human_and_json_sections_carry_the_same_strategy_semantics
         "Strategy comparison: available",
         "Comparison window: 02-01-2025 → 04-02-2025",
         "Strategy anchor: 02-01-2025",
+        "Selected at: 05-02-2025",
+        "basis: explicit_user_selection",
+        "Selected definition: Global Sixty Forty",
+        "kind custom_blend",
         "Reset rule: monthly",
         "Global Sixty Forty",
         "target weight: 60.00%",
@@ -403,6 +407,13 @@ async fn the_dashboard_human_and_json_sections_carry_the_same_strategy_semantics
         17.0,
     );
     assert_eq!(strategy_json["selection_basis"], "explicit_user_selection");
+    assert_eq!(
+        strategy_json["reference_id"],
+        "custom-blend-global-sixty-forty"
+    );
+    assert_eq!(strategy_json["definition_kind"], "custom_blend");
+    assert_eq!(strategy_json["verification_state"], "verified");
+    assert_eq!(strategy_json["selected_at"], "2025-02-05T00:00:00Z");
     let components = strategy_json["components"]
         .as_array()
         .expect("the components");
@@ -504,6 +515,11 @@ async fn an_unavailable_strategy_keeps_the_exposure_comparison_and_the_portfolio
     let human = view_human(&view);
     let section = section_after(&human, "Strategy benchmark:");
     assert!(section.contains("Strategy comparison: unavailable"));
+    // The selected definition and its provenance stay visible, so the reason
+    // is inspectable instead of hidden behind a summary.
+    assert!(section.contains("Selected definition: Global Sixty Forty"));
+    assert!(section.contains("Reset rule: monthly"));
+    assert!(section.contains("target weight: 60.00%"));
     let exposure_section = section_after(&human, "Exposure-matched benchmark:");
     assert!(exposure_section.contains("Primary exposure comparison: available"));
 }

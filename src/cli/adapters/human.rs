@@ -17,8 +17,8 @@ use tabled::Table;
 use textplots::{Chart, Plot, Shape};
 
 use crate::cli::display::helpers::{
-    color_for_value, color_value, format_eu, format_market_data_limitation_warning,
-    write_benchmark_period_rows,
+    color_for_value, color_value, display_timestamp, format_eu,
+    format_market_data_limitation_warning, write_benchmark_period_rows, write_comparison_graph,
 };
 use crate::constants::display_date;
 use crate::models::{
@@ -555,47 +555,18 @@ fn format_weight(weight: Option<f64>) -> String {
     )
 }
 
-/// The user-facing date of a stored timestamp. The machine value keeps its
-/// ISO form in the JSON output.
-fn display_timestamp(timestamp: &str) -> String {
-    let date = timestamp.split('T').next().unwrap_or(timestamp);
-    display_date(date)
-}
-
 /// The aligned subject/reference graph of the exposure-matched comparison.
 fn write_exposure_graph<W: Write>(
     writer: &mut W,
     comparison: &ExposureBenchmarkComparison,
 ) -> anyhow::Result<()> {
-    if comparison.subject_wealth.len() < 2 || comparison.reference_wealth.len() < 2 {
-        return Ok(());
-    }
-    let subject_points: Vec<(f32, f32)> = comparison
-        .subject_wealth
-        .iter()
-        .enumerate()
-        .map(|(index, point)| (index as f32, point.wealth as f32))
-        .collect();
-    let reference_points: Vec<(f32, f32)> = comparison
-        .reference_wealth
-        .iter()
-        .enumerate()
-        .map(|(index, point)| (index as f32, point.wealth as f32))
-        .collect();
-    let xmax = (subject_points.len() - 1) as f32;
-    let subject_shape = Shape::Lines(&subject_points);
-    let reference_shape = Shape::Points(&reference_points);
-    let mut chart = Chart::new(180, 40, 0.0, xmax);
-    let plotted = chart.lineplot(&subject_shape).lineplot(&reference_shape);
-    plotted.axis();
-    plotted.figures();
-    writeln!(writer, "{plotted}")?;
-    writeln!(
+    write_comparison_graph(
         writer,
-        "  Legend: {} = line, {} = points",
-        comparison.subject_label, comparison.reference_label
-    )?;
-    Ok(())
+        &comparison.subject_wealth,
+        &comparison.reference_wealth,
+        &comparison.subject_label,
+        &comparison.reference_label,
+    )
 }
 
 // --- Selected Strategy benchmark ---
@@ -673,7 +644,8 @@ fn write_strategy_benchmark<W: Write>(
 }
 
 /// The provenance of the selected Strategy benchmark: its own anchor, the
-/// coverage it cannot offer, its conventions, and its components.
+/// coverage it cannot offer, its conventions, its components, and the
+/// explicit choice that selected it.
 fn write_strategy_provenance<W: Write>(
     writer: &mut W,
     comparison: &StrategyComparison,
@@ -683,6 +655,27 @@ fn write_strategy_provenance<W: Write>(
             writer,
             "  Strategy anchor: {} (selected explicitly; the comparison is independent of the portfolio's actual allocation)",
             display_date(anchor)
+        )?;
+    }
+    if let Some(selected_at) = &comparison.selected_at {
+        writeln!(
+            writer,
+            "  Selected at: {}; basis: {}",
+            display_timestamp(selected_at),
+            comparison.selection_basis.as_deref().unwrap_or("unknown")
+        )?;
+    }
+    if let Some(reference_id) = &comparison.reference_id {
+        writeln!(
+            writer,
+            "  Selected definition: {} [{}] — kind {}; source {} {}; provenance {}; verification {}",
+            comparison.reference_label,
+            reference_id,
+            comparison.definition_kind.as_deref().unwrap_or("unknown"),
+            comparison.source.as_deref().unwrap_or("unknown"),
+            comparison.source_identifier.as_deref().unwrap_or("unknown"),
+            comparison.source_provenance.as_deref().unwrap_or("unknown"),
+            comparison.verification_state.as_deref().unwrap_or("unknown"),
         )?;
     }
     if let Some(limitation) = &comparison.earlier_period_limitation {
@@ -731,35 +724,13 @@ fn write_strategy_graph<W: Write>(
     writer: &mut W,
     comparison: &StrategyComparison,
 ) -> anyhow::Result<()> {
-    if comparison.subject_wealth.len() < 2 || comparison.reference_wealth.len() < 2 {
-        return Ok(());
-    }
-    let subject_points: Vec<(f32, f32)> = comparison
-        .subject_wealth
-        .iter()
-        .enumerate()
-        .map(|(index, point)| (index as f32, point.wealth as f32))
-        .collect();
-    let reference_points: Vec<(f32, f32)> = comparison
-        .reference_wealth
-        .iter()
-        .enumerate()
-        .map(|(index, point)| (index as f32, point.wealth as f32))
-        .collect();
-    let xmax = (subject_points.len() - 1) as f32;
-    let subject_shape = Shape::Lines(&subject_points);
-    let reference_shape = Shape::Points(&reference_points);
-    let mut chart = Chart::new(180, 40, 0.0, xmax);
-    let plotted = chart.lineplot(&subject_shape).lineplot(&reference_shape);
-    plotted.axis();
-    plotted.figures();
-    writeln!(writer, "{plotted}")?;
-    writeln!(
+    write_comparison_graph(
         writer,
-        "  Legend: {} = line, {} = points",
-        comparison.subject_label, comparison.reference_label
-    )?;
-    Ok(())
+        &comparison.subject_wealth,
+        &comparison.reference_wealth,
+        &comparison.subject_label,
+        &comparison.reference_label,
+    )
 }
 
 // --- Limitation scopes ---

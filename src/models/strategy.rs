@@ -1,7 +1,9 @@
 use serde::Serialize;
 
+use crate::db::entities::benchmark_strategy_selection;
 use crate::models::{
-    BenchmarkPeriod, BlendComponent, ComparisonAvailability, DatedWealthPoint, MarketDataLimitation,
+    BenchmarkComparisonPeriod, BenchmarkPeriod, BlendComponent, ComparisonAvailability,
+    DatedWealthPoint, MarketDataLimitation,
 };
 
 /// The explicitly selected Strategy benchmark.
@@ -17,6 +19,16 @@ pub struct StrategySelection {
     pub selected_at: String,
     /// Why the definition is selected; the selection is always explicit.
     pub selection_basis: String,
+}
+
+impl From<benchmark_strategy_selection::Model> for StrategySelection {
+    fn from(model: benchmark_strategy_selection::Model) -> Self {
+        Self {
+            reference_id: model.reference_id,
+            selected_at: model.selected_at,
+            selection_basis: model.selection_basis,
+        }
+    }
 }
 
 /// The receipt of one explicit Strategy selection or unselection.
@@ -41,6 +53,43 @@ pub struct StrategySelectionOutcome {
     pub replaced_display_name: Option<String>,
     /// A human-readable statement of what the command did.
     pub note: String,
+}
+
+/// The static provenance of the selected Strategy benchmark.
+///
+/// The provenance stays visible whether the comparison could be measured or
+/// not: the selected definition, the conventions it was admitted with, its
+/// components, and the explicit choice that selected it are the meaning of
+/// the comparison.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StrategyProvenance {
+    /// The selected benchmark definition identity.
+    pub reference_id: String,
+    /// The selected benchmark definition's display name.
+    pub reference_name: String,
+    /// The kind of the selected definition: a saved Custom blend.
+    pub definition_kind: String,
+    /// The reset rule of the selected definition.
+    pub reset_rule: Option<String>,
+    /// The weight convention of the selected definition.
+    pub weight_convention: Option<String>,
+    /// The cash convention of the selected definition.
+    pub cash_convention: Option<String>,
+    /// The component membership and conventions of the selected definition.
+    pub components: Vec<BlendComponent>,
+    /// The source of the selected definition.
+    pub source: String,
+    /// The source lookup identity of the selected definition.
+    pub source_identifier: String,
+    /// The source provenance of the selected definition.
+    pub source_provenance: String,
+    /// The verification state of the selected definition.
+    pub verification_state: String,
+    /// When the Strategy benchmark was explicitly selected.
+    pub selected_at: String,
+    /// Why the Strategy benchmark is selected; the selection is always
+    /// explicit.
+    pub selection_basis: String,
 }
 
 /// The comparison of the portfolio against its explicitly selected Strategy
@@ -78,20 +127,26 @@ pub struct StrategyComparison {
     /// The honest limitation of the periods the Strategy benchmark cannot
     /// cover.
     pub earlier_period_limitation: Option<String>,
-    /// The reset rule of the selected definition, for a saved Custom blend.
+    /// The reset rule of the selected definition.
     pub reset_rule: Option<String>,
-    /// The weight convention of the selected definition, for a saved Custom
-    /// blend.
+    /// The weight convention of the selected definition.
     pub weight_convention: Option<String>,
-    /// The cash convention of the selected definition, for a saved Custom
-    /// blend.
+    /// The cash convention of the selected definition.
     pub cash_convention: Option<String>,
-    /// The component provenance of the selected definition, for a saved Custom
-    /// blend.
+    /// The component provenance of the selected definition.
     pub components: Vec<BlendComponent>,
-    /// The kind of the selected definition: a saved Custom blend or a
-    /// source-backed reference.
+    /// The kind of the selected definition: a saved Custom blend.
     pub definition_kind: Option<String>,
+    /// The selected benchmark definition identity.
+    pub reference_id: Option<String>,
+    /// The source of the selected definition.
+    pub source: Option<String>,
+    /// The source lookup identity of the selected definition.
+    pub source_identifier: Option<String>,
+    /// The source provenance of the selected definition.
+    pub source_provenance: Option<String>,
+    /// The verification state of the selected definition.
+    pub verification_state: Option<String>,
     /// When the Strategy benchmark was explicitly selected.
     pub selected_at: Option<String>,
     /// Why the Strategy benchmark is selected; the selection is always
@@ -113,77 +168,117 @@ pub struct StrategyComparison {
 }
 
 impl StrategyComparison {
-    /// The comparison outcome for a portfolio that carries no selected
-    /// Strategy benchmark.
-    pub fn not_applicable(reason: impl Into<String>) -> Self {
-        let reason = reason.into();
-        let mut comparison = Self::empty(ComparisonAvailability::NotApplicable {
-            reason: reason.clone(),
-        });
-        comparison.standard_periods = crate::models::BenchmarkComparisonPeriod::standard_periods()
-            .into_iter()
-            .map(|period| BenchmarkPeriod::not_applicable(period, reason.clone()))
-            .collect();
-        comparison
-    }
-
-    /// The comparison outcome when the selected Strategy benchmark cannot be
-    /// prepared.
+    /// The comparison of a selected Strategy benchmark.
     ///
-    /// The selected definition and its Market data limitations stay visible so
-    /// the reason is inspectable instead of hidden behind a summary.
-    pub fn unavailable(
-        reason: impl Into<String>,
-        reference_label: impl Into<String>,
-        limitations: Vec<MarketDataLimitation>,
-    ) -> Self {
-        let reason = reason.into();
-        let mut comparison = Self::empty(ComparisonAvailability::Unavailable {
-            reason: reason.clone(),
-        });
-        comparison.reference_label = reference_label.into();
-        comparison.limitations = limitations;
-        comparison.standard_periods = crate::models::BenchmarkComparisonPeriod::standard_periods()
-            .into_iter()
-            .map(|period| BenchmarkPeriod::unavailable(period, reason.clone()))
-            .collect();
-        comparison
-    }
-
-    fn empty(availability: ComparisonAvailability) -> Self {
-        let reason = match &availability {
-            ComparisonAvailability::Available => String::new(),
-            ComparisonAvailability::Unavailable { reason }
-            | ComparisonAvailability::NotApplicable { reason } => reason.clone(),
+    /// The selected definition and its provenance stay visible before the
+    /// comparison is measured, so an unavailable comparison still explains
+    /// what was selected.
+    pub fn selected(provenance: &StrategyProvenance, availability: ComparisonAvailability) -> Self {
+        let standard_periods = match &availability {
+            ComparisonAvailability::Available => BenchmarkComparisonPeriod::standard_periods()
+                .into_iter()
+                .map(|period| {
+                    BenchmarkPeriod::unavailable(period, "the comparison is not measured")
+                })
+                .collect(),
+            ComparisonAvailability::Unavailable { reason } => {
+                BenchmarkComparisonPeriod::standard_periods()
+                    .into_iter()
+                    .map(|period| BenchmarkPeriod::unavailable(period, reason.clone()))
+                    .collect()
+            }
+            ComparisonAvailability::NotApplicable { reason } => {
+                BenchmarkComparisonPeriod::standard_periods()
+                    .into_iter()
+                    .map(|period| BenchmarkPeriod::not_applicable(period, reason.clone()))
+                    .collect()
+            }
         };
         Self {
             availability,
             role: "strategy".to_owned(),
             method: "explicit_strategy_selection".to_owned(),
             subject_label: "Portfolio".to_owned(),
-            reference_label: "Strategy benchmark".to_owned(),
+            reference_label: provenance.reference_name.clone(),
             currency: crate::constants::BASE_CURRENCY.to_owned(),
             start_date: None,
             end_date: None,
             strategy_anchor_date: None,
             earlier_period_limitation: None,
-            reset_rule: None,
-            weight_convention: None,
-            cash_convention: None,
-            components: Vec::new(),
-            definition_kind: None,
-            selected_at: None,
-            selection_basis: None,
+            reset_rule: provenance.reset_rule.clone(),
+            weight_convention: provenance.weight_convention.clone(),
+            cash_convention: provenance.cash_convention.clone(),
+            components: provenance.components.clone(),
+            definition_kind: Some(provenance.definition_kind.clone()),
+            reference_id: Some(provenance.reference_id.clone()),
+            source: Some(provenance.source.clone()),
+            source_identifier: Some(provenance.source_identifier.clone()),
+            source_provenance: Some(provenance.source_provenance.clone()),
+            verification_state: Some(provenance.verification_state.clone()),
+            selected_at: Some(provenance.selected_at.clone()),
+            selection_basis: Some(provenance.selection_basis.clone()),
             subject_return_pct: None,
             reference_return_pct: None,
             excess_return_percentage_points: None,
             subject_wealth: Vec::new(),
             reference_wealth: Vec::new(),
-            standard_periods: crate::models::BenchmarkComparisonPeriod::standard_periods()
-                .into_iter()
-                .map(|period| BenchmarkPeriod::unavailable(period, reason.clone()))
-                .collect(),
+            standard_periods,
             limitations: Vec::new(),
+        }
+    }
+
+    /// The comparison outcome for a portfolio that carries no selected
+    /// Strategy benchmark.
+    pub fn not_applicable(reason: impl Into<String>) -> Self {
+        Self::selected(
+            &StrategyProvenance::empty(),
+            ComparisonAvailability::NotApplicable {
+                reason: reason.into(),
+            },
+        )
+    }
+
+    /// The comparison outcome when the selected Strategy benchmark cannot be
+    /// prepared.
+    ///
+    /// The selected definition, its provenance, and its Market data
+    /// limitations stay visible so the reason is inspectable instead of
+    /// hidden behind a summary.
+    pub fn unavailable(
+        reason: impl Into<String>,
+        provenance: &StrategyProvenance,
+        limitations: Vec<MarketDataLimitation>,
+    ) -> Self {
+        let reason = reason.into();
+        let mut comparison = Self::selected(
+            provenance,
+            ComparisonAvailability::Unavailable {
+                reason: reason.clone(),
+            },
+        );
+        comparison.limitations = limitations;
+        comparison
+    }
+}
+
+impl StrategyProvenance {
+    /// The provenance of a portfolio that carries no selected Strategy
+    /// benchmark.
+    fn empty() -> Self {
+        Self {
+            reference_id: String::new(),
+            reference_name: "Strategy benchmark".to_owned(),
+            definition_kind: String::new(),
+            reset_rule: None,
+            weight_convention: None,
+            cash_convention: None,
+            components: Vec::new(),
+            source: String::new(),
+            source_identifier: String::new(),
+            source_provenance: String::new(),
+            verification_state: String::new(),
+            selected_at: String::new(),
+            selection_basis: String::new(),
         }
     }
 }

@@ -657,6 +657,14 @@ fn strategy_benchmark_view() -> rstock::models::StrategyComparison {
             verification_state: "verified".to_owned(),
         }],
         definition_kind: Some("custom_blend".to_owned()),
+        reference_id: Some("custom-blend-global-sixty-forty".to_owned()),
+        source: Some("custom_blend".to_owned()),
+        source_identifier: Some(String::new()),
+        source_provenance: Some(
+            "User-defined Custom blend; its components and their conventions are listed with the definition"
+                .to_owned(),
+        ),
+        verification_state: Some("verified".to_owned()),
         selected_at: Some("2025-06-01T00:00:00Z".to_owned()),
         selection_basis: Some("explicit_user_selection".to_owned()),
         subject_return_pct: Some(12.0),

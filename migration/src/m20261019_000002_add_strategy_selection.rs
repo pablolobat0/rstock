@@ -10,17 +10,24 @@ impl MigrationTrait for Migration {
         // The optional selected Strategy benchmark. The selection is explicit:
         // no strategy and no target allocation is ever inferred from the
         // portfolio's holdings, so the row records only the chosen definition
-        // identity, when it was chosen, and why. At most one Strategy
-        // benchmark is selected, which the primary key enforces.
+        // identity, when it was chosen, and why. The single selection slot is
+        // the primary key, so the database itself holds at most one selected
+        // Strategy benchmark.
         manager
             .create_table(
                 Table::create()
                     .table(BenchmarkStrategySelections::Table)
                     .col(
-                        ColumnDef::new(BenchmarkStrategySelections::ReferenceId)
+                        ColumnDef::new(BenchmarkStrategySelections::SelectionSlot)
                             .string()
                             .not_null()
                             .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(BenchmarkStrategySelections::ReferenceId)
+                            .string()
+                            .not_null()
+                            .unique_key(),
                     )
                     .col(ColumnDef::new(BenchmarkStrategySelections::SelectedAt).string().not_null())
                     .col(
@@ -86,6 +93,7 @@ enum BenchmarkReferences {
 #[derive(DeriveIden)]
 enum BenchmarkStrategySelections {
     Table,
+    SelectionSlot,
     ReferenceId,
     SelectedAt,
     SelectionBasis,

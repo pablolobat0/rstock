@@ -173,7 +173,7 @@ The actual completed weekday close a **Custom blend** starts at, resolved from t
 _Avoid_: First common observation, first available date
 
 **Strategy benchmark**:
-The optional benchmark definition the portfolio owner explicitly selects to judge allocation decisions against, independently of the portfolio's actual allocation. It is a reference operation: it carries no target allocation, it is never inferred from the holdings, and it never changes the **Exposure-matched benchmark**, the portfolio's weights, its NAV accounting, its inventory, or its Effective valuation date.
+The optional saved **Custom blend** the portfolio owner explicitly selects to judge allocation decisions against, independently of the portfolio's actual allocation. It is a reference operation: it carries no target allocation, it is never inferred from the holdings, and it never changes the **Exposure-matched benchmark**, the portfolio's weights, its NAV accounting, its inventory, or its Effective valuation date.
 _Avoid_: Exposure-matched benchmark, portfolio weight benchmark, implied strategy
 
 **Strategy selection**:
@@ -293,6 +293,7 @@ _Avoid_: NAV inception return, missing history
 - At most one **Strategy benchmark** is selected; a later selection replaces the earlier one, and unselecting or replacing a selection makes an otherwise-unused definition deletable again.
 - The **Strategy benchmark** is compared independently of the **Exposure-matched benchmark**: it keeps its own role, availability, dates, and provenance, and it never changes that comparison's weights, the portfolio's NAV accounting, its inventory, or its Effective valuation date.
 - The **Strategy benchmark** and the portfolio are aligned at the first close they share, so a comparison never measures unmatched endpoints; a **Strategy anchor** after the portfolio's first invested close leaves the earlier periods unavailable instead of shortening a standard window silently.
+- The **Strategy benchmark** comparison needs every completed weekday of its window in both series; a missing close leaves the comparison unavailable rather than shortening the measured return.
 - Fund comparison updates holdings snapshot history for each compared fund but does not show holdings snapshot diffs.
 - Assets entering the portfolio ledger should have **Asset classification** available at creation time, including when created by import.
 - **Asset classification** attributes should be consistent with the top-level asset class; equity-specific attributes belong to equity assets, and fixed-income-specific attributes belong to fixed-income assets.

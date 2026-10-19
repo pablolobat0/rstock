@@ -59,7 +59,9 @@ pub use portfolio_view::{
     PortfolioPerformance, PortfolioView,
 };
 pub use stock_info::StockInfo;
-pub use strategy::{StrategyComparison, StrategySelection, StrategySelectionOutcome};
+pub use strategy::{
+    StrategyComparison, StrategyProvenance, StrategySelection, StrategySelectionOutcome,
+};
 pub use transaction::{
     cents_are_representable, cents_to_f64, f64_to_cents, BuyOrder, CsvRow, DividendOrder,
     SellOrder, SplitOrder, Transaction, TransactionListItem, TxType,

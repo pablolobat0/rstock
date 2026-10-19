@@ -157,7 +157,7 @@ fn stepped_sources() -> MockMarketDataSources {
 /// 123.0 on 04-02-2025, and the portfolio's cumulative return over the window
 /// is exactly 23%.
 async fn insert_invested_portfolio(db: &DatabaseConnection) {
-    let asset_id = common::insert_asset(db, "XFAKE1", "Invested fixture", "stock", "EUR").await;
+    let asset_id = common::insert_asset(&db, "XFAKE1", "Invested fixture", "stock", "EUR").await;
     let mut nav = 100.0;
     for (date, _) in weekday_observations(WINDOW_START, WINDOW_END, |_| 0.0) {
         common::insert_portfolio_snapshot(db, &date, nav, 10.0).await;
@@ -874,6 +874,246 @@ async fn a_selected_strategy_refuses_the_destructive_migration_rollback() {
             .expect("the selection should be readable")
             .is_some(),
         "the refused rollback must keep the explicit selection intact"
+    );
+}
+
+#[tokio::test]
+async fn the_selection_commands_persist_through_the_public_dispatch() {
+    let db = setup_test_db().await;
+    insert_verified_reference(&db, REFERENCE_A, "XREFA").await;
+    insert_verified_reference(&db, REFERENCE_B, "XREFB").await;
+    let sources = stepped_sources();
+    let today = clock();
+    let first = save_stepped_blend(&db, &sources, today).await;
+    let market_data = market_data_at(&sources, today);
+    let second = custom_blends::create_custom_blend(
+        &db,
+        &market_data,
+        BlendCreateRequest {
+            name: "All Equity".to_owned(),
+            components: vec![rstock::models::BlendComponentArgument {
+                identity: REFERENCE_B.to_owned(),
+                weight_percent: 100.0,
+            }],
+            start_date: Some(
+                NaiveDate::parse_from_str(WINDOW_START, "%Y-%m-%d").expect("valid start date"),
+            ),
+        },
+    )
+    .await
+    .expect("the second blend should be saved");
+
+    let selected = run_strategy(
+        &db,
+        &sources,
+        today,
+        &["rstock", "strategy", "select", &first],
+        OutputFormat::Json,
+    )
+    .await
+    .expect("the strategy should be selected");
+    let selected = common::parse_json_envelope(&selected);
+    assert_eq!(selected["command"], "strategy.select");
+    assert_eq!(selected["data"]["selected"], true);
+    assert_eq!(selected["data"]["reference_id"], first.as_str());
+
+    let shown = run_strategy(
+        &db,
+        &sources,
+        today,
+        &["rstock", "strategy", "show"],
+        OutputFormat::Json,
+    )
+    .await
+    .expect("the selection should be shown");
+    let shown = common::parse_json_envelope(&shown);
+    assert_eq!(shown["data"]["reference_id"], first.as_str());
+    assert_eq!(
+        strategy::selected_strategy(&db)
+            .await
+            .expect("the selection should be readable")
+            .expect("a strategy should be selected")
+            .reference_id,
+        first
+    );
+
+    // A later selection replaces the earlier one through the same dispatch.
+    let replaced = run_strategy(
+        &db,
+        &sources,
+        today,
+        &["rstock", "strategy", "select", &second.id],
+        OutputFormat::Json,
+    )
+    .await
+    .expect("the second strategy should be selected");
+    let replaced = common::parse_json_envelope(&replaced);
+    assert_eq!(replaced["data"]["reference_id"], second.id.as_str());
+    assert_eq!(replaced["data"]["replaced_reference_id"], first.as_str());
+    assert_eq!(
+        strategy::selected_strategy(&db)
+            .await
+            .expect("the selection should be readable")
+            .expect("a strategy should be selected")
+            .reference_id,
+        second.id
+    );
+
+    let unselected = run_strategy(
+        &db,
+        &sources,
+        today,
+        &["rstock", "strategy", "unselect"],
+        OutputFormat::Json,
+    )
+    .await
+    .expect("the strategy should be unselected");
+    let unselected = common::parse_json_envelope(&unselected);
+    assert_eq!(unselected["data"]["selected"], false);
+    assert!(strategy::selected_strategy(&db)
+        .await
+        .expect("the selection should be readable")
+        .is_none());
+}
+
+#[tokio::test]
+async fn a_selected_strategy_blocks_the_deletion_through_the_public_dispatch() {
+    let db = setup_test_db().await;
+    insert_verified_reference(&db, REFERENCE_A, "XREFA").await;
+    let sources = stepped_sources();
+    let today = clock();
+    let blend_id = save_stepped_blend(&db, &sources, today).await;
+    let market_data = market_data_at(&sources, today);
+    strategy::select_strategy(&db, &market_data, &blend_id)
+        .await
+        .expect("the strategy should be selected");
+
+    let mut output = Vec::new();
+    let failure = rstock::cli::run_blend_command_with_writer(
+        &db,
+        &market_data,
+        rstock::cli::BlendCommands::Delete {
+            blend_id: blend_id.clone(),
+        },
+        OutputFormat::Json,
+        &mut output,
+    )
+    .await
+    .expect_err("a selected strategy must not be deletable");
+    assert!(
+        failure.to_string().contains("Strategy benchmark"),
+        "the failure must name the Strategy benchmark: {failure}"
+    );
+    assert!(
+        custom_blends::show_custom_blend(&db, &blend_id)
+            .await
+            .is_ok(),
+        "the rejected deletion must leave the definition saved"
+    );
+
+    strategy::unselect_strategy(&db)
+        .await
+        .expect("the strategy should be unselected");
+    let mut output = Vec::new();
+    rstock::cli::run_blend_command_with_writer(
+        &db,
+        &market_data,
+        rstock::cli::BlendCommands::Delete {
+            blend_id: blend_id.clone(),
+        },
+        OutputFormat::Json,
+        &mut output,
+    )
+    .await
+    .expect("an unused definition should be deletable");
+    let deletion = common::parse_json_envelope(&output);
+    assert_eq!(deletion["data"]["deleted"], true);
+    assert!(
+        custom_blends::show_custom_blend(&db, &blend_id)
+            .await
+            .is_err(),
+        "the deleted definition must be gone"
+    );
+}
+
+#[tokio::test]
+async fn a_definition_that_is_not_a_saved_custom_blend_cannot_be_selected() {
+    let db = setup_test_db().await;
+    insert_verified_reference(&db, REFERENCE_A, "XREFA").await;
+    let sources = stepped_sources();
+    let today = clock();
+    let market_data = market_data_at(&sources, today);
+
+    let failure = strategy::select_strategy(&db, &market_data, REFERENCE_A)
+        .await
+        .expect_err("a plain reference is not a Strategy benchmark");
+    assert!(
+        failure.to_string().contains("saved Custom blend"),
+        "the failure must name the required definition kind: {failure}"
+    );
+    assert!(
+        strategy::selected_strategy(&db)
+            .await
+            .expect("the selection should be readable")
+            .is_none(),
+        "a rejected selection must not persist"
+    );
+}
+
+#[tokio::test]
+async fn a_missing_interior_weekday_leaves_the_strategy_comparison_unavailable() {
+    let db = setup_test_db().await;
+    insert_verified_reference(&db, REFERENCE_A, "XREFA").await;
+    let sources = stepped_sources();
+    let today = clock();
+    let blend_id = save_stepped_blend(&db, &sources, today).await;
+    // The portfolio's ready NAV history misses one completed weekday.
+    let asset_id = common::insert_asset(&db, "XFAKE1", "Invested fixture", "stock", "EUR").await;
+    let mut nav = 100.0;
+    for (date, _) in weekday_observations(WINDOW_START, WINDOW_END, |_| 0.0) {
+        if date != "2025-01-20" {
+            common::insert_portfolio_snapshot(&db, &date, nav, 10.0).await;
+            common::insert_portfolio_asset_snapshot(
+                &db,
+                &date,
+                asset_id,
+                10.0,
+                nav,
+                nav * 10.0,
+                1.0,
+            )
+            .await;
+        }
+        nav += 1.0;
+    }
+    let market_data = market_data_at(&sources, today);
+    strategy::select_strategy(&db, &market_data, &blend_id)
+        .await
+        .expect("the strategy should be selected");
+
+    let comparison =
+        strategy::compute_strategy_comparison(&db, &market_data, &ready_snapshots(&db).await)
+            .await
+            .expect("the comparison should be reported");
+    assert!(
+        matches!(
+            comparison.availability,
+            ComparisonAvailability::Unavailable { .. }
+        ),
+        "a missing completed weekday must leave the comparison unavailable, got {:?}",
+        comparison.availability
+    );
+    let reason = match &comparison.availability {
+        ComparisonAvailability::Unavailable { reason } => reason.clone(),
+        other => panic!("the comparison must be unavailable, got {other:?}"),
+    };
+    assert!(
+        reason.contains("2025-01-20"),
+        "the reason must name the missing close: {reason}"
+    );
+    assert!(
+        comparison.subject_return_pct.is_none(),
+        "the measured return must not be silently shortened"
     );
 }
 

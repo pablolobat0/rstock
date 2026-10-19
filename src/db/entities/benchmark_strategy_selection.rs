@@ -8,8 +8,11 @@ use sea_orm::entity::prelude::*;
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
 #[sea_orm(table_name = "benchmark_strategy_selections")]
 pub struct Model {
-    /// The selected benchmark definition identity.
+    /// The single selection slot. The primary key holds one row at most, so
+    /// the database itself enforces that one Strategy benchmark is selected.
     #[sea_orm(primary_key, auto_increment = false)]
+    pub selection_slot: String,
+    /// The selected benchmark definition identity.
     pub reference_id: String,
     /// When the selection was made.
     pub selected_at: String,

@@ -7,11 +7,8 @@
 
 use std::io::Write;
 
-use serde::Serialize;
-
 use crate::{
-    cli::{output, StrategyCommands},
-    constants::display_date,
+    cli::{display::helpers::display_timestamp, output, StrategyCommands},
     models::StrategySelectionOutcome,
     services::{market_data::MarketData, strategy},
 };
@@ -30,7 +27,7 @@ pub async fn run_with_writer<W: Write>(
     match command {
         StrategyCommands::Select { reference_id } => {
             let outcome = strategy::select_strategy(db, market_data, &reference_id).await?;
-            write_output(
+            output::write_command_output(
                 writer,
                 format,
                 "strategy.select",
@@ -40,7 +37,7 @@ pub async fn run_with_writer<W: Write>(
         }
         StrategyCommands::Unselect {} => {
             let outcome = strategy::unselect_strategy(db).await?;
-            write_output(
+            output::write_command_output(
                 writer,
                 format,
                 "strategy.unselect",
@@ -50,7 +47,7 @@ pub async fn run_with_writer<W: Write>(
         }
         StrategyCommands::Show {} => {
             let outcome = current_selection(db).await?;
-            write_output(
+            output::write_command_output(
                 writer,
                 format,
                 "strategy.show",
@@ -117,7 +114,7 @@ fn selection_human(outcome: &StrategySelectionOutcome, verb: &str) -> String {
     if let Some(selected_at) = outcome.selected_at.as_ref() {
         lines.push(format!(
             "  Selected at: {}; basis: {}",
-            display_selected_at(selected_at),
+            display_timestamp(selected_at),
             outcome.selection_basis.as_deref().unwrap_or("unknown")
         ));
     }
@@ -131,26 +128,4 @@ fn selection_human(outcome: &StrategySelectionOutcome, verb: &str) -> String {
     }
     lines.push(format!("  {}", outcome.note));
     lines.join("\n")
-}
-
-/// The selection date, displayed in the user-facing format.
-fn display_selected_at(selected_at: &str) -> String {
-    selected_at
-        .split('T')
-        .next()
-        .map_or_else(|| selected_at.to_owned(), display_date)
-}
-
-/// Writes one command result in the requested output format.
-fn write_output<W: Write, T: Serialize>(
-    writer: &mut W,
-    format: output::OutputFormat,
-    command: &str,
-    data: &T,
-    human: &str,
-) -> anyhow::Result<()> {
-    match format {
-        output::OutputFormat::Json => output::write_json(writer, command, data),
-        output::OutputFormat::Human => writeln!(writer, "{human}").map_err(Into::into),
-    }
 }

@@ -12,14 +12,14 @@
 use std::collections::BTreeMap;
 
 use anyhow::Context;
-use chrono::NaiveDate;
+use chrono::{Datelike, Duration, NaiveDate, Weekday};
 use sea_orm::{DatabaseConnection, TransactionTrait};
 
-use crate::constants::{format_date, BASE_CURRENCY, DATE_FORMAT};
+use crate::constants::{format_date, DATE_FORMAT};
 use crate::db::repos::{benchmark_reference_repo, benchmark_strategy_repo, custom_blend_repo};
 use crate::models::{
-    BlendComponent, ComparisonAvailability, DatedWealthPoint, MarketDataLimitation,
-    PortfolioSnapshot, StrategyComparison, StrategySelection, StrategySelectionOutcome,
+    ComparisonAvailability, CustomBlendDefinition, DatedWealthPoint, PortfolioSnapshot,
+    StrategyComparison, StrategyProvenance, StrategySelection, StrategySelectionOutcome,
 };
 use crate::services::custom_blends::{self, BlendWindow};
 use crate::services::market_data::MarketData;
@@ -27,14 +27,17 @@ use crate::services::market_data::MarketData;
 /// Why a Strategy benchmark is selected: the user chose it explicitly.
 pub const SELECTION_BASIS_EXPLICIT: &str = "explicit_user_selection";
 
-/// The saved-definition kind of a saved Custom blend in the reference catalog.
-const CUSTOM_BLEND_KIND: &str = "custom_blend";
+/// The role of the selected Strategy comparison.
+pub const STRATEGY_ROLE: &str = "strategy";
 
-/// The kind of a source-backed reference definition.
-const REFERENCE_KIND: &str = "reference";
+/// The calculation method of the selected Strategy comparison.
+pub const STRATEGY_METHOD: &str = "explicit_strategy_selection";
 
 /// Explicitly selects one saved definition as the portfolio's Strategy
 /// benchmark.
+///
+/// A Strategy benchmark is a saved Custom blend: a named, immutable definition
+/// with explicit target weights, monthly resets, and component provenance.
 ///
 /// The selection is persisted as a whole: the previous selection and the new
 /// one are written in one caller-owned transaction, so a failed selection
@@ -50,11 +53,11 @@ pub async fn select_strategy(
         !reference_id.is_empty(),
         "a Strategy benchmark needs an identity"
     );
-    let definition = benchmark_reference_repo::find_by_id(db, reference_id).await?;
     anyhow::ensure!(
-        is_usable_strategy(&definition),
-        "'{reference_id}' is not a usable Strategy benchmark: a Strategy benchmark is a saved Custom blend or a verified source-backed reference"
+        custom_blend_repo::exists(db, reference_id).await?,
+        "'{reference_id}' is not a saved Custom blend; a Strategy benchmark is a saved Custom blend with explicit target weights, monthly resets, and component provenance"
     );
+    let definition = benchmark_reference_repo::find_by_id(db, reference_id).await?;
 
     let selected_at = format!("{}T00:00:00Z", format_date(market_data.today()));
     let selection = StrategySelection {
@@ -69,13 +72,13 @@ pub async fn select_strategy(
     benchmark_strategy_repo::insert_selection(&transaction, &selection).await?;
     transaction.commit().await?;
 
-    let replaced = match previous.as_ref() {
+    let (replaced_reference_id, replaced_display_name) = match previous.as_ref() {
         Some(previous) if previous.reference_id != selection.reference_id => {
-            let replaced_name = benchmark_reference_repo::find_by_id(db, &previous.reference_id)
-                .await
-                .ok()
-                .map(|definition| definition.display_name);
-            (Some(previous.reference_id.clone()), replaced_name)
+            let replaced = benchmark_reference_repo::find_by_id(db, &previous.reference_id).await?;
+            (
+                Some(previous.reference_id.clone()),
+                Some(replaced.display_name),
+            )
         }
         _ => (None, None),
     };
@@ -85,8 +88,8 @@ pub async fn select_strategy(
         selected: true,
         selected_at: Some(selection.selected_at),
         selection_basis: Some(selection.selection_basis),
-        replaced_reference_id: replaced.0,
-        replaced_display_name: replaced.1,
+        replaced_reference_id,
+        replaced_display_name,
         note: "Strategy benchmark selected explicitly; it is compared independently of the portfolio's actual allocation"
             .to_owned(),
     })
@@ -105,11 +108,11 @@ pub async fn unselect_strategy(
     transaction.commit().await?;
     let (replaced_reference_id, replaced_display_name) = match previous.as_ref() {
         Some(previous) => {
-            let name = benchmark_reference_repo::find_by_id(db, &previous.reference_id)
-                .await
-                .ok()
-                .map(|definition| definition.display_name);
-            (Some(previous.reference_id.clone()), name)
+            let replaced = benchmark_reference_repo::find_by_id(db, &previous.reference_id).await?;
+            (
+                Some(previous.reference_id.clone()),
+                Some(replaced.display_name),
+            )
         }
         None => (None, None),
     };
@@ -146,7 +149,8 @@ pub async fn selected_strategy(
 ///
 /// A Strategy benchmark that cannot be prepared is reported as an unavailable
 /// comparison instead of failing the command, so the primary comparison stays
-/// intact. Database failures and malformed persisted data remain errors.
+/// intact. Database failures, corrupt persisted data, and violated invariants
+/// remain errors.
 pub async fn compute_strategy_comparison(
     db: &DatabaseConnection,
     market_data: &MarketData,
@@ -157,13 +161,15 @@ pub async fn compute_strategy_comparison(
             "no Strategy benchmark is explicitly selected",
         ));
     };
-    let series = match prepare_strategy_series(db, market_data, &definition).await {
+    let blend = custom_blend_repo::find_by_id(db, &definition.id).await?;
+    let provenance = provenance_of(&selection, &definition, &blend);
+    let series = match prepare_series(db, market_data, &blend).await {
         Ok(series) => series,
         Err(StrategyPreparation::Fatal(error)) => return Err(error),
         Err(StrategyPreparation::Coverage(reason)) => {
             return Ok(StrategyComparison::unavailable(
                 reason,
-                definition.display_name.clone(),
+                &provenance,
                 Vec::new(),
             ));
         }
@@ -174,48 +180,31 @@ pub async fn compute_strategy_comparison(
     else {
         return Ok(StrategyComparison::unavailable(
             "the portfolio has no invested Complete NAV snapshot to compare the Strategy benchmark against",
-            definition.display_name.clone(),
+            &provenance,
             Vec::new(),
         ));
     };
-    Ok(calculate(
-        &selection,
-        &definition,
-        series,
-        ready_snapshots,
-        &portfolio_anchor.date,
-    ))
+    calculate(&provenance, series, ready_snapshots, &portfolio_anchor.date)
 }
 
-/// The prepared Strategy benchmark series and its provenance.
+/// The failure of one Strategy benchmark preparation.
+enum StrategyPreparation {
+    /// A database failure, corrupt persisted data, or a violated invariant,
+    /// which remains an error.
+    Fatal(anyhow::Error),
+    /// A missing required input, which makes the comparison unavailable.
+    Coverage(String),
+}
+
+/// The prepared Strategy benchmark series.
 struct StrategySeries {
     /// The dated reference values of the selected definition.
     values: Vec<(String, f64)>,
     /// The anchor of the Strategy benchmark itself.
     anchor_date: String,
-    /// The kind of the selected definition.
-    definition_kind: String,
-    /// The reset rule, for a saved Custom blend.
-    reset_rule: Option<String>,
-    /// The weight convention, for a saved Custom blend.
-    weight_convention: Option<String>,
-    /// The cash convention, for a saved Custom blend.
-    cash_convention: Option<String>,
-    /// The component provenance, for a saved Custom blend.
-    components: Vec<BlendComponent>,
     /// The honest limitation of the periods the Strategy benchmark cannot
-    /// cover.
+    /// cover, stated by the saved definition.
     earlier_period_limitation: Option<String>,
-    /// The market-data limitations of the selected definition.
-    limitations: Vec<MarketDataLimitation>,
-}
-
-/// The failure of one Strategy benchmark preparation.
-enum StrategyPreparation {
-    /// A database failure or a violated invariant, which remains an error.
-    Fatal(anyhow::Error),
-    /// A missing required input, which makes the comparison unavailable.
-    Coverage(String),
 }
 
 /// Loads the selected Strategy benchmark with its definition.
@@ -234,38 +223,42 @@ async fn load_selection(
     Ok(Some((selection, definition)))
 }
 
-/// Prepares the dated series of the selected Strategy benchmark.
-async fn prepare_strategy_series(
-    db: &DatabaseConnection,
-    market_data: &MarketData,
+/// The static provenance of the selected Strategy benchmark.
+fn provenance_of(
+    selection: &StrategySelection,
     definition: &benchmark_reference_repo::BenchmarkReference,
-) -> Result<StrategySeries, StrategyPreparation> {
-    if custom_blend_repo::exists(db, &definition.id)
-        .await
-        .map_err(StrategyPreparation::Fatal)?
-    {
-        return prepare_blend_series(db, market_data, definition).await;
+    blend: &CustomBlendDefinition,
+) -> StrategyProvenance {
+    StrategyProvenance {
+        reference_id: definition.id.clone(),
+        reference_name: definition.display_name.clone(),
+        definition_kind: custom_blends::CUSTOM_BLEND_KIND.to_owned(),
+        reset_rule: Some(blend.reset_rule.clone()),
+        weight_convention: Some(blend.weight_convention.clone()),
+        cash_convention: Some(blend.cash_convention.clone()),
+        components: blend.components.clone(),
+        source: definition.source.clone(),
+        source_identifier: definition.source_identifier.clone(),
+        source_provenance: definition.source_provenance.clone(),
+        verification_state: definition.verification_state.clone(),
+        selected_at: selection.selected_at.clone(),
+        selection_basis: selection.selection_basis.clone(),
     }
-    prepare_reference_series(db, market_data, definition).await
 }
 
-/// Prepares the series of a saved Custom blend selected as a Strategy
-/// benchmark.
+/// Prepares the dated series of the selected Custom blend.
 ///
-/// The saved definition's own persisted facts are validated first, so
-/// malformed persisted data stays an error. The market-data stage afterwards
-/// only reports missing coverage.
-async fn prepare_blend_series(
+/// The saved definition's own persisted facts are validated first, so a
+/// malformed saved definition stays an error. The market-data stage afterwards
+/// reports only a missing required observation, and a recorded convention that
+/// no longer holds remains a violated invariant.
+async fn prepare_series(
     db: &DatabaseConnection,
     market_data: &MarketData,
-    definition: &benchmark_reference_repo::BenchmarkReference,
+    blend: &CustomBlendDefinition,
 ) -> Result<StrategySeries, StrategyPreparation> {
-    let blend = custom_blend_repo::find_by_id(db, &definition.id)
-        .await
-        .map_err(StrategyPreparation::Fatal)?;
-    custom_blends::validate_saved_blend(&blend).map_err(StrategyPreparation::Fatal)?;
     let start = parse_date(&blend.admitted_start_date).map_err(StrategyPreparation::Fatal)?;
-    let end = market_data.today() - chrono::Duration::days(1);
+    let end = market_data.today() - Duration::days(1);
     if start > end {
         return Err(StrategyPreparation::Fatal(anyhow::anyhow!(
             "the saved Strategy benchmark '{}' starts on {} but no completed comparison date is available",
@@ -274,10 +267,8 @@ async fn prepare_blend_series(
         )));
     }
     let window = BlendWindow::new(start, end);
-    let admitted = custom_blends::admit_saved_blend(db, market_data, &blend, &window)
+    let series = custom_blends::prepare_saved_blend_series(db, market_data, blend, &window)
         .await
-        .map_err(classify_preparation_failure)?;
-    let series = custom_blends::calculate_blend_wealth(&admitted, &window)
         .map_err(classify_preparation_failure)?;
     Ok(StrategySeries {
         values: series
@@ -286,78 +277,21 @@ async fn prepare_blend_series(
             .map(|point| (point.date.clone(), point.wealth))
             .collect(),
         anchor_date: series.anchor_date,
-        definition_kind: CUSTOM_BLEND_KIND.to_owned(),
-        reset_rule: Some(blend.reset_rule.clone()),
-        weight_convention: Some(blend.weight_convention.clone()),
-        cash_convention: Some(blend.cash_convention.clone()),
-        components: blend.components.clone(),
-        earlier_period_limitation: custom_blends::earlier_period_limitation(&blend),
-        limitations: Vec::new(),
-    })
-}
-
-/// Prepares the series of a source-backed reference selected as a Strategy
-/// benchmark.
-async fn prepare_reference_series(
-    db: &DatabaseConnection,
-    market_data: &MarketData,
-    definition: &benchmark_reference_repo::BenchmarkReference,
-) -> Result<StrategySeries, StrategyPreparation> {
-    let start = market_data.today() - chrono::Duration::days(365 * 10);
-    let end = market_data.today() - chrono::Duration::days(1);
-    let prepared = market_data
-        .selected_benchmark_reference_market_data(
-            db,
-            &definition.id,
-            &format_date(start),
-            &format_date(end),
-        )
-        .await
-        .map_err(classify_preparation_failure)?;
-    let Some(qualification) = prepared.source_qualification.as_ref() else {
-        return Err(StrategyPreparation::Coverage(
-            "the selected Strategy benchmark has no verified return-basis, adjustment, currency, hedge, and cadence qualification"
-                .to_owned(),
-        ));
-    };
-    if qualification.cadence != "daily" {
-        return Err(StrategyPreparation::Coverage(format!(
-            "the selected Strategy benchmark is not a daily series (cadence: {}); a Strategy comparison needs daily history",
-            qualification.cadence
-        )));
-    }
-    let Some(anchor) = prepared
-        .genuine_benchmark_series
-        .first()
-        .map(|(date, _)| date.clone())
-    else {
-        return Err(StrategyPreparation::Coverage(
-            "the selected Strategy benchmark has no completed observations in the comparison window"
-                .to_owned(),
-        ));
-    };
-    let earlier_period_limitation = Some(format!(
-        "the Strategy benchmark's available history starts on {anchor}; the periods before that date are unavailable for this comparison"
-    ));
-    Ok(StrategySeries {
-        values: prepared.genuine_benchmark_series,
-        anchor_date: anchor,
-        definition_kind: REFERENCE_KIND.to_owned(),
-        reset_rule: None,
-        weight_convention: None,
-        cash_convention: None,
-        components: Vec::new(),
-        earlier_period_limitation,
-        limitations: prepared.limitations,
+        earlier_period_limitation: series.earlier_period_limitation,
     })
 }
 
 /// Classifies one preparation failure.
 ///
-/// A database failure stays an error; every other failure is a missing
-/// required input that makes the comparison unavailable.
+/// A database failure, corrupt persisted data, and a violated invariant stay
+/// errors; every other failure is a missing required input that makes the
+/// comparison unavailable.
 fn classify_preparation_failure(error: anyhow::Error) -> StrategyPreparation {
-    if error.downcast_ref::<sea_orm::DbErr>().is_some() {
+    if error.downcast_ref::<sea_orm::DbErr>().is_some()
+        || error
+            .downcast_ref::<custom_blends::BlendConventionViolation>()
+            .is_some()
+    {
         StrategyPreparation::Fatal(error)
     } else {
         StrategyPreparation::Coverage(error.to_string())
@@ -367,17 +301,16 @@ fn classify_preparation_failure(error: anyhow::Error) -> StrategyPreparation {
 /// Calculates the aligned Strategy comparison over the common window.
 ///
 /// Both series are rebased to 100 at the first close they share, so the
-/// comparison never measures unmatched endpoints. A Strategy benchmark that
-/// starts after the portfolio therefore anchors the comparison at its own
-/// first close and the periods before it stay unavailable.
+/// comparison never measures unmatched endpoints. Every completed weekday of
+/// the window must be covered by both series: a missing close leaves the
+/// comparison unavailable instead of silently shortening it.
 fn calculate(
-    selection: &StrategySelection,
-    definition: &benchmark_reference_repo::BenchmarkReference,
+    provenance: &StrategyProvenance,
     series: StrategySeries,
     ready_snapshots: &[PortfolioSnapshot],
     portfolio_anchor: &str,
-) -> StrategyComparison {
-    let strategy_map: BTreeMap<String, f64> = series.values.into_iter().collect();
+) -> anyhow::Result<StrategyComparison> {
+    let reference_map: BTreeMap<String, f64> = series.values.into_iter().collect();
     let subject_map: BTreeMap<String, f64> = ready_snapshots
         .iter()
         .map(|snapshot| (snapshot.date.clone(), snapshot.nav))
@@ -385,26 +318,35 @@ fn calculate(
     let common: Vec<(String, f64, f64)> = subject_map
         .iter()
         .filter_map(|(date, value)| {
-            strategy_map
+            reference_map
                 .get(date)
                 .map(|other| (date.clone(), *value, *other))
         })
         .collect();
-    let Some((anchor_date, anchor_value, anchor_strategy)) = common.first().cloned() else {
-        return StrategyComparison::unavailable(
+    let Some((anchor_date, anchor_value, anchor_reference)) = common.first().cloned() else {
+        return Ok(StrategyComparison::unavailable(
             "the portfolio and the selected Strategy benchmark have no common completed observation",
-            definition.display_name.clone(),
-            series.limitations,
-        );
+            provenance,
+            Vec::new(),
+        ));
     };
     if common.len() < 2 {
-        return StrategyComparison::unavailable(
+        return Ok(StrategyComparison::unavailable(
             "the portfolio and the selected Strategy benchmark have fewer than two common completed observations",
-            definition.display_name.clone(),
-            series.limitations,
-        );
+            provenance,
+            Vec::new(),
+        ));
     }
-    let (end_date, end_value, end_strategy) = common[common.len() - 1].clone();
+    let (end_date, end_value, end_reference) = common[common.len() - 1].clone();
+    if let Some(reason) =
+        missing_weekday_coverage(&subject_map, &reference_map, &anchor_date, &end_date)?
+    {
+        return Ok(StrategyComparison::unavailable(
+            reason,
+            provenance,
+            Vec::new(),
+        ));
+    }
 
     let subject_wealth: Vec<DatedWealthPoint> = common
         .iter()
@@ -417,11 +359,11 @@ fn calculate(
         .iter()
         .map(|(date, _, other)| DatedWealthPoint {
             date: date.clone(),
-            wealth: other / anchor_strategy * 100.0,
+            wealth: other / anchor_reference * 100.0,
         })
         .collect();
     let subject_return_pct = (end_value / anchor_value - 1.0) * 100.0;
-    let reference_return_pct = (end_strategy / anchor_strategy - 1.0) * 100.0;
+    let reference_return_pct = (end_reference / anchor_reference - 1.0) * 100.0;
 
     let subject_series: Vec<(String, f64)> = subject_wealth
         .iter()
@@ -443,69 +385,89 @@ fn calculate(
     ) {
         Ok(periods) => periods,
         Err(error) => {
-            return StrategyComparison::unavailable(
+            return Ok(StrategyComparison::unavailable(
                 format!("the standard comparison rows could not be calculated: {error}"),
-                definition.display_name.clone(),
-                series.limitations,
-            );
+                provenance,
+                Vec::new(),
+            ));
         }
     };
 
-    let earlier_period_limitation = earlier_period_limitation(
+    let mut comparison =
+        StrategyComparison::selected(provenance, ComparisonAvailability::Available);
+    comparison.start_date = Some(anchor_date);
+    comparison.end_date = Some(end_date);
+    comparison.strategy_anchor_date = Some(series.anchor_date.clone());
+    comparison.earlier_period_limitation = earlier_period_limitation(
         series.earlier_period_limitation,
         &series.anchor_date,
         portfolio_anchor,
     );
-    StrategyComparison {
-        availability: ComparisonAvailability::Available,
-        role: "strategy".to_owned(),
-        method: "explicit_strategy_selection".to_owned(),
-        subject_label: "Portfolio".to_owned(),
-        reference_label: definition.display_name.clone(),
-        currency: BASE_CURRENCY.to_owned(),
-        start_date: Some(anchor_date),
-        end_date: Some(end_date),
-        strategy_anchor_date: Some(series.anchor_date),
-        earlier_period_limitation,
-        reset_rule: series.reset_rule,
-        weight_convention: series.weight_convention,
-        cash_convention: series.cash_convention,
-        components: series.components,
-        definition_kind: Some(series.definition_kind),
-        selected_at: Some(selection.selected_at.clone()),
-        selection_basis: Some(selection.selection_basis.clone()),
-        subject_return_pct: Some(subject_return_pct),
-        reference_return_pct: Some(reference_return_pct),
-        excess_return_percentage_points: Some(subject_return_pct - reference_return_pct),
-        subject_wealth,
-        reference_wealth,
-        standard_periods,
-        limitations: series.limitations,
+    comparison.subject_return_pct = Some(subject_return_pct);
+    comparison.reference_return_pct = Some(reference_return_pct);
+    comparison.excess_return_percentage_points = Some(subject_return_pct - reference_return_pct);
+    comparison.subject_wealth = subject_wealth;
+    comparison.reference_wealth = reference_wealth;
+    comparison.standard_periods = standard_periods;
+    Ok(comparison)
+}
+
+/// The completed weekday of the comparison window that one of the two series
+/// does not cover.
+///
+/// A missing close leaves the comparison unavailable: it is never dropped
+/// from the aligned series, which would silently shorten the measured return.
+fn missing_weekday_coverage(
+    subject: &BTreeMap<String, f64>,
+    reference: &BTreeMap<String, f64>,
+    anchor: &str,
+    end: &str,
+) -> anyhow::Result<Option<String>> {
+    let mut day = parse_date(anchor)?;
+    let last = parse_date(end)?;
+    while day <= last {
+        if is_weekday(day) {
+            let key = format_date(day);
+            if !subject.contains_key(&key) {
+                return Ok(Some(format!(
+                    "the portfolio has no Complete NAV snapshot on {key}; the Strategy comparison needs every completed weekday of its window"
+                )));
+            }
+            if !reference.contains_key(&key) {
+                return Ok(Some(format!(
+                    "the selected Strategy benchmark has no observation on {key}; the Strategy comparison needs every completed weekday of its window"
+                )));
+            }
+        }
+        day += Duration::days(1);
     }
+    Ok(None)
 }
 
 /// The honest limitation of the periods before the comparison anchor.
 ///
 /// A Strategy benchmark that starts after the portfolio cannot cover the
 /// earlier periods, and that limitation is stated instead of the window
-/// being silently shortened.
+/// being silently shortened. A Strategy benchmark that already covers the
+/// portfolio's start has no earlier-period limitation.
 fn earlier_period_limitation(
     limitation: Option<String>,
     strategy_anchor: &str,
     portfolio_anchor: &str,
 ) -> Option<String> {
-    match limitation {
-        Some(limitation) => Some(limitation),
-        None if strategy_anchor > portfolio_anchor => Some(format!(
-            "the Strategy benchmark's history starts on {strategy_anchor}; the periods before that date are unavailable for this comparison"
-        )),
-        None => None,
+    if strategy_anchor <= portfolio_anchor {
+        return None;
     }
+    Some(limitation.unwrap_or_else(|| {
+        format!(
+            "the Strategy benchmark's history starts on {strategy_anchor}; the periods before that date are unavailable for this comparison"
+        )
+    }))
 }
 
-/// Whether a definition can be selected as a Strategy benchmark.
-fn is_usable_strategy(definition: &benchmark_reference_repo::BenchmarkReference) -> bool {
-    definition.kind == CUSTOM_BLEND_KIND || definition.verification_state == "verified"
+/// Whether a date is a completed weekday.
+fn is_weekday(date: NaiveDate) -> bool {
+    !matches!(date.weekday(), Weekday::Sat | Weekday::Sun)
 }
 
 /// Parses one stored date.
