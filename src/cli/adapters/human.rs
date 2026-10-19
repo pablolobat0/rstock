@@ -26,6 +26,7 @@ use crate::models::{
     ExposureBenchmarkComparison, FactAvailability, InventoryPosition, InventorySectionAggregates,
     MarketDataLimitation, NavHistoryRequest, PeriodOutcome, PortfolioInventory,
     PortfolioInventorySection, PortfolioPerformance, PortfolioSnapshot, PortfolioView,
+    StrategyComparison,
 };
 
 /// Renders the complete Portfolio view through the injected writer. The view
@@ -44,6 +45,7 @@ pub fn write_portfolio_human<W: Write>(
         nav_history_request,
     )?;
     write_exposure_benchmark(writer, &view.exposure_benchmark)?;
+    write_strategy_benchmark(writer, &view.strategy_benchmark)?;
     write_limitations(writer, view)?;
     Ok(())
 }
@@ -564,6 +566,170 @@ fn display_timestamp(timestamp: &str) -> String {
 fn write_exposure_graph<W: Write>(
     writer: &mut W,
     comparison: &ExposureBenchmarkComparison,
+) -> anyhow::Result<()> {
+    if comparison.subject_wealth.len() < 2 || comparison.reference_wealth.len() < 2 {
+        return Ok(());
+    }
+    let subject_points: Vec<(f32, f32)> = comparison
+        .subject_wealth
+        .iter()
+        .enumerate()
+        .map(|(index, point)| (index as f32, point.wealth as f32))
+        .collect();
+    let reference_points: Vec<(f32, f32)> = comparison
+        .reference_wealth
+        .iter()
+        .enumerate()
+        .map(|(index, point)| (index as f32, point.wealth as f32))
+        .collect();
+    let xmax = (subject_points.len() - 1) as f32;
+    let subject_shape = Shape::Lines(&subject_points);
+    let reference_shape = Shape::Points(&reference_points);
+    let mut chart = Chart::new(180, 40, 0.0, xmax);
+    let plotted = chart.lineplot(&subject_shape).lineplot(&reference_shape);
+    plotted.axis();
+    plotted.figures();
+    writeln!(writer, "{plotted}")?;
+    writeln!(
+        writer,
+        "  Legend: {} = line, {} = points",
+        comparison.subject_label, comparison.reference_label
+    )?;
+    Ok(())
+}
+
+// --- Selected Strategy benchmark ---
+
+/// The explicitly selected Strategy benchmark: its own availability, the
+/// aligned subject/reference graph, the standard return and risk rows, and
+/// the provenance of the selected definition.
+///
+/// The section is labelled separately from the exposure-matched primary
+/// comparison: it answers a different question, and it never changes the
+/// primary comparison, the portfolio's weights, its NAV accounting, its
+/// inventory, or its Effective valuation date.
+fn write_strategy_benchmark<W: Write>(
+    writer: &mut W,
+    comparison: &StrategyComparison,
+) -> anyhow::Result<()> {
+    writeln!(writer, "\nStrategy benchmark:")?;
+    match &comparison.availability {
+        ComparisonAvailability::Available => {
+            writeln!(writer, "  Strategy comparison: available")?;
+        }
+        ComparisonAvailability::Unavailable { reason } => {
+            writeln!(
+                writer,
+                "  Strategy comparison: unavailable ({})",
+                super::super::display::helpers::display_reason(reason)
+            )?;
+        }
+        ComparisonAvailability::NotApplicable { reason } => {
+            writeln!(
+                writer,
+                "  Strategy comparison: not applicable ({})",
+                super::super::display::helpers::display_reason(reason)
+            )?;
+        }
+    }
+    if let (Some(start), Some(end)) = (&comparison.start_date, &comparison.end_date) {
+        writeln!(
+            writer,
+            "  Comparison window: {} → {} (both series anchored at 100 on {})",
+            display_date(start),
+            display_date(end),
+            display_date(start)
+        )?;
+    }
+    write_strategy_provenance(writer, comparison)?;
+    if let (Some(subject), Some(reference)) = (
+        comparison.subject_return_pct,
+        comparison.reference_return_pct,
+    ) {
+        writeln!(
+            writer,
+            "  {} return: {}  {} return: {}  Excess: {}",
+            comparison.subject_label,
+            format_eu(&format!("{subject:+.2}%")),
+            comparison.reference_label,
+            format_eu(&format!("{reference:+.2}%")),
+            format_eu(&format!("{:+.2} pp", subject - reference))
+        )?;
+    }
+    write_benchmark_period_rows(
+        writer,
+        comparison.subject_label.as_str(),
+        &comparison.standard_periods,
+    )?;
+    write_strategy_graph(writer, comparison)?;
+    for limitation in &comparison.limitations {
+        writeln!(
+            writer,
+            "  strategy limitation: {}",
+            format_market_data_limitation_warning(limitation)
+        )?;
+    }
+    Ok(())
+}
+
+/// The provenance of the selected Strategy benchmark: its own anchor, the
+/// coverage it cannot offer, its conventions, and its components.
+fn write_strategy_provenance<W: Write>(
+    writer: &mut W,
+    comparison: &StrategyComparison,
+) -> anyhow::Result<()> {
+    if let Some(anchor) = &comparison.strategy_anchor_date {
+        writeln!(
+            writer,
+            "  Strategy anchor: {} (selected explicitly; the comparison is independent of the portfolio's actual allocation)",
+            display_date(anchor)
+        )?;
+    }
+    if let Some(limitation) = &comparison.earlier_period_limitation {
+        writeln!(
+            writer,
+            "  Earlier coverage: {}",
+            super::super::display::helpers::display_reason(limitation)
+        )?;
+    }
+    if let Some(reset_rule) = &comparison.reset_rule {
+        writeln!(writer, "  Reset rule: {reset_rule}")?;
+    }
+    if let Some(convention) = &comparison.weight_convention {
+        writeln!(writer, "  Weight convention: {convention}")?;
+    }
+    if let Some(convention) = &comparison.cash_convention {
+        writeln!(writer, "  Cash convention: {convention}")?;
+    }
+    if comparison.components.is_empty() {
+        return Ok(());
+    }
+    writeln!(writer, "  Components:")?;
+    for component in &comparison.components {
+        writeln!(
+            writer,
+            "    - {} [{}] — target weight: {:.2}%; return basis: {}; adjustment: {}; currency: {}; hedge policy: {}; source: {}; source identifier: {}; cadence: {}; provenance: {}; verification: {}",
+            component.display_name,
+            component.component_key,
+            component.target_weight_percent,
+            component.return_basis,
+            component.adjustment,
+            component.currency,
+            component.hedge_policy,
+            component.source,
+            component.source_identifier,
+            component.cadence,
+            component.source_provenance,
+            component.verification_state,
+        )?;
+    }
+    Ok(())
+}
+
+/// The aligned subject/reference graph of the selected Strategy comparison.
+fn write_strategy_graph<W: Write>(
+    writer: &mut W,
+    comparison: &StrategyComparison,
 ) -> anyhow::Result<()> {
     if comparison.subject_wealth.len() < 2 || comparison.reference_wealth.len() < 2 {
         return Ok(());

@@ -131,6 +131,8 @@ collections or regressions remain explicit decision-gate failures.
 | `tests/correlation_tests.rs` | Portfolio asset correlation matrix computation |
 | `tests/fund_analysis_tests.rs` | Fund analysis, comparison, holdings, and period metrics |
 | `tests/metrics_tests.rs` | Shared portfolio-analysis metric calculations |
+| `tests/strategy_tests.rs` | Explicit Strategy benchmark selection, replacement, in-use deletion guard, and comparison seam |
+| `tests/strategy_dashboard_tests.rs` | Portfolio dashboard Strategy benchmark section in human and JSON output |
 
 ## How To: Add a New CLI Command
 

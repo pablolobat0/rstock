@@ -13,12 +13,12 @@ use serde::Serialize;
 
 use crate::cli::output::write_json;
 use crate::models::{
-    BenchmarkComparisonPeriod, BenchmarkPeriod, ComparisonAvailability, ComparisonFact,
-    DailyMovementCoverage, DailyPricedHoldingsMovement, DatedWealthPoint,
+    BenchmarkComparisonPeriod, BenchmarkPeriod, BlendComponent, ComparisonAvailability,
+    ComparisonFact, DailyMovementCoverage, DailyPricedHoldingsMovement, DatedWealthPoint,
     ExposureBenchmarkComparison, ExposureBenchmarkReference, FactAvailability, IndividualPrice,
     InventoryPosition, MarketDataLimitation, MarketDataLimitationClassification, MarketDataSubject,
     OmittedSeedInterval, PortfolioInventorySection, PortfolioPerformance, PortfolioSnapshot,
-    PortfolioView,
+    PortfolioView, StrategyComparison,
 };
 
 /// Maps the composed Portfolio view onto the nested JSON schema and writes one
@@ -37,6 +37,143 @@ struct PortfolioViewJson<'a> {
     /// The exposure-matched primary benchmark with its availability, aligned
     /// subject/reference series, standard rows, and reference provenance.
     exposure_benchmark: ExposureBenchmarkJson<'a>,
+    /// The explicitly selected Strategy benchmark with its own availability,
+    /// aligned subject/reference series, standard rows, and the selected
+    /// definition's provenance.
+    strategy_benchmark: StrategyBenchmarkJson<'a>,
+}
+
+/// The selected Strategy benchmark mapped onto the Adapter's own schema.
+///
+/// The Adapter owns this mapping: the domain outcome is not serialized
+/// directly, so the JSON contract stays an explicit Adapter decision. The
+/// section keeps its own role and availability, so a Strategy comparison is
+/// never confused with the exposure-matched primary comparison.
+#[derive(Serialize)]
+struct StrategyBenchmarkJson<'a> {
+    availability: ComparisonAvailabilityJson,
+    role: &'a str,
+    method: &'a str,
+    subject_label: &'a str,
+    reference_label: &'a str,
+    currency: &'a str,
+    start_date: Option<&'a str>,
+    end_date: Option<&'a str>,
+    /// The anchor of the Strategy benchmark itself, before it is aligned with
+    /// the portfolio.
+    strategy_anchor_date: Option<&'a str>,
+    /// The periods the Strategy benchmark cannot cover.
+    earlier_period_limitation: Option<&'a str>,
+    reset_rule: Option<&'a str>,
+    weight_convention: Option<&'a str>,
+    cash_convention: Option<&'a str>,
+    components: Vec<BlendComponentJson<'a>>,
+    definition_kind: Option<&'a str>,
+    selected_at: Option<&'a str>,
+    selection_basis: Option<&'a str>,
+    subject_return_pct: Option<f64>,
+    reference_return_pct: Option<f64>,
+    excess_return_percentage_points: Option<f64>,
+    subject_wealth: Vec<WealthPointJson<'a>>,
+    reference_wealth: Vec<WealthPointJson<'a>>,
+    standard_periods: Vec<BenchmarkPeriodJson<'a>>,
+    limitations: Vec<MarketDataLimitationJson<'a>>,
+}
+
+impl<'a> From<&'a StrategyComparison> for StrategyBenchmarkJson<'a> {
+    fn from(comparison: &'a StrategyComparison) -> Self {
+        Self {
+            availability: ComparisonAvailabilityJson::from(&comparison.availability),
+            role: &comparison.role,
+            method: &comparison.method,
+            subject_label: &comparison.subject_label,
+            reference_label: &comparison.reference_label,
+            currency: &comparison.currency,
+            start_date: comparison.start_date.as_deref(),
+            end_date: comparison.end_date.as_deref(),
+            strategy_anchor_date: comparison.strategy_anchor_date.as_deref(),
+            earlier_period_limitation: comparison.earlier_period_limitation.as_deref(),
+            reset_rule: comparison.reset_rule.as_deref(),
+            weight_convention: comparison.weight_convention.as_deref(),
+            cash_convention: comparison.cash_convention.as_deref(),
+            components: comparison
+                .components
+                .iter()
+                .map(BlendComponentJson::from)
+                .collect(),
+            definition_kind: comparison.definition_kind.as_deref(),
+            selected_at: comparison.selected_at.as_deref(),
+            selection_basis: comparison.selection_basis.as_deref(),
+            subject_return_pct: comparison.subject_return_pct,
+            reference_return_pct: comparison.reference_return_pct,
+            excess_return_percentage_points: comparison.excess_return_percentage_points,
+            subject_wealth: comparison
+                .subject_wealth
+                .iter()
+                .map(WealthPointJson::from)
+                .collect(),
+            reference_wealth: comparison
+                .reference_wealth
+                .iter()
+                .map(WealthPointJson::from)
+                .collect(),
+            standard_periods: comparison
+                .standard_periods
+                .iter()
+                .map(BenchmarkPeriodJson::from)
+                .collect(),
+            limitations: comparison
+                .limitations
+                .iter()
+                .map(MarketDataLimitationJson::from)
+                .collect(),
+        }
+    }
+}
+
+/// One component of the selected Strategy benchmark, with the conventions it
+/// was admitted with.
+#[derive(Serialize)]
+struct BlendComponentJson<'a> {
+    component_key: &'a str,
+    component_reference_id: Option<&'a str>,
+    display_name: &'a str,
+    target_weight: f64,
+    target_weight_percent: f64,
+    is_cash: bool,
+    currency: &'a str,
+    return_basis: &'a str,
+    adjustment: &'a str,
+    hedge_policy: &'a str,
+    universe: &'a str,
+    source: &'a str,
+    source_identifier: &'a str,
+    cadence: &'a str,
+    source_provenance: &'a str,
+    verification_state: &'a str,
+}
+
+impl<'a> From<&'a BlendComponent> for BlendComponentJson<'a> {
+    fn from(component: &'a BlendComponent) -> Self {
+        Self {
+            component_key: &component.component_key,
+            component_reference_id: component.component_reference_id.as_deref(),
+            display_name: &component.display_name,
+            target_weight: component.target_weight,
+            target_weight_percent: component.target_weight_percent,
+            is_cash: component.is_cash,
+            currency: &component.currency,
+            return_basis: &component.return_basis,
+            adjustment: &component.adjustment,
+            hedge_policy: &component.hedge_policy,
+            universe: &component.universe,
+            source: &component.source,
+            source_identifier: &component.source_identifier,
+            cadence: &component.cadence,
+            source_provenance: &component.source_provenance,
+            verification_state: &component.verification_state,
+        }
+    }
 }
 
 /// The exposure-matched benchmark mapped onto the Adapter's own schema.
@@ -366,6 +503,7 @@ impl<'a> From<&'a PortfolioView> for PortfolioViewJson<'a> {
             performance: PerformanceJson::from(&view.performance),
             nav_history: view.nav_history.iter().map(NavSnapshotJson::from).collect(),
             exposure_benchmark: ExposureBenchmarkJson::from(&view.exposure_benchmark),
+            strategy_benchmark: StrategyBenchmarkJson::from(&view.strategy_benchmark),
         }
     }
 }

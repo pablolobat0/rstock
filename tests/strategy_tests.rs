@@ -1,13 +1,27 @@
+//! Explicit Strategy benchmark selection seam tests.
+//!
+//! The selection, the unselection, the replacement, and the in-use deletion
+//! guard are exercised offline with an in-memory database, dummy identities,
+//! a fixed clock, and fake `MarketDataSources`. The selection commands run
+//! through the library-owned production dispatch, so the tests observe exactly
+//! the behaviour of `rstock strategy ...`.
+
 #![allow(dead_code)]
 
 mod common;
 
 use chrono::{Datelike, Duration, NaiveDate, Weekday};
+use clap::Parser;
 use migration::{Migrator, MigratorTrait};
 use rstock::{
-    cli::{commands::strategy::StrategyCommands, output::OutputFormat},
-    db::entities::{benchmark_blend_component, benchmark_reference, benchmark_reference_price},
-    models::ComparisonAvailability,
+    cli::{output::OutputFormat, Cli, Commands},
+    db::{
+        entities::{benchmark_blend_component, benchmark_reference, benchmark_reference_price},
+        repos::portfolio_history_repo,
+    },
+    models::{
+        BenchmarkComparisonPeriod, ComparisonAvailability, ComparisonFact, PortfolioSnapshot,
+    },
     services::{
         custom_blends::{self, BlendCreateRequest},
         market_data::SeriesQualification,
@@ -26,6 +40,7 @@ const REFERENCE_B: &str = "x-strategy-reference-b";
 const SOURCE: &str = "test_source";
 const WINDOW_START: &str = "2025-01-02";
 const WINDOW_END: &str = "2025-02-04";
+const STRATEGY_ROLE: &str = "strategy";
 
 /// The clock the fixtures use.
 fn clock() -> NaiveDate {
@@ -123,6 +138,18 @@ fn offline_sources(
     sources
 }
 
+/// The offline fixture with a stepped component and a flat second component.
+fn stepped_sources() -> MockMarketDataSources {
+    offline_sources(
+        stepped_observations(
+            WINDOW_START,
+            WINDOW_END,
+            &[("2025-01-15", 100.0), ("2025-01-16", 110.0)],
+        ),
+        weekday_observations(WINDOW_START, WINDOW_END, |_| 100.0),
+    )
+}
+
 /// The portfolio fixture: one invested Complete closing snapshot per weekday,
 /// with a NAV that rises by one point per weekday.
 ///
@@ -133,10 +160,18 @@ async fn insert_invested_portfolio(db: &DatabaseConnection) {
     let asset_id = common::insert_asset(db, "XFAKE1", "Invested fixture", "stock", "EUR").await;
     let mut nav = 100.0;
     for (date, _) in weekday_observations(WINDOW_START, WINDOW_END, |_| 0.0) {
-        common::insert_portfolio_snapshot(db, &date, nav, 1.0).await;
-        common::insert_portfolio_asset_snapshot(db, &date, asset_id, 1.0, nav, 100.0, 1.0).await;
+        common::insert_portfolio_snapshot(db, &date, nav, 10.0).await;
+        common::insert_portfolio_asset_snapshot(db, &date, asset_id, 10.0, nav, nav * 10.0, 1.0)
+            .await;
         nav += 1.0;
     }
+}
+
+/// The ready Complete NAV snapshots of the fixture.
+async fn ready_snapshots(db: &DatabaseConnection) -> Vec<PortfolioSnapshot> {
+    portfolio_history_repo::find_between(db, WINDOW_START, WINDOW_END)
+        .await
+        .expect("the ready NAV history should be readable")
 }
 
 /// Saves one Custom blend whose component steps on 16-01-2025.
@@ -174,22 +209,10 @@ async fn save_stepped_blend(
     definition.id
 }
 
-/// The offline fixture with a stepped component and a flat second component.
-fn stepped_sources() -> MockMarketDataSources {
-    offline_sources(
-        stepped_observations(
-            WINDOW_START,
-            WINDOW_END,
-            &[("2025-01-15", 100.0), ("2025-01-16", 110.0)],
-        ),
-        weekday_observations(WINDOW_START, WINDOW_END, |_| 100.0),
-    )
-}
-
 /// The value of one available comparison fact.
-fn available_value(fact: &rstock::models::ComparisonFact<f64>) -> f64 {
+fn available_value(fact: &ComparisonFact<f64>) -> f64 {
     match fact {
-        rstock::models::ComparisonFact::Available { value } => *value,
+        ComparisonFact::Available { value } => *value,
         other => panic!("expected an available fact, got {other:?}"),
     }
 }
@@ -228,20 +251,31 @@ fn assert_no_iso_dates(human: &str) {
     }
 }
 
-/// Runs one Strategy command through the injected writer.
+/// Parses one Strategy command from the command line.
+fn strategy_command(args: &[&str]) -> Commands {
+    match Cli::try_parse_from(args)
+        .expect("the command should parse")
+        .command
+    {
+        Commands::Strategy(arguments) => Commands::Strategy(arguments),
+        other => panic!("expected a strategy command, got {other:?}"),
+    }
+}
+
+/// Runs one Strategy command through the library-owned production dispatch.
 async fn run_strategy(
     db: &DatabaseConnection,
     sources: &MockMarketDataSources,
     today: NaiveDate,
-    command: StrategyCommands,
+    args: &[&str],
     format: OutputFormat,
 ) -> anyhow::Result<Vec<u8>> {
     let market_data = market_data_at(sources, today);
     let mut output = Vec::new();
-    rstock::cli::commands::strategy::run_with_writer(
+    rstock::cli::run_command_with_writer(
         db,
         &market_data,
-        command,
+        strategy_command(args),
         format,
         &mut output,
     )
@@ -301,15 +335,17 @@ async fn the_selection_is_never_inferred_from_the_portfolio_holdings() {
     );
 
     let market_data = market_data_at(&sources, today);
-    let comparison = strategy::compute_strategy_comparison(&db, &market_data)
-        .await
-        .expect("the comparison should be reported");
+    let comparison =
+        strategy::compute_strategy_comparison(&db, &market_data, &ready_snapshots(&db).await)
+            .await
+            .expect("the comparison should be reported");
     assert!(matches!(
         comparison.availability,
         ComparisonAvailability::NotApplicable { .. }
     ));
-    assert_eq!(comparison.role, strategy::STRATEGY_ROLE);
-    assert!(comparison.reference_id.is_none());
+    assert_eq!(comparison.role, STRATEGY_ROLE);
+    assert_eq!(comparison.method, "explicit_strategy_selection");
+    assert_eq!(comparison.reference_label, "Strategy benchmark");
     assert!(comparison.standard_periods.len() == 5);
 }
 
@@ -471,25 +507,36 @@ async fn the_strategy_comparison_is_labelled_separately_and_uses_monthly_reset_a
         .await
         .expect("the strategy should be selected");
 
-    let comparison = strategy::compute_strategy_comparison(&db, &market_data)
-        .await
-        .expect("the comparison should be calculated");
+    let comparison =
+        strategy::compute_strategy_comparison(&db, &market_data, &ready_snapshots(&db).await)
+            .await
+            .expect("the comparison should be calculated");
     assert_eq!(comparison.availability, ComparisonAvailability::Available);
-    assert_eq!(comparison.role, strategy::STRATEGY_ROLE);
-    assert_eq!(comparison.reference_id.as_deref(), Some(blend_id.as_str()));
+    assert_eq!(comparison.role, STRATEGY_ROLE);
+    assert_eq!(comparison.method, "explicit_strategy_selection");
+    assert_eq!(comparison.subject_label, "Portfolio");
+    assert_eq!(comparison.reference_label, "Sixty Forty");
     assert_eq!(comparison.definition_kind.as_deref(), Some("custom_blend"));
     assert_eq!(comparison.currency, "EUR");
-    assert_eq!(comparison.anchor_date.as_deref(), Some(WINDOW_START));
+    assert_eq!(comparison.start_date.as_deref(), Some(WINDOW_START));
     assert_eq!(comparison.end_date.as_deref(), Some(WINDOW_END));
+    assert_eq!(
+        comparison.strategy_anchor_date.as_deref(),
+        Some(WINDOW_START)
+    );
     assert_eq!(comparison.reset_rule.as_deref(), Some("monthly"));
     assert_eq!(comparison.components.len(), 2);
+    assert_eq!(
+        comparison.selection_basis.as_deref(),
+        Some(strategy::SELECTION_BASIS_EXPLICIT)
+    );
 
     assert_close(
-        comparison.portfolio_return_pct.expect("a portfolio return"),
+        comparison.subject_return_pct.expect("a portfolio return"),
         23.0,
     );
     assert_close(
-        comparison.strategy_return_pct.expect("a strategy return"),
+        comparison.reference_return_pct.expect("a strategy return"),
         6.0,
     );
     assert_close(
@@ -501,24 +548,22 @@ async fn the_strategy_comparison_is_labelled_separately_and_uses_monthly_reset_a
 
     // The blend compounds an arithmetic 6% interval return on 16-01-2025 and
     // stays flat afterwards; the monthly reset does not change the wealth.
-    assert_close(wealth_at(&comparison.strategy_wealth, WINDOW_START), 100.0);
-    assert_close(wealth_at(&comparison.strategy_wealth, "2025-01-15"), 100.0);
-    assert_close(wealth_at(&comparison.strategy_wealth, "2025-01-16"), 106.0);
-    assert_close(wealth_at(&comparison.strategy_wealth, WINDOW_END), 106.0);
-    assert_close(wealth_at(&comparison.portfolio_wealth, WINDOW_START), 100.0);
-    assert_close(wealth_at(&comparison.portfolio_wealth, WINDOW_END), 123.0);
+    assert_close(wealth_at(&comparison.reference_wealth, WINDOW_START), 100.0);
+    assert_close(wealth_at(&comparison.reference_wealth, "2025-01-15"), 100.0);
+    assert_close(wealth_at(&comparison.reference_wealth, "2025-01-16"), 106.0);
+    assert_close(wealth_at(&comparison.reference_wealth, WINDOW_END), 106.0);
+    assert_close(wealth_at(&comparison.subject_wealth, WINDOW_START), 100.0);
+    assert_close(wealth_at(&comparison.subject_wealth, WINDOW_END), 123.0);
 
     let since_start = comparison
         .standard_periods
         .iter()
-        .find(|period| {
-            period.period == rstock::models::BenchmarkComparisonPeriod::SinceComparisonStart
-        })
+        .find(|period| period.period == BenchmarkComparisonPeriod::SinceComparisonStart)
         .expect("a since-comparison-start row");
     assert_eq!(since_start.start_date.as_deref(), Some(WINDOW_START));
     assert_eq!(since_start.end_date.as_deref(), Some(WINDOW_END));
-    assert_close(available_value(&since_start.portfolio_return_pct), 23.0);
-    assert_close(available_value(&since_start.strategy_return_pct), 6.0);
+    assert_close(available_value(&since_start.subject_return_pct), 23.0);
+    assert_close(available_value(&since_start.reference_return_pct), 6.0);
     assert_close(
         available_value(&since_start.excess_return_percentage_points),
         17.0,
@@ -538,13 +583,14 @@ async fn the_standard_rows_never_shorten_a_window_the_strategy_cannot_cover() {
         .await
         .expect("the strategy should be selected");
 
-    let comparison = strategy::compute_strategy_comparison(&db, &market_data)
-        .await
-        .expect("the comparison should be calculated");
+    let comparison =
+        strategy::compute_strategy_comparison(&db, &market_data, &ready_snapshots(&db).await)
+            .await
+            .expect("the comparison should be calculated");
     for period in [
-        rstock::models::BenchmarkComparisonPeriod::OneYear,
-        rstock::models::BenchmarkComparisonPeriod::ThreeYear,
-        rstock::models::BenchmarkComparisonPeriod::FiveYear,
+        BenchmarkComparisonPeriod::OneYear,
+        BenchmarkComparisonPeriod::ThreeYear,
+        BenchmarkComparisonPeriod::FiveYear,
     ] {
         let row = comparison
             .standard_periods
@@ -552,17 +598,14 @@ async fn the_standard_rows_never_shorten_a_window_the_strategy_cannot_cover() {
             .find(|row| row.period == period)
             .expect("a standard row");
         assert!(
-            matches!(
-                row.portfolio_return_pct,
-                rstock::models::ComparisonFact::NotApplicable { .. }
-            ),
+            matches!(row.subject_return_pct, ComparisonFact::NotApplicable { .. }),
             "the {period:?} row must not be computed on a shortened window"
         );
     }
     let ytd = comparison
         .standard_periods
         .iter()
-        .find(|row| row.period == rstock::models::BenchmarkComparisonPeriod::Ytd)
+        .find(|row| row.period == BenchmarkComparisonPeriod::Ytd)
         .expect("a year-to-date row");
     assert_eq!(ytd.start_date.as_deref(), Some(WINDOW_START));
 }
@@ -595,16 +638,17 @@ async fn a_later_start_strategy_exposes_its_anchor_and_the_unavailable_earlier_c
         .await
         .expect("the strategy should be selected");
 
-    let comparison = strategy::compute_strategy_comparison(&db, &market_data)
-        .await
-        .expect("the comparison should be calculated");
+    let comparison =
+        strategy::compute_strategy_comparison(&db, &market_data, &ready_snapshots(&db).await)
+            .await
+            .expect("the comparison should be calculated");
     assert_eq!(comparison.availability, ComparisonAvailability::Available);
     assert_eq!(
         comparison.strategy_anchor_date.as_deref(),
         Some("2025-01-16"),
         "the strategy must expose its own anchor"
     );
-    assert_eq!(comparison.anchor_date.as_deref(), Some("2025-01-16"));
+    assert_eq!(comparison.start_date.as_deref(), Some("2025-01-16"));
     let limitation = comparison
         .earlier_period_limitation
         .as_ref()
@@ -616,9 +660,7 @@ async fn a_later_start_strategy_exposes_its_anchor_and_the_unavailable_earlier_c
     let since_start = comparison
         .standard_periods
         .iter()
-        .find(|period| {
-            period.period == rstock::models::BenchmarkComparisonPeriod::SinceComparisonStart
-        })
+        .find(|period| period.period == BenchmarkComparisonPeriod::SinceComparisonStart)
         .expect("a since-comparison-start row");
     assert_eq!(since_start.start_date.as_deref(), Some("2025-01-16"));
 }
@@ -656,9 +698,13 @@ async fn an_unavailable_strategy_leaves_the_portfolio_facts_intact() {
         .insert("XREFA".to_owned());
     let failing_market_data = market_data_at(&failing_sources, today);
 
-    let comparison = strategy::compute_strategy_comparison(&db, &failing_market_data)
-        .await
-        .expect("an unavailable strategy must not fail the command");
+    let comparison = strategy::compute_strategy_comparison(
+        &db,
+        &failing_market_data,
+        &ready_snapshots(&db).await,
+    )
+    .await
+    .expect("an unavailable strategy must not fail the command");
     assert!(
         matches!(
             comparison.availability,
@@ -667,8 +713,8 @@ async fn an_unavailable_strategy_leaves_the_portfolio_facts_intact() {
         "the strategy must be unavailable, got {:?}",
         comparison.availability
     );
-    assert_eq!(comparison.role, strategy::STRATEGY_ROLE);
-    assert_eq!(comparison.reference_id.as_deref(), Some(blend_id.as_str()));
+    assert_eq!(comparison.role, STRATEGY_ROLE);
+    assert_eq!(comparison.reference_label, "Sixty Forty");
 
     let history_after = common::get_all_snapshots(&db).await;
     assert_eq!(
@@ -711,9 +757,10 @@ async fn malformed_persisted_strategy_data_remains_an_error() {
         .await
         .expect("the component should be updatable");
 
-    let failure = strategy::compute_strategy_comparison(&db, &market_data)
-        .await
-        .expect_err("malformed persisted data must remain an error");
+    let failure =
+        strategy::compute_strategy_comparison(&db, &market_data, &ready_snapshots(&db).await)
+            .await
+            .expect_err("malformed persisted data must remain an error");
     assert!(
         failure.to_string().contains("total"),
         "the failure must name the broken invariant: {failure}"
@@ -842,9 +889,7 @@ async fn the_strategy_commands_report_the_same_selection_in_human_and_json() {
         &db,
         &sources,
         today,
-        StrategyCommands::Select {
-            reference_id: blend_id.clone(),
-        },
+        &["rstock", "strategy", "select", &blend_id],
         OutputFormat::Json,
     )
     .await
@@ -864,7 +909,7 @@ async fn the_strategy_commands_report_the_same_selection_in_human_and_json() {
         &db,
         &sources,
         today,
-        StrategyCommands::Show {},
+        &["rstock", "strategy", "show"],
         OutputFormat::Human,
     )
     .await
@@ -887,7 +932,7 @@ async fn the_strategy_commands_report_the_same_selection_in_human_and_json() {
         &db,
         &sources,
         today,
-        StrategyCommands::Show {},
+        &["rstock", "strategy", "show"],
         OutputFormat::Json,
     )
     .await
@@ -902,7 +947,7 @@ async fn the_strategy_commands_report_the_same_selection_in_human_and_json() {
         &db,
         &sources,
         today,
-        StrategyCommands::Unselect {},
+        &["rstock", "strategy", "unselect"],
         OutputFormat::Json,
     )
     .await

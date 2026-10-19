@@ -5,45 +5,21 @@
 //! strategy from the holdings, and they create no transaction, weight, or NAV
 //! change.
 
-use std::io::{self, Write};
+use std::io::Write;
 
-use clap::Subcommand;
 use serde::Serialize;
 
 use crate::{
-    cli::output,
+    cli::{output, StrategyCommands},
     constants::display_date,
     models::StrategySelectionOutcome,
     services::{market_data::MarketData, strategy},
 };
 
-/// The explicit Strategy benchmark selection commands.
-#[derive(Clone, Debug, Subcommand)]
-pub enum StrategyCommands {
-    /// Explicitly select a saved definition as the portfolio's Strategy benchmark
-    Select {
-        /// The saved benchmark definition identity to select
-        reference_id: String,
-    },
-    /// Explicitly remove the portfolio's Strategy benchmark selection
-    Unselect {},
-    /// Show the current Strategy benchmark selection
-    Show {},
-}
-
-/// Runs one Strategy selection command against the application graph.
-pub async fn run(
-    db: &sea_orm::DatabaseConnection,
-    market_data: &MarketData,
-    command: StrategyCommands,
-    format: output::OutputFormat,
-) -> anyhow::Result<()> {
-    let stdout = io::stdout();
-    let mut writer = stdout.lock();
-    run_with_writer(db, market_data, command, format, &mut writer).await
-}
-
 /// Runs one Strategy selection command through the injected writer.
+///
+/// The library-owned dispatch is the only entry point, so the production
+/// command and the tests observe exactly the same behaviour.
 pub async fn run_with_writer<W: Write>(
     db: &sea_orm::DatabaseConnection,
     market_data: &MarketData,

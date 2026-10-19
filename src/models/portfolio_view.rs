@@ -1,6 +1,6 @@
 use crate::models::{
     ExposureBenchmarkComparison, FactAvailability, MarketDataLimitation, PortfolioInventory,
-    PortfolioSnapshot,
+    PortfolioSnapshot, StrategyComparison,
 };
 
 /// Presentation-neutral request for the ready NAV history the composer must
@@ -147,4 +147,10 @@ pub struct PortfolioView {
     /// removes the inventory, the NAV readiness, or the portfolio-only
     /// outcomes.
     pub exposure_benchmark: ExposureBenchmarkComparison,
+    /// The explicitly selected Strategy benchmark of the portfolio. It is
+    /// always present and keeps its own availability: it is a reference
+    /// comparison of a separately chosen definition, and it never changes the
+    /// exposure-matched primary comparison, the portfolio's weights, its NAV
+    /// accounting, its inventory, or its Effective valuation date.
+    pub strategy_benchmark: StrategyComparison,
 }

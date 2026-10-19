@@ -25,7 +25,7 @@ use crate::models::{
     PortfolioView,
 };
 use crate::services::market_data::MarketData;
-use crate::services::{exposure_benchmark, ledger, metrics, nav, portfolio_inventory};
+use crate::services::{exposure_benchmark, ledger, metrics, nav, portfolio_inventory, strategy};
 
 /// Composes one complete, presentation-neutral [`PortfolioView`] for the
 /// requested NAV history period.
@@ -122,11 +122,19 @@ pub async fn get_portfolio_view(
         exposure_benchmark::compute_exposure_matched_comparison(db, market_data, &ready_snapshots)
             .await?;
 
+    // The selected Strategy benchmark is a separate reference comparison. It
+    // reuses the same ready NAV history and never changes the exposure-matched
+    // comparison, the portfolio's weights, its NAV accounting, its inventory,
+    // or its Effective valuation date.
+    let strategy_benchmark =
+        strategy::compute_strategy_comparison(db, market_data, &ready_snapshots).await?;
+
     Ok(PortfolioView {
         inventory,
         performance,
         nav_history,
         exposure_benchmark,
+        strategy_benchmark,
     })
 }
 

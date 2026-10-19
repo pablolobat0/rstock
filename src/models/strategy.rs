@@ -1,8 +1,7 @@
 use serde::Serialize;
 
 use crate::models::{
-    BenchmarkComparisonPeriod, BlendComponent, ComparisonAvailability, ComparisonFact,
-    DatedWealthPoint, MarketDataLimitation,
+    BenchmarkPeriod, BlendComponent, ComparisonAvailability, DatedWealthPoint, MarketDataLimitation,
 };
 
 /// The explicitly selected Strategy benchmark.
@@ -44,68 +43,37 @@ pub struct StrategySelectionOutcome {
     pub note: String,
 }
 
-/// One standard comparison row of the selected Strategy comparison.
+/// The comparison of the portfolio against its explicitly selected Strategy
+/// benchmark.
 ///
-/// The rows answer the strategy question and stay separate from the
-/// exposure-matched primary comparison: the subject is the portfolio and the
-/// reference is the selected Strategy benchmark.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct StrategyComparisonPeriod {
-    pub period: BenchmarkComparisonPeriod,
-    /// The trailing or calendar anchor the row asked for.
-    pub requested_start_date: Option<String>,
-    /// The actual anchor the row was calculated from.
-    pub start_date: Option<String>,
-    /// The actual end the row was calculated to.
-    pub end_date: Option<String>,
-    /// The portfolio's return over the row.
-    pub portfolio_return_pct: ComparisonFact<f64>,
-    /// The selected Strategy benchmark's return over the row.
-    pub strategy_return_pct: ComparisonFact<f64>,
-    /// The portfolio's return minus the Strategy benchmark's return, in
-    /// percentage points.
-    pub excess_return_percentage_points: ComparisonFact<f64>,
-    pub beta: ComparisonFact<f64>,
-    pub correlation: ComparisonFact<f64>,
-    /// Sample deviation of arithmetic active returns, annualized and expressed
-    /// in percent.
-    pub tracking_error_annualized_pct: ComparisonFact<f64>,
-    /// Annualized information ratio from arithmetic daily active returns.
-    pub information_ratio: ComparisonFact<f64>,
-}
-
-/// The complete outcome of the selected Strategy comparison.
+/// The comparison is a reference comparison only: it answers a different
+/// question from the exposure-matched primary comparison and never changes
+/// that comparison, the portfolio's weights, its NAV accounting, its
+/// inventory, or its Effective valuation date.
 ///
-/// The outcome is a reference comparison only: it never changes the
-/// exposure-matched primary comparison, the portfolio's weights, its NAV
-/// accounting, its inventory, or its Effective valuation date.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+/// The outcome keeps its own availability: an expected missing input is an
+/// explicit unavailable state, while a database failure, a corrupt persisted
+/// observation, or a violated invariant remains an error.
+#[derive(Clone, Debug, PartialEq)]
 pub struct StrategyComparison {
-    /// The outcome state of the whole comparison.
     pub availability: ComparisonAvailability,
-    /// The role of this comparison; it is always the strategy role.
+    /// The comparison role: the explicitly selected Strategy benchmark.
     pub role: String,
-    /// The selected definition identity.
-    pub reference_id: Option<String>,
-    /// The selected definition's display name.
-    pub reference_name: Option<String>,
-    /// The kind of the selected definition: a saved Custom blend or a
-    /// source-backed reference.
-    pub definition_kind: Option<String>,
-    /// When the Strategy benchmark was explicitly selected.
-    pub selected_at: Option<String>,
-    /// Why the Strategy benchmark is selected; the selection is always
-    /// explicit.
-    pub selection_basis: Option<String>,
-    /// The comparison currency; EUR is the Base currency.
+    /// The calculation method of this comparison.
+    pub method: String,
+    /// The subject of the comparison: the portfolio itself.
+    pub subject_label: String,
+    /// The reference of the comparison: the selected Strategy benchmark.
+    pub reference_label: String,
+    /// The currency of both compared series and returns.
     pub currency: String,
-    /// The anchor the comparison actually starts at. A Strategy benchmark that
-    /// starts later than the portfolio exposes its own anchor here.
-    pub anchor_date: Option<String>,
+    /// The anchor the comparison starts at, where both series reach 100.
+    pub start_date: Option<String>,
     /// The last close the comparison reaches.
     pub end_date: Option<String>,
     /// The anchor of the Strategy benchmark itself, before it is aligned with
-    /// the portfolio.
+    /// the portfolio. A Strategy benchmark that starts later than the
+    /// portfolio exposes its own anchor here.
     pub strategy_anchor_date: Option<String>,
     /// The honest limitation of the periods the Strategy benchmark cannot
     /// cover.
@@ -121,21 +89,101 @@ pub struct StrategyComparison {
     /// The component provenance of the selected definition, for a saved Custom
     /// blend.
     pub components: Vec<BlendComponent>,
-    /// The portfolio's rebased wealth over the comparison window.
-    pub portfolio_wealth: Vec<DatedWealthPoint>,
-    /// The selected Strategy benchmark's rebased wealth over the comparison
-    /// window.
-    pub strategy_wealth: Vec<DatedWealthPoint>,
-    /// The portfolio's cumulative return over the comparison window.
-    pub portfolio_return_pct: Option<f64>,
-    /// The Strategy benchmark's cumulative return over the comparison window.
-    pub strategy_return_pct: Option<f64>,
-    /// The difference between the two cumulative returns, in percentage
-    /// points.
+    /// The kind of the selected definition: a saved Custom blend or a
+    /// source-backed reference.
+    pub definition_kind: Option<String>,
+    /// When the Strategy benchmark was explicitly selected.
+    pub selected_at: Option<String>,
+    /// Why the Strategy benchmark is selected; the selection is always
+    /// explicit.
+    pub selection_basis: Option<String>,
+    pub subject_return_pct: Option<f64>,
+    pub reference_return_pct: Option<f64>,
     pub excess_return_percentage_points: Option<f64>,
-    /// The standard comparison rows, calculated independently of the graph
-    /// period.
-    pub standard_periods: Vec<StrategyComparisonPeriod>,
-    /// The market-data limitations of the selected definition.
+    /// The portfolio NAV rebased to 100 at the comparison anchor.
+    pub subject_wealth: Vec<DatedWealthPoint>,
+    /// The selected Strategy benchmark rebased to 100 at the comparison
+    /// anchor.
+    pub reference_wealth: Vec<DatedWealthPoint>,
+    /// The YTD, 1Y, 3Y, 5Y, and since-comparison-start rows, independent of
+    /// the graph period.
+    pub standard_periods: Vec<BenchmarkPeriod>,
+    /// The Market data limitations of the selected definition.
     pub limitations: Vec<MarketDataLimitation>,
+}
+
+impl StrategyComparison {
+    /// The comparison outcome for a portfolio that carries no selected
+    /// Strategy benchmark.
+    pub fn not_applicable(reason: impl Into<String>) -> Self {
+        let reason = reason.into();
+        let mut comparison = Self::empty(ComparisonAvailability::NotApplicable {
+            reason: reason.clone(),
+        });
+        comparison.standard_periods = crate::models::BenchmarkComparisonPeriod::standard_periods()
+            .into_iter()
+            .map(|period| BenchmarkPeriod::not_applicable(period, reason.clone()))
+            .collect();
+        comparison
+    }
+
+    /// The comparison outcome when the selected Strategy benchmark cannot be
+    /// prepared.
+    ///
+    /// The selected definition and its Market data limitations stay visible so
+    /// the reason is inspectable instead of hidden behind a summary.
+    pub fn unavailable(
+        reason: impl Into<String>,
+        reference_label: impl Into<String>,
+        limitations: Vec<MarketDataLimitation>,
+    ) -> Self {
+        let reason = reason.into();
+        let mut comparison = Self::empty(ComparisonAvailability::Unavailable {
+            reason: reason.clone(),
+        });
+        comparison.reference_label = reference_label.into();
+        comparison.limitations = limitations;
+        comparison.standard_periods = crate::models::BenchmarkComparisonPeriod::standard_periods()
+            .into_iter()
+            .map(|period| BenchmarkPeriod::unavailable(period, reason.clone()))
+            .collect();
+        comparison
+    }
+
+    fn empty(availability: ComparisonAvailability) -> Self {
+        let reason = match &availability {
+            ComparisonAvailability::Available => String::new(),
+            ComparisonAvailability::Unavailable { reason }
+            | ComparisonAvailability::NotApplicable { reason } => reason.clone(),
+        };
+        Self {
+            availability,
+            role: "strategy".to_owned(),
+            method: "explicit_strategy_selection".to_owned(),
+            subject_label: "Portfolio".to_owned(),
+            reference_label: "Strategy benchmark".to_owned(),
+            currency: crate::constants::BASE_CURRENCY.to_owned(),
+            start_date: None,
+            end_date: None,
+            strategy_anchor_date: None,
+            earlier_period_limitation: None,
+            reset_rule: None,
+            weight_convention: None,
+            cash_convention: None,
+            components: Vec::new(),
+            definition_kind: None,
+            selected_at: None,
+            selection_basis: None,
+            subject_return_pct: None,
+            reference_return_pct: None,
+            excess_return_percentage_points: None,
+            subject_wealth: Vec::new(),
+            reference_wealth: Vec::new(),
+            standard_periods: crate::models::BenchmarkComparisonPeriod::standard_periods()
+                .into_iter()
+                .map(|period| BenchmarkPeriod::unavailable(period, reason.clone()))
+                .collect(),
+            limitations: Vec::new(),
+        }
+    }
 }

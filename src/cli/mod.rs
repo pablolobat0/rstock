@@ -131,6 +131,8 @@ pub enum Commands {
     Benchmark(BenchmarkArgs),
     /// Create, inspect and delete saved Custom benchmark blends
     Blend(BlendArgs),
+    /// Select, unselect and inspect the portfolio's Strategy benchmark
+    Strategy(StrategyArgs),
 }
 
 #[derive(Debug, Args)]
@@ -185,6 +187,31 @@ pub enum CandidateVehicle {
 pub struct BlendArgs {
     #[command(subcommand)]
     pub command: BlendCommands,
+}
+
+/// The grouped Strategy benchmark selection commands.
+#[derive(Debug, Args)]
+pub struct StrategyArgs {
+    #[command(subcommand)]
+    pub command: StrategyCommands,
+}
+
+/// The explicit Strategy benchmark selection commands.
+///
+/// A selection is a reference operation: it records which saved definition the
+/// portfolio is compared against and never infers a strategy from the
+/// holdings.
+#[derive(Clone, Debug, Subcommand)]
+pub enum StrategyCommands {
+    /// Explicitly select a saved definition as the portfolio's Strategy benchmark
+    Select {
+        /// The saved benchmark definition identity to select
+        reference_id: String,
+    },
+    /// Explicitly remove the portfolio's Strategy benchmark selection
+    Unselect {},
+    /// Show the current Strategy benchmark selection
+    Show {},
 }
 
 #[derive(Debug, Subcommand)]

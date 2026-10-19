@@ -104,6 +104,16 @@ pub async fn run_command_with_writer<W: Write>(
         Commands::Blend(args) => {
             commands::custom_blends::run(db, market_data, args.command, output_format).await
         }
+        Commands::Strategy(args) => {
+            commands::strategy::run_with_writer(
+                db,
+                market_data,
+                args.command,
+                output_format,
+                writer,
+            )
+            .await
+        }
     }
 }
 
