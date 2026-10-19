@@ -8,13 +8,17 @@
 
 use std::io::Write;
 
+use chrono::NaiveDate;
 use serde::Serialize;
 
 use crate::cli::output::write_json;
 use crate::models::{
-    DailyMovementCoverage, DailyPricedHoldingsMovement, FactAvailability, IndividualPrice,
-    InventoryPosition, MarketDataLimitation, PortfolioInventorySection, PortfolioPerformance,
-    PortfolioSnapshot, PortfolioView,
+    BenchmarkComparisonPeriod, BenchmarkPeriod, ComparisonAvailability, ComparisonFact,
+    DailyMovementCoverage, DailyPricedHoldingsMovement, DatedWealthPoint,
+    ExposureBenchmarkComparison, ExposureBenchmarkReference, FactAvailability, IndividualPrice,
+    InventoryPosition, MarketDataLimitation, MarketDataLimitationClassification, MarketDataSubject,
+    OmittedSeedInterval, PortfolioInventorySection, PortfolioPerformance, PortfolioSnapshot,
+    PortfolioView,
 };
 
 /// Maps the composed Portfolio view onto the nested JSON schema and writes one
@@ -30,6 +34,320 @@ struct PortfolioViewJson<'a> {
     inventory: InventoryJson<'a>,
     performance: PerformanceJson<'a>,
     nav_history: Vec<NavSnapshotJson>,
+    /// The exposure-matched primary benchmark with its availability, aligned
+    /// subject/reference series, standard rows, and reference provenance.
+    exposure_benchmark: ExposureBenchmarkJson<'a>,
+}
+
+/// The exposure-matched benchmark mapped onto the Adapter's own schema.
+///
+/// The Adapter owns this mapping: the domain outcome is not serialized
+/// directly, so the JSON contract stays an explicit Adapter decision.
+#[derive(Serialize)]
+struct ExposureBenchmarkJson<'a> {
+    availability: ComparisonAvailabilityJson,
+    role: &'a str,
+    method: &'a str,
+    subject_label: &'a str,
+    reference_label: &'a str,
+    currency: &'a str,
+    start_date: Option<&'a str>,
+    end_date: Option<&'a str>,
+    inception_date: Option<&'a str>,
+    omitted_seed_interval: Option<OmittedSeedIntervalJson<'a>>,
+    retrospective: bool,
+    subject_return_pct: Option<f64>,
+    reference_return_pct: Option<f64>,
+    excess_return_percentage_points: Option<f64>,
+    subject_wealth: Vec<WealthPointJson<'a>>,
+    reference_wealth: Vec<WealthPointJson<'a>>,
+    standard_periods: Vec<BenchmarkPeriodJson<'a>>,
+    references: Vec<ExposureBenchmarkReferenceJson<'a>>,
+    reference_limitations: Vec<MarketDataLimitationJson<'a>>,
+}
+
+impl<'a> From<&'a ExposureBenchmarkComparison> for ExposureBenchmarkJson<'a> {
+    fn from(comparison: &'a ExposureBenchmarkComparison) -> Self {
+        Self {
+            availability: ComparisonAvailabilityJson::from(&comparison.availability),
+            role: &comparison.role,
+            method: &comparison.method,
+            subject_label: &comparison.subject_label,
+            reference_label: &comparison.reference_label,
+            currency: &comparison.currency,
+            start_date: comparison.start_date.as_deref(),
+            end_date: comparison.end_date.as_deref(),
+            inception_date: comparison.inception_date.as_deref(),
+            omitted_seed_interval: comparison
+                .omitted_seed_interval
+                .as_ref()
+                .map(OmittedSeedIntervalJson::from),
+            retrospective: comparison.retrospective,
+            subject_return_pct: comparison.subject_return_pct,
+            reference_return_pct: comparison.reference_return_pct,
+            excess_return_percentage_points: comparison.excess_return_percentage_points,
+            subject_wealth: comparison
+                .subject_wealth
+                .iter()
+                .map(WealthPointJson::from)
+                .collect(),
+            reference_wealth: comparison
+                .reference_wealth
+                .iter()
+                .map(WealthPointJson::from)
+                .collect(),
+            standard_periods: comparison
+                .standard_periods
+                .iter()
+                .map(BenchmarkPeriodJson::from)
+                .collect(),
+            references: comparison
+                .references
+                .iter()
+                .map(ExposureBenchmarkReferenceJson::from)
+                .collect(),
+            reference_limitations: comparison
+                .reference_limitations
+                .iter()
+                .map(MarketDataLimitationJson::from)
+                .collect(),
+        }
+    }
+}
+
+/// One contributing reference mapped onto the Adapter's own schema.
+#[derive(Serialize)]
+struct ExposureBenchmarkReferenceJson<'a> {
+    reference_id: &'a str,
+    display_name: &'a str,
+    assets: &'a [String],
+    first_weight_pct: Option<f64>,
+    last_weight_pct: Option<f64>,
+    max_weight_pct: Option<f64>,
+    native_currency: &'a str,
+    comparison_currency: &'a str,
+    return_basis: &'a str,
+    adjustment: &'a str,
+    hedge_policy: &'a str,
+    cadence: Option<&'a str>,
+    source: &'a str,
+    source_identifier: &'a str,
+    source_provenance: &'a str,
+    verification_state: &'a str,
+    assigned_at: Option<&'a str>,
+    limitations: Vec<MarketDataLimitationJson<'a>>,
+}
+
+impl<'a> From<&'a ExposureBenchmarkReference> for ExposureBenchmarkReferenceJson<'a> {
+    fn from(reference: &'a ExposureBenchmarkReference) -> Self {
+        Self {
+            reference_id: &reference.reference_id,
+            display_name: &reference.display_name,
+            assets: &reference.assets,
+            first_weight_pct: reference.first_weight_pct,
+            last_weight_pct: reference.last_weight_pct,
+            max_weight_pct: reference.max_weight_pct,
+            native_currency: &reference.native_currency,
+            comparison_currency: &reference.comparison_currency,
+            return_basis: &reference.return_basis,
+            adjustment: &reference.adjustment,
+            hedge_policy: &reference.hedge_policy,
+            cadence: reference.cadence.as_deref(),
+            source: &reference.source,
+            source_identifier: &reference.source_identifier,
+            source_provenance: &reference.source_provenance,
+            verification_state: &reference.verification_state,
+            assigned_at: reference.assigned_at.as_deref(),
+            limitations: reference
+                .limitations
+                .iter()
+                .map(MarketDataLimitationJson::from)
+                .collect(),
+        }
+    }
+}
+
+/// The omitted seed-to-first-close interval mapped onto the Adapter's schema.
+#[derive(Serialize)]
+struct OmittedSeedIntervalJson<'a> {
+    seed_date: &'a str,
+    anchor_date: &'a str,
+}
+
+impl<'a> From<&'a OmittedSeedInterval> for OmittedSeedIntervalJson<'a> {
+    fn from(interval: &'a OmittedSeedInterval) -> Self {
+        Self {
+            seed_date: &interval.seed_date,
+            anchor_date: &interval.anchor_date,
+        }
+    }
+}
+
+/// One dated point of an aligned wealth series.
+#[derive(Serialize)]
+struct WealthPointJson<'a> {
+    date: &'a str,
+    wealth: f64,
+}
+
+impl<'a> From<&'a DatedWealthPoint> for WealthPointJson<'a> {
+    fn from(point: &'a DatedWealthPoint) -> Self {
+        Self {
+            date: &point.date,
+            wealth: point.wealth,
+        }
+    }
+}
+
+/// One standard comparison period mapped onto the Adapter's own schema.
+#[derive(Serialize)]
+struct BenchmarkPeriodJson<'a> {
+    period: BenchmarkComparisonPeriod,
+    requested_start_date: Option<&'a str>,
+    start_date: Option<&'a str>,
+    end_date: Option<&'a str>,
+    subject_return_pct: ComparisonFactJson,
+    reference_return_pct: ComparisonFactJson,
+    excess_return_percentage_points: ComparisonFactJson,
+    beta: ComparisonFactJson,
+    correlation: ComparisonFactJson,
+    tracking_error_annualized_pct: ComparisonFactJson,
+    information_ratio: ComparisonFactJson,
+}
+
+impl<'a> From<&'a BenchmarkPeriod> for BenchmarkPeriodJson<'a> {
+    fn from(period: &'a BenchmarkPeriod) -> Self {
+        Self {
+            period: period.period,
+            requested_start_date: period.requested_start_date.as_deref(),
+            start_date: period.start_date.as_deref(),
+            end_date: period.end_date.as_deref(),
+            subject_return_pct: ComparisonFactJson::from(&period.subject_return_pct),
+            reference_return_pct: ComparisonFactJson::from(&period.reference_return_pct),
+            excess_return_percentage_points: ComparisonFactJson::from(
+                &period.excess_return_percentage_points,
+            ),
+            beta: ComparisonFactJson::from(&period.beta),
+            correlation: ComparisonFactJson::from(&period.correlation),
+            tracking_error_annualized_pct: ComparisonFactJson::from(
+                &period.tracking_error_annualized_pct,
+            ),
+            information_ratio: ComparisonFactJson::from(&period.information_ratio),
+        }
+    }
+}
+
+/// The availability of one comparison outcome.
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case", tag = "status")]
+enum ComparisonAvailabilityJson {
+    Available,
+    Unavailable { reason: String },
+    NotApplicable { reason: String },
+}
+
+impl<'a> From<&'a ComparisonAvailability> for ComparisonAvailabilityJson {
+    fn from(availability: &'a ComparisonAvailability) -> Self {
+        match availability {
+            ComparisonAvailability::Available => Self::Available,
+            ComparisonAvailability::Unavailable { reason } => Self::Unavailable {
+                reason: reason.clone(),
+            },
+            ComparisonAvailability::NotApplicable { reason } => Self::NotApplicable {
+                reason: reason.clone(),
+            },
+        }
+    }
+}
+
+/// One calculated comparison fact.
+#[derive(Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+enum ComparisonFactJson {
+    Available { value: f64 },
+    Unavailable { reason: String },
+    NotApplicable { reason: String },
+}
+
+impl<'a> From<&'a ComparisonFact<f64>> for ComparisonFactJson {
+    fn from(fact: &'a ComparisonFact<f64>) -> Self {
+        match fact {
+            ComparisonFact::Available { value } => Self::Available { value: *value },
+            ComparisonFact::Unavailable { reason } => Self::Unavailable {
+                reason: reason.clone(),
+            },
+            ComparisonFact::NotApplicable { reason } => Self::NotApplicable {
+                reason: reason.clone(),
+            },
+        }
+    }
+}
+
+/// One Market data limitation mapped onto the Adapter's own schema.
+#[derive(Serialize)]
+struct MarketDataLimitationJson<'a> {
+    subject: MarketDataSubjectJson<'a>,
+    latest_available_date: Option<NaiveDate>,
+    requested_end_date: NaiveDate,
+    classification: &'static str,
+}
+
+impl<'a> From<&'a MarketDataLimitation> for MarketDataLimitationJson<'a> {
+    fn from(limitation: &'a MarketDataLimitation) -> Self {
+        Self {
+            subject: MarketDataSubjectJson::from(&limitation.subject),
+            latest_available_date: limitation.latest_available_date,
+            requested_end_date: limitation.requested_end_date,
+            classification: classification_label(&limitation.classification),
+        }
+    }
+}
+
+/// The classified subject of one Market data limitation.
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum MarketDataSubjectJson<'a> {
+    Asset {
+        ticker: &'a str,
+        name: &'a str,
+        asset_type: String,
+    },
+    BenchmarkReference {
+        id: &'a str,
+        display_name: &'a str,
+    },
+    FxRate {
+        currency: &'a str,
+    },
+}
+
+impl<'a> From<&'a MarketDataSubject> for MarketDataSubjectJson<'a> {
+    fn from(subject: &'a MarketDataSubject) -> Self {
+        match subject {
+            MarketDataSubject::Asset {
+                ticker,
+                name,
+                asset_type,
+            } => Self::Asset {
+                ticker,
+                name,
+                asset_type: asset_type.to_string(),
+            },
+            MarketDataSubject::BenchmarkReference { id, display_name } => {
+                Self::BenchmarkReference { id, display_name }
+            }
+            MarketDataSubject::FxRate { currency } => Self::FxRate { currency },
+        }
+    }
+}
+
+/// The user-actionable classification of one Market data limitation.
+fn classification_label(classification: &MarketDataLimitationClassification) -> &'static str {
+    match classification {
+        MarketDataLimitationClassification::ActionableMissingData => "actionable_missing_data",
+        MarketDataLimitationClassification::ActionableReportingLag => "actionable_reporting_lag",
+        MarketDataLimitationClassification::ActionableStaleData => "actionable_stale_data",
+    }
 }
 
 impl<'a> From<&'a PortfolioView> for PortfolioViewJson<'a> {
@@ -47,6 +365,7 @@ impl<'a> From<&'a PortfolioView> for PortfolioViewJson<'a> {
             },
             performance: PerformanceJson::from(&view.performance),
             nav_history: view.nav_history.iter().map(NavSnapshotJson::from).collect(),
+            exposure_benchmark: ExposureBenchmarkJson::from(&view.exposure_benchmark),
         }
     }
 }

@@ -10,6 +10,22 @@ pub struct PrimaryAssignment {
     pub is_override: bool,
 }
 
+/// One explicit assignment with the moment it was recorded.
+///
+/// The catalog view of an assignment does not carry its timestamp. A
+/// comparison that reports retrospective provenance needs the recorded
+/// moment, so the assignment record keeps it without changing the catalog
+/// view.
+#[derive(Clone, Debug)]
+pub struct PrimaryAssignmentRecord {
+    pub subject_id: String,
+    pub reference_id: String,
+    pub is_override: bool,
+    /// When the explicit assignment was recorded. The assignment applies
+    /// retrospectively to the whole comparison window.
+    pub assigned_at: String,
+}
+
 pub async fn find_all(
     db: &impl sea_orm::ConnectionTrait,
 ) -> anyhow::Result<Vec<PrimaryAssignment>> {
@@ -19,12 +35,7 @@ pub async fn find_all(
         .all(db)
         .await?
         .into_iter()
-        .map(|row| PrimaryAssignment {
-            subject_type: row.subject_type,
-            subject_id: row.subject_id,
-            reference_id: row.reference_id,
-            is_override: row.is_override,
-        })
+        .map(assignment_from_row)
         .collect())
 }
 
@@ -37,12 +48,7 @@ pub async fn find_by_subject(
         benchmark_assignment::Entity::find_by_id((subject_type.to_owned(), subject_id.to_owned()))
             .one(db)
             .await?
-            .map(|row| PrimaryAssignment {
-                subject_type: row.subject_type,
-                subject_id: row.subject_id,
-                reference_id: row.reference_id,
-                is_override: row.is_override,
-            }),
+            .map(assignment_from_row),
     )
 }
 
@@ -58,12 +64,28 @@ pub async fn find_by_reference(
         .all(db)
         .await?
         .into_iter()
-        .map(|row| PrimaryAssignment {
-            subject_type: row.subject_type,
-            subject_id: row.subject_id,
-            reference_id: row.reference_id,
-            is_override: row.is_override,
-        })
+        .map(assignment_from_row)
+        .collect())
+}
+
+/// Reads the explicit primary assignments of the given subjects in one query,
+/// including the moment each assignment was recorded.
+pub async fn find_by_subjects(
+    db: &impl sea_orm::ConnectionTrait,
+    subject_type: &str,
+    subject_ids: &[String],
+) -> anyhow::Result<Vec<PrimaryAssignmentRecord>> {
+    if subject_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(benchmark_assignment::Entity::find()
+        .filter(benchmark_assignment::Column::SubjectType.eq(subject_type))
+        .filter(benchmark_assignment::Column::SubjectId.is_in(subject_ids.to_vec()))
+        .order_by_asc(benchmark_assignment::Column::SubjectId)
+        .all(db)
+        .await?
+        .into_iter()
+        .map(record_from_row)
         .collect())
 }
 
@@ -110,4 +132,22 @@ pub async fn delete_by_subject(
     .exec(db)
     .await?;
     Ok(result.rows_affected > 0)
+}
+
+fn assignment_from_row(row: benchmark_assignment::Model) -> PrimaryAssignment {
+    PrimaryAssignment {
+        subject_type: row.subject_type,
+        subject_id: row.subject_id,
+        reference_id: row.reference_id,
+        is_override: row.is_override,
+    }
+}
+
+fn record_from_row(row: benchmark_assignment::Model) -> PrimaryAssignmentRecord {
+    PrimaryAssignmentRecord {
+        subject_id: row.subject_id,
+        reference_id: row.reference_id,
+        is_override: row.is_override,
+        assigned_at: row.assigned_at,
+    }
 }

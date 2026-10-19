@@ -1,5 +1,6 @@
 use crate::models::{
-    FactAvailability, MarketDataLimitation, PortfolioInventory, PortfolioSnapshot,
+    ExposureBenchmarkComparison, FactAvailability, MarketDataLimitation, PortfolioInventory,
+    PortfolioSnapshot,
 };
 
 /// Presentation-neutral request for the ready NAV history the composer must
@@ -141,4 +142,9 @@ pub struct PortfolioView {
     /// never split a successful presentation. Empty while no Complete NAV
     /// snapshot exists.
     pub nav_history: Vec<PortfolioSnapshot>,
+    /// The exposure-matched primary benchmark of the portfolio. It is always
+    /// present and keeps its own availability: a benchmark failure never
+    /// removes the inventory, the NAV readiness, or the portfolio-only
+    /// outcomes.
+    pub exposure_benchmark: ExposureBenchmarkComparison,
 }

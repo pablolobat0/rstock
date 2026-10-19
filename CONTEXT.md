@@ -172,9 +172,35 @@ _Avoid_: Component history, lookback window
 The actual completed weekday close a **Custom blend** starts at, resolved from the requested start by calendar rule before any component availability is inspected. Every component must hold that close, so a **Custom blend** never opens on a shortened window.
 _Avoid_: First common observation, first available date
 
+**Exposure-matched benchmark**:
+The primary benchmark of the Portfolio dashboard that combines the explicitly assigned primary reference of every held asset through that asset's historical prior-closing EUR exposures.
+_Avoid_: Portfolio weight benchmark, current-holdings benchmark, strategy benchmark
+
+**Prior-close exposure weight**:
+One held asset's share of the complete NAV scope at the closing snapshot before the measured interval, used to weight the assigned primary reference's return in that interval.
+_Avoid_: Today's weight, intraday weight, projected weight
+
+**Complete NAV scope**:
+The performance-holdings value plus the retained Net dividend income of one closing snapshot, with Monetary holdings excluded; it is the denominator of every exposure weight.
+_Avoid_: Inventory value, market value of holdings
+
+**Retrospective reference assignment**:
+An explicit primary reference assignment that applies to the whole compared window because it was selected after the compared period, without an effective-dated chain or a spliced series.
+_Avoid_: Effective-dated assignment, backdated reference
+
+**Omitted seed-to-first-close interval**:
+The interval between the zero-value seed closing snapshot of a unitized portfolio and its first invested closing snapshot, which the exposure-matched comparison omits and discloses instead of comparing.
+_Avoid_: NAV inception return, missing history
+
 ## Relationships
 
 - A **Portfolio view** always contains **Portfolio inventory** and reports **Portfolio performance** as a distinct outcome.
+- A **Portfolio view** always contains the **Exposure-matched benchmark**; a benchmark failure never removes the inventory, the NAV readiness, or the portfolio-only outcomes.
+- The **Exposure-matched benchmark** weights every interval with the **Prior-close exposure weight** of the preceding closing snapshot, so today's holdings never redefine past performance.
+- The **Exposure-matched benchmark** uses the **Complete NAV scope** as the denominator of every weight, carries the retained Net dividend income at a 0% return, and excludes Monetary holdings.
+- Assets that share one assigned primary reference aggregate their weights in the **Exposure-matched benchmark**; a missing assignment leaves the comparison unavailable rather than renormalizing the remaining weights.
+- The **Exposure-matched benchmark** anchors both series at 100 on the first invested closing snapshot and discloses the **Omitted seed-to-first-close interval**; it never overwrites the NAV inception result or the Effective valuation date.
+- A **Retrospective reference assignment** applies to the whole compared window and is reported as retrospective rather than spliced into an effective-dated chain.
 - **Portfolio performance** is not applicable when there are no current or historical performance holdings to measure.
 - **Portfolio performance** is unavailable when performance holdings exist but no **Complete NAV snapshot** can be produced.
 - **Portfolio performance** is available whenever a **Complete NAV snapshot** exists; a **Market data limitation** may prevent advancing its **Effective valuation date** without making that snapshot unavailable.

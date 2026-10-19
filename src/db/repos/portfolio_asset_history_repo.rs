@@ -1,4 +1,6 @@
-use sea_orm::{sea_query::OnConflict, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, Set};
+use sea_orm::{
+    sea_query::OnConflict, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder, Set,
+};
 
 use crate::db::entities::portfolio_asset_history;
 use crate::models::AssetSnapshot;
@@ -11,6 +13,23 @@ pub async fn find_by_date(
 ) -> anyhow::Result<Vec<AssetSnapshot>> {
     let results = portfolio_asset_history::Entity::find()
         .filter(portfolio_asset_history::Column::Date.eq(date))
+        .all(db)
+        .await?;
+    Ok(results.into_iter().map(AssetSnapshot::from).collect())
+}
+
+/// Reads the per-asset exposures of one bounded date range in ascending
+/// chronology. One ranged read replaces a query per date.
+pub async fn find_between(
+    db: &impl ConnectionTrait,
+    start_date: &str,
+    end_date: &str,
+) -> anyhow::Result<Vec<AssetSnapshot>> {
+    let results = portfolio_asset_history::Entity::find()
+        .filter(portfolio_asset_history::Column::Date.gte(start_date))
+        .filter(portfolio_asset_history::Column::Date.lte(end_date))
+        .order_by_asc(portfolio_asset_history::Column::Date)
+        .order_by_asc(portfolio_asset_history::Column::AssetId)
         .all(db)
         .await?;
     Ok(results.into_iter().map(AssetSnapshot::from).collect())

@@ -5,8 +5,8 @@
 
 use crate::constants::{format_date, FLOAT_EPSILON, MIN_DATA_POINTS, TRADING_DAYS_PER_YEAR};
 use crate::models::{
-    BenchmarkComparisonPeriod, ComparisonAvailability, ComparisonCoverageIssue, ComparisonFact,
-    DatedWealthPoint, FundBenchmarkComparison, FundBenchmarkPeriod,
+    BenchmarkComparisonPeriod, BenchmarkPeriod, ComparisonAvailability, ComparisonCoverageIssue,
+    ComparisonFact, DatedWealthPoint, FundBenchmarkComparison, FundBenchmarkPeriod,
 };
 use crate::services::market_data::MarketData;
 use anyhow::Context;
@@ -123,15 +123,34 @@ pub fn compare_aligned_eur_series(
 }
 
 /// Computes the standard fund/reference windows independently of the graph
-/// selection. Trailing anchors use the latest common close on or before the
-/// requested date so a weekend or market holiday never shortens the period;
-/// the actual anchor is returned to callers.
+/// selection.
+///
+/// The fund comparison keeps its accepted output row; the shared calculation
+/// behind it is [`compute_standard_benchmark_periods`].
 pub fn compute_standard_fund_benchmark_periods(
     subject: &[(String, f64)],
     reference: &[(String, f64)],
     comparison_start: &str,
     comparison_end: &str,
 ) -> anyhow::Result<Vec<FundBenchmarkPeriod>> {
+    Ok(
+        compute_standard_benchmark_periods(subject, reference, comparison_start, comparison_end)?
+            .into_iter()
+            .map(FundBenchmarkPeriod::from)
+            .collect(),
+    )
+}
+
+/// Computes the standard subject/reference windows independently of the graph
+/// selection. Trailing anchors use the latest common close on or before the
+/// requested date so a weekend or market holiday never shortens the period;
+/// the actual anchor is returned to callers.
+pub fn compute_standard_benchmark_periods(
+    subject: &[(String, f64)],
+    reference: &[(String, f64)],
+    comparison_start: &str,
+    comparison_end: &str,
+) -> anyhow::Result<Vec<BenchmarkPeriod>> {
     let subject = validate_series(subject, "fund")?;
     let reference = validate_series(reference, "reference")?;
     let comparison_start = NaiveDate::parse_from_str(comparison_start, "%Y-%m-%d")?;
@@ -294,7 +313,7 @@ fn not_applicable_short_history(
     outcome.availability = ComparisonAvailability::NotApplicable {
         reason: REASON.to_owned(),
     };
-    outcome.standard_periods = standard_periods()
+    outcome.standard_periods = BenchmarkComparisonPeriod::standard_periods()
         .into_iter()
         .map(|period| {
             FundBenchmarkPeriod::not_applicable(
@@ -304,16 +323,6 @@ fn not_applicable_short_history(
         })
         .collect();
     outcome
-}
-
-fn standard_periods() -> [BenchmarkComparisonPeriod; 5] {
-    [
-        BenchmarkComparisonPeriod::Ytd,
-        BenchmarkComparisonPeriod::OneYear,
-        BenchmarkComparisonPeriod::ThreeYear,
-        BenchmarkComparisonPeriod::FiveYear,
-        BenchmarkComparisonPeriod::SinceComparisonStart,
-    ]
 }
 
 fn calculate_comparison(
@@ -365,7 +374,7 @@ fn compute_standard_period(
     reference: &std::collections::BTreeMap<String, f64>,
     comparison_start: NaiveDate,
     comparison_end: NaiveDate,
-) -> anyhow::Result<FundBenchmarkPeriod> {
+) -> anyhow::Result<BenchmarkPeriod> {
     let requested_start =
         match period {
             BenchmarkComparisonPeriod::Ytd => NaiveDate::from_ymd_opt(comparison_end.year(), 1, 1)
@@ -382,10 +391,8 @@ fn compute_standard_period(
             BenchmarkComparisonPeriod::SinceComparisonStart => comparison_start,
         };
     let requested_start_string = format_date(requested_start);
-    let mut outcome = FundBenchmarkPeriod::unavailable(
-        period,
-        "period comparison has unavailable required inputs",
-    );
+    let mut outcome =
+        BenchmarkPeriod::unavailable(period, "period comparison has unavailable required inputs");
     outcome.requested_start_date = Some(requested_start_string.clone());
     let end_date = format_date(comparison_end);
     if !subject.contains_key(&end_date) || !reference.contains_key(&end_date) {
@@ -441,7 +448,7 @@ fn select_actual_period_start(
     requested_start_string: &str,
     requested_start: NaiveDate,
     comparison_start: NaiveDate,
-    outcome: &mut FundBenchmarkPeriod,
+    outcome: &mut BenchmarkPeriod,
 ) -> Option<String> {
     match period {
         BenchmarkComparisonPeriod::Ytd => select_year_to_date_start(
@@ -480,7 +487,7 @@ fn select_year_to_date_start(
     reference: &std::collections::BTreeMap<String, f64>,
     year_start: NaiveDate,
     comparison_start: NaiveDate,
-    outcome: &mut FundBenchmarkPeriod,
+    outcome: &mut BenchmarkPeriod,
 ) -> Option<String> {
     let approved_start = year_start.max(comparison_start);
     let approved_start_string = format_date(approved_start);
@@ -514,7 +521,7 @@ fn select_comparison_start_anchor(
     requested_start: NaiveDate,
     requested_start_string: &str,
     comparison_start: NaiveDate,
-    outcome: &mut FundBenchmarkPeriod,
+    outcome: &mut BenchmarkPeriod,
 ) -> Option<String> {
     let comparison_start_string = format_date(comparison_start);
     let anchor = subject
@@ -544,7 +551,7 @@ fn select_trailing_start(
     requested_start_string: &str,
     requested_start: NaiveDate,
     comparison_start: NaiveDate,
-    outcome: &mut FundBenchmarkPeriod,
+    outcome: &mut BenchmarkPeriod,
 ) -> Option<String> {
     let anchor = subject
         .keys()
@@ -570,7 +577,7 @@ fn select_trailing_start(
 }
 
 fn classify_missing_period_anchor(
-    outcome: &mut FundBenchmarkPeriod,
+    outcome: &mut BenchmarkPeriod,
     subject: &std::collections::BTreeMap<String, f64>,
     reference: &std::collections::BTreeMap<String, f64>,
     requested_start: NaiveDate,
@@ -642,7 +649,7 @@ fn aligned_weekday_observations(
 }
 
 fn calculate_period_returns_and_risk(
-    outcome: &mut FundBenchmarkPeriod,
+    outcome: &mut BenchmarkPeriod,
     observations: &[(String, f64, f64)],
 ) -> anyhow::Result<()> {
     let first = observations
@@ -653,8 +660,8 @@ fn calculate_period_returns_and_risk(
         .context("aligned comparison has no ending observation")?;
     let fund_return = checked_return(first.1, last.1)?;
     let reference_return = checked_return(first.2, last.2)?;
-    outcome.fund_return_pct =
-        ComparisonFact::available(finite_metric(fund_return * 100.0, "fund return")?);
+    outcome.subject_return_pct =
+        ComparisonFact::available(finite_metric(fund_return * 100.0, "subject return")?);
     outcome.reference_return_pct =
         ComparisonFact::available(finite_metric(reference_return * 100.0, "reference return")?);
     outcome.excess_return_percentage_points = ComparisonFact::available(finite_metric(
@@ -740,8 +747,8 @@ fn calculate_period_returns_and_risk(
     Ok(())
 }
 
-fn set_period_not_applicable(outcome: &mut FundBenchmarkPeriod, reason: &str) {
-    outcome.fund_return_pct = ComparisonFact::not_applicable(reason);
+fn set_period_not_applicable(outcome: &mut BenchmarkPeriod, reason: &str) {
+    outcome.subject_return_pct = ComparisonFact::not_applicable(reason);
     outcome.reference_return_pct = ComparisonFact::not_applicable(reason);
     outcome.excess_return_percentage_points = ComparisonFact::not_applicable(reason);
     outcome.beta = ComparisonFact::not_applicable(reason);
@@ -750,8 +757,8 @@ fn set_period_not_applicable(outcome: &mut FundBenchmarkPeriod, reason: &str) {
     outcome.information_ratio = ComparisonFact::not_applicable(reason);
 }
 
-fn set_period_unavailable(outcome: &mut FundBenchmarkPeriod, reason: &str) {
-    outcome.fund_return_pct = ComparisonFact::unavailable(reason);
+fn set_period_unavailable(outcome: &mut BenchmarkPeriod, reason: &str) {
+    outcome.subject_return_pct = ComparisonFact::unavailable(reason);
     outcome.reference_return_pct = ComparisonFact::unavailable(reason);
     outcome.excess_return_percentage_points = ComparisonFact::unavailable(reason);
     outcome.beta = ComparisonFact::unavailable(reason);
