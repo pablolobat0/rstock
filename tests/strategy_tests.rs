@@ -1,0 +1,918 @@
+#![allow(dead_code)]
+
+mod common;
+
+use chrono::{Datelike, Duration, NaiveDate, Weekday};
+use migration::{Migrator, MigratorTrait};
+use rstock::{
+    cli::{commands::strategy::StrategyCommands, output::OutputFormat},
+    db::entities::{benchmark_blend_component, benchmark_reference, benchmark_reference_price},
+    models::ComparisonAvailability,
+    services::{
+        custom_blends::{self, BlendCreateRequest},
+        market_data::SeriesQualification,
+        strategy,
+    },
+};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, Database, DatabaseBackend, DatabaseConnection,
+    EntityTrait, QueryFilter, QueryOrder, Set, Statement,
+};
+
+use common::{market_data_at, setup_test_db, MockMarketDataSources};
+
+const REFERENCE_A: &str = "x-strategy-reference-a";
+const REFERENCE_B: &str = "x-strategy-reference-b";
+const SOURCE: &str = "test_source";
+const WINDOW_START: &str = "2025-01-02";
+const WINDOW_END: &str = "2025-02-04";
+
+/// The clock the fixtures use.
+fn clock() -> NaiveDate {
+    NaiveDate::from_ymd_opt(2025, 2, 5).expect("valid clock date")
+}
+
+/// A component definition whose qualification is verified and daily.
+async fn insert_verified_reference(db: &DatabaseConnection, id: &str, identifier: &str) {
+    benchmark_reference::ActiveModel {
+        id: Set(id.to_owned()),
+        display_name: Set(format!("Strategy reference {identifier}")),
+        instrument_ticker: Set(identifier.to_owned()),
+        source: Set(SOURCE.to_owned()),
+        source_identifier: Set(identifier.to_owned()),
+        currency: Set("EUR".to_owned()),
+        adjustment_provenance: Set("Adjusted daily closes".to_owned()),
+        adjustment_qualification: Set("dividends_reinvested_once".to_owned()),
+        return_basis_qualification: Set("total_return".to_owned()),
+        role: Set("Investment universe".to_owned()),
+        universe: Set("Equities".to_owned()),
+        hedge_policy: Set("Unhedged".to_owned()),
+        source_provenance: Set("Fake offline source".to_owned()),
+        history_boundary: Set("Fake offline history".to_owned()),
+        verification_state: Set("verified".to_owned()),
+        official_comparator: Set(None),
+        objective_comparator: Set(None),
+        kind: Set("reference".to_owned()),
+    }
+    .insert(db)
+    .await
+    .expect("failed to insert the reference fixture");
+}
+
+/// The verified daily qualification of the fake components.
+fn qualification() -> SeriesQualification {
+    SeriesQualification {
+        currency: "EUR".to_owned(),
+        return_basis: "total_return".to_owned(),
+        adjustment: "dividends_reinvested_once".to_owned(),
+        hedge_policy: "Unhedged".to_owned(),
+        cadence: "daily".to_owned(),
+    }
+}
+
+/// The weekday observations of one fake component between two dates.
+fn weekday_observations(
+    start: &str,
+    end: &str,
+    mut price: impl FnMut(&str) -> f64,
+) -> Vec<(String, f64)> {
+    let mut day = NaiveDate::parse_from_str(start, "%Y-%m-%d").expect("valid start date");
+    let last = NaiveDate::parse_from_str(end, "%Y-%m-%d").expect("valid end date");
+    let mut observations = Vec::new();
+    while day <= last {
+        if !matches!(day.weekday(), Weekday::Sat | Weekday::Sun) {
+            let date = day.format("%Y-%m-%d").to_string();
+            let value = price(&date);
+            observations.push((date, value));
+        }
+        day += Duration::days(1);
+    }
+    observations
+}
+
+/// A component price series that steps on the given dates.
+fn stepped_observations(start: &str, end: &str, steps: &[(&str, f64)]) -> Vec<(String, f64)> {
+    weekday_observations(start, end, |date| {
+        steps
+            .iter()
+            .filter(|(step_date, _)| *step_date <= date)
+            .map(|(_, price)| *price)
+            .last()
+            .unwrap_or(100.0)
+    })
+}
+
+/// The offline fixture: two verified components.
+fn offline_sources(
+    observations_a: Vec<(String, f64)>,
+    observations_b: Vec<(String, f64)>,
+) -> MockMarketDataSources {
+    let mut sources = MockMarketDataSources::new();
+    sources
+        .historical_prices
+        .insert("XREFA".to_owned(), observations_a);
+    sources
+        .historical_prices
+        .insert("XREFB".to_owned(), observations_b);
+    sources
+        .series_qualifications
+        .insert((SOURCE.to_owned(), "XREFA".to_owned()), qualification());
+    sources
+        .series_qualifications
+        .insert((SOURCE.to_owned(), "XREFB".to_owned()), qualification());
+    sources
+}
+
+/// The portfolio fixture: one invested Complete closing snapshot per weekday,
+/// with a NAV that rises by one point per weekday.
+///
+/// The window holds 24 weekdays, so the NAV series is 100.0 on 02-01-2025 and
+/// 123.0 on 04-02-2025, and the portfolio's cumulative return over the window
+/// is exactly 23%.
+async fn insert_invested_portfolio(db: &DatabaseConnection) {
+    let asset_id = common::insert_asset(db, "XFAKE1", "Invested fixture", "stock", "EUR").await;
+    let mut nav = 100.0;
+    for (date, _) in weekday_observations(WINDOW_START, WINDOW_END, |_| 0.0) {
+        common::insert_portfolio_snapshot(db, &date, nav, 1.0).await;
+        common::insert_portfolio_asset_snapshot(db, &date, asset_id, 1.0, nav, 100.0, 1.0).await;
+        nav += 1.0;
+    }
+}
+
+/// Saves one Custom blend whose component steps on 16-01-2025.
+///
+/// The component holds 60% and synthetic cash holds 40%, so the blend's wealth
+/// rises by exactly 6% on 16-01-2025 and stays flat afterwards.
+async fn save_stepped_blend(
+    db: &DatabaseConnection,
+    sources: &MockMarketDataSources,
+    today: NaiveDate,
+) -> String {
+    let market_data = market_data_at(sources, today);
+    let definition = custom_blends::create_custom_blend(
+        db,
+        &market_data,
+        BlendCreateRequest {
+            name: "Sixty Forty".to_owned(),
+            components: vec![
+                rstock::models::BlendComponentArgument {
+                    identity: REFERENCE_A.to_owned(),
+                    weight_percent: 60.0,
+                },
+                rstock::models::BlendComponentArgument {
+                    identity: "cash".to_owned(),
+                    weight_percent: 40.0,
+                },
+            ],
+            start_date: Some(
+                NaiveDate::parse_from_str(WINDOW_START, "%Y-%m-%d").expect("valid start date"),
+            ),
+        },
+    )
+    .await
+    .expect("the blend should be saved");
+    definition.id
+}
+
+/// The offline fixture with a stepped component and a flat second component.
+fn stepped_sources() -> MockMarketDataSources {
+    offline_sources(
+        stepped_observations(
+            WINDOW_START,
+            WINDOW_END,
+            &[("2025-01-15", 100.0), ("2025-01-16", 110.0)],
+        ),
+        weekday_observations(WINDOW_START, WINDOW_END, |_| 100.0),
+    )
+}
+
+/// The value of one available comparison fact.
+fn available_value(fact: &rstock::models::ComparisonFact<f64>) -> f64 {
+    match fact {
+        rstock::models::ComparisonFact::Available { value } => *value,
+        other => panic!("expected an available fact, got {other:?}"),
+    }
+}
+
+fn assert_close(actual: f64, expected: f64) {
+    assert!(
+        (actual - expected).abs() < 1e-9,
+        "expected {expected}, got {actual}"
+    );
+}
+
+/// The wealth of one dated point of a comparison series.
+fn wealth_at(series: &[rstock::models::DatedWealthPoint], date: &str) -> f64 {
+    series
+        .iter()
+        .find(|point| point.date == date)
+        .map(|point| point.wealth)
+        .unwrap_or_else(|| panic!("the series has no point on {date}"))
+}
+
+/// Asserts that a human output holds no stored ISO date.
+fn assert_no_iso_dates(human: &str) {
+    let bytes = human.as_bytes();
+    for index in 0..bytes.len().saturating_sub(9) {
+        let window = &bytes[index..index + 10];
+        let digit = |byte: &u8| byte.is_ascii_digit();
+        if window[4] == b'-'
+            && window[7] == b'-'
+            && window[0..4].iter().all(digit)
+            && window[5..7].iter().all(digit)
+            && window[8..10].iter().all(digit)
+        {
+            let date = std::str::from_utf8(window).expect("the window is ascii");
+            panic!("the human output shows the stored ISO date {date}: {human}");
+        }
+    }
+}
+
+/// Runs one Strategy command through the injected writer.
+async fn run_strategy(
+    db: &DatabaseConnection,
+    sources: &MockMarketDataSources,
+    today: NaiveDate,
+    command: StrategyCommands,
+    format: OutputFormat,
+) -> anyhow::Result<Vec<u8>> {
+    let market_data = market_data_at(sources, today);
+    let mut output = Vec::new();
+    rstock::cli::commands::strategy::run_with_writer(
+        db,
+        &market_data,
+        command,
+        format,
+        &mut output,
+    )
+    .await?;
+    Ok(output)
+}
+
+#[tokio::test]
+async fn selecting_a_strategy_persists_the_explicit_selection() {
+    let db = setup_test_db().await;
+    insert_verified_reference(&db, REFERENCE_A, "XREFA").await;
+    let sources = stepped_sources();
+    let today = clock();
+    let blend_id = save_stepped_blend(&db, &sources, today).await;
+
+    let market_data = market_data_at(&sources, today);
+    let outcome = strategy::select_strategy(&db, &market_data, &blend_id)
+        .await
+        .expect("the strategy should be selected");
+    assert!(outcome.selected);
+    assert_eq!(outcome.reference_id.as_deref(), Some(blend_id.as_str()));
+    assert_eq!(outcome.display_name.as_deref(), Some("Sixty Forty"));
+    assert_eq!(
+        outcome.selection_basis.as_deref(),
+        Some(strategy::SELECTION_BASIS_EXPLICIT)
+    );
+    assert_eq!(outcome.selected_at.as_deref(), Some("2025-02-05T00:00:00Z"));
+    assert!(outcome.replaced_reference_id.is_none());
+
+    let persisted = strategy::selected_strategy(&db)
+        .await
+        .expect("the selection should be readable");
+    let persisted = persisted.expect("a strategy should be selected");
+    assert_eq!(persisted.reference_id, blend_id);
+    assert_eq!(
+        persisted.selection_basis,
+        strategy::SELECTION_BASIS_EXPLICIT
+    );
+    assert_eq!(persisted.selected_at, "2025-02-05T00:00:00Z");
+}
+
+#[tokio::test]
+async fn the_selection_is_never_inferred_from_the_portfolio_holdings() {
+    let db = setup_test_db().await;
+    insert_verified_reference(&db, REFERENCE_A, "XREFA").await;
+    let sources = stepped_sources();
+    let today = clock();
+    save_stepped_blend(&db, &sources, today).await;
+    insert_invested_portfolio(&db).await;
+
+    assert!(
+        strategy::selected_strategy(&db)
+            .await
+            .expect("the selection should be readable")
+            .is_none(),
+        "a strategy must never be inferred from the holdings"
+    );
+
+    let market_data = market_data_at(&sources, today);
+    let comparison = strategy::compute_strategy_comparison(&db, &market_data)
+        .await
+        .expect("the comparison should be reported");
+    assert!(matches!(
+        comparison.availability,
+        ComparisonAvailability::NotApplicable { .. }
+    ));
+    assert_eq!(comparison.role, strategy::STRATEGY_ROLE);
+    assert!(comparison.reference_id.is_none());
+    assert!(comparison.standard_periods.len() == 5);
+}
+
+#[tokio::test]
+async fn unselecting_removes_the_persisted_selection_and_is_repeatable() {
+    let db = setup_test_db().await;
+    insert_verified_reference(&db, REFERENCE_A, "XREFA").await;
+    let sources = stepped_sources();
+    let today = clock();
+    let blend_id = save_stepped_blend(&db, &sources, today).await;
+    let market_data = market_data_at(&sources, today);
+    strategy::select_strategy(&db, &market_data, &blend_id)
+        .await
+        .expect("the strategy should be selected");
+
+    let outcome = strategy::unselect_strategy(&db)
+        .await
+        .expect("the strategy should be unselected");
+    assert!(!outcome.selected);
+    assert_eq!(
+        outcome.replaced_reference_id.as_deref(),
+        Some(blend_id.as_str())
+    );
+    assert_eq!(
+        outcome.replaced_display_name.as_deref(),
+        Some("Sixty Forty")
+    );
+    assert!(strategy::selected_strategy(&db)
+        .await
+        .expect("the selection should be readable")
+        .is_none());
+
+    let repeated = strategy::unselect_strategy(&db)
+        .await
+        .expect("unselecting again should be a no-op");
+    assert!(!repeated.selected);
+    assert!(repeated.replaced_reference_id.is_none());
+}
+
+#[tokio::test]
+async fn selecting_another_strategy_replaces_the_current_selection() {
+    let db = setup_test_db().await;
+    insert_verified_reference(&db, REFERENCE_A, "XREFA").await;
+    insert_verified_reference(&db, REFERENCE_B, "XREFB").await;
+    let sources = stepped_sources();
+    let today = clock();
+    let first = save_stepped_blend(&db, &sources, today).await;
+    let market_data = market_data_at(&sources, today);
+    strategy::select_strategy(&db, &market_data, &first)
+        .await
+        .expect("the first strategy should be selected");
+
+    let second = custom_blends::create_custom_blend(
+        &db,
+        &market_data,
+        BlendCreateRequest {
+            name: "All Equity".to_owned(),
+            components: vec![rstock::models::BlendComponentArgument {
+                identity: REFERENCE_B.to_owned(),
+                weight_percent: 100.0,
+            }],
+            start_date: Some(
+                NaiveDate::parse_from_str(WINDOW_START, "%Y-%m-%d").expect("valid start date"),
+            ),
+        },
+    )
+    .await
+    .expect("the second blend should be saved");
+
+    let outcome = strategy::select_strategy(&db, &market_data, &second.id)
+        .await
+        .expect("the second strategy should be selected");
+    assert_eq!(outcome.reference_id.as_deref(), Some(second.id.as_str()));
+    assert_eq!(
+        outcome.replaced_reference_id.as_deref(),
+        Some(first.as_str())
+    );
+    assert_eq!(
+        outcome.replaced_display_name.as_deref(),
+        Some("Sixty Forty")
+    );
+
+    let persisted = strategy::selected_strategy(&db)
+        .await
+        .expect("the selection should be readable")
+        .expect("a strategy should be selected");
+    assert_eq!(persisted.reference_id, second.id);
+}
+
+#[tokio::test]
+async fn a_selected_strategy_cannot_be_deleted_until_it_is_unselected() {
+    let db = setup_test_db().await;
+    insert_verified_reference(&db, REFERENCE_A, "XREFA").await;
+    let sources = stepped_sources();
+    let today = clock();
+    let blend_id = save_stepped_blend(&db, &sources, today).await;
+    let market_data = market_data_at(&sources, today);
+    strategy::select_strategy(&db, &market_data, &blend_id)
+        .await
+        .expect("the strategy should be selected");
+
+    let failure = custom_blends::delete_custom_blend(&db, &blend_id)
+        .await
+        .expect_err("a selected strategy must not be deletable");
+    assert!(
+        failure.to_string().contains("Strategy benchmark"),
+        "the failure must name the Strategy benchmark: {failure}"
+    );
+    assert!(
+        custom_blends::show_custom_blend(&db, &blend_id)
+            .await
+            .is_ok(),
+        "the rejected deletion must leave the definition saved"
+    );
+    let cached_prices = benchmark_reference_price::Entity::find()
+        .filter(benchmark_reference_price::Column::ReferenceId.eq(REFERENCE_A))
+        .all(&db)
+        .await
+        .expect("the cached prices should be readable");
+    assert!(
+        !cached_prices.is_empty(),
+        "the rejected deletion must preserve the cached market data"
+    );
+
+    strategy::unselect_strategy(&db)
+        .await
+        .expect("the strategy should be unselected");
+    let deletion = custom_blends::delete_custom_blend(&db, &blend_id)
+        .await
+        .expect("an unused definition should be deletable");
+    assert!(deletion.deleted);
+    assert!(
+        custom_blends::show_custom_blend(&db, &blend_id)
+            .await
+            .is_err(),
+        "the deleted definition must be gone"
+    );
+    let cached_prices = benchmark_reference_price::Entity::find()
+        .filter(benchmark_reference_price::Column::ReferenceId.eq(REFERENCE_A))
+        .all(&db)
+        .await
+        .expect("the cached prices should be readable");
+    assert!(
+        !cached_prices.is_empty(),
+        "the deletion must preserve the cached market data"
+    );
+}
+
+#[tokio::test]
+async fn the_strategy_comparison_is_labelled_separately_and_uses_monthly_reset_arithmetic() {
+    let db = setup_test_db().await;
+    insert_verified_reference(&db, REFERENCE_A, "XREFA").await;
+    let sources = stepped_sources();
+    let today = clock();
+    let blend_id = save_stepped_blend(&db, &sources, today).await;
+    insert_invested_portfolio(&db).await;
+    let market_data = market_data_at(&sources, today);
+    strategy::select_strategy(&db, &market_data, &blend_id)
+        .await
+        .expect("the strategy should be selected");
+
+    let comparison = strategy::compute_strategy_comparison(&db, &market_data)
+        .await
+        .expect("the comparison should be calculated");
+    assert_eq!(comparison.availability, ComparisonAvailability::Available);
+    assert_eq!(comparison.role, strategy::STRATEGY_ROLE);
+    assert_eq!(comparison.reference_id.as_deref(), Some(blend_id.as_str()));
+    assert_eq!(comparison.definition_kind.as_deref(), Some("custom_blend"));
+    assert_eq!(comparison.currency, "EUR");
+    assert_eq!(comparison.anchor_date.as_deref(), Some(WINDOW_START));
+    assert_eq!(comparison.end_date.as_deref(), Some(WINDOW_END));
+    assert_eq!(comparison.reset_rule.as_deref(), Some("monthly"));
+    assert_eq!(comparison.components.len(), 2);
+
+    assert_close(
+        comparison.portfolio_return_pct.expect("a portfolio return"),
+        23.0,
+    );
+    assert_close(
+        comparison.strategy_return_pct.expect("a strategy return"),
+        6.0,
+    );
+    assert_close(
+        comparison
+            .excess_return_percentage_points
+            .expect("an excess return"),
+        17.0,
+    );
+
+    // The blend compounds an arithmetic 6% interval return on 16-01-2025 and
+    // stays flat afterwards; the monthly reset does not change the wealth.
+    assert_close(wealth_at(&comparison.strategy_wealth, WINDOW_START), 100.0);
+    assert_close(wealth_at(&comparison.strategy_wealth, "2025-01-15"), 100.0);
+    assert_close(wealth_at(&comparison.strategy_wealth, "2025-01-16"), 106.0);
+    assert_close(wealth_at(&comparison.strategy_wealth, WINDOW_END), 106.0);
+    assert_close(wealth_at(&comparison.portfolio_wealth, WINDOW_START), 100.0);
+    assert_close(wealth_at(&comparison.portfolio_wealth, WINDOW_END), 123.0);
+
+    let since_start = comparison
+        .standard_periods
+        .iter()
+        .find(|period| {
+            period.period == rstock::models::BenchmarkComparisonPeriod::SinceComparisonStart
+        })
+        .expect("a since-comparison-start row");
+    assert_eq!(since_start.start_date.as_deref(), Some(WINDOW_START));
+    assert_eq!(since_start.end_date.as_deref(), Some(WINDOW_END));
+    assert_close(available_value(&since_start.portfolio_return_pct), 23.0);
+    assert_close(available_value(&since_start.strategy_return_pct), 6.0);
+    assert_close(
+        available_value(&since_start.excess_return_percentage_points),
+        17.0,
+    );
+}
+
+#[tokio::test]
+async fn the_standard_rows_never_shorten_a_window_the_strategy_cannot_cover() {
+    let db = setup_test_db().await;
+    insert_verified_reference(&db, REFERENCE_A, "XREFA").await;
+    let sources = stepped_sources();
+    let today = clock();
+    let blend_id = save_stepped_blend(&db, &sources, today).await;
+    insert_invested_portfolio(&db).await;
+    let market_data = market_data_at(&sources, today);
+    strategy::select_strategy(&db, &market_data, &blend_id)
+        .await
+        .expect("the strategy should be selected");
+
+    let comparison = strategy::compute_strategy_comparison(&db, &market_data)
+        .await
+        .expect("the comparison should be calculated");
+    for period in [
+        rstock::models::BenchmarkComparisonPeriod::OneYear,
+        rstock::models::BenchmarkComparisonPeriod::ThreeYear,
+        rstock::models::BenchmarkComparisonPeriod::FiveYear,
+    ] {
+        let row = comparison
+            .standard_periods
+            .iter()
+            .find(|row| row.period == period)
+            .expect("a standard row");
+        assert!(
+            matches!(
+                row.portfolio_return_pct,
+                rstock::models::ComparisonFact::NotApplicable { .. }
+            ),
+            "the {period:?} row must not be computed on a shortened window"
+        );
+    }
+    let ytd = comparison
+        .standard_periods
+        .iter()
+        .find(|row| row.period == rstock::models::BenchmarkComparisonPeriod::Ytd)
+        .expect("a year-to-date row");
+    assert_eq!(ytd.start_date.as_deref(), Some(WINDOW_START));
+}
+
+#[tokio::test]
+async fn a_later_start_strategy_exposes_its_anchor_and_the_unavailable_earlier_coverage() {
+    let db = setup_test_db().await;
+    insert_verified_reference(&db, REFERENCE_A, "XREFA").await;
+    let sources = stepped_sources();
+    let today = clock();
+    let market_data = market_data_at(&sources, today);
+    let later_start =
+        NaiveDate::parse_from_str("2025-01-16", "%Y-%m-%d").expect("valid start date");
+    let definition = custom_blends::create_custom_blend(
+        &db,
+        &market_data,
+        BlendCreateRequest {
+            name: "Later Start".to_owned(),
+            components: vec![rstock::models::BlendComponentArgument {
+                identity: REFERENCE_A.to_owned(),
+                weight_percent: 100.0,
+            }],
+            start_date: Some(later_start),
+        },
+    )
+    .await
+    .expect("the blend should be saved");
+    insert_invested_portfolio(&db).await;
+    strategy::select_strategy(&db, &market_data, &definition.id)
+        .await
+        .expect("the strategy should be selected");
+
+    let comparison = strategy::compute_strategy_comparison(&db, &market_data)
+        .await
+        .expect("the comparison should be calculated");
+    assert_eq!(comparison.availability, ComparisonAvailability::Available);
+    assert_eq!(
+        comparison.strategy_anchor_date.as_deref(),
+        Some("2025-01-16"),
+        "the strategy must expose its own anchor"
+    );
+    assert_eq!(comparison.anchor_date.as_deref(), Some("2025-01-16"));
+    let limitation = comparison
+        .earlier_period_limitation
+        .as_ref()
+        .expect("the earlier coverage must be disclosed");
+    assert!(
+        limitation.contains("2025-01-16"),
+        "the limitation must name the anchor: {limitation}"
+    );
+    let since_start = comparison
+        .standard_periods
+        .iter()
+        .find(|period| {
+            period.period == rstock::models::BenchmarkComparisonPeriod::SinceComparisonStart
+        })
+        .expect("a since-comparison-start row");
+    assert_eq!(since_start.start_date.as_deref(), Some("2025-01-16"));
+}
+
+#[tokio::test]
+async fn an_unavailable_strategy_leaves_the_portfolio_facts_intact() {
+    let db = setup_test_db().await;
+    insert_verified_reference(&db, REFERENCE_A, "XREFA").await;
+    let sources = stepped_sources();
+    let today = clock();
+    let blend_id = save_stepped_blend(&db, &sources, today).await;
+    insert_invested_portfolio(&db).await;
+    let market_data = market_data_at(&sources, today);
+    strategy::select_strategy(&db, &market_data, &blend_id)
+        .await
+        .expect("the strategy should be selected");
+
+    let history_before = common::get_all_snapshots(&db).await;
+    let assets_before = benchmark_blend_component::Entity::find()
+        .order_by_asc(benchmark_blend_component::Column::BlendId)
+        .all(&db)
+        .await
+        .expect("the saved definition should be readable");
+
+    // The component's cached history disappears and its source fails, so the
+    // selected Strategy benchmark cannot be prepared.
+    benchmark_reference_price::Entity::delete_many()
+        .filter(benchmark_reference_price::Column::ReferenceId.eq(REFERENCE_A))
+        .exec(&db)
+        .await
+        .expect("the cached prices should be removable");
+    let mut failing_sources = sources.clone();
+    failing_sources
+        .failing_price_sources
+        .insert("XREFA".to_owned());
+    let failing_market_data = market_data_at(&failing_sources, today);
+
+    let comparison = strategy::compute_strategy_comparison(&db, &failing_market_data)
+        .await
+        .expect("an unavailable strategy must not fail the command");
+    assert!(
+        matches!(
+            comparison.availability,
+            ComparisonAvailability::Unavailable { .. }
+        ),
+        "the strategy must be unavailable, got {:?}",
+        comparison.availability
+    );
+    assert_eq!(comparison.role, strategy::STRATEGY_ROLE);
+    assert_eq!(comparison.reference_id.as_deref(), Some(blend_id.as_str()));
+
+    let history_after = common::get_all_snapshots(&db).await;
+    assert_eq!(
+        history_before.len(),
+        history_after.len(),
+        "the NAV history must be untouched"
+    );
+    assert_eq!(history_before, history_after);
+    let assets_after = benchmark_blend_component::Entity::find()
+        .order_by_asc(benchmark_blend_component::Column::BlendId)
+        .all(&db)
+        .await
+        .expect("the saved definition should be readable");
+    assert_eq!(assets_before, assets_after);
+}
+
+#[tokio::test]
+async fn malformed_persisted_strategy_data_remains_an_error() {
+    let db = setup_test_db().await;
+    insert_verified_reference(&db, REFERENCE_A, "XREFA").await;
+    let sources = stepped_sources();
+    let today = clock();
+    let blend_id = save_stepped_blend(&db, &sources, today).await;
+    insert_invested_portfolio(&db).await;
+    let market_data = market_data_at(&sources, today);
+    strategy::select_strategy(&db, &market_data, &blend_id)
+        .await
+        .expect("the strategy should be selected");
+
+    let component = benchmark_blend_component::Entity::find()
+        .filter(benchmark_blend_component::Column::BlendId.eq(&blend_id))
+        .one(&db)
+        .await
+        .expect("the component should be readable")
+        .expect("the component should exist");
+    let mut active: benchmark_blend_component::ActiveModel = component.into();
+    active.target_weight = Set(0.1);
+    active
+        .update(&db)
+        .await
+        .expect("the component should be updatable");
+
+    let failure = strategy::compute_strategy_comparison(&db, &market_data)
+        .await
+        .expect_err("malformed persisted data must remain an error");
+    assert!(
+        failure.to_string().contains("total"),
+        "the failure must name the broken invariant: {failure}"
+    );
+}
+
+#[tokio::test]
+async fn the_strategy_selection_migration_preserves_accounting_and_cache_history() {
+    let db = Database::connect("sqlite::memory:")
+        .await
+        .expect("in-memory SQLite");
+    let boundary = Migrator::migrations()
+        .iter()
+        .position(|migration| migration.name().contains("add_strategy_selection"))
+        .expect("the strategy selection migration should be registered") as u32;
+    Migrator::up(&db, Some(boundary))
+        .await
+        .expect("the schema before the strategy selection migration");
+
+    for sql in [
+        "INSERT INTO assets (id, ticker, name, asset_type, currency, created_at) VALUES (17, 'XFAKEMIG', 'migration fixture', 'stock', 'USD', 'legacy-created-at')",
+        "INSERT INTO transactions (id, asset_id, tx_type, date, units, unit_price_cents, fees_cents, created_at) VALUES (23, 17, 'buy', '2024-01-02', 2, 10000, 1, 'ledger-created-at')",
+        "INSERT INTO daily_asset_prices (id, asset_id, date, closing_price, is_api_failure) VALUES (31, 17, '2024-01-02', 99.5, 0)",
+        "INSERT INTO daily_exchange_rates (from_currency, to_currency, date, rate) VALUES ('USD', 'EUR', '2024-01-02', 0.91)",
+        "INSERT INTO portfolio_history (date, cash_balance, asset_value, total_value, outstanding_shares, nav) VALUES ('2024-01-02', 0, 199, 199, 2, 99.5)",
+        "INSERT INTO portfolio_asset_history (id, date, asset_id, quantity, closing_price, market_value, exchange_rate) VALUES (41, '2024-01-02', 17, 2, 99.5, 181.09, 0.91)",
+        "INSERT INTO benchmark_references (id, display_name, instrument_ticker, source, source_identifier, currency, adjustment_provenance, adjustment_qualification, return_basis_qualification, role, universe, hedge_policy, source_provenance, history_boundary, verification_state) VALUES ('migration-reference', 'Migration reference', 'MIG', 'yahoo_finance', 'MIG', 'USD', 'adjusted', 'split_adjusted', 'total_return', 'Investment universe', 'Equities', 'Unhedged', 'source', 'boundary', 'verified')",
+        "INSERT INTO benchmark_reference_prices (reference_id, date, closing_price, is_api_failure) VALUES ('migration-reference', '2024-01-02', 88.0, 0)",
+    ] {
+        db.execute(Statement::from_string(DatabaseBackend::Sqlite, sql))
+            .await
+            .expect("seed pre-migration row");
+    }
+
+    Migrator::up(&db, Some(1))
+        .await
+        .expect("the additive strategy selection migration");
+    Migrator::down(&db, Some(1))
+        .await
+        .expect("the strategy selection migration should roll back");
+    Migrator::up(&db, Some(1))
+        .await
+        .expect("the strategy selection migration should apply again");
+
+    for (sql, expected) in [
+        (
+            "SELECT CAST(id AS REAL) AS value FROM assets WHERE ticker = 'XFAKEMIG'",
+            17.0,
+        ),
+        (
+            "SELECT CAST(id AS REAL) AS value FROM transactions WHERE id = 23",
+            23.0,
+        ),
+        (
+            "SELECT closing_price AS value FROM daily_asset_prices WHERE id = 31",
+            99.5,
+        ),
+        (
+            "SELECT rate AS value FROM daily_exchange_rates WHERE from_currency = 'USD'",
+            0.91,
+        ),
+        (
+            "SELECT nav AS value FROM portfolio_history WHERE date = '2024-01-02'",
+            99.5,
+        ),
+        (
+            "SELECT market_value AS value FROM portfolio_asset_history WHERE id = 41",
+            181.09,
+        ),
+        (
+            "SELECT closing_price AS value FROM benchmark_reference_prices WHERE reference_id = 'migration-reference'",
+            88.0,
+        ),
+    ] {
+        let value: f64 = db
+            .query_one(Statement::from_string(DatabaseBackend::Sqlite, sql))
+            .await
+            .expect("preserved source query")
+            .expect("preserved source row")
+            .try_get("", "value")
+            .expect("preserved source value");
+        assert_eq!(value, expected, "preserved value from {sql}");
+    }
+}
+
+#[tokio::test]
+async fn a_selected_strategy_refuses_the_destructive_migration_rollback() {
+    let db = setup_test_db().await;
+    insert_verified_reference(&db, REFERENCE_A, "XREFA").await;
+    let sources = stepped_sources();
+    let today = clock();
+    let blend_id = save_stepped_blend(&db, &sources, today).await;
+    let market_data = market_data_at(&sources, today);
+    strategy::select_strategy(&db, &market_data, &blend_id)
+        .await
+        .expect("the strategy should be selected");
+
+    let rollback = Migrator::down(&db, Some(1)).await;
+    assert!(
+        rollback.is_err(),
+        "a destructive rollback must be refused while a Strategy benchmark is selected"
+    );
+    let error = rollback.expect_err("the rollback must fail").to_string();
+    assert!(
+        error.contains("Strategy benchmark is selected"),
+        "the refusal must explain the refusal: {error}"
+    );
+    assert!(
+        strategy::selected_strategy(&db)
+            .await
+            .expect("the selection should be readable")
+            .is_some(),
+        "the refused rollback must keep the explicit selection intact"
+    );
+}
+
+#[tokio::test]
+async fn the_strategy_commands_report_the_same_selection_in_human_and_json() {
+    let db = setup_test_db().await;
+    insert_verified_reference(&db, REFERENCE_A, "XREFA").await;
+    let sources = stepped_sources();
+    let today = clock();
+    let blend_id = save_stepped_blend(&db, &sources, today).await;
+
+    let json = run_strategy(
+        &db,
+        &sources,
+        today,
+        StrategyCommands::Select {
+            reference_id: blend_id.clone(),
+        },
+        OutputFormat::Json,
+    )
+    .await
+    .expect("the strategy should be selected");
+    let envelope = common::parse_json_envelope(&json);
+    assert_eq!(envelope["command"], "strategy.select");
+    assert_eq!(envelope["data"]["selected"], true);
+    assert_eq!(envelope["data"]["reference_id"], blend_id.as_str());
+    assert_eq!(envelope["data"]["display_name"], "Sixty Forty");
+    assert_eq!(
+        envelope["data"]["selection_basis"],
+        strategy::SELECTION_BASIS_EXPLICIT
+    );
+    assert_eq!(envelope["data"]["selected_at"], "2025-02-05T00:00:00Z");
+
+    let human = run_strategy(
+        &db,
+        &sources,
+        today,
+        StrategyCommands::Show {},
+        OutputFormat::Human,
+    )
+    .await
+    .expect("the selection should render");
+    let human = String::from_utf8(human).unwrap();
+    for expected in [
+        "Selected Strategy benchmark 'Sixty Forty'",
+        "Selected at: 05-02-2025",
+        "basis: explicit_user_selection",
+        "compared independently of the portfolio's actual allocation",
+    ] {
+        assert!(
+            human.contains(expected),
+            "the human output omitted {expected}: {human}"
+        );
+    }
+    assert_no_iso_dates(&human);
+
+    let shown = run_strategy(
+        &db,
+        &sources,
+        today,
+        StrategyCommands::Show {},
+        OutputFormat::Json,
+    )
+    .await
+    .expect("the selection should be shown");
+    let shown = common::parse_json_envelope(&shown);
+    assert_eq!(shown["command"], "strategy.show");
+    assert_eq!(shown["data"]["selected"], true);
+    assert_eq!(shown["data"]["reference_id"], blend_id.as_str());
+    assert_eq!(shown["data"]["display_name"], "Sixty Forty");
+
+    let unselected = run_strategy(
+        &db,
+        &sources,
+        today,
+        StrategyCommands::Unselect {},
+        OutputFormat::Json,
+    )
+    .await
+    .expect("the strategy should be unselected");
+    let unselected = common::parse_json_envelope(&unselected);
+    assert_eq!(unselected["command"], "strategy.unselect");
+    assert_eq!(unselected["data"]["selected"], false);
+    assert_eq!(unselected["data"]["reference_id"], serde_json::Value::Null);
+    assert_eq!(
+        unselected["data"]["replaced_reference_id"],
+        blend_id.as_str()
+    );
+}

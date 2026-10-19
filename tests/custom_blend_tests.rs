@@ -29,6 +29,18 @@ fn clock() -> NaiveDate {
     NaiveDate::from_ymd_opt(2025, 2, 5).expect("valid clock date")
 }
 
+/// The number of migrations that must be rolled back to reach the Custom
+/// blend migration, located by its stable name so an unrelated additive
+/// migration cannot shift the boundary this test exercises.
+fn migrations_after_blend() -> u32 {
+    let migrations = Migrator::migrations();
+    let index = migrations
+        .iter()
+        .position(|migration| migration.name().contains("add_custom_blends"))
+        .expect("the blend migration should be registered");
+    (migrations.len() - index) as u32
+}
+
 /// A component definition whose qualification is verified and daily.
 async fn insert_verified_reference(db: &DatabaseConnection, id: &str, identifier: &str) {
     insert_reference_with_currency(db, id, identifier, "EUR").await;
@@ -2620,6 +2632,9 @@ async fn the_blend_migration_preserves_accounting_and_cache_history_in_both_dire
     Migrator::up(&db, Some(1))
         .await
         .expect("the blend migration should apply again");
+    Migrator::up(&db, None)
+        .await
+        .expect("the remaining additive migrations should apply");
     assert!(Migrator::get_pending_migrations(&db)
         .await
         .expect("pending migrations")
@@ -2696,7 +2711,7 @@ async fn a_populated_blend_refuses_the_destructive_migration_rollback() {
     .await
     .expect("the blend should be saved");
 
-    let rollback = Migrator::down(&db, Some(1)).await;
+    let rollback = Migrator::down(&db, Some(migrations_after_blend())).await;
     assert!(
         rollback.is_err(),
         "a destructive rollback must be refused while saved blends exist"
@@ -2741,7 +2756,9 @@ async fn a_populated_blend_refuses_the_destructive_migration_rollback() {
     )
     .await
     .unwrap();
-    assert!(Migrator::down(&db, Some(1)).await.is_err());
+    assert!(Migrator::down(&db, Some(migrations_after_blend()))
+        .await
+        .is_err());
     assert_eq!(
         benchmark_assignment_repo::find_by_reference(&db, "custom-blend-populated-blend")
             .await

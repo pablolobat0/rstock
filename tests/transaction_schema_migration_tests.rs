@@ -27,6 +27,14 @@ fn migrations_from_contract_schema() -> u32 {
     Migrator::migrations().len() as u32 - contract_schema_prefix()
 }
 
+/// The number of `down` steps that returns the schema from three migrations
+/// above the contract transaction schema migration back to that migration
+/// itself, so an unrelated additive migration cannot shift the boundary these
+/// tests exercise.
+fn down_steps_to_contract_schema() -> u32 {
+    migrations_from_contract_schema() - 3
+}
+
 async fn assert_check_failure(db: &sea_orm::DatabaseConnection, sql: String) {
     let result = db
         .execute(Statement::from_string(DatabaseBackend::Sqlite, sql.clone()))
@@ -476,7 +484,9 @@ async fn failed_down_rolls_back_rebuild_and_bookkeeping_then_retries() {
     .await
     .unwrap();
 
-    assert!(Migrator::down(&db, Some(4)).await.is_err());
+    assert!(Migrator::down(&db, Some(down_steps_to_contract_schema()))
+        .await
+        .is_err());
     db.execute_unprepared("DROP TRIGGER fail_contract_down")
         .await
         .unwrap();
@@ -487,7 +497,9 @@ async fn failed_down_rolls_back_rebuild_and_bookkeeping_then_retries() {
     assert_eq!(transaction_sequence(&db).await, before.4);
     assert_eq!(migration_versions(&db).await, before.5);
 
-    Migrator::down(&db, Some(4)).await.unwrap();
+    Migrator::down(&db, Some(down_steps_to_contract_schema()))
+        .await
+        .unwrap();
     assert_eq!(legacy_rows(&db).await.len(), 1);
     assert_eq!(transaction_sequence(&db).await, (1, 100));
     assert!(!migration_versions(&db)

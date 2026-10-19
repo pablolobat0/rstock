@@ -5,4 +5,5 @@ pub mod custom_blends;
 pub mod export;
 pub mod import;
 pub mod portfolio;
+pub mod strategy;
 pub mod transactions;

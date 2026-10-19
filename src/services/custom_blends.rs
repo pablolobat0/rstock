@@ -27,7 +27,8 @@ use sea_orm::{DatabaseConnection, TransactionTrait};
 
 use crate::constants::{format_date, BASE_CURRENCY, DATE_FORMAT};
 use crate::db::repos::{
-    benchmark_assignment_repo, benchmark_reference_repo, custom_blend_repo, portfolio_history_repo,
+    benchmark_assignment_repo, benchmark_reference_repo, benchmark_strategy_repo,
+    custom_blend_repo, portfolio_history_repo,
 };
 use crate::models::{
     BlendComponent, BlendComponentArgument, BlendTargetReset, BlendWealthPoint,
@@ -268,9 +269,10 @@ pub async fn preview_custom_blend(
 /// Deletes one unused saved Custom blend definition.
 ///
 /// The usage check and the deletion share one caller-owned transaction, so a
-/// definition that is assigned cannot be deleted and a failed deletion leaves
-/// the saved definition, its components, and every price, FX, ledger, and NAV
-/// row unchanged.
+/// definition that is assigned or explicitly selected as the portfolio's
+/// Strategy benchmark cannot be deleted, and a failed deletion leaves the
+/// saved definition, its components, and every price, FX, ledger, and NAV row
+/// unchanged.
 pub async fn delete_custom_blend(
     db: &DatabaseConnection,
     blend_id: &str,
@@ -283,6 +285,15 @@ pub async fn delete_custom_blend(
         anyhow::bail!(
             "Custom blend '{blend_id}' is in use by {} active assignment(s); remove or replace them before deleting the definition",
             assignments.len()
+        );
+    }
+    if benchmark_strategy_repo::find_by_reference(&transaction, blend_id)
+        .await?
+        .is_some()
+    {
+        transaction.rollback().await?;
+        anyhow::bail!(
+            "Custom blend '{blend_id}' is the explicitly selected Strategy benchmark; unselect or replace it before deleting the definition"
         );
     }
     let deleted = match custom_blend_repo::delete_blend(&transaction, blend_id).await {
@@ -664,6 +675,32 @@ fn requested_components(
     Ok(requested)
 }
 
+/// Validates the persisted facts of one saved blend.
+///
+/// A saved blend is immutable, so its recorded weights and components are
+/// invariants: a definition whose weights do not total 100% or that repeats a
+/// component is malformed persisted data, not a coverage gap.
+pub fn validate_saved_blend(
+    definition: &CustomBlendDefinition,
+) -> anyhow::Result<Vec<BlendComponentRequest>> {
+    requested_components_from_definition(definition)
+}
+
+/// Admits the components of one saved blend over a window.
+///
+/// The admission is the same one the blend's own creation used: every
+/// component must hold the required anchor and end closes and every interior
+/// weekday. No component is omitted and no weight is renormalized.
+pub async fn admit_saved_blend(
+    db: &DatabaseConnection,
+    market_data: &MarketData,
+    definition: &CustomBlendDefinition,
+    window: &BlendWindow,
+) -> anyhow::Result<Vec<AdmittedComponent>> {
+    let requested = requested_components_from_definition(definition)?;
+    admit_components(db, market_data, &requested, window).await
+}
+
 /// Rebuilds the component requests of a saved definition.
 fn requested_components_from_definition(
     definition: &CustomBlendDefinition,
@@ -771,7 +808,11 @@ fn admission_basis(start_date: Option<NaiveDate>) -> &'static str {
 }
 
 /// The honest earlier-period limitation of a saved blend.
-fn earlier_period_limitation(definition: &CustomBlendDefinition) -> Option<String> {
+///
+/// A blend admitted from an explicitly selected later start cannot cover the
+/// periods before that date, and the limitation is stated instead of the
+/// window being silently shortened.
+pub fn earlier_period_limitation(definition: &CustomBlendDefinition) -> Option<String> {
     match definition.admission_basis.as_str() {
         ADMISSION_BASIS_EXPLICIT_START => Some(format!(
             "the comparison was explicitly started on {}; the periods before that date are unavailable for this blend",
