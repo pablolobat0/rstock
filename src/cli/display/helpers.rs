@@ -53,6 +53,59 @@ pub(crate) fn color_value(value: f64, formatted: &str) -> String {
     }
 }
 
+/// Rewrites the storage dates embedded in a machine reason to the
+/// user-facing display format. Machine output keeps the stored ISO value.
+pub(crate) fn display_reason(reason: &str) -> String {
+    let bytes = reason.as_bytes();
+    let mut display = String::with_capacity(reason.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if let Some(date) = iso_date_at(reason, index) {
+            display.push_str(&crate::constants::display_date(date));
+            index += date.len();
+        } else {
+            let character = reason[index..]
+                .chars()
+                .next()
+                .expect("a non-empty remainder has a first character");
+            display.push(character);
+            index += character.len_utf8();
+        }
+    }
+    display
+}
+
+/// The complete `YYYY-MM-DD` date at `index`, when the text holds one that is
+/// not part of a longer number.
+fn iso_date_at(reason: &str, index: usize) -> Option<&str> {
+    let bytes = reason.as_bytes();
+    if index + 10 > bytes.len() {
+        return None;
+    }
+    let window = &bytes[index..index + 10];
+    let is_digit = |byte: u8| byte.is_ascii_digit();
+    let shaped = is_digit(window[0])
+        && is_digit(window[1])
+        && is_digit(window[2])
+        && is_digit(window[3])
+        && window[4] == b'-'
+        && is_digit(window[5])
+        && is_digit(window[6])
+        && window[7] == b'-'
+        && is_digit(window[8])
+        && is_digit(window[9]);
+    if !shaped {
+        return None;
+    }
+    if index > 0 && bytes[index - 1].is_ascii_digit() {
+        return None;
+    }
+    if bytes.get(index + 10).is_some_and(u8::is_ascii_digit) {
+        return None;
+    }
+    Some(&reason[index..index + 10])
+}
+
 pub(super) fn format_pct(v: Option<f64>) -> String {
     match v {
         Some(val) => format_eu(&format!("{val:.2}%")),
@@ -94,6 +147,128 @@ pub(crate) fn write_benchmark_reference_context<W: Write>(
         writeln!(writer, "{line}")?;
     }
     Ok(())
+}
+
+pub(crate) fn write_fund_benchmark_periods<W: Write>(
+    writer: &mut W,
+    fund_name: &str,
+    comparison: &crate::models::FundBenchmarkComparison,
+) -> anyhow::Result<()> {
+    use crate::constants::display_date;
+    use crate::models::ComparisonAvailability;
+
+    match &comparison.availability {
+        ComparisonAvailability::Available => {
+            writeln!(writer, "{fund_name} assigned primary comparison: available")?;
+        }
+        ComparisonAvailability::Unavailable { reason } => {
+            writeln!(
+                writer,
+                "{fund_name} assigned primary comparison: unavailable ({})",
+                display_reason(reason)
+            )?;
+        }
+        ComparisonAvailability::NotApplicable { reason } => {
+            writeln!(
+                writer,
+                "{fund_name} assigned primary comparison: not applicable ({})",
+                display_reason(reason)
+            )?;
+        }
+    }
+    if let Some(reference_name) = &comparison.reference_name {
+        writeln!(
+            writer,
+            "{} primary reference: {} [{}]; currency {}; basis {}; adjustment {}; hedge {}; cadence {}; source {} {}; provenance {}",
+            fund_name,
+            reference_name,
+            comparison.reference_id.as_deref().unwrap_or("unknown id"),
+            comparison.currency,
+            comparison.return_basis.as_deref().unwrap_or("unknown"),
+            comparison.adjustment.as_deref().unwrap_or("unknown"),
+            comparison.hedge_policy.as_deref().unwrap_or("unknown"),
+            comparison.cadence.as_deref().unwrap_or("unknown"),
+            comparison.source.as_deref().unwrap_or("unknown"),
+            comparison.source_identifier.as_deref().unwrap_or("unknown"),
+            comparison.source_provenance.as_deref().unwrap_or("unknown"),
+        )?;
+    }
+    writeln!(writer, "  Period | Requested start; actual anchor – end | Fund return | Reference return | Excess | Beta | Correlation | Tracking error (% annualized) | Information ratio")?;
+    for period in &comparison.standard_periods {
+        let dates = match (&period.start_date, &period.end_date) {
+            (Some(start), Some(end)) => format!(
+                "{}; {} – {}",
+                period
+                    .requested_start_date
+                    .as_deref()
+                    .map_or_else(|| "N/A".to_owned(), display_date),
+                display_date(start),
+                display_date(end)
+            ),
+            _ => format!(
+                "{}; actual anchor/end N/A",
+                period
+                    .requested_start_date
+                    .as_deref()
+                    .map_or_else(|| "N/A".to_owned(), display_date)
+            ),
+        };
+        writeln!(
+            writer,
+            "  {} | {} | {} | {} | {} | {} | {} | {} | {}",
+            period.period.label(),
+            dates,
+            format_comparison_fact(&period.fund_return_pct, |value| format_pct(Some(value))),
+            format_comparison_fact(&period.reference_return_pct, |value| format_pct(Some(
+                value
+            ))),
+            format_comparison_fact(&period.excess_return_percentage_points, |value| {
+                format_eu(&format!("{value:+.2} pp"))
+            }),
+            format_comparison_fact(&period.beta, |value| format_plain(Some(value))),
+            format_comparison_fact(&period.correlation, |value| format_plain(Some(value))),
+            format_comparison_fact(&period.tracking_error_annualized_pct, |value| {
+                format_pct(Some(value))
+            }),
+            format_comparison_fact(&period.information_ratio, |value| format_plain(Some(value))),
+        )?;
+    }
+    Ok(())
+}
+
+pub(crate) fn write_risk_free_assumption<W: Write>(
+    writer: &mut W,
+    assumption: &crate::models::RiskFreeAssumption,
+) -> anyhow::Result<()> {
+    writeln!(
+        writer,
+        "Risk-free assumption: {:.2}% annual for {}; not a substitute for {} and not applied to {}.",
+        assumption.annual_rate_pct,
+        assumption.applies_to.join("/"),
+        assumption.not_applied_to.first().map_or("€STR", String::as_str),
+        assumption
+            .not_applied_to
+            .get(1)
+            .map_or("retained cash", String::as_str),
+    )?;
+    Ok(())
+}
+
+fn format_comparison_fact(
+    fact: &crate::models::ComparisonFact<f64>,
+    format_value: impl FnOnce(f64) -> String,
+) -> String {
+    use crate::models::ComparisonFact;
+
+    match fact {
+        ComparisonFact::Available { value } => format_value(*value),
+        ComparisonFact::Unavailable { reason } => {
+            format!("Unavailable ({})", display_reason(reason))
+        }
+        ComparisonFact::NotApplicable { reason } => {
+            format!("N/A ({})", display_reason(reason))
+        }
+    }
 }
 
 pub(crate) fn benchmark_reference_context_lines(

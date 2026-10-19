@@ -1,4 +1,7 @@
-use super::{portfolio::BenchmarkReferenceInfo, FundPeriodMetrics, MarketDataLimitation};
+use super::{
+    portfolio::BenchmarkReferenceInfo, FundBenchmarkComparison, FundPeriodMetrics,
+    MarketDataLimitation, RiskFreeAssumption,
+};
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -11,6 +14,7 @@ pub struct FundComparisonResult {
     pub common_holdings: Vec<CommonFundHolding>,
     pub correlation: FundComparisonCorrelation,
     pub benchmark_reference: BenchmarkReferenceInfo,
+    pub risk_free_assumption: RiskFreeAssumption,
 }
 
 #[derive(Clone, Copy)]
@@ -30,6 +34,7 @@ pub struct FundComparisonSide {
     pub five_year: Option<FundPeriodMetrics>,
     pub all_time: Option<FundPeriodMetrics>,
     pub benchmark_limitations: Vec<MarketDataLimitation>,
+    pub primary_benchmark_comparison: FundBenchmarkComparison,
 }
 
 #[derive(Serialize)]

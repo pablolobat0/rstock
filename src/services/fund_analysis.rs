@@ -120,6 +120,7 @@ pub async fn compute_fund_analysis(
         benchmark_reference: metrics.benchmark_reference,
         benchmark_limitations: metrics.benchmark_limitations,
         primary_benchmark_comparison,
+        risk_free_assumption: crate::models::RiskFreeAssumption::current(),
         candidate_correlation,
         holdings_changed,
         last_snapshot_date,

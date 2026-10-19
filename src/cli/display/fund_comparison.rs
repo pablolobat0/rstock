@@ -141,7 +141,13 @@ pub fn write_fund_comparison_reference_context<W: Write>(
     result: &FundComparisonResult,
 ) -> anyhow::Result<()> {
     super::helpers::write_benchmark_reference_context(writer, &result.benchmark_reference, &[])?;
+    super::helpers::write_risk_free_assumption(writer, &result.risk_free_assumption)?;
     for side in [&result.fund_a, &result.fund_b] {
+        super::helpers::write_fund_benchmark_periods(
+            writer,
+            &side.name,
+            &side.primary_benchmark_comparison,
+        )?;
         for limitation in &side.benchmark_limitations {
             writeln!(
                 writer,
