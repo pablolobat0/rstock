@@ -4,13 +4,19 @@ mod dispatch;
 pub mod display;
 pub mod output;
 
-pub use dispatch::{run_benchmark_command_with_writer, run_command, run_command_with_writer};
+pub use dispatch::{
+    run_benchmark_command_with_writer, run_blend_command_with_writer, run_command,
+    run_command_with_writer,
+};
 
 use chrono::NaiveDate;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::constants::DISPLAY_DATE_FORMAT;
-use crate::models::{AssetClass, AssetType, BondCredit, BondDuration, EquityStyle, Management};
+use crate::models::{
+    AssetClass, AssetType, BlendComponentArgument, BondCredit, BondDuration, EquityStyle,
+    Management,
+};
 
 fn parse_date(s: &str) -> Result<NaiveDate, String> {
     let date = NaiveDate::parse_from_str(s, DISPLAY_DATE_FORMAT)
@@ -123,6 +129,8 @@ pub enum Commands {
     Compare(CompareArgs),
     /// Browse benchmark definitions and manage explicit primary assignments
     Benchmark(BenchmarkArgs),
+    /// Create, inspect and delete saved Custom benchmark blends
+    Blend(BlendArgs),
 }
 
 #[derive(Debug, Args)]
@@ -171,6 +179,64 @@ pub enum BenchmarkCommands {
 pub enum CandidateVehicle {
     Fund,
     Etf,
+}
+
+#[derive(Debug, Args)]
+pub struct BlendArgs {
+    #[command(subcommand)]
+    pub command: BlendCommands,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum BlendCommands {
+    /// List saved Custom benchmark blends
+    List {},
+    /// Create an immutable Custom benchmark blend from explicit components
+    Create {
+        /// Display name of the blend; its stable identity is derived from it
+        #[arg(short = 'n', long = "name")]
+        name: String,
+
+        /// Component as <reference-id|cash>:<weight-percent>; repeat per component
+        #[arg(short = 'c', long = "component", value_parser = parse_blend_component)]
+        component: Vec<BlendComponentArgument>,
+
+        /// Explicit later comparison start (DD-MM-YYYY); defaults to the full comparison history
+        #[arg(long = "start", value_parser = parse_date)]
+        start: Option<NaiveDate>,
+    },
+    /// Show one saved Custom benchmark blend with its component conventions
+    Show { blend_id: String },
+    /// Preview the dated rebased wealth series of one saved Custom benchmark blend
+    Preview { blend_id: String },
+    /// Delete one unused saved Custom benchmark blend
+    Delete { blend_id: String },
+}
+
+/// Parses one declared component as `<reference-id|cash>:<weight-percent>`.
+fn parse_blend_component(value: &str) -> Result<BlendComponentArgument, String> {
+    let (identity, weight) = value.split_once(':').ok_or_else(|| {
+        format!("invalid component '{value}', expected <reference-id|cash>:<weight-percent>")
+    })?;
+    let identity = identity.trim();
+    if identity.is_empty() {
+        return Err(format!(
+            "invalid component '{value}', the component identity is empty"
+        ));
+    }
+    let weight_percent: f64 = weight
+        .trim()
+        .parse()
+        .map_err(|_| format!("invalid component '{value}', the weight must be a number"))?;
+    if !weight_percent.is_finite() {
+        return Err(format!(
+            "invalid component '{value}', the weight must be a finite number"
+        ));
+    }
+    Ok(BlendComponentArgument {
+        identity: identity.to_owned(),
+        weight_percent,
+    })
 }
 
 #[derive(Debug, Args)]

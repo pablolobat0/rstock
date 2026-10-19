@@ -52,6 +52,22 @@ pub async fn find_by_subject(
     )
 }
 
+/// The active primary assignments that point at one definition.
+pub async fn find_by_reference(
+    db: &impl sea_orm::ConnectionTrait,
+    reference_id: &str,
+) -> anyhow::Result<Vec<PrimaryAssignment>> {
+    Ok(benchmark_assignment::Entity::find()
+        .filter(benchmark_assignment::Column::ReferenceId.eq(reference_id))
+        .order_by_asc(benchmark_assignment::Column::SubjectType)
+        .order_by_asc(benchmark_assignment::Column::SubjectId)
+        .all(db)
+        .await?
+        .into_iter()
+        .map(assignment_from_row)
+        .collect())
+}
+
 /// Reads the explicit primary assignments of the given subjects in one query,
 /// including the moment each assignment was recorded.
 pub async fn find_by_subjects(

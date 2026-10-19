@@ -5,6 +5,28 @@ use sea_orm::{ConnectionTrait, DatabaseBackend, EntityTrait, QueryOrder, Set, St
 
 pub mod common;
 
+/// The number of migrations applied before the contract transaction schema
+/// migration, located by its stable name so an unrelated additive migration
+/// cannot shift the boundary these tests exercise.
+fn contract_schema_prefix() -> u32 {
+    Migrator::migrations()
+        .iter()
+        .position(|migration| migration.name().contains("contract_transaction_schema"))
+        .expect("the contract transaction schema migration should be registered") as u32
+}
+
+/// The number of `down` steps that returns the schema to the contract
+/// transaction schema migration itself.
+fn migrations_above_contract_schema() -> u32 {
+    Migrator::migrations().len() as u32 - contract_schema_prefix() - 1
+}
+
+/// The number of `down` steps that returns the schema to the state before the
+/// contract transaction schema migration.
+fn migrations_from_contract_schema() -> u32 {
+    Migrator::migrations().len() as u32 - contract_schema_prefix()
+}
+
 async fn assert_check_failure(db: &sea_orm::DatabaseConnection, sql: String) {
     let result = db
         .execute(Statement::from_string(DatabaseBackend::Sqlite, sql.clone()))
@@ -178,7 +200,7 @@ async fn semantic_migration_round_trips_every_transaction_kind_and_identity() {
     let db = sea_orm::Database::connect("sqlite::memory:")
         .await
         .expect("in-memory database");
-    let prefix = (Migrator::migrations().len() - 6) as u32;
+    let prefix = contract_schema_prefix();
     Migrator::up(&db, Some(prefix))
         .await
         .expect("legacy migration prefix");
@@ -218,7 +240,7 @@ async fn semantic_migration_round_trips_every_transaction_kind_and_identity() {
     assert_eq!(rows[3].units, Some(3.0));
     assert_eq!(rows[3].unit_price_cents, Some(1500));
 
-    Migrator::down(&db, Some(5))
+    Migrator::down(&db, Some(migrations_above_contract_schema()))
         .await
         .expect("drop additive benchmark migrations");
     Migrator::down(&db, Some(1))
@@ -324,7 +346,7 @@ async fn semantic_constraints_reject_irrelevant_fields_and_invalid_signs() {
 #[tokio::test]
 async fn migration_preserves_deleted_highest_transaction_id_through_up_and_down() {
     let db = sea_orm::Database::connect("sqlite::memory:").await.unwrap();
-    let prefix = (Migrator::migrations().len() - 6) as u32;
+    let prefix = contract_schema_prefix();
     Migrator::up(&db, Some(prefix)).await.unwrap();
     db.execute_unprepared("INSERT INTO assets (id,ticker,name,asset_type,currency,created_at) VALUES (1,'XSEQ','Sequence','stock','EUR','now')").await.unwrap();
     db.execute_unprepared("INSERT INTO transactions (id,asset_id,tx_type,date,quantity,price_cents,fees_cents,created_at) VALUES (7,1,'buy','2025-01-01',1.0,100,0,'now'),(100,1,'buy','2025-01-02',1.0,100,0,'now')").await.unwrap();
@@ -337,7 +359,9 @@ async fn migration_preserves_deleted_highest_transaction_id_through_up_and_down(
     let generated = db.execute_unprepared("INSERT INTO transactions (asset_id,tx_type,date,units,unit_price_cents,fees_cents,created_at) VALUES (1,'buy','2025-01-03',1.0,100,0,'now')").await.unwrap().last_insert_id();
     assert!(generated > 100);
 
-    Migrator::down(&db, Some(6)).await.unwrap();
+    Migrator::down(&db, Some(migrations_from_contract_schema()))
+        .await
+        .unwrap();
     assert_eq!(
         transaction_sequence(&db).await,
         (1, i64::try_from(generated).unwrap())
@@ -349,7 +373,7 @@ async fn migration_preserves_deleted_highest_transaction_id_through_up_and_down(
 #[tokio::test]
 async fn migration_preserves_empty_table_sequence_through_up_and_down() {
     let db = sea_orm::Database::connect("sqlite::memory:").await.unwrap();
-    let prefix = (Migrator::migrations().len() - 6) as u32;
+    let prefix = contract_schema_prefix();
     Migrator::up(&db, Some(prefix)).await.unwrap();
     db.execute_unprepared("INSERT INTO assets (id,ticker,name,asset_type,currency,created_at) VALUES (1,'XEMPTYSEQ','Empty Sequence','stock','EUR','now')").await.unwrap();
     db.execute_unprepared("INSERT INTO transactions (id,asset_id,tx_type,date,quantity,price_cents,fees_cents,created_at) VALUES (50,1,'buy','2025-01-01',1.0,100,0,'now')").await.unwrap();
@@ -365,7 +389,9 @@ async fn migration_preserves_empty_table_sequence_through_up_and_down() {
         .await
         .unwrap();
 
-    Migrator::down(&db, Some(6)).await.unwrap();
+    Migrator::down(&db, Some(migrations_from_contract_schema()))
+        .await
+        .unwrap();
     assert_eq!(
         transaction_sequence(&db).await,
         (1, i64::try_from(generated).unwrap())
@@ -377,7 +403,7 @@ async fn migration_preserves_empty_table_sequence_through_up_and_down() {
 #[tokio::test]
 async fn failed_up_rolls_back_rebuild_and_bookkeeping_then_retries() {
     let db = sea_orm::Database::connect("sqlite::memory:").await.unwrap();
-    let prefix = (Migrator::migrations().len() - 6) as u32;
+    let prefix = contract_schema_prefix();
     Migrator::up(&db, Some(prefix)).await.unwrap();
     db.execute_unprepared("INSERT INTO assets (id,ticker,name,asset_type,currency,created_at) VALUES (1,'XUPFAIL','Up failure','stock','EUR','now')").await.unwrap();
     db.execute_unprepared("INSERT INTO transactions (id,asset_id,tx_type,date,quantity,price_cents,fees_cents,notes,created_at) VALUES (7,1,'buy','2025-01-01',1.0,100,0,'legacy note','legacy created'),(100,1,'sell','2025-01-02',1.0,110,1,NULL,'legacy sell')").await.unwrap();
@@ -424,7 +450,7 @@ async fn failed_up_rolls_back_rebuild_and_bookkeeping_then_retries() {
 #[tokio::test]
 async fn failed_down_rolls_back_rebuild_and_bookkeeping_then_retries() {
     let db = sea_orm::Database::connect("sqlite::memory:").await.unwrap();
-    let prefix = (Migrator::migrations().len() - 6) as u32;
+    let prefix = contract_schema_prefix();
     Migrator::up(&db, Some(prefix)).await.unwrap();
     db.execute_unprepared("INSERT INTO assets (id,ticker,name,asset_type,currency,created_at) VALUES (1,'XDOWNFAIL','Down failure','stock','EUR','now')").await.unwrap();
     db.execute_unprepared("INSERT INTO transactions (id,asset_id,tx_type,date,quantity,price_cents,fees_cents,notes,created_at) VALUES (7,1,'buy','2025-01-01',1.0,100,0,'semantic note','semantic created'),(100,1,'sell','2025-01-02',1.0,110,1,NULL,'semantic sell')").await.unwrap();

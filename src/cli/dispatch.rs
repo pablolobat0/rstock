@@ -11,7 +11,7 @@ use sea_orm::DatabaseConnection;
 use super::commands;
 use super::output::OutputFormat;
 use super::{
-    AnalyzeCommands, AssetCommands, BenchmarkCommands, Commands, CompareCommands,
+    AnalyzeCommands, AssetCommands, BenchmarkCommands, BlendCommands, Commands, CompareCommands,
     CorrelationCommands, PortfolioCommands, TransactionCommands,
 };
 use crate::services::market_data::MarketData;
@@ -101,6 +101,9 @@ pub async fn run_command_with_writer<W: Write>(
         Commands::Benchmark(args) => {
             commands::benchmarks::run(db, args.command, output_format).await
         }
+        Commands::Blend(args) => {
+            commands::custom_blends::run(db, market_data, args.command, output_format).await
+        }
     }
 }
 
@@ -113,6 +116,18 @@ pub async fn run_benchmark_command_with_writer<W: Write>(
     writer: &mut W,
 ) -> anyhow::Result<()> {
     commands::benchmarks::run_with_writer(db, command, output_format, writer).await
+}
+
+/// Dispatch one Custom blend command through the library-owned CLI adapter
+/// while letting callers capture the exact human or JSON output.
+pub async fn run_blend_command_with_writer<W: Write>(
+    db: &DatabaseConnection,
+    market_data: &MarketData,
+    command: BlendCommands,
+    output_format: OutputFormat,
+    writer: &mut W,
+) -> anyhow::Result<()> {
+    commands::custom_blends::run_with_writer(db, market_data, command, output_format, writer).await
 }
 
 async fn run_transaction_command(

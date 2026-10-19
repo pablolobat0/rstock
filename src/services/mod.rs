@@ -4,6 +4,7 @@ pub mod benchmark;
 pub mod benchmark_references;
 pub mod clock;
 pub mod composition;
+pub mod custom_blends;
 pub mod export;
 pub mod exposure_benchmark;
 pub mod fund_analysis;

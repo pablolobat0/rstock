@@ -1,6 +1,7 @@
 mod asset;
 mod benchmark;
 mod classification;
+mod custom_blend;
 mod exposure_benchmark;
 mod fund_analysis;
 mod fund_comparison;
@@ -19,6 +20,10 @@ pub use benchmark::{
 };
 pub use classification::{
     enum_to_db, AssetClass, AssetClassification, BondCredit, BondDuration, EquityStyle, Management,
+};
+pub use custom_blend::{
+    BlendComponent, BlendComponentArgument, BlendTargetReset, BlendWealthPoint,
+    CustomBlendDefinition, CustomBlendDeletion, CustomBlendPreview,
 };
 pub use exposure_benchmark::{
     ExposureBenchmarkComparison, ExposureBenchmarkReference, OmittedSeedInterval,

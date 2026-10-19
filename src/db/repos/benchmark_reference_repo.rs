@@ -1,4 +1,6 @@
-use sea_orm::{sea_query::OnConflict, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set};
+use sea_orm::{
+    sea_query::OnConflict, ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set,
+};
 
 use crate::db::entities::{benchmark_reference, benchmark_reference_price};
 
@@ -21,6 +23,9 @@ pub struct BenchmarkReference {
     pub verification_state: String,
     pub official_comparator: Option<String>,
     pub objective_comparator: Option<String>,
+    /// `reference` for source-backed definitions, `custom_blend` for saved
+    /// Custom blends, which are synthetic reference wealth.
+    pub kind: String,
 }
 
 impl From<benchmark_reference::Model> for BenchmarkReference {
@@ -43,6 +48,7 @@ impl From<benchmark_reference::Model> for BenchmarkReference {
             verification_state: model.verification_state,
             official_comparator: model.official_comparator,
             objective_comparator: model.objective_comparator,
+            kind: model.kind,
         }
     }
 }
@@ -76,6 +82,50 @@ pub async fn find_by_id(
         .await?
         .map(BenchmarkReference::from)
         .ok_or_else(|| anyhow::anyhow!("benchmark reference '{reference_id}' not found"))
+}
+
+/// Whether one benchmark definition identity exists.
+pub async fn exists(
+    db: &impl sea_orm::ConnectionTrait,
+    reference_id: &str,
+) -> anyhow::Result<bool> {
+    Ok(benchmark_reference::Entity::find_by_id(reference_id)
+        .one(db)
+        .await?
+        .is_some())
+}
+
+/// Inserts one new benchmark definition.
+///
+/// Definitions are immutable: an existing identity is never updated or
+/// revised, and a repeated identity is rejected by the primary key.
+pub async fn insert_definition(
+    db: &impl sea_orm::ConnectionTrait,
+    definition: &BenchmarkReference,
+) -> anyhow::Result<()> {
+    benchmark_reference::ActiveModel {
+        id: Set(definition.id.clone()),
+        display_name: Set(definition.display_name.clone()),
+        instrument_ticker: Set(definition.instrument_ticker.clone()),
+        source: Set(definition.source.clone()),
+        source_identifier: Set(definition.source_identifier.clone()),
+        currency: Set(definition.currency.clone()),
+        adjustment_provenance: Set(definition.adjustment_provenance.clone()),
+        adjustment_qualification: Set(definition.adjustment_qualification.clone()),
+        return_basis_qualification: Set(definition.return_basis_qualification.clone()),
+        role: Set(definition.role.clone()),
+        universe: Set(definition.universe.clone()),
+        hedge_policy: Set(definition.hedge_policy.clone()),
+        source_provenance: Set(definition.source_provenance.clone()),
+        history_boundary: Set(definition.history_boundary.clone()),
+        verification_state: Set(definition.verification_state.clone()),
+        official_comparator: Set(definition.official_comparator.clone()),
+        objective_comparator: Set(definition.objective_comparator.clone()),
+        kind: Set(definition.kind.clone()),
+    }
+    .insert(db)
+    .await?;
+    Ok(())
 }
 
 pub async fn find_prices_with_seed(
