@@ -33,7 +33,31 @@ fn print_identity(result: &FundComparisonResult) {
         "{} [{}]  vs  {} [{}]",
         result.fund_a.name, result.fund_a.code, result.fund_b.name, result.fund_b.code
     );
+    for side in [&result.fund_a, &result.fund_b] {
+        println!("  Exact class: {}", class_identity_line(side));
+    }
     println!();
+}
+
+/// The exact class identity of one compared side.
+///
+/// Two share classes of the same fund are different investments, so each side
+/// keeps its own identity. A class that this portfolio does not track has no
+/// local identity, and that absence stays visible.
+fn class_identity_line(side: &FundComparisonSide) -> String {
+    match (
+        side.class_identity.tracked_identity.as_deref(),
+        side.class_identity.vehicle.as_deref(),
+    ) {
+        (Some(identity), Some(vehicle)) => {
+            format!("{identity} ({vehicle}, tracked in this portfolio)")
+        }
+        (Some(identity), None) => format!("{identity} (tracked in this portfolio)"),
+        (None, _) => format!(
+            "{} is not tracked in this portfolio; only the source code identifies this exact class",
+            side.class_identity.source_code
+        ),
+    }
 }
 
 fn print_fund_info(result: &FundComparisonResult) {
@@ -104,6 +128,10 @@ fn print_performance(result: &FundComparisonResult) {
     write_fund_comparison_reference_context(&mut std::io::stdout().lock(), result)
         .expect("writing fund-comparison reference context to stdout");
     println!();
+    println!(
+        "Direct fund-to-fund rows measure each fund alone; they use no reference and stay available when a fund's own reference is unusable."
+    );
+    println!();
 
     let return_rows = [
         build_performance_rows("Total Return", result, |m| {
@@ -119,12 +147,11 @@ fn print_performance(result: &FundComparisonResult) {
     let risk_rows = [
         build_performance_rows("Volatility", result, |m| format_pct(m.volatility)),
         build_performance_rows("Max DD", result, |m| format_pct(m.max_drawdown)),
-        build_performance_rows("Beta", result, |m| format_plain(m.beta)),
     ]
     .into_iter()
     .flatten()
     .collect::<Vec<_>>();
-    print_performance_table("Risk", risk_rows, &[3, 5]);
+    print_performance_table("Risk", risk_rows, &[3]);
 
     let risk_adjusted_rows = [
         build_performance_rows("Sharpe", result, |m| format_plain(m.sharpe)),
@@ -136,24 +163,41 @@ fn print_performance(result: &FundComparisonResult) {
     print_performance_table("Risk-Adjusted", risk_adjusted_rows, &[3]);
 }
 
+/// Writes each fund's own reference-relative results.
+///
+/// Every side is measured against its own selected primary reference, so two
+/// funds with different references never read as one shared investment
+/// universe. A side without a usable reference keeps its own outcome state and
+/// never borrows the other side's reference.
 pub fn write_fund_comparison_reference_context<W: Write>(
     writer: &mut W,
     result: &FundComparisonResult,
 ) -> anyhow::Result<()> {
-    super::helpers::write_benchmark_reference_context(writer, &result.benchmark_reference, &[])?;
     super::helpers::write_risk_free_assumption(writer, &result.risk_free_assumption)?;
+    writeln!(
+        writer,
+        "Reference-relative results use each fund's own selected primary reference; the two compared funds share no reference."
+    )?;
     for side in [&result.fund_a, &result.fund_b] {
+        writeln!(writer, "{} reference-relative comparison", side.name)?;
         super::helpers::write_fund_benchmark_periods(
             writer,
             &side.name,
             &side.primary_benchmark_comparison,
         )?;
-        for limitation in &side.benchmark_limitations {
-            writeln!(
+        super::helpers::write_comparison_limitations(
+            writer,
+            "Fund",
+            "Reference",
+            &side.primary_benchmark_comparison,
+        )?;
+        if matches!(
+            side.primary_benchmark_comparison.availability,
+            crate::models::ComparisonAvailability::Available
+        ) {
+            super::helpers::write_comparison_wealth_graph(
                 writer,
-                "{}: {}",
-                side.code,
-                super::helpers::format_market_data_limitation_warning(limitation)
+                &side.primary_benchmark_comparison,
             )?;
         }
     }

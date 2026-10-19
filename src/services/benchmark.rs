@@ -7,6 +7,7 @@ use crate::constants::{format_date, FLOAT_EPSILON, MIN_DATA_POINTS, TRADING_DAYS
 use crate::models::{
     BenchmarkComparisonPeriod, BenchmarkPeriod, ComparisonAvailability, ComparisonCoverageIssue,
     ComparisonFact, DatedWealthPoint, FundBenchmarkComparison, FundBenchmarkPeriod,
+    ReferenceDefinitionInfo,
 };
 use crate::services::market_data::MarketData;
 use anyhow::Context;
@@ -193,6 +194,7 @@ async fn compare_assigned_fund(
     definition: crate::db::repos::benchmark_reference_repo::BenchmarkReference,
 ) -> anyhow::Result<FundBenchmarkComparison> {
     let mut outcome = FundBenchmarkComparison::unavailable("comparison inputs are not qualified");
+    outcome.definition = Some(ReferenceDefinitionInfo::from(&definition));
     outcome.reference_id = Some(definition.id.clone());
     outcome.reference_name = Some(definition.display_name.clone());
     outcome.source = Some(definition.source.clone());
@@ -293,6 +295,35 @@ fn latest_completed_weekday(today: NaiveDate) -> NaiveDate {
         date -= Duration::days(1);
     }
     date
+}
+
+/// The identity and purpose of one selected reference definition.
+///
+/// The definition is immutable, so the rendered comparison keeps the meaning
+/// of its reference instead of only an identifier.
+impl From<&crate::db::repos::benchmark_reference_repo::BenchmarkReference>
+    for ReferenceDefinitionInfo
+{
+    fn from(definition: &crate::db::repos::benchmark_reference_repo::BenchmarkReference) -> Self {
+        Self {
+            reference_id: definition.id.clone(),
+            display_name: definition.display_name.clone(),
+            instrument_ticker: definition.instrument_ticker.clone(),
+            role: definition.role.clone(),
+            universe: definition.universe.clone(),
+            native_currency: definition.currency.clone(),
+            return_basis: definition.return_basis_qualification.clone(),
+            adjustment: definition.adjustment_qualification.clone(),
+            hedge_policy: definition.hedge_policy.clone(),
+            source: definition.source.clone(),
+            source_identifier: definition.source_identifier.clone(),
+            source_provenance: definition.source_provenance.clone(),
+            history_boundary: definition.history_boundary.clone(),
+            verification_state: definition.verification_state.clone(),
+            official_comparator: definition.official_comparator.clone(),
+            objective_comparator: definition.objective_comparator.clone(),
+        }
+    }
 }
 
 fn not_applicable_short_history(

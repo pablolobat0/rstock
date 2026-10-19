@@ -1,6 +1,6 @@
 use super::benchmark::{
     BenchmarkComparisonPeriod, BenchmarkPeriod, ComparisonAvailability, ComparisonFact,
-    DatedWealthPoint,
+    DatedWealthPoint, ReferenceDefinitionInfo,
 };
 use super::portfolio::{AllocationEntry, BenchmarkReferenceInfo, FundHolding};
 use super::MarketDataLimitation;
@@ -41,6 +41,12 @@ impl std::fmt::Display for ComparisonCoverageIssue {
 pub struct FundBenchmarkComparison {
     pub availability: ComparisonAvailability,
     pub role: String,
+    /// The identity and purpose of the selected reference definition.
+    ///
+    /// It is absent when no reference is selected for the subject, and the
+    /// availability reason states why. A reference is never replaced by
+    /// another reference to keep a comparison available.
+    pub definition: Option<ReferenceDefinitionInfo>,
     pub reference_id: Option<String>,
     pub reference_name: Option<String>,
     /// Currency of the persisted reference prices before conversion.
@@ -172,6 +178,7 @@ impl FundBenchmarkComparison {
                 reason: reason.clone(),
             },
             role: "primary".to_owned(),
+            definition: None,
             reference_id: None,
             reference_name: None,
             native_currency: None,

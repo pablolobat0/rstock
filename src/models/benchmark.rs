@@ -18,6 +18,41 @@ pub struct DatedWealthPoint {
     pub wealth: f64,
 }
 
+/// The identity and purpose of one selected reference definition.
+///
+/// A rendered comparison carries the meaning of its selected definition, not
+/// only an opaque identifier, so that the reference stays inspectable: which
+/// investment universe it describes, which official or objective comparator it
+/// records, and which currency, return basis, adjustment, hedge, source and
+/// history boundary it was verified against.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ReferenceDefinitionInfo {
+    pub reference_id: String,
+    pub display_name: String,
+    /// The instrument the definition tracks, when it tracks one.
+    pub instrument_ticker: String,
+    /// The financial role the definition plays, for example "Investment universe".
+    pub role: String,
+    /// The investment universe the definition describes.
+    pub universe: String,
+    /// The currency of the reference series before conversion.
+    pub native_currency: String,
+    pub return_basis: String,
+    pub adjustment: String,
+    pub hedge_policy: String,
+    pub source: String,
+    pub source_identifier: String,
+    pub source_provenance: String,
+    /// The explicit history boundary of the definition.
+    pub history_boundary: String,
+    /// The production mapping verification state of the definition.
+    pub verification_state: String,
+    /// The official comparator the definition records, when it records one.
+    pub official_comparator: Option<String>,
+    /// The stated objective comparator the definition records, when it has one.
+    pub objective_comparator: Option<String>,
+}
+
 /// The standard comparison periods shared by every subject/reference
 /// comparison.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]

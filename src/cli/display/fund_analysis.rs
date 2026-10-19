@@ -143,21 +143,6 @@ pub fn write_fund_analysis_reference_context<W: Write>(
             )?;
         }
     }
-    if let (Some(start), Some(end)) = (&comparison.start_date, &comparison.end_date) {
-        writeln!(
-            writer,
-            "Comparison dates: {} – {}; returns in %, excess in percentage points",
-            display_date(start),
-            display_date(end)
-        )?;
-        writeln!(
-            writer,
-            "Fund: {:?}; reference: {:?}; excess: {:?} pp",
-            comparison.fund_return_pct,
-            comparison.reference_return_pct,
-            comparison.excess_return_percentage_points
-        )?;
-    }
     super::helpers::write_fund_benchmark_periods(
         writer,
         result.name.as_deref().unwrap_or(&result.ms_code),
@@ -185,65 +170,15 @@ pub fn write_fund_analysis_reference_context<W: Write>(
             comparison.source_provenance.as_deref().unwrap_or("unknown")
         )?;
     }
-    for limitation in &comparison.fund_limitations {
-        writeln!(
-            writer,
-            "Fund comparison limitation: {}",
-            super::helpers::format_market_data_limitation_warning(limitation)
-        )?;
-    }
-    for limitation in &comparison.reference_limitations {
-        writeln!(
-            writer,
-            "Reference comparison limitation: {}",
-            super::helpers::format_market_data_limitation_warning(limitation)
-        )?;
-    }
-    if matches!(comparison.availability, ComparisonAvailability::Available) {
-        write_comparison_wealth_graph(writer, comparison)?;
-    }
-    Ok(())
-}
-
-fn write_comparison_wealth_graph<W: Write>(
-    writer: &mut W,
-    comparison: &crate::models::FundBenchmarkComparison,
-) -> anyhow::Result<()> {
-    use crate::models::DatedWealthPoint;
-
-    if comparison.fund_wealth.len() != comparison.reference_wealth.len()
-        || comparison.fund_wealth.len() < 2
-    {
-        return Ok(());
-    }
-    let points: [&[DatedWealthPoint]; 2] = [&comparison.fund_wealth, &comparison.reference_wealth];
-    let (minimum, maximum) = points
-        .iter()
-        .flat_map(|series| series.iter().map(|point| point.wealth))
-        .fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), value| {
-            (min.min(value), max.max(value))
-        });
-    let shades = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
-    let render = |series: &[DatedWealthPoint]| {
-        series
-            .iter()
-            .map(|point| {
-                let fraction = if maximum > minimum {
-                    (point.wealth - minimum) / (maximum - minimum)
-                } else {
-                    0.5
-                };
-                shades[(fraction * (shades.len() - 1) as f64).round() as usize]
-            })
-            .collect::<String>()
-    };
-    writeln!(writer, "Aligned wealth graph (EUR wealth rebased to 100):")?;
-    writeln!(writer, "  Fund      {}", render(&comparison.fund_wealth))?;
-    writeln!(
+    super::helpers::write_comparison_limitations(
         writer,
-        "  Reference {}",
-        render(&comparison.reference_wealth)
+        "Fund comparison",
+        "Reference comparison",
+        comparison,
     )?;
+    if matches!(comparison.availability, ComparisonAvailability::Available) {
+        super::helpers::write_comparison_wealth_graph(writer, comparison)?;
+    }
     Ok(())
 }
 

@@ -192,6 +192,10 @@ pub(crate) fn write_fund_benchmark_periods<W: Write>(
             comparison.source_provenance.as_deref().unwrap_or("unknown"),
         )?;
     }
+    if let Some(definition) = &comparison.definition {
+        write_reference_definition_purpose(writer, definition)?;
+    }
+    write_comparison_dates(writer, comparison)?;
     write_benchmark_period_rows(
         writer,
         "Fund",
@@ -201,6 +205,148 @@ pub(crate) fn write_fund_benchmark_periods<W: Write>(
             .map(crate::models::BenchmarkPeriod::from)
             .collect::<Vec<_>>(),
     )
+}
+
+/// The purpose and provenance of one selected reference definition.
+///
+/// A rendered comparison carries the meaning of its reference, not only an
+/// identifier, so the investment universe it describes and the official or
+/// objective comparator it records stay inspectable.
+pub(crate) fn write_reference_definition_purpose<W: Write>(
+    writer: &mut W,
+    definition: &crate::models::ReferenceDefinitionInfo,
+) -> anyhow::Result<()> {
+    writeln!(
+        writer,
+        "  Reference purpose: role {}; universe {}; instrument {}; verification {}",
+        definition.role,
+        definition.universe,
+        display_optional_text(Some(definition.instrument_ticker.as_str())),
+        definition.verification_state,
+    )?;
+    writeln!(
+        writer,
+        "  Reference history boundary: {}; source provenance: {}",
+        definition.history_boundary, definition.source_provenance
+    )?;
+    writeln!(
+        writer,
+        "  Official comparator: {}; objective comparator: {}",
+        display_optional_text(definition.official_comparator.as_deref()),
+        display_optional_text(definition.objective_comparator.as_deref()),
+    )?;
+    Ok(())
+}
+
+/// The actual comparison dates and the cumulative facts of one comparison.
+pub(crate) fn write_comparison_dates<W: Write>(
+    writer: &mut W,
+    comparison: &crate::models::FundBenchmarkComparison,
+) -> anyhow::Result<()> {
+    use crate::constants::display_date;
+
+    let (Some(start), Some(end)) = (&comparison.start_date, &comparison.end_date) else {
+        return Ok(());
+    };
+    writeln!(
+        writer,
+        "  Comparison dates: {} – {}; returns in %, excess in percentage points",
+        display_date(start),
+        display_date(end)
+    )?;
+    writeln!(
+        writer,
+        "  Fund return: {}; reference return: {}; excess: {}",
+        format_return_plain(comparison.fund_return_pct),
+        format_return_plain(comparison.reference_return_pct),
+        match comparison.excess_return_percentage_points {
+            Some(excess) => format_eu(&format!("{excess:+.2} pp")),
+            None => "N/A".to_owned(),
+        }
+    )?;
+    Ok(())
+}
+
+/// The aligned wealth graph of one comparison, rebased to 100.
+pub(crate) fn write_comparison_wealth_graph<W: Write>(
+    writer: &mut W,
+    comparison: &crate::models::FundBenchmarkComparison,
+) -> anyhow::Result<()> {
+    use crate::models::DatedWealthPoint;
+
+    if comparison.fund_wealth.len() != comparison.reference_wealth.len()
+        || comparison.fund_wealth.len() < 2
+    {
+        return Ok(());
+    }
+    let points: [&[DatedWealthPoint]; 2] = [&comparison.fund_wealth, &comparison.reference_wealth];
+    let (minimum, maximum) = points
+        .iter()
+        .flat_map(|series| series.iter().map(|point| point.wealth))
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), value| {
+            (min.min(value), max.max(value))
+        });
+    let shades = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+    let render = |series: &[DatedWealthPoint]| {
+        series
+            .iter()
+            .map(|point| {
+                let fraction = if maximum > minimum {
+                    (point.wealth - minimum) / (maximum - minimum)
+                } else {
+                    0.5
+                };
+                shades[(fraction * (shades.len() - 1) as f64).round() as usize]
+            })
+            .collect::<String>()
+    };
+    writeln!(
+        writer,
+        "  Aligned wealth graph (EUR wealth rebased to 100):"
+    )?;
+    writeln!(writer, "    Fund      {}", render(&comparison.fund_wealth))?;
+    writeln!(
+        writer,
+        "    Reference {}",
+        render(&comparison.reference_wealth)
+    )?;
+    Ok(())
+}
+
+/// The scoped Market data limitations of one comparison.
+///
+/// The fund scope and the reference scope stay separate, so a limitation of
+/// one reference never reads as a limitation of the other.
+pub(crate) fn write_comparison_limitations<W: Write>(
+    writer: &mut W,
+    fund_label: &str,
+    reference_label: &str,
+    comparison: &crate::models::FundBenchmarkComparison,
+) -> anyhow::Result<()> {
+    for limitation in &comparison.fund_limitations {
+        writeln!(
+            writer,
+            "  {fund_label} limitation: {}",
+            format_market_data_limitation_warning(limitation)
+        )?;
+    }
+    for limitation in &comparison.reference_limitations {
+        writeln!(
+            writer,
+            "  {reference_label} limitation: {}",
+            format_market_data_limitation_warning(limitation)
+        )?;
+    }
+    Ok(())
+}
+
+/// One descriptive text that may be absent.
+fn display_optional_text(value: Option<&str>) -> String {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("none")
+        .to_owned()
 }
 
 /// The standard comparison rows shared by the fund and exposure comparisons.

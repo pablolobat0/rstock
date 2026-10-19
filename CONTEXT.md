@@ -266,6 +266,10 @@ _Avoid_: NAV inception return, missing history
 - **Fund quote metadata** is displayed at analysis time and is not part of the transaction ledger or NAV history.
 - Fund analysis can run for a **Fund candidate** that is not a **Tracked asset**; when no local asset name exists, the fund name from **Fund quote metadata** is used.
 - In fund comparison, standard performance metrics use YTD, 1Y, 3Y, 5Y, and all-time periods, while the selected period controls only the correlation and aligned return graph.
+- The direct fund-to-fund rows of a fund comparison measure each fund alone; they use no reference, so they stay available when a fund's own reference is absent or unusable.
+- Each compared fund is measured against its own selected primary reference, through the shared Benchmark Module, and reports that reference's identity, purpose, conventions, actual comparison dates and scoped limitations.
+- Two compared funds never share one reference in a fund comparison: a missing or unusable reference leaves that fund's reference-relative facts unavailable and never falls back to the other fund's reference or to the old fixed ACWI reference.
+- Two share classes of the same fund are different investments: a fund comparison keeps each side's own exact class identity, and a class this portfolio does not track shows that absence instead of borrowing another class's identity.
 - **Fund candidate correlation** is omitted for the portfolio NAV or any held **Tracked asset** that does not have return coverage for the requested correlation period.
 - Fund comparison correlation and aligned return graph require full coverage for the selected period; they do not fall back to shorter overlapping history.
 - A **Custom blend** is a benchmark definition with its own identity; its **Blend component** identities are exact definition identities, and a saved **Custom blend** may not contain another **Custom blend**.
