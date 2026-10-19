@@ -129,10 +129,18 @@ pub fn write_fund_analysis_reference_context<W: Write>(
     match &comparison.availability {
         ComparisonAvailability::Available => writeln!(writer, "Primary comparison: available")?,
         ComparisonAvailability::Unavailable { reason } => {
-            writeln!(writer, "Primary comparison: unavailable ({reason})")?;
+            writeln!(
+                writer,
+                "Primary comparison: unavailable ({})",
+                super::helpers::display_reason(reason)
+            )?;
         }
         ComparisonAvailability::NotApplicable { reason } => {
-            writeln!(writer, "Primary comparison: not applicable ({reason})")?;
+            writeln!(
+                writer,
+                "Primary comparison: not applicable ({})",
+                super::helpers::display_reason(reason)
+            )?;
         }
     }
     if let (Some(start), Some(end)) = (&comparison.start_date, &comparison.end_date) {

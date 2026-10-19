@@ -1,8 +1,10 @@
 use chrono::{Datelike, Duration, NaiveDate};
-use rstock::models::{BenchmarkComparisonPeriod, ComparisonFact};
+use rstock::models::{BenchmarkComparisonPeriod, ComparisonFact, FundBenchmarkPeriod};
 use rstock::services::benchmark::{
     compare_aligned_eur_series, compute_standard_fund_benchmark_periods,
 };
+
+type PriceSeries = Vec<(String, f64)>;
 
 #[test]
 fn aligned_comparison_rebases_both_series_and_reports_cumulative_returns() {
@@ -162,6 +164,28 @@ fn standard_comparison_metrics_use_hand_checkable_aligned_daily_returns() {
         available(&since.information_ratio),
         expected_information_ratio,
     );
+
+    // Hand-checkable values for the same twenty alternating intervals.
+    assert!(
+        (available(&since.tracking_error_annualized_pct) - 24.430_352).abs() < 1e-6,
+        "{}",
+        available(&since.tracking_error_annualized_pct)
+    );
+    assert!(
+        (available(&since.information_ratio) - 5.157_519).abs() < 1e-6,
+        "{}",
+        available(&since.information_ratio)
+    );
+    assert!(
+        (available(&since.beta) + 1.990_244).abs() < 1e-6,
+        "{}",
+        available(&since.beta)
+    );
+    assert!(
+        (available(&since.correlation) + 1.0).abs() < 1e-9,
+        "{}",
+        available(&since.correlation)
+    );
 }
 
 #[test]
@@ -304,6 +328,134 @@ fn standard_comparison_rejects_nonfinite_inputs() {
     .is_err());
 }
 
+#[test]
+fn ytd_period_requires_the_subject_anchor_instead_of_shortening_the_window() {
+    let dates = weekdays("2025-01-06", 5);
+    let subject = growing_series(&dates, 100.0, 0.01);
+    let reference = growing_series(&dates, 50.0, 0.005);
+    // The reference misses the subject anchor close and is complete from the
+    // next day: the year-to-date window cannot start later without dropping a
+    // required subject observation.
+    let late_reference = reference[1..].to_vec();
+
+    let periods = compute_standard_fund_benchmark_periods(
+        &subject,
+        &late_reference,
+        &dates[0],
+        dates.last().unwrap(),
+    )
+    .unwrap();
+    let ytd = standard_period(&periods, BenchmarkComparisonPeriod::Ytd);
+    assert!(matches!(
+        ytd.fund_return_pct,
+        ComparisonFact::Unavailable { .. }
+    ));
+    assert!(matches!(
+        ytd.tracking_error_annualized_pct,
+        ComparisonFact::Unavailable { .. }
+    ));
+    assert_eq!(ytd.start_date, None);
+    assert_eq!(ytd.requested_start_date.as_deref(), Some("2025-01-01"));
+
+    let covered = compute_standard_fund_benchmark_periods(
+        &subject,
+        &reference,
+        &dates[0],
+        dates.last().unwrap(),
+    )
+    .unwrap();
+    let covered_ytd = standard_period(&covered, BenchmarkComparisonPeriod::Ytd);
+    assert_eq!(covered_ytd.start_date.as_deref(), Some("2025-01-06"));
+    assert!(matches!(
+        covered_ytd.fund_return_pct,
+        ComparisonFact::Available { .. }
+    ));
+}
+
+#[test]
+fn ytd_window_excludes_observations_before_the_approved_comparison_start() {
+    let dates = weekdays("2024-12-27", 11);
+    let subject = growing_series(&dates, 100.0, 0.01);
+    let reference = growing_series(&dates, 50.0, 0.005);
+
+    let periods =
+        compute_standard_fund_benchmark_periods(&subject, &reference, "2025-01-06", "2025-01-10")
+            .unwrap();
+    let ytd = standard_period(&periods, BenchmarkComparisonPeriod::Ytd);
+    assert_eq!(ytd.start_date.as_deref(), Some("2025-01-06"));
+    assert_eq!(ytd.end_date.as_deref(), Some("2025-01-10"));
+    // The bounded window drives the return; the earlier observations are not
+    // admitted into the year-to-date period.
+    let anchor_index = subject
+        .iter()
+        .position(|(date, _)| date == "2025-01-06")
+        .unwrap();
+    assert_close(
+        available(&ytd.fund_return_pct),
+        (subject.last().unwrap().1 / subject[anchor_index].1 - 1.0) * 100.0,
+    );
+}
+
+#[test]
+fn ytd_period_keeps_the_valid_subject_inception_fallback() {
+    let dates = weekdays("2025-03-03", 5);
+    let subject = growing_series(&dates, 100.0, 0.01);
+    let reference = growing_series(&dates, 50.0, 0.005);
+
+    let periods = compute_standard_fund_benchmark_periods(
+        &subject,
+        &reference,
+        &dates[0],
+        dates.last().unwrap(),
+    )
+    .unwrap();
+    let ytd = standard_period(&periods, BenchmarkComparisonPeriod::Ytd);
+    assert_eq!(ytd.start_date.as_deref(), Some("2025-03-03"));
+    assert!(matches!(
+        ytd.fund_return_pct,
+        ComparisonFact::Available { .. }
+    ));
+}
+
+#[test]
+fn standard_comparison_reports_complete_trailing_periods_and_weekend_anchors() {
+    let dates = weekdays_between("2020-12-01", "2025-12-31");
+    let (subject, reference) = varying_growth(&dates);
+
+    let periods = compute_standard_fund_benchmark_periods(
+        &subject,
+        &reference,
+        &dates[0],
+        dates.last().unwrap(),
+    )
+    .unwrap();
+    let ytd = standard_period(&periods, BenchmarkComparisonPeriod::Ytd);
+    assert_eq!(ytd.start_date.as_deref(), Some("2025-01-01"));
+    let one_year = standard_period(&periods, BenchmarkComparisonPeriod::OneYear);
+    assert_eq!(one_year.start_date.as_deref(), Some("2024-12-31"));
+    let three_year = standard_period(&periods, BenchmarkComparisonPeriod::ThreeYear);
+    // 2022-12-31 is a Saturday, so the trailing anchor is the preceding close.
+    assert_eq!(three_year.start_date.as_deref(), Some("2022-12-30"));
+    let five_year = standard_period(&periods, BenchmarkComparisonPeriod::FiveYear);
+    assert_eq!(five_year.start_date.as_deref(), Some("2020-12-31"));
+
+    for (row, start) in [
+        (one_year, "2024-12-31"),
+        (three_year, "2022-12-30"),
+        (five_year, "2020-12-31"),
+    ] {
+        let (beta, correlation, tracking_error, information_ratio) =
+            aligned_metrics(&subject, &reference, start, "2025-12-31");
+        assert_close(available(&row.beta), beta);
+        assert_close(available(&row.correlation), correlation);
+        assert_close(
+            available(&row.tracking_error_annualized_pct),
+            tracking_error,
+        );
+        assert_close(available(&row.information_ratio), information_ratio);
+    }
+}
+
 fn weekdays(start: &str, count: usize) -> Vec<String> {
     let mut date = NaiveDate::parse_from_str(start, "%Y-%m-%d").unwrap();
     let mut dates = Vec::with_capacity(count);
@@ -314,6 +466,100 @@ fn weekdays(start: &str, count: usize) -> Vec<String> {
         date += Duration::days(1);
     }
     dates
+}
+
+fn weekdays_between(start: &str, end: &str) -> Vec<String> {
+    let mut date = NaiveDate::parse_from_str(start, "%Y-%m-%d").unwrap();
+    let end = NaiveDate::parse_from_str(end, "%Y-%m-%d").unwrap();
+    let mut dates = Vec::new();
+    while date <= end {
+        if !matches!(date.weekday(), chrono::Weekday::Sat | chrono::Weekday::Sun) {
+            dates.push(date.format("%Y-%m-%d").to_string());
+        }
+        date += Duration::days(1);
+    }
+    dates
+}
+
+fn growing_series(dates: &[String], start: f64, rate: f64) -> PriceSeries {
+    dates
+        .iter()
+        .enumerate()
+        .map(|(index, date)| (date.clone(), start * (1.0 + rate).powf(index as f64)))
+        .collect()
+}
+
+fn varying_growth(dates: &[String]) -> (PriceSeries, PriceSeries) {
+    let mut subject = vec![(dates[0].clone(), 100.0)];
+    let mut reference = vec![(dates[0].clone(), 50.0)];
+    for index in 0..dates.len() - 1 {
+        let subject_return = 0.0004 + 0.0002 * (index % 7) as f64;
+        let reference_return = 0.0003 + 0.0001 * (index % 5) as f64;
+        subject.push((
+            dates[index + 1].clone(),
+            subject.last().unwrap().1 * (1.0 + subject_return),
+        ));
+        reference.push((
+            dates[index + 1].clone(),
+            reference.last().unwrap().1 * (1.0 + reference_return),
+        ));
+    }
+    (subject, reference)
+}
+
+fn standard_period(
+    periods: &[FundBenchmarkPeriod],
+    period: BenchmarkComparisonPeriod,
+) -> &FundBenchmarkPeriod {
+    periods
+        .iter()
+        .find(|candidate| candidate.period == period)
+        .expect("the standard period should be reported")
+}
+
+fn aligned_metrics(
+    subject: &[(String, f64)],
+    reference: &[(String, f64)],
+    start: &str,
+    end: &str,
+) -> (f64, f64, f64, f64) {
+    let subject_values: std::collections::BTreeMap<&str, f64> = subject
+        .iter()
+        .map(|(date, value)| (date.as_str(), *value))
+        .collect();
+    let reference_values: std::collections::BTreeMap<&str, f64> = reference
+        .iter()
+        .map(|(date, value)| (date.as_str(), *value))
+        .collect();
+    let dates: Vec<&str> = subject_values
+        .range(start..=end)
+        .map(|(date, _)| *date)
+        .filter(|date| reference_values.contains_key(*date))
+        .collect();
+    let subject_returns: Vec<f64> = dates
+        .windows(2)
+        .map(|window| (subject_values[window[1]] / subject_values[window[0]]).ln())
+        .collect();
+    let reference_returns: Vec<f64> = dates
+        .windows(2)
+        .map(|window| (reference_values[window[1]] / reference_values[window[0]]).ln())
+        .collect();
+    let active_returns: Vec<f64> = dates
+        .windows(2)
+        .map(|window| {
+            (subject_values[window[1]] / subject_values[window[0]] - 1.0)
+                - (reference_values[window[1]] / reference_values[window[0]] - 1.0)
+        })
+        .collect();
+    let covariance = sample_covariance(&subject_returns, &reference_returns);
+    let beta = covariance / sample_variance(&reference_returns);
+    let correlation = covariance
+        / (sample_variance(&subject_returns) * sample_variance(&reference_returns)).sqrt();
+    let active_mean = active_returns.iter().sum::<f64>() / active_returns.len() as f64;
+    let active_std = sample_variance(&active_returns).sqrt();
+    let tracking_error = active_std * 252.0_f64.sqrt() * 100.0;
+    let information_ratio = active_mean / active_std * 252.0_f64.sqrt();
+    (beta, correlation, tracking_error, information_ratio)
 }
 
 fn available(fact: &ComparisonFact<f64>) -> f64 {

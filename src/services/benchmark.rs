@@ -57,6 +57,109 @@ pub async fn compare_fund_to_primary(
     .await
 }
 
+/// Aligns genuinely common observations across the declared complete interval.
+/// Expected coverage gaps are data outcomes; malformed series remain errors.
+pub fn compare_aligned_eur_series(
+    fund: &[(String, f64)],
+    reference: &[(String, f64)],
+    requested_start: &str,
+    requested_end: &str,
+) -> ComparisonCalculation {
+    let fund = validate_series(fund, "fund")?;
+    let reference = validate_series(reference, "reference")?;
+    let start = chrono::NaiveDate::parse_from_str(requested_start, "%Y-%m-%d")?;
+    let end = chrono::NaiveDate::parse_from_str(requested_end, "%Y-%m-%d")?;
+    anyhow::ensure!(start <= end, "comparison start date is after end date");
+    if !fund.contains_key(requested_start) || !reference.contains_key(requested_start) {
+        return Ok(Err(ComparisonCoverageIssue::MissingAnchor(
+            requested_start.to_owned(),
+        )));
+    }
+    if !fund.contains_key(requested_end) || !reference.contains_key(requested_end) {
+        return Ok(Err(ComparisonCoverageIssue::MissingEnd(
+            requested_end.to_owned(),
+        )));
+    }
+    let mut day = start;
+    while day <= end {
+        let date = day.format("%Y-%m-%d").to_string();
+        if !matches!(day.weekday(), chrono::Weekday::Sat | chrono::Weekday::Sun)
+            && (!fund.contains_key(&date) || !reference.contains_key(&date))
+        {
+            return Ok(Err(ComparisonCoverageIssue::InternalWeekdayGap(date)));
+        }
+        day += chrono::Duration::days(1);
+    }
+    let aligned: Vec<_> = fund
+        .iter()
+        .filter_map(|(date, value)| reference.get(date).map(|other| (date, *value, *other)))
+        .filter(|(date, _, _)| date.as_str() >= requested_start && date.as_str() <= requested_end)
+        .collect();
+    if aligned.len() < 2 {
+        return Ok(Err(ComparisonCoverageIssue::InsufficientCommonObservations));
+    }
+    let first = aligned[0];
+    let last = aligned[aligned.len() - 1];
+    let fund_wealth = aligned
+        .iter()
+        .map(|(date, value, _)| DatedWealthPoint {
+            date: (*date).clone(),
+            wealth: value / first.1 * 100.0,
+        })
+        .collect();
+    let reference_wealth = aligned
+        .iter()
+        .map(|(date, _, value)| DatedWealthPoint {
+            date: (*date).clone(),
+            wealth: value / first.2 * 100.0,
+        })
+        .collect();
+    Ok(Ok((
+        fund_wealth,
+        reference_wealth,
+        (last.1 / first.1 - 1.0) * 100.0,
+        (last.2 / first.2 - 1.0) * 100.0,
+    )))
+}
+
+/// Computes the standard fund/reference windows independently of the graph
+/// selection. Trailing anchors use the latest common close on or before the
+/// requested date so a weekend or market holiday never shortens the period;
+/// the actual anchor is returned to callers.
+pub fn compute_standard_fund_benchmark_periods(
+    subject: &[(String, f64)],
+    reference: &[(String, f64)],
+    comparison_start: &str,
+    comparison_end: &str,
+) -> anyhow::Result<Vec<FundBenchmarkPeriod>> {
+    let subject = validate_series(subject, "fund")?;
+    let reference = validate_series(reference, "reference")?;
+    let comparison_start = NaiveDate::parse_from_str(comparison_start, "%Y-%m-%d")?;
+    let comparison_end = NaiveDate::parse_from_str(comparison_end, "%Y-%m-%d")?;
+    anyhow::ensure!(
+        comparison_start <= comparison_end,
+        "comparison start date is after end date"
+    );
+
+    let mut periods = Vec::with_capacity(5);
+    for period in [
+        BenchmarkComparisonPeriod::Ytd,
+        BenchmarkComparisonPeriod::OneYear,
+        BenchmarkComparisonPeriod::ThreeYear,
+        BenchmarkComparisonPeriod::FiveYear,
+        BenchmarkComparisonPeriod::SinceComparisonStart,
+    ] {
+        periods.push(compute_standard_period(
+            period,
+            &subject,
+            &reference,
+            comparison_start,
+            comparison_end,
+        )?);
+    }
+    Ok(periods)
+}
+
 struct FundComparisonRequest<'a> {
     ms_code: &'a str,
     ticker: &'a str,
@@ -256,109 +359,6 @@ fn calculate_comparison(
     }
 }
 
-/// Aligns genuinely common observations across the declared complete interval.
-/// Expected coverage gaps are data outcomes; malformed series remain errors.
-pub fn compare_aligned_eur_series(
-    fund: &[(String, f64)],
-    reference: &[(String, f64)],
-    requested_start: &str,
-    requested_end: &str,
-) -> ComparisonCalculation {
-    let fund = validate_series(fund, "fund")?;
-    let reference = validate_series(reference, "reference")?;
-    let start = chrono::NaiveDate::parse_from_str(requested_start, "%Y-%m-%d")?;
-    let end = chrono::NaiveDate::parse_from_str(requested_end, "%Y-%m-%d")?;
-    anyhow::ensure!(start <= end, "comparison start date is after end date");
-    if !fund.contains_key(requested_start) || !reference.contains_key(requested_start) {
-        return Ok(Err(ComparisonCoverageIssue::MissingAnchor(
-            requested_start.to_owned(),
-        )));
-    }
-    if !fund.contains_key(requested_end) || !reference.contains_key(requested_end) {
-        return Ok(Err(ComparisonCoverageIssue::MissingEnd(
-            requested_end.to_owned(),
-        )));
-    }
-    let mut day = start;
-    while day <= end {
-        let date = day.format("%Y-%m-%d").to_string();
-        if !matches!(day.weekday(), chrono::Weekday::Sat | chrono::Weekday::Sun)
-            && (!fund.contains_key(&date) || !reference.contains_key(&date))
-        {
-            return Ok(Err(ComparisonCoverageIssue::InternalWeekdayGap(date)));
-        }
-        day += chrono::Duration::days(1);
-    }
-    let aligned: Vec<_> = fund
-        .iter()
-        .filter_map(|(date, value)| reference.get(date).map(|other| (date, *value, *other)))
-        .filter(|(date, _, _)| date.as_str() >= requested_start && date.as_str() <= requested_end)
-        .collect();
-    if aligned.len() < 2 {
-        return Ok(Err(ComparisonCoverageIssue::InsufficientCommonObservations));
-    }
-    let first = aligned[0];
-    let last = aligned[aligned.len() - 1];
-    let fund_wealth = aligned
-        .iter()
-        .map(|(date, value, _)| DatedWealthPoint {
-            date: (*date).clone(),
-            wealth: value / first.1 * 100.0,
-        })
-        .collect();
-    let reference_wealth = aligned
-        .iter()
-        .map(|(date, _, value)| DatedWealthPoint {
-            date: (*date).clone(),
-            wealth: value / first.2 * 100.0,
-        })
-        .collect();
-    Ok(Ok((
-        fund_wealth,
-        reference_wealth,
-        (last.1 / first.1 - 1.0) * 100.0,
-        (last.2 / first.2 - 1.0) * 100.0,
-    )))
-}
-
-/// Computes the standard fund/reference windows independently of the graph
-/// selection. Trailing anchors use the latest common close on or before the
-/// requested date so a weekend or market holiday never shortens the period;
-/// the actual anchor is returned to callers.
-pub fn compute_standard_fund_benchmark_periods(
-    subject: &[(String, f64)],
-    reference: &[(String, f64)],
-    comparison_start: &str,
-    comparison_end: &str,
-) -> anyhow::Result<Vec<FundBenchmarkPeriod>> {
-    let subject = validate_series(subject, "fund")?;
-    let reference = validate_series(reference, "reference")?;
-    let comparison_start = NaiveDate::parse_from_str(comparison_start, "%Y-%m-%d")?;
-    let comparison_end = NaiveDate::parse_from_str(comparison_end, "%Y-%m-%d")?;
-    anyhow::ensure!(
-        comparison_start <= comparison_end,
-        "comparison start date is after end date"
-    );
-
-    let mut periods = Vec::with_capacity(5);
-    for period in [
-        BenchmarkComparisonPeriod::Ytd,
-        BenchmarkComparisonPeriod::OneYear,
-        BenchmarkComparisonPeriod::ThreeYear,
-        BenchmarkComparisonPeriod::FiveYear,
-        BenchmarkComparisonPeriod::SinceComparisonStart,
-    ] {
-        periods.push(compute_standard_period(
-            period,
-            &subject,
-            &reference,
-            comparison_start,
-            comparison_end,
-        )?);
-    }
-    Ok(periods)
-}
-
 fn compute_standard_period(
     period: BenchmarkComparisonPeriod,
     subject: &std::collections::BTreeMap<String, f64>,
@@ -428,6 +428,12 @@ fn compute_standard_period(
     Ok(outcome)
 }
 
+/// Selects the anchor observation that opens a standard period window.
+///
+/// The year-to-date window opens at the subject's own anchor, the
+/// since-comparison-start window opens at the approved comparison start, and
+/// the trailing windows open at the latest common close on or before the
+/// requested trailing date.
 fn select_actual_period_start(
     period: BenchmarkComparisonPeriod,
     subject: &std::collections::BTreeMap<String, f64>,
@@ -437,41 +443,130 @@ fn select_actual_period_start(
     comparison_start: NaiveDate,
     outcome: &mut FundBenchmarkPeriod,
 ) -> Option<String> {
-    let common_dates: Vec<&String> = subject
-        .keys()
-        .filter(|date| reference.contains_key(*date))
-        .collect();
-    let actual_start = match period {
-        BenchmarkComparisonPeriod::Ytd => common_dates
-            .iter()
-            .find(|date| date.as_str() >= requested_start_string),
-        BenchmarkComparisonPeriod::SinceComparisonStart => {
-            let comparison_start_string = format_date(comparison_start);
-            common_dates
-                .iter()
-                .find(|date| date.as_str() == comparison_start_string)
-        }
-        _ => common_dates
-            .iter()
-            .filter(|date| date.as_str() <= requested_start_string)
-            .filter(|date| {
-                NaiveDate::parse_from_str(date, "%Y-%m-%d")
-                    .is_ok_and(|date| date >= comparison_start)
-            })
-            .max(),
-    };
-    let Some(actual_start) = actual_start else {
-        classify_missing_period_anchor(
+    match period {
+        BenchmarkComparisonPeriod::Ytd => select_year_to_date_start(
+            subject,
+            reference,
+            requested_start,
+            comparison_start,
             outcome,
+        ),
+        BenchmarkComparisonPeriod::SinceComparisonStart => select_comparison_start_anchor(
             subject,
             reference,
             requested_start,
             requested_start_string,
             comparison_start,
+            outcome,
+        ),
+        _ => select_trailing_start(
+            subject,
+            reference,
+            requested_start_string,
+            requested_start,
+            comparison_start,
+            outcome,
+        ),
+    }
+}
+
+/// The year-to-date window opens at the subject's own anchor: the first
+/// weekday close the subject reports on or after the calendar-year start
+/// bounded by the approved comparison start. A reference that does not report
+/// that exact close cannot supply the window, so the period stays unavailable
+/// instead of opening later on a shortened window.
+fn select_year_to_date_start(
+    subject: &std::collections::BTreeMap<String, f64>,
+    reference: &std::collections::BTreeMap<String, f64>,
+    year_start: NaiveDate,
+    comparison_start: NaiveDate,
+    outcome: &mut FundBenchmarkPeriod,
+) -> Option<String> {
+    let approved_start = year_start.max(comparison_start);
+    let approved_start_string = format_date(approved_start);
+    let anchor = subject
+        .keys()
+        .find(|date| date.as_str() >= approved_start_string.as_str())
+        .filter(|date| is_weekday_observation(date.as_str()))
+        .cloned();
+    let Some(anchor) = anchor else {
+        set_period_unavailable(
+            outcome,
+            "required subject observations are missing for the requested year to date period",
         );
         return None;
     };
-    Some((*actual_start).clone())
+    if !reference.contains_key(&anchor) {
+        set_period_unavailable(
+            outcome,
+            "required common subject/reference anchor observation is missing",
+        );
+        return None;
+    }
+    Some(anchor)
+}
+
+/// The since-comparison-start window opens at the approved comparison start,
+/// which both series must report on the same close.
+fn select_comparison_start_anchor(
+    subject: &std::collections::BTreeMap<String, f64>,
+    reference: &std::collections::BTreeMap<String, f64>,
+    requested_start: NaiveDate,
+    requested_start_string: &str,
+    comparison_start: NaiveDate,
+    outcome: &mut FundBenchmarkPeriod,
+) -> Option<String> {
+    let comparison_start_string = format_date(comparison_start);
+    let anchor = subject
+        .keys()
+        .find(|date| date.as_str() == comparison_start_string)
+        .filter(|date| reference.contains_key(*date))
+        .cloned();
+    if let Some(anchor) = anchor {
+        return Some(anchor);
+    }
+    classify_missing_period_anchor(
+        outcome,
+        subject,
+        reference,
+        requested_start,
+        requested_start_string,
+        comparison_start,
+    );
+    None
+}
+
+/// The trailing window opens at the latest common close on or before the
+/// requested trailing date and never before the approved comparison start.
+fn select_trailing_start(
+    subject: &std::collections::BTreeMap<String, f64>,
+    reference: &std::collections::BTreeMap<String, f64>,
+    requested_start_string: &str,
+    requested_start: NaiveDate,
+    comparison_start: NaiveDate,
+    outcome: &mut FundBenchmarkPeriod,
+) -> Option<String> {
+    let anchor = subject
+        .keys()
+        .filter(|date| reference.contains_key(*date))
+        .filter(|date| date.as_str() <= requested_start_string)
+        .filter(|date| {
+            NaiveDate::parse_from_str(date, "%Y-%m-%d").is_ok_and(|date| date >= comparison_start)
+        })
+        .max()
+        .cloned();
+    if let Some(anchor) = anchor {
+        return Some(anchor);
+    }
+    classify_missing_period_anchor(
+        outcome,
+        subject,
+        reference,
+        requested_start,
+        requested_start_string,
+        comparison_start,
+    );
+    None
 }
 
 fn classify_missing_period_anchor(
@@ -667,6 +762,10 @@ fn set_period_unavailable(outcome: &mut FundBenchmarkPeriod, reason: &str) {
 
 fn is_weekday(date: NaiveDate) -> bool {
     !matches!(date.weekday(), Weekday::Sat | Weekday::Sun)
+}
+
+fn is_weekday_observation(date: &str) -> bool {
+    NaiveDate::parse_from_str(date, "%Y-%m-%d").is_ok_and(is_weekday)
 }
 
 fn checked_return(start: f64, end: f64) -> anyhow::Result<f64> {

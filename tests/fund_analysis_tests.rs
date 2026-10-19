@@ -138,6 +138,48 @@ async fn assigned_comparison_fixture() -> (DatabaseConnection, MockMarketDataSou
     (db, sources)
 }
 
+/// The assigned comparison with twenty alternating daily intervals, enough
+/// aligned observations for the relative risk facts to be numerically
+/// available instead of not applicable.
+async fn assigned_comparison_with_alternating_returns(
+) -> (DatabaseConnection, MockMarketDataSources) {
+    let (db, mut sources) = assigned_comparison_fixture().await;
+    let dates = weekdays_from("2025-01-06", 21);
+    let mut subject = vec![(dates[0].clone(), 100.0)];
+    let mut reference = vec![(dates[0].clone(), 50.0)];
+    for index in 0..20 {
+        let subject_return = if index % 2 == 0 { 0.03 } else { 0.01 };
+        let reference_return = if index % 2 == 0 { 0.01 } else { 0.02 };
+        subject.push((
+            dates[index + 1].clone(),
+            subject.last().unwrap().1 * (1.0 + subject_return),
+        ));
+        reference.push((
+            dates[index + 1].clone(),
+            reference.last().unwrap().1 * (1.0 + reference_return),
+        ));
+    }
+    sources
+        .historical_prices
+        .insert("XCLASS".to_owned(), subject);
+    sources
+        .historical_prices
+        .insert("XREF".to_owned(), reference);
+    (db, sources)
+}
+
+fn weekdays_from(start: &str, count: usize) -> Vec<String> {
+    let mut date = chrono::NaiveDate::parse_from_str(start, "%Y-%m-%d").unwrap();
+    let mut dates = Vec::with_capacity(count);
+    while dates.len() < count {
+        if !matches!(date.weekday(), chrono::Weekday::Sat | chrono::Weekday::Sun) {
+            dates.push(format_date(date));
+        }
+        date += Duration::days(1);
+    }
+    dates
+}
+
 fn qualification(
     currency: &str,
     basis: &str,
@@ -454,6 +496,137 @@ async fn standard_benchmark_periods_end_on_the_latest_completed_weekday() {
         .unwrap();
     assert_eq!(ytd.start_date.as_deref(), Some("2025-01-09"));
     assert_eq!(ytd.end_date.as_deref(), Some("2025-01-10"));
+}
+
+#[tokio::test]
+async fn standard_benchmark_rows_expose_numeric_relative_risk_facts_in_human_and_json_output() {
+    let (db, sources) = assigned_comparison_with_alternating_returns().await;
+    let market = market_data_at(
+        &sources,
+        chrono::NaiveDate::from_ymd_opt(2025, 2, 4).unwrap(),
+    );
+    let result = compute_fund_analysis(&db, &market, "XCLASS", one_year_candidate_period())
+        .await
+        .unwrap();
+
+    let since = result
+        .primary_benchmark_comparison
+        .standard_periods
+        .iter()
+        .find(|period| {
+            period.period == rstock::models::BenchmarkComparisonPeriod::SinceComparisonStart
+        })
+        .unwrap();
+    assert!(matches!(
+        since.beta,
+        rstock::models::ComparisonFact::Available { value } if (value + 1.990_244).abs() < 1e-6
+    ));
+    assert!(matches!(
+        since.correlation,
+        rstock::models::ComparisonFact::Available { value } if (value + 1.0).abs() < 1e-9
+    ));
+    assert!(matches!(
+        since.tracking_error_annualized_pct,
+        rstock::models::ComparisonFact::Available { value } if (value - 24.430_352).abs() < 1e-6
+    ));
+    assert!(matches!(
+        since.information_ratio,
+        rstock::models::ComparisonFact::Available { value } if (value - 5.157_519).abs() < 1e-6
+    ));
+
+    let mut human = Vec::new();
+    rstock::cli::display::write_fund_analysis_reference_context(&mut human, &result).unwrap();
+    let human = String::from_utf8(human).unwrap();
+    let row = human
+        .lines()
+        .find(|line| line.contains("Since Comparison Start"))
+        .expect("the human output should report the since-comparison-start row");
+    assert!(
+        row.contains("| -1,99 | -1,00 | 24,43% | 5,16"),
+        "unexpected human row: {row}"
+    );
+
+    let data = fund_analysis_envelope(&result)["data"].clone();
+    let since_json = &data["primary_benchmark_comparison"]["standard_periods"][4];
+    assert!((since_json["beta"]["value"].as_f64().unwrap() + 1.990_244).abs() < 1e-6);
+    assert!((since_json["correlation"]["value"].as_f64().unwrap() + 1.0).abs() < 1e-9);
+    assert!(
+        (since_json["tracking_error_annualized_pct"]["value"]
+            .as_f64()
+            .unwrap()
+            - 24.430_352)
+            .abs()
+            < 1e-6
+    );
+    assert!((since_json["information_ratio"]["value"].as_f64().unwrap() - 5.157_519).abs() < 1e-6);
+    assert_eq!(since_json["start_date"], "2025-01-06");
+    assert_eq!(since_json["end_date"], "2025-02-03");
+}
+
+#[tokio::test]
+async fn human_availability_reasons_use_display_dates_while_json_keeps_iso_dates() {
+    let (db, mut sources) = assigned_comparison_fixture().await;
+    // The subject misses an internal weekday close that the reference reports.
+    sources.historical_prices.insert(
+        "XCLASS".to_owned(),
+        vec![
+            ("2025-01-06".to_owned(), 100.0),
+            ("2025-01-07".to_owned(), 101.0),
+            ("2025-01-09".to_owned(), 102.0),
+            ("2025-01-10".to_owned(), 103.0),
+        ],
+    );
+    sources.historical_prices.insert(
+        "XREF".to_owned(),
+        vec![
+            ("2025-01-06".to_owned(), 50.0),
+            ("2025-01-07".to_owned(), 50.5),
+            ("2025-01-08".to_owned(), 51.0),
+            ("2025-01-09".to_owned(), 51.5),
+            ("2025-01-10".to_owned(), 52.0),
+        ],
+    );
+    let market = market_data_at(
+        &sources,
+        chrono::NaiveDate::from_ymd_opt(2025, 1, 11).unwrap(),
+    );
+    let result = compute_fund_analysis(&db, &market, "XCLASS", one_year_candidate_period())
+        .await
+        .unwrap();
+
+    let mut human = Vec::new();
+    rstock::cli::display::write_fund_analysis_reference_context(&mut human, &result).unwrap();
+    let human = String::from_utf8(human).unwrap();
+    assert!(
+        human.contains("required internal weekday observation is missing on 08-01-2025"),
+        "unexpected human output: {human}"
+    );
+    assert!(
+        human.contains("required internal weekday observation missing on 08-01-2025"),
+        "unexpected human output: {human}"
+    );
+    assert!(
+        !human.contains("2025-01-08"),
+        "human output must not print the machine date: {human}"
+    );
+
+    let data = fund_analysis_envelope(&result)["data"].clone();
+    let since_json = &data["primary_benchmark_comparison"]["standard_periods"][4];
+    assert_eq!(since_json["fund_return_pct"]["status"], "unavailable");
+    assert_eq!(
+        since_json["fund_return_pct"]["reason"],
+        "required internal weekday observation is missing on 2025-01-08"
+    );
+    assert_eq!(
+        data["primary_benchmark_comparison"]["availability"]["status"],
+        "unavailable"
+    );
+    assert!(
+        data["primary_benchmark_comparison"]["availability"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("2025-01-08")
+    );
 }
 
 #[tokio::test]

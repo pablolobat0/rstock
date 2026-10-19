@@ -53,6 +53,59 @@ pub(crate) fn color_value(value: f64, formatted: &str) -> String {
     }
 }
 
+/// Rewrites the storage dates embedded in a machine reason to the
+/// user-facing display format. Machine output keeps the stored ISO value.
+pub(crate) fn display_reason(reason: &str) -> String {
+    let bytes = reason.as_bytes();
+    let mut display = String::with_capacity(reason.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if let Some(date) = iso_date_at(reason, index) {
+            display.push_str(&crate::constants::display_date(date));
+            index += date.len();
+        } else {
+            let character = reason[index..]
+                .chars()
+                .next()
+                .expect("a non-empty remainder has a first character");
+            display.push(character);
+            index += character.len_utf8();
+        }
+    }
+    display
+}
+
+/// The complete `YYYY-MM-DD` date at `index`, when the text holds one that is
+/// not part of a longer number.
+fn iso_date_at(reason: &str, index: usize) -> Option<&str> {
+    let bytes = reason.as_bytes();
+    if index + 10 > bytes.len() {
+        return None;
+    }
+    let window = &bytes[index..index + 10];
+    let is_digit = |byte: u8| byte.is_ascii_digit();
+    let shaped = is_digit(window[0])
+        && is_digit(window[1])
+        && is_digit(window[2])
+        && is_digit(window[3])
+        && window[4] == b'-'
+        && is_digit(window[5])
+        && is_digit(window[6])
+        && window[7] == b'-'
+        && is_digit(window[8])
+        && is_digit(window[9]);
+    if !shaped {
+        return None;
+    }
+    if index > 0 && bytes[index - 1].is_ascii_digit() {
+        return None;
+    }
+    if bytes.get(index + 10).is_some_and(u8::is_ascii_digit) {
+        return None;
+    }
+    Some(&reason[index..index + 10])
+}
+
 pub(super) fn format_pct(v: Option<f64>) -> String {
     match v {
         Some(val) => format_eu(&format!("{val:.2}%")),
@@ -111,13 +164,15 @@ pub(crate) fn write_fund_benchmark_periods<W: Write>(
         ComparisonAvailability::Unavailable { reason } => {
             writeln!(
                 writer,
-                "{fund_name} assigned primary comparison: unavailable ({reason})"
+                "{fund_name} assigned primary comparison: unavailable ({})",
+                display_reason(reason)
             )?;
         }
         ComparisonAvailability::NotApplicable { reason } => {
             writeln!(
                 writer,
-                "{fund_name} assigned primary comparison: not applicable ({reason})"
+                "{fund_name} assigned primary comparison: not applicable ({})",
+                display_reason(reason)
             )?;
         }
     }
@@ -207,8 +262,12 @@ fn format_comparison_fact(
 
     match fact {
         ComparisonFact::Available { value } => format_value(*value),
-        ComparisonFact::Unavailable { reason } => format!("Unavailable ({reason})"),
-        ComparisonFact::NotApplicable { reason } => format!("N/A ({reason})"),
+        ComparisonFact::Unavailable { reason } => {
+            format!("Unavailable ({})", display_reason(reason))
+        }
+        ComparisonFact::NotApplicable { reason } => {
+            format!("N/A ({})", display_reason(reason))
+        }
     }
 }
 
