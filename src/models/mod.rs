@@ -20,10 +20,10 @@ pub use custom_blend::{
     CustomBlendDefinition, CustomBlendDeletion, CustomBlendPreview,
 };
 pub use fund_analysis::{
-    CandidateCorrelationPeriod, CandidateCorrelationResult, CandidateCorrelationRow,
-    ComparisonAvailability, ComparisonCoverageIssue, DatedWealthPoint, FundAnalysisResult,
-    FundBenchmarkComparison, FundData, FundPeriodMetrics, FundQuoteMetadata, HoldingChange,
-    HoldingChangeType,
+    BenchmarkComparisonPeriod, CandidateCorrelationPeriod, CandidateCorrelationResult,
+    CandidateCorrelationRow, ComparisonAvailability, ComparisonCoverageIssue, ComparisonFact,
+    DatedWealthPoint, FundAnalysisResult, FundBenchmarkComparison, FundBenchmarkPeriod, FundData,
+    FundPeriodMetrics, FundQuoteMetadata, HoldingChange, HoldingChangeType, RiskFreeAssumption,
 };
 pub use fund_comparison::{
     AlignedFundReturnPoint, AllocationComparison, CommonFundHolding, FundComparisonCorrelation,

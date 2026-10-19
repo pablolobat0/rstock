@@ -66,6 +66,7 @@ pub async fn compare_funds(
         fund_a: fund_a.side,
         fund_b: fund_b.side,
         benchmark_reference,
+        risk_free_assumption: crate::models::RiskFreeAssumption::current(),
     })
 }
 
@@ -76,9 +77,8 @@ async fn build_comparison_side(
     today: NaiveDate,
 ) -> anyhow::Result<FundComparisonData> {
     let today_str = format_date(today);
-    let local_name = asset_repo::find_by_morningstar_code(db, code)
-        .await?
-        .map(|asset| asset.name);
+    let local_asset = asset_repo::find_by_morningstar_code(db, code).await?;
+    let local_name = local_asset.as_ref().map(|asset| asset.name.clone());
 
     let (fund_data_result, quote_metadata_result, prices_result) = tokio::join!(
         market_data.fund_data(code, 200),
@@ -102,6 +102,15 @@ async fn build_comparison_side(
         .or_else(|| fund_data.fund_currency.clone());
     let metrics =
         compute_standard_fund_metrics(db, market_data, &prices, currency.as_deref(), today).await?;
+    let primary_benchmark_comparison = crate::services::benchmark::compare_fund_to_primary(
+        db,
+        market_data,
+        code,
+        local_asset.as_ref().map(|asset| asset.ticker.as_str()),
+        currency.as_deref(),
+        today,
+    )
+    .await?;
     let top_10_weight = compute_top_n_weight(&fund_data.holdings, 10);
     record_holdings_snapshot(
         db,
@@ -141,6 +150,7 @@ async fn build_comparison_side(
         five_year: metrics.five_year,
         all_time: metrics.all_time,
         benchmark_limitations: metrics.benchmark_limitations,
+        primary_benchmark_comparison,
     };
 
     Ok(FundComparisonData {

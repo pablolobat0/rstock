@@ -129,10 +129,18 @@ pub fn write_fund_analysis_reference_context<W: Write>(
     match &comparison.availability {
         ComparisonAvailability::Available => writeln!(writer, "Primary comparison: available")?,
         ComparisonAvailability::Unavailable { reason } => {
-            writeln!(writer, "Primary comparison: unavailable ({reason})")?;
+            writeln!(
+                writer,
+                "Primary comparison: unavailable ({})",
+                super::helpers::display_reason(reason)
+            )?;
         }
         ComparisonAvailability::NotApplicable { reason } => {
-            writeln!(writer, "Primary comparison: not applicable ({reason})")?;
+            writeln!(
+                writer,
+                "Primary comparison: not applicable ({})",
+                super::helpers::display_reason(reason)
+            )?;
         }
     }
     if let (Some(start), Some(end)) = (&comparison.start_date, &comparison.end_date) {
@@ -150,6 +158,12 @@ pub fn write_fund_analysis_reference_context<W: Write>(
             comparison.excess_return_percentage_points
         )?;
     }
+    super::helpers::write_fund_benchmark_periods(
+        writer,
+        result.name.as_deref().unwrap_or(&result.ms_code),
+        comparison,
+    )?;
+    super::helpers::write_risk_free_assumption(writer, &result.risk_free_assumption)?;
     if let Some(name) = &comparison.reference_name {
         writeln!(
             writer,
