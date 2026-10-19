@@ -229,7 +229,10 @@ fn preview_human(preview: &CustomBlendPreview) -> String {
     lines.push(format!("  Cash convention: {}", preview.cash_convention));
     lines.push(format!("  Accounting: {}", preview.accounting_note));
     if let Some(limitation) = preview.earlier_period_limitation.as_ref() {
-        lines.push(format!("  Earlier-period limitation: {limitation}"));
+        lines.push(format!(
+            "  Earlier-period limitation: {}",
+            crate::cli::display::helpers::display_reason(limitation)
+        ));
     }
     lines.push("  Components:".to_owned());
     for component in &preview.components {

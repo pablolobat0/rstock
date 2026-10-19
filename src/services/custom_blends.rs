@@ -311,6 +311,10 @@ pub async fn delete_custom_blend(
 /// blend wealth compounds them. Target weights are initialized at the anchor
 /// close, reset at the close immediately before each new calendar month, and
 /// drift with component wealth between resets.
+///
+/// A blend of synthetic cash alone has no market observation, so its series is
+/// the resolved completed weekdays of the window at a constant wealth: cash
+/// earns nothing, and no market request or fee is invented for it.
 pub fn calculate_blend_wealth(
     components: &[AdmittedComponent],
     window: &BlendWindow,
@@ -318,12 +322,6 @@ pub fn calculate_blend_wealth(
     anyhow::ensure!(
         !components.is_empty(),
         "a Custom blend needs at least one component"
-    );
-    anyhow::ensure!(
-        components
-            .iter()
-            .any(|component| !component.component.is_cash),
-        "a Custom blend needs at least one market component with verifiable history; cash alone has no comparable series"
     );
     let dates = aligned_dates(components, window);
     anyhow::ensure!(
@@ -484,6 +482,15 @@ async fn admit_component(
             request.identity
         );
     };
+    if let Some(recorded) = request.recorded.as_ref() {
+        anyhow::ensure!(
+            recorded.cadence == qualification.cadence,
+            "component '{}' no longer reports the cadence recorded for this blend (recorded: {}; reported: {})",
+            request.identity,
+            recorded.cadence,
+            qualification.cadence
+        );
+    }
     anyhow::ensure!(
         qualification.currency == definition.currency
             && qualification.return_basis == definition.return_basis_qualification
@@ -498,15 +505,6 @@ async fn admit_component(
         request.identity,
         qualification.cadence
     );
-    if let Some(recorded) = request.recorded.as_ref() {
-        anyhow::ensure!(
-            recorded.cadence == qualification.cadence,
-            "component '{}' no longer reports the cadence recorded for this blend (recorded: {}; reported: {})",
-            request.identity,
-            recorded.cadence,
-            qualification.cadence
-        );
-    }
     let series = parsed_series(&prepared.genuine_benchmark_series)?;
     let component = match request.recorded.as_ref() {
         Some(recorded) => BlendComponent {
@@ -941,7 +939,11 @@ fn component_return(
     Ok(current_value / previous_value - 1.0)
 }
 
-/// The dates every market component observed inside the window.
+/// The dates the blend is calculated over.
+///
+/// For a blend with market components these are the dates every component
+/// observed. A blend of synthetic cash alone has no market observation, so it
+/// is calculated over the resolved completed weekdays of the window.
 fn aligned_dates(components: &[AdmittedComponent], window: &BlendWindow) -> Vec<NaiveDate> {
     let mut common: Option<BTreeSet<NaiveDate>> = None;
     for component in components {
@@ -959,7 +961,23 @@ fn aligned_dates(components: &[AdmittedComponent], window: &BlendWindow) -> Vec<
             None => dates,
         });
     }
-    common.unwrap_or_default().into_iter().collect()
+    match common {
+        Some(dates) => dates.into_iter().collect(),
+        None => resolved_weekdays(window),
+    }
+}
+
+/// The completed weekdays of the window.
+fn resolved_weekdays(window: &BlendWindow) -> Vec<NaiveDate> {
+    let mut days = Vec::new();
+    let mut day = window.actual_start;
+    while day <= window.actual_end {
+        if is_weekday(day) {
+            days.push(day);
+        }
+        day += Duration::days(1);
+    }
+    days
 }
 
 /// The parsed Base currency observations of one component.

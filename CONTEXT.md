@@ -153,7 +153,7 @@ The declared share of a **Custom blend** held by one **Blend component**, expres
 _Avoid_: Allocation, portfolio weight
 
 **Blend cash component**:
-The optional synthetic **Blend component** that earns a 0% return; it has no market data, no fee, and no transaction.
+The optional synthetic **Blend component** that earns a 0% return; it has no market data, no fee, and no transaction. A blend of cash alone is calculated over the resolved completed weekdays of its window at a constant wealth.
 _Avoid_: Monetary holding, cash position
 
 **Monthly blend reset**:
