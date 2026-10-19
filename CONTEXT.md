@@ -84,6 +84,14 @@ _Avoid_: Portfolio exposure, combined allocation
 Current fund-level facts used in fund analysis, including fund name, assets under management, and inception date.
 _Avoid_: Holdings, price history
 
+**Fund class identity**:
+The exact share class and vehicle of one compared fund, resolved from the tracked asset's ISIN when the portfolio tracks that class and from the source code alone when it does not.
+_Avoid_: Fund name, fund family
+
+**Reference purpose**:
+The financial meaning of one selected reference definition: the investment universe it describes, the official or objective comparator it records, its history boundary, and its production mapping verification state.
+_Avoid_: Reference name, source identity
+
 **Asset classification**:
 The portfolio-analysis taxonomy assigned to an asset, including its top-level asset class and any relevant style, credit, duration, or management attributes.
 _Avoid_: Asset type, ticker metadata
@@ -266,6 +274,10 @@ _Avoid_: NAV inception return, missing history
 - **Fund quote metadata** is displayed at analysis time and is not part of the transaction ledger or NAV history.
 - Fund analysis can run for a **Fund candidate** that is not a **Tracked asset**; when no local asset name exists, the fund name from **Fund quote metadata** is used.
 - In fund comparison, standard performance metrics use YTD, 1Y, 3Y, 5Y, and all-time periods, while the selected period controls only the correlation and aligned return graph.
+- The direct fund-to-fund rows of a fund comparison measure each fund alone, in the fund's own currency; they use no reference, so they stay available when a fund's own reference is absent or unusable.
+- Each compared fund is measured against its own selected primary reference, through the shared Benchmark Module, and reports that reference's identity, its **Reference purpose**, its conventions, its actual comparison dates, and its scoped limitations.
+- Two compared funds never share one reference in a fund comparison: a missing or unusable reference leaves that fund's reference-relative facts unavailable and never falls back to the other fund's reference or to the old fixed ACWI reference.
+- Two share classes of the same fund are different investments: a fund comparison keeps each side's own **Fund class identity**, and a class this portfolio does not track shows that absence instead of borrowing another class's identity.
 - **Fund candidate correlation** is omitted for the portfolio NAV or any held **Tracked asset** that does not have return coverage for the requested correlation period.
 - Fund comparison correlation and aligned return graph require full coverage for the selected period; they do not fall back to shorter overlapping history.
 - A **Custom blend** is a benchmark definition with its own identity; its **Blend component** identities are exact definition identities, and a saved **Custom blend** may not contain another **Custom blend**.

@@ -53,7 +53,7 @@
 - **`analyze`** — Composition, fund analysis, static correlation matrix, and rolling pair correlation
 - **`compare`** — Side-by-side fund candidate comparison
 
-`main.rs` is a thin process bootstrap: it parses the CLI with clap, initializes logging, connects to the database, and builds the `MarketData` sources, then delegates the parsed command to `cli::run_command()` in `src/cli/dispatch.rs`. That library-owned dispatch routes every command in the current surface — both dashboard aliases `get` and `portfolio get` reach the same path — so production, integration tests, and benchmarks exercise one application module graph. The Portfolio dashboard commands compose `portfolio_view::get_portfolio_view()` first, then write the complete outcome through the separate human and JSON output Adapters in `src/cli/adapters/`, which accept injected `Write` targets and own sorting, labels, the nested JSON schema, and the NAV chart (ADR-0004). Other command adapters in `src/cli/commands/` call presentation-neutral services, then choose either the existing human renderer or `output::emit_json()`. `src/cli/output.rs` owns compact serialization and emits one `command`/`data` envelope to stdout; services do not emit successful command output. Errors and Clap help/version remain outside this successful-output boundary.
+`main.rs` is a thin process bootstrap: it parses the CLI with clap, initializes logging, connects to the database, and builds the `MarketData` sources, then delegates the parsed command to `cli::run_command()` in `src/cli/dispatch.rs`. That library-owned dispatch routes every command in the current surface — both dashboard aliases `get` and `portfolio get` reach the same path — so production, integration tests, and benchmarks exercise one application module graph. The Portfolio dashboard commands compose `portfolio_view::get_portfolio_view()` first, then write the complete outcome through the separate human and JSON output Adapters in `src/cli/adapters/`, which accept injected `Write` targets and own sorting, labels, the nested JSON schema, and the NAV chart (ADR-0004). The fund comparison command writes its JSON envelope through the same injected `Write` target, so the library dispatch of a real command value produces the production document. Other command adapters in `src/cli/commands/` call presentation-neutral services, then choose either the existing human renderer or `output::emit_json()`. `src/cli/output.rs` owns compact serialization and emits one `command`/`data` envelope to stdout; services do not emit successful command output. Errors and Clap help/version remain outside this successful-output boundary.
 
 The library owns the complete command dispatch, and the executable imports the shared modules from the `rstock` library rather than compiling a second copy of them. Logging initialization remains owned by the executable. Test bodies and helpers live in dedicated files under `tests/`; private unit modules reference `tests/unit/` files through test-only module declarations.
 
@@ -102,6 +102,10 @@ All business logic lives here. Key modules:
 
 **`fund_analysis.rs`** — `compute_fund_analysis()` builds a deep-dive report for any Morningstar fund code, including performance, holdings, equity-only allocation tables, and holdings snapshot diffs. Snapshot persistence is keyed by Morningstar's reported portfolio date, so repeated runs against the same Morningstar snapshot do not create duplicate history rows.
 
+**`fund_comparison.rs`** — `compare_funds()` builds the direct fund-to-fund comparison of two Morningstar fund codes. The direct analysis is fund-only: the aligned correlation graph, the allocation tables, the common holdings, and the standard performance rows measure each fund alone, use no reference, and stay available when a fund's own reference is absent or unusable. Each side also carries its own reference-relative comparison, prepared through the shared Benchmark Module against that fund's own selected primary reference, so two funds with different references never read as one investment universe. Each side keeps its own exact class identity, its own reference identity and purpose, its own actual comparison dates, and its own scoped limitations; a missing or unusable reference leaves only that side's reference-relative facts unavailable and never falls back to the other side's reference or to the old fixed ACWI reference. The selected graph period controls only the correlation and the aligned graph; the standard comparison rows are independent of it. Each compared fund keeps its own holdings snapshot.
+
+**`fund_metrics.rs`** — The standard fund performance rows. `compute_standard_fund_metrics()` measures a fund against the legacy shared ACWI proxy and keeps the beta row of that measure, while `compute_fund_only_metrics()` measures the fund alone and needs no reference series, so the direct fund comparison never presents a fact measured against a reference the fund was not assigned. Both share the same row calculation.
+
 **`holdings.rs`** — Shared holdings fetch helper used by composition and other look-through paths.
 
 **`monitor.rs`** — `generate_monitor_report()` fetches price history for a stock and its sector ETF, computes momentum indicators (RSI-14, SMA-50/200, MACD), fundamentals, and relative strength metrics.
@@ -118,7 +122,7 @@ Pure output formatting with no business logic. `OutputFormat` selects human or J
 - **`correlation.rs`** — `print_correlation_matrix()` renders N×N correlation matrix with color-coded values
 - **`composition.rs`** — `print_composition()` renders composition breakdowns and top holdings
 - **`fund_analysis.rs`** — `print_fund_analysis()` renders deep-dive fund analysis tables and snapshot diffs
-- **`fund_comparison.rs`** — `print_fund_comparison()` renders side-by-side fund candidate analysis
+- **`fund_comparison.rs`** — `print_fund_comparison()` renders side-by-side fund candidate analysis, the direct fund-to-fund rows, and each fund's own reference-relative comparison with its reference identity, purpose, dates, aligned graph, standard rows, and scoped limitations
 - **`monitor.rs`** — `print_monitor_report()` renders stock analysis with fundamentals, momentum indicators, and sector comparison charts
 - **`output.rs`** — `OutputFormat`, compact `command`/`data` envelope serialization, and stdout emission
 
@@ -161,12 +165,17 @@ Domain structs organized by concept:
 - `BenchmarkComparisonPeriod` — The YTD, 1Y, 3Y, 5Y, and since-comparison-start periods
 - `ComparisonAvailability`, `ComparisonFact<T>` — The explicit available/unavailable/not-applicable states of a comparison and of one calculated fact
 - `DatedWealthPoint` — One dated point of an aligned wealth series
+- `ReferencePurposeInfo` — The purpose of one selected reference definition: its role, universe, instrument, history boundary, verification state, and official and objective comparators
 
 **`fund_analysis.rs`**:
 - `FundBenchmarkComparison`, `FundBenchmarkPeriod` — The fund comparison outcome and its accepted `fund_return_pct` period row, mapped from the shared computed row without changing the fund's JSON contract
 - `FundAnalysisResult` — Full fund report including top holdings, allocations, period metrics, and holdings snapshot diff
 - `FundPeriodMetrics` — Total return, CAGR, volatility, max drawdown, beta, Sharpe, and Sortino
 - `HoldingChange`, `HoldingChangeType`, `FundData` — Snapshot diff and Morningstar payload models
+
+**`fund_comparison.rs`**:
+- `FundComparisonResult`, `FundComparisonSide` — The direct fund-to-fund comparison and one compared side, with its own reference-relative comparison
+- `FundClassIdentity` — The **Fund class identity** of one compared side: its source code, its tracked identity, and its vehicle
 
 **`exposure_benchmark.rs`**:
 - `ExposureBenchmarkComparison` — The exposure-matched primary benchmark: its availability, the aligned subject/reference wealth series, the standard periods, the contributing references, and the omitted seed-to-first-close interval

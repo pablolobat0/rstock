@@ -1490,7 +1490,7 @@ async fn usd_fund_beta_converts_subject_returns_to_eur_before_alignment() {
     .await
     .unwrap();
 
-    assert!((result.all_time.unwrap().beta.unwrap() - 1.0).abs() < 1e-10);
+    assert!((result.rows.all_time.unwrap().beta.unwrap() - 1.0).abs() < 1e-10);
     assert!(result.benchmark_limitations.is_empty());
 }
 
@@ -1529,9 +1529,9 @@ async fn fund_beta_uses_complete_identical_window_intervals_including_flat_days(
     .await
     .unwrap();
 
-    assert_eq!(result.all_time.unwrap().beta, Some(1.0));
-    assert_eq!(result.one_year.unwrap().beta, Some(1.0));
-    assert_eq!(result.ytd.unwrap().beta, Some(1.0));
+    assert_eq!(result.rows.all_time.unwrap().beta, Some(1.0));
+    assert_eq!(result.rows.one_year.unwrap().beta, Some(1.0));
+    assert_eq!(result.rows.ytd.unwrap().beta, Some(1.0));
 
     let weekday_prices: Vec<_> = prices
         .iter()
@@ -1554,9 +1554,9 @@ async fn fund_beta_uses_complete_identical_window_intervals_including_flat_days(
     )
     .await
     .unwrap();
-    assert_eq!(weekday_result.all_time.unwrap().beta, Some(1.0));
-    assert_eq!(weekday_result.one_year.unwrap().beta, Some(1.0));
-    assert_eq!(weekday_result.ytd.unwrap().beta, Some(1.0));
+    assert_eq!(weekday_result.rows.all_time.unwrap().beta, Some(1.0));
+    assert_eq!(weekday_result.rows.one_year.unwrap().beta, Some(1.0));
+    assert_eq!(weekday_result.rows.ytd.unwrap().beta, Some(1.0));
     assert!(weekday_prices
         .windows(2)
         .any(|pair| { pair[0].0 == dates[170] && pair[1].0 == dates[173] }));
@@ -1575,8 +1575,8 @@ async fn fund_beta_uses_complete_identical_window_intervals_including_flat_days(
     )
     .await
     .unwrap();
-    assert!(missing_flat.all_time.unwrap().beta.is_none());
-    assert!(missing_flat.one_year.unwrap().beta.is_none());
+    assert!(missing_flat.rows.all_time.unwrap().beta.is_none());
+    assert!(missing_flat.rows.one_year.unwrap().beta.is_none());
 
     let incomplete_prices: Vec<_> = prices
         .iter()
@@ -1592,10 +1592,10 @@ async fn fund_beta_uses_complete_identical_window_intervals_including_flat_days(
     )
     .await
     .unwrap();
-    let incomplete_all = incomplete.all_time.unwrap();
+    let incomplete_all = incomplete.rows.all_time.unwrap();
     assert!(incomplete_all.beta.is_none());
     assert!(incomplete_all.volatility.is_some());
-    assert!(incomplete.one_year.unwrap().beta.is_none());
+    assert!(incomplete.rows.one_year.unwrap().beta.is_none());
 }
 
 #[tokio::test]
@@ -1607,7 +1607,11 @@ async fn malformed_persisted_fund_fx_is_a_hard_error_in_analysis_and_comparison(
     for invalid_rate in [0.0, -1.0, f64::INFINITY] {
         let db = setup_test_db().await;
         let mut sources = MockMarketDataSources::new();
-        for code in ["XGBP_BAD_A", "XGBP_BAD_B"] {
+        // The compared funds are tracked classes with an assigned reference, so
+        // the fund comparison converts their prices to EUR for their own
+        // reference comparison.
+        for (ticker, code) in [("XSIEINBADA", "XGBP_BAD_A"), ("XSIEINBADB", "XGBP_BAD_B")] {
+            insert_fund_asset(&db, ticker, "Bad Fund", "GBP", code).await;
             sources.fund_data.insert(
                 code.to_owned(),
                 FundData {
@@ -1619,7 +1623,64 @@ async fn malformed_persisted_fund_fx_is_a_hard_error_in_analysis_and_comparison(
                 code.to_owned(),
                 dates.iter().map(|date| (date.clone(), 100.0)).collect(),
             );
+            sources.series_qualifications.insert(
+                ("morningstar".to_owned(), code.to_owned()),
+                qualification(
+                    "GBP",
+                    "total_return",
+                    "dividends_reinvested_once",
+                    "Unhedged",
+                    "daily",
+                ),
+            );
         }
+        benchmark_reference::Entity::insert(benchmark_reference::ActiveModel {
+            id: Set("gbp-bad-reference".to_owned()),
+            display_name: Set("GBP Bad Reference".to_owned()),
+            instrument_ticker: Set("XGBPBADREF".to_owned()),
+            source: Set("test_source".to_owned()),
+            source_identifier: Set("XGBPBADREF".to_owned()),
+            currency: Set("GBP".to_owned()),
+            adjustment_provenance: Set("explicit fake total-return observations".to_owned()),
+            adjustment_qualification: Set("dividends_reinvested_once".to_owned()),
+            return_basis_qualification: Set("total_return".to_owned()),
+            role: Set("Investment universe".to_owned()),
+            universe: Set("test".to_owned()),
+            hedge_policy: Set("Unhedged".to_owned()),
+            source_provenance: Set("deterministic test source".to_owned()),
+            history_boundary: Set("2025-01-01 exact fixture class".to_owned()),
+            verification_state: Set("verified".to_owned()),
+            ..Default::default()
+        })
+        .exec(&db)
+        .await
+        .unwrap();
+        for ticker in ["XSIEINBADA", "XSIEINBADB"] {
+            benchmark_assignment::Entity::insert(benchmark_assignment::ActiveModel {
+                subject_type: Set("tracked".to_owned()),
+                subject_id: Set(ticker.to_owned()),
+                reference_id: Set("gbp-bad-reference".to_owned()),
+                is_override: Set(false),
+                assigned_at: Set("2025-01-01T00:00:00Z".to_owned()),
+            })
+            .exec(&db)
+            .await
+            .unwrap();
+        }
+        sources.historical_prices.insert(
+            "XGBPBADREF".to_owned(),
+            dates.iter().map(|date| (date.clone(), 200.0)).collect(),
+        );
+        sources.series_qualifications.insert(
+            ("test_source".to_owned(), "XGBPBADREF".to_owned()),
+            qualification(
+                "GBP",
+                "total_return",
+                "dividends_reinvested_once",
+                "Unhedged",
+                "daily",
+            ),
+        );
         sources.historical_prices.insert(
             BENCHMARK_TICKER.to_owned(),
             dates.iter().map(|date| (date.clone(), 200.0)).collect(),
@@ -1650,9 +1711,8 @@ async fn malformed_persisted_fund_fx_is_a_hard_error_in_analysis_and_comparison(
         let analysis_result =
             compute_fund_analysis(&db, &market_data, "XGBP_BAD_A", one_year_candidate_period())
                 .await;
-        let analysis_error = match analysis_result {
-            Err(error) => error,
-            Ok(_) => panic!("fund analysis must propagate malformed persisted FX"),
+        let Err(analysis_error) = analysis_result else {
+            panic!("fund analysis must propagate malformed persisted FX");
         };
         assert!(format!("{analysis_error:#}").contains("invalid persisted GBP/EUR FX rate"));
 
@@ -1664,9 +1724,8 @@ async fn malformed_persisted_fund_fx_is_a_hard_error_in_analysis_and_comparison(
             thirty_day_fund_comparison_period(),
         )
         .await;
-        let comparison_error = match comparison_result {
-            Err(error) => error,
-            Ok(_) => panic!("fund comparison must propagate malformed persisted FX"),
+        let Err(comparison_error) = comparison_result else {
+            panic!("fund comparison must propagate malformed persisted FX");
         };
         assert!(format!("{comparison_error:#}").contains("invalid persisted GBP/EUR FX rate"));
     }
@@ -1705,7 +1764,7 @@ async fn unavailable_fund_fx_remains_a_scoped_limitation_not_a_hard_error() {
     .await
     .unwrap();
 
-    assert!(result.all_time.unwrap().beta.is_none());
+    assert!(result.rows.all_time.unwrap().beta.is_none());
     assert!(result
         .benchmark_limitations
         .iter()
@@ -2081,14 +2140,14 @@ async fn test_fund_comparison_json_complete_structure_and_aligned_points() {
     let mut human = Vec::new();
     rstock::cli::display::write_fund_comparison_reference_context(&mut human, &result).unwrap();
     let human = String::from_utf8(human).unwrap();
-    assert!(human.contains("legacy-acwi-etf-proxy"));
-    assert!(human.contains("auto_adjust"));
-    assert!(human.contains("unverified"));
-    assert!(human.contains("FX rate USD"));
+    // The direct comparison never reuses the old fixed ACWI reference, and it
+    // never presents one shared reference for the two compared funds.
+    assert!(!human.contains("legacy-acwi-etf-proxy"));
+    assert!(human.contains("assigned primary comparison: unavailable"));
 
     assert_eq!(envelope["command"], "compare.funds");
     let data = &envelope["data"];
-    assert_eq!(data["benchmark_reference"]["id"], "legacy-acwi-etf-proxy");
+    assert!(data.get("benchmark_reference").is_none());
     assert_eq!(
         data["fund_a"]["primary_benchmark_comparison"]["standard_periods"]
             .as_array()
@@ -2104,20 +2163,12 @@ async fn test_fund_comparison_json_complete_structure_and_aligned_points() {
         5
     );
     assert!(human.contains("Risk-free assumption: 3.00% annual"));
-    assert_eq!(
-        data["benchmark_reference"]["display_name"],
-        "iShares MSCI ACWI ETF (ACWI) proxy"
-    );
     assert_eq!(data["risk_free_assumption"]["annual_rate_pct"], 3.0);
     assert!(data["risk_free_assumption"]["not_applied_to"]
         .as_array()
         .unwrap()
         .iter()
         .any(|item| item == "retained cash return"));
-    assert!(data["benchmark_reference"]["return_basis_qualification"]
-        .as_str()
-        .unwrap()
-        .contains("unverified"));
     assert_eq!(data["fund_a"]["code"], "XJSONCMP1");
     assert_eq!(data["fund_a"]["name"], "First Candidate");
     assert_eq!(data["fund_a"]["info"]["aum"], json!(1_000_000.0));
@@ -2129,13 +2180,27 @@ async fn test_fund_comparison_json_complete_structure_and_aligned_points() {
     assert_eq!(data["fund_b"]["code"], "XJSONCMP2");
     assert_eq!(data["fund_b"]["name"], "Second Candidate");
     assert_eq!(data["fund_b"]["info"]["currency"], "USD");
-    assert!(data["fund_a"]["benchmark_limitations"].is_array());
-    assert!(data["fund_b"]["benchmark_limitations"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|limitation| limitation["subject"]["type"] == "fx_rate"
-            && limitation["subject"]["currency"] == "USD"));
+    // The scoped limitations of each side belong to that side's own reference
+    // comparison, and the comparison carries no shared limitation scope.
+    assert!(data["fund_a"]["primary_benchmark_comparison"]["fund_limitations"].is_array());
+    assert!(data["fund_b"]["primary_benchmark_comparison"]["fund_limitations"].is_array());
+    assert!(
+        data["fund_b"]["primary_benchmark_comparison"]["reference_limitations"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    // Neither compared fund is tracked, so neither side borrows a reference.
+    assert_eq!(
+        data["fund_b"]["primary_benchmark_comparison"]["availability"]["status"],
+        "unavailable"
+    );
+    assert!(
+        data["fund_b"]["primary_benchmark_comparison"]["availability"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("no exact tracked-asset identity")
+    );
     for fund in ["fund_a", "fund_b"] {
         for period in ["ytd", "one_year", "three_year", "five_year", "all_time"] {
             assert!(

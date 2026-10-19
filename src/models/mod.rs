@@ -16,7 +16,7 @@ pub(crate) use asset::normalize_currency;
 pub use asset::{Asset, AssetInfo, AssetType};
 pub use benchmark::{
     BenchmarkComparisonPeriod, BenchmarkPeriod, ComparisonAvailability, ComparisonFact,
-    DatedWealthPoint,
+    DatedWealthPoint, ReferencePurposeInfo,
 };
 pub use classification::{
     enum_to_db, AssetClass, AssetClassification, BondCredit, BondDuration, EquityStyle, Management,
@@ -35,8 +35,9 @@ pub use fund_analysis::{
     RiskFreeAssumption,
 };
 pub use fund_comparison::{
-    AlignedFundReturnPoint, AllocationComparison, CommonFundHolding, FundComparisonCorrelation,
-    FundComparisonPeriod, FundComparisonResult, FundComparisonSide, FundInfoComparison,
+    AlignedFundReturnPoint, AllocationComparison, CommonFundHolding, FundClassIdentity,
+    FundComparisonCorrelation, FundComparisonPeriod, FundComparisonResult, FundComparisonSide,
+    FundInfoComparison,
 };
 pub use market_data::{
     BaseCurrencyPriceSeries, BenchmarkRiskMarketData, CorrelationMarketData,
