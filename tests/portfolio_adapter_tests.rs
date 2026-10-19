@@ -609,69 +609,75 @@ fn populated_view() -> PortfolioView {
             outstanding_shares: 0.18,
             nav: 100.0,
         }],
-        exposure_benchmark: rstock::models::ExposureBenchmarkComparison {
-            availability: rstock::models::ComparisonAvailability::Available,
-            role: "primary".to_owned(),
-            method: "exposure_matched".to_owned(),
-            subject_label: "Portfolio".to_owned(),
-            reference_label: "Exposure-matched benchmark".to_owned(),
-            currency: "EUR".to_owned(),
-            start_date: Some("2025-06-02".to_owned()),
-            end_date: Some("2025-06-09".to_owned()),
-            inception_date: Some("2025-06-01".to_owned()),
-            omitted_seed_interval: Some(rstock::models::OmittedSeedInterval {
-                seed_date: "2025-06-01".to_owned(),
-                anchor_date: "2025-06-02".to_owned(),
-            }),
-            retrospective: true,
-            subject_return_pct: Some(12.0),
-            reference_return_pct: Some(9.0),
-            excess_return_percentage_points: Some(3.0),
-            subject_wealth: vec![
-                rstock::models::DatedWealthPoint {
-                    date: "2025-06-02".to_owned(),
-                    wealth: 100.0,
-                },
-                rstock::models::DatedWealthPoint {
-                    date: "2025-06-09".to_owned(),
-                    wealth: 112.0,
-                },
-            ],
-            reference_wealth: vec![
-                rstock::models::DatedWealthPoint {
-                    date: "2025-06-02".to_owned(),
-                    wealth: 100.0,
-                },
-                rstock::models::DatedWealthPoint {
-                    date: "2025-06-09".to_owned(),
-                    wealth: 109.0,
-                },
-            ],
-            standard_periods: rstock::models::BenchmarkComparisonPeriod::standard_periods()
-                .into_iter()
-                .map(|period| rstock::models::BenchmarkPeriod::unavailable(period, "no history"))
-                .collect(),
-            references: vec![rstock::models::ExposureBenchmarkReference {
-                reference_id: "verified-fake-reference".to_owned(),
-                display_name: "Verified Fake Reference".to_owned(),
-                assets: vec!["XFAKE1".to_owned()],
-                first_weight_pct: 60.0,
-                last_weight_pct: 55.0,
-                max_weight_pct: 60.0,
-                native_currency: "EUR".to_owned(),
-                comparison_currency: "EUR".to_owned(),
-                return_basis: "total_return".to_owned(),
-                adjustment: "dividends_reinvested_once".to_owned(),
-                hedge_policy: "Unhedged".to_owned(),
-                cadence: Some("daily".to_owned()),
-                source: "test_source".to_owned(),
-                source_identifier: "XREF".to_owned(),
-                source_provenance: "deterministic test source".to_owned(),
-                verification_state: "verified".to_owned(),
-                assigned_at: Some("2025-06-01T00:00:00Z".to_owned()),
-            }],
-            reference_limitations: vec![],
-        },
+        exposure_benchmark: exposure_benchmark_view(),
+    }
+}
+
+/// The exposure-matched comparison of the populated view fixture.
+fn exposure_benchmark_view() -> rstock::models::ExposureBenchmarkComparison {
+    rstock::models::ExposureBenchmarkComparison {
+        availability: rstock::models::ComparisonAvailability::Available,
+        role: "primary".to_owned(),
+        method: "exposure_matched".to_owned(),
+        subject_label: "Portfolio".to_owned(),
+        reference_label: "Exposure-matched benchmark".to_owned(),
+        currency: "EUR".to_owned(),
+        start_date: Some("2025-06-02".to_owned()),
+        end_date: Some("2025-06-09".to_owned()),
+        inception_date: Some("2025-06-01".to_owned()),
+        omitted_seed_interval: Some(rstock::models::OmittedSeedInterval {
+            seed_date: "2025-06-01".to_owned(),
+            anchor_date: "2025-06-02".to_owned(),
+        }),
+        retrospective: true,
+        subject_return_pct: Some(12.0),
+        reference_return_pct: Some(9.0),
+        excess_return_percentage_points: Some(3.0),
+        subject_wealth: vec![
+            rstock::models::DatedWealthPoint {
+                date: "2025-06-02".to_owned(),
+                wealth: 100.0,
+            },
+            rstock::models::DatedWealthPoint {
+                date: "2025-06-09".to_owned(),
+                wealth: 112.0,
+            },
+        ],
+        reference_wealth: vec![
+            rstock::models::DatedWealthPoint {
+                date: "2025-06-02".to_owned(),
+                wealth: 100.0,
+            },
+            rstock::models::DatedWealthPoint {
+                date: "2025-06-09".to_owned(),
+                wealth: 109.0,
+            },
+        ],
+        standard_periods: rstock::models::BenchmarkComparisonPeriod::standard_periods()
+            .into_iter()
+            .map(|period| rstock::models::BenchmarkPeriod::unavailable(period, "no history"))
+            .collect(),
+        references: vec![rstock::models::ExposureBenchmarkReference {
+            reference_id: "verified-fake-reference".to_owned(),
+            display_name: "Verified Fake Reference".to_owned(),
+            assets: vec!["XFAKE1".to_owned()],
+            first_weight_pct: Some(60.0),
+            last_weight_pct: Some(55.0),
+            max_weight_pct: Some(60.0),
+            native_currency: "EUR".to_owned(),
+            comparison_currency: "EUR".to_owned(),
+            return_basis: "total_return".to_owned(),
+            adjustment: "dividends_reinvested_once".to_owned(),
+            hedge_policy: "Unhedged".to_owned(),
+            cadence: Some("daily".to_owned()),
+            source: "test_source".to_owned(),
+            source_identifier: "XREF".to_owned(),
+            source_provenance: "deterministic test source".to_owned(),
+            verification_state: "verified".to_owned(),
+            assigned_at: Some("2025-06-01T00:00:00Z".to_owned()),
+            limitations: vec![],
+        }],
+        reference_limitations: vec![],
     }
 }
 

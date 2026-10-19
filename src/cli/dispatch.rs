@@ -11,19 +11,10 @@ use sea_orm::DatabaseConnection;
 use super::commands;
 use super::output::OutputFormat;
 use super::{
-    AnalyzeCommands, AssetCommands, BenchmarkCommands, ChartPeriod, Commands, CompareCommands,
+    AnalyzeCommands, AssetCommands, BenchmarkCommands, Commands, CompareCommands,
     CorrelationCommands, PortfolioCommands, TransactionCommands,
 };
 use crate::services::market_data::MarketData;
-
-/// The Portfolio dashboard command behind its two CLI aliases.
-#[derive(Clone, Copy, Debug)]
-pub enum DashboardCommand {
-    /// The `rstock get` alias.
-    Get { period: ChartPeriod },
-    /// The `rstock portfolio get` alias.
-    PortfolioGet { period: ChartPeriod },
-}
 
 /// Dispatch one parsed CLI command against the application graph.
 pub async fn run_command(
@@ -32,13 +23,34 @@ pub async fn run_command(
     command: Commands,
     output_format: OutputFormat,
 ) -> anyhow::Result<()> {
+    let stdout = std::io::stdout();
+    let mut writer = stdout.lock();
+    run_command_with_writer(db, market_data, command, output_format, &mut writer).await
+}
+
+/// Dispatch one parsed CLI command against the application graph, writing the
+/// Portfolio dashboard output through the injected writer.
+///
+/// This is the same dispatch path [`run_command`] uses, so a caller that
+/// captures the writer observes exactly the production behaviour of the
+/// `rstock get` and `rstock portfolio get` aliases. The remaining commands
+/// keep their existing successful-output behaviour.
+pub async fn run_command_with_writer<W: Write>(
+    db: &DatabaseConnection,
+    market_data: &MarketData,
+    command: Commands,
+    output_format: OutputFormat,
+    writer: &mut W,
+) -> anyhow::Result<()> {
     match command {
         Commands::Get { period } => {
-            commands::portfolio::get(db, market_data, period, output_format).await
+            commands::portfolio::get_with_writer(db, market_data, period, output_format, writer)
+                .await
         }
         Commands::Portfolio(args) => match args.command {
             PortfolioCommands::Get { period } => {
-                commands::portfolio::get(db, market_data, period, output_format).await
+                commands::portfolio::get_with_writer(db, market_data, period, output_format, writer)
+                    .await
             }
             PortfolioCommands::Asset(asset_args) => {
                 run_asset_command(db, asset_args.command, output_format).await
@@ -101,24 +113,6 @@ pub async fn run_benchmark_command_with_writer<W: Write>(
     writer: &mut W,
 ) -> anyhow::Result<()> {
     commands::benchmarks::run_with_writer(db, command, output_format, writer).await
-}
-
-/// Dispatch one Portfolio dashboard command through the library-owned output
-/// Adapter while letting callers capture the exact human or JSON output.
-///
-/// `rstock get` and `rstock portfolio get` are the two dashboard aliases.
-/// They share this single dispatch path, so both report the same outcome.
-pub async fn run_dashboard_command_with_writer<W: Write>(
-    db: &DatabaseConnection,
-    market_data: &MarketData,
-    command: DashboardCommand,
-    output_format: OutputFormat,
-    writer: &mut W,
-) -> anyhow::Result<()> {
-    let period = match command {
-        DashboardCommand::Get { period } | DashboardCommand::PortfolioGet { period } => period,
-    };
-    commands::portfolio::get_with_writer(db, market_data, period, output_format, writer).await
 }
 
 async fn run_transaction_command(

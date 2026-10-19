@@ -8,6 +8,19 @@ pub struct PrimaryAssignment {
     pub subject_id: String,
     pub reference_id: String,
     pub is_override: bool,
+}
+
+/// One explicit assignment with the moment it was recorded.
+///
+/// The catalog view of an assignment does not carry its timestamp. A
+/// comparison that reports retrospective provenance needs the recorded
+/// moment, so the assignment record keeps it without changing the catalog
+/// view.
+#[derive(Clone, Debug)]
+pub struct PrimaryAssignmentRecord {
+    pub subject_id: String,
+    pub reference_id: String,
+    pub is_override: bool,
     /// When the explicit assignment was recorded. The assignment applies
     /// retrospectively to the whole comparison window.
     pub assigned_at: String,
@@ -39,12 +52,13 @@ pub async fn find_by_subject(
     )
 }
 
-/// Reads the explicit primary assignments of the given subjects in one query.
+/// Reads the explicit primary assignments of the given subjects in one query,
+/// including the moment each assignment was recorded.
 pub async fn find_by_subjects(
     db: &impl sea_orm::ConnectionTrait,
     subject_type: &str,
     subject_ids: &[String],
-) -> anyhow::Result<Vec<PrimaryAssignment>> {
+) -> anyhow::Result<Vec<PrimaryAssignmentRecord>> {
     if subject_ids.is_empty() {
         return Ok(Vec::new());
     }
@@ -55,18 +69,8 @@ pub async fn find_by_subjects(
         .all(db)
         .await?
         .into_iter()
-        .map(assignment_from_row)
+        .map(record_from_row)
         .collect())
-}
-
-fn assignment_from_row(row: benchmark_assignment::Model) -> PrimaryAssignment {
-    PrimaryAssignment {
-        subject_type: row.subject_type,
-        subject_id: row.subject_id,
-        reference_id: row.reference_id,
-        is_override: row.is_override,
-        assigned_at: row.assigned_at,
-    }
 }
 
 pub async fn upsert(
@@ -112,4 +116,22 @@ pub async fn delete_by_subject(
     .exec(db)
     .await?;
     Ok(result.rows_affected > 0)
+}
+
+fn assignment_from_row(row: benchmark_assignment::Model) -> PrimaryAssignment {
+    PrimaryAssignment {
+        subject_type: row.subject_type,
+        subject_id: row.subject_id,
+        reference_id: row.reference_id,
+        is_override: row.is_override,
+    }
+}
+
+fn record_from_row(row: benchmark_assignment::Model) -> PrimaryAssignmentRecord {
+    PrimaryAssignmentRecord {
+        subject_id: row.subject_id,
+        reference_id: row.reference_id,
+        is_override: row.is_override,
+        assigned_at: row.assigned_at,
+    }
 }

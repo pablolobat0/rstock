@@ -11,23 +11,20 @@
 
 pub mod common;
 
-use std::collections::BTreeMap;
-
 use chrono::NaiveDate;
-use sea_orm::{ActiveModelTrait, DatabaseConnection, EntityTrait, Set};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter,
+    Set,
+};
 
 use common::{insert_asset, market_data_at, setup_test_db, MockMarketDataSources};
 use rstock::cli::adapters;
 use rstock::db::entities::{
-    benchmark_assignment, benchmark_reference, portfolio_asset_history, portfolio_history,
+    benchmark_assignment, benchmark_reference, benchmark_reference_price, portfolio_asset_history,
+    portfolio_history,
 };
-use rstock::models::{
-    ComparisonAvailability, ComparisonFact, ExposureBenchmarkComparison, NavHistoryRequest,
-    PortfolioView,
-};
-use rstock::services::exposure_benchmark::{
-    compute_exposure_matched_comparison, compute_interval_exposure,
-};
+use rstock::models::{ComparisonAvailability, ComparisonFact, NavHistoryRequest, PortfolioView};
+use rstock::services::exposure_benchmark::compute_exposure_matched_comparison;
 use rstock::services::portfolio_view::get_portfolio_view;
 
 const TODAY: NaiveDate = NaiveDate::from_ymd_opt(2025, 1, 11).expect("fixed date");
@@ -47,14 +44,20 @@ fn fixed_today() -> NaiveDate {
 
 // --- Fixture helpers ---
 
-async fn insert_reference(db: &DatabaseConnection, id: &str, name: &str, identifier: &str) {
+async fn insert_reference(
+    db: &DatabaseConnection,
+    id: &str,
+    name: &str,
+    identifier: &str,
+    currency: &str,
+) {
     benchmark_reference::Entity::insert(benchmark_reference::ActiveModel {
         id: Set(id.to_owned()),
         display_name: Set(name.to_owned()),
         instrument_ticker: Set(identifier.to_owned()),
         source: Set("test_source".to_owned()),
         source_identifier: Set(identifier.to_owned()),
-        currency: Set("EUR".to_owned()),
+        currency: Set(currency.to_owned()),
         adjustment_provenance: Set("explicit fake total-return observations".to_owned()),
         adjustment_qualification: Set("dividends_reinvested_once".to_owned()),
         return_basis_qualification: Set("total_return".to_owned()),
@@ -169,7 +172,8 @@ async fn insert_nav_history(db: &DatabaseConnection, alpha: i32, beta_asset: i32
 /// The fake reference observations.
 ///
 /// ALPHA moves +10% on 2025-01-07 and +10% on 2025-01-09. BETA moves +10% on
-/// 2025-01-08 and +9.09% on 2025-01-10.
+/// 2025-01-08. Both report every completed weekday of the window they
+/// contribute to.
 fn reference_sources() -> MockMarketDataSources {
     let mut sources = MockMarketDataSources::new();
     sources.historical_prices.insert(
@@ -190,23 +194,26 @@ fn reference_sources() -> MockMarketDataSources {
             ("2025-01-06".to_owned(), 50.0),
             ("2025-01-07".to_owned(), 50.0),
             ("2025-01-08".to_owned(), 55.0),
-            ("2025-01-09".to_owned(), 55.0),
-            ("2025-01-10".to_owned(), 60.0),
         ],
     );
     for identifier in ["ALPHA", "BETA"] {
         sources.series_qualifications.insert(
             ("test_source".to_owned(), identifier.to_owned()),
-            rstock::services::market_data::SeriesQualification {
-                currency: "EUR".to_owned(),
-                return_basis: "total_return".to_owned(),
-                adjustment: "dividends_reinvested_once".to_owned(),
-                hedge_policy: "Unhedged".to_owned(),
-                cadence: "daily".to_owned(),
-            },
+            qualification("EUR"),
         );
     }
     sources
+}
+
+/// The qualified source registration of a fake reference.
+fn qualification(currency: &str) -> rstock::services::market_data::SeriesQualification {
+    rstock::services::market_data::SeriesQualification {
+        currency: currency.to_owned(),
+        return_basis: "total_return".to_owned(),
+        adjustment: "dividends_reinvested_once".to_owned(),
+        hedge_policy: "Unhedged".to_owned(),
+        cadence: "daily".to_owned(),
+    }
 }
 
 /// The complete exposure fixture: assets, references, assignments, and the
@@ -216,8 +223,8 @@ async fn exposure_fixture() -> (DatabaseConnection, MockMarketDataSources) {
     let alpha = insert_asset(&db, "XFAKE1", "Alpha Stock", "stock", "EUR").await;
     let beta_asset = insert_asset(&db, "XFAKE2", "Beta Stock", "stock", "EUR").await;
     let gamma = insert_asset(&db, "XFAKE3", "Gamma Stock", "stock", "EUR").await;
-    insert_reference(&db, ALPHA, "Verified Alpha Reference", "ALPHA").await;
-    insert_reference(&db, BETA, "Verified Beta Reference", "BETA").await;
+    insert_reference(&db, ALPHA, "Verified Alpha Reference", "ALPHA", "EUR").await;
+    insert_reference(&db, BETA, "Verified Beta Reference", "BETA", "EUR").await;
     assign_reference(&db, "tracked", "XFAKE1", ALPHA).await;
     assign_reference(&db, "tracked", "XFAKE2", BETA).await;
     assign_reference(&db, "tracked", "XFAKE3", ALPHA).await;
@@ -263,106 +270,26 @@ fn snapshot(
 async fn compute_fixture_comparison(
     db: &DatabaseConnection,
     sources: &MockMarketDataSources,
-) -> ExposureBenchmarkComparison {
+) -> rstock::models::ExposureBenchmarkComparison {
     let market_data = market_data_at(sources, fixed_today());
     compute_exposure_matched_comparison(db, &market_data, &ready_snapshots())
         .await
         .expect("the exposure comparison should be computable")
 }
 
-/// The per-asset exposures of one fixture closing snapshot.
-fn fixture_exposures(date: &str) -> Vec<rstock::models::AssetSnapshot> {
-    let exposure = |asset_id: i32, quantity: f64, price: f64, market_value: f64| {
-        rstock::models::AssetSnapshot {
-            date: date.to_owned(),
-            asset_id,
-            quantity,
-            closing_price: price,
-            market_value,
-            exchange_rate: 1.0,
-        }
-    };
-    match date {
-        "2025-01-06" => vec![
-            exposure(1, 6.0, 100.0, 600.0),
-            exposure(2, 4.0, 100.0, 400.0),
-        ],
-        "2025-01-07" => vec![
-            exposure(1, 6.0, 110.0, 660.0),
-            exposure(2, 4.0, 110.0, 440.0),
-        ],
-        "2025-01-08" => vec![exposure(1, 6.0, 110.0, 660.0)],
-        _ => vec![
-            exposure(1, 6.0, 110.0, 660.0),
-            exposure(3, 2.0, 100.0, 200.0),
-        ],
-    }
+/// The JSON envelope of one Portfolio view.
+fn view_json(view: &PortfolioView) -> serde_json::Value {
+    let mut output = Vec::new();
+    adapters::write_portfolio_json(&mut output, view).expect("JSON should be written");
+    common::parse_json_envelope(&output)
 }
 
-/// A fund analysis fixture whose assigned primary reference is the same
-/// verified reference the exposure fixture uses.
-async fn fund_fixture() -> (DatabaseConnection, MockMarketDataSources) {
-    let db = setup_test_db().await;
-    common::insert_fund_asset(&db, "XISINFAKE1", "Fund", "EUR", "XCLASS").await;
-    insert_reference(&db, ALPHA, "Verified Alpha Reference", "ALPHA").await;
-    assign_reference(&db, "tracked", "XISINFAKE1", ALPHA).await;
-
-    let mut sources = MockMarketDataSources::new();
-    sources.historical_prices.insert(
-        "XCLASS".to_owned(),
-        vec![
-            ("2025-01-06".to_owned(), 100.0),
-            ("2025-01-07".to_owned(), 112.0),
-        ],
-    );
-    sources.historical_prices.insert(
-        "ALPHA".to_owned(),
-        vec![
-            ("2025-01-03".to_owned(), 100.0),
-            ("2025-01-06".to_owned(), 100.0),
-            ("2025-01-07".to_owned(), 110.0),
-            ("2025-01-08".to_owned(), 110.0),
-            ("2025-01-09".to_owned(), 121.0),
-            ("2025-01-10".to_owned(), 121.0),
-        ],
-    );
-    sources.series_qualifications.insert(
-        ("morningstar".to_owned(), "XCLASS".to_owned()),
-        rstock::services::market_data::SeriesQualification {
-            currency: "EUR".to_owned(),
-            return_basis: "total_return".to_owned(),
-            adjustment: "dividends_reinvested_once".to_owned(),
-            hedge_policy: "Unhedged".to_owned(),
-            cadence: "daily".to_owned(),
-        },
-    );
-    sources.series_qualifications.insert(
-        ("test_source".to_owned(), "ALPHA".to_owned()),
-        rstock::services::market_data::SeriesQualification {
-            currency: "EUR".to_owned(),
-            return_basis: "total_return".to_owned(),
-            adjustment: "dividends_reinvested_once".to_owned(),
-            hedge_policy: "Unhedged".to_owned(),
-            cadence: "daily".to_owned(),
-        },
-    );
-    sources.fund_data.insert(
-        "XCLASS".to_owned(),
-        rstock::models::FundData {
-            fund_currency: Some("EUR".to_owned()),
-            total_holdings: None,
-            portfolio_date: None,
-            holdings: vec![],
-        },
-    );
-    sources.fund_quote_metadata.insert(
-        "XCLASS".to_owned(),
-        rstock::models::FundQuoteMetadata {
-            quote_currency: Some("EUR".to_owned()),
-            ..Default::default()
-        },
-    );
-    (db, sources)
+/// The human output of one Portfolio view.
+fn view_human(view: &PortfolioView) -> String {
+    let mut output = Vec::new();
+    adapters::write_portfolio_human(&mut output, view, NavHistoryRequest::All)
+        .expect("human output should be written");
+    String::from_utf8(output).expect("human output should be UTF-8")
 }
 
 // --- Tests ---
@@ -446,81 +373,30 @@ async fn comparison_discloses_the_omitted_seed_to_first_close_interval() {
 #[tokio::test]
 async fn same_day_trade_changes_only_the_following_interval_weights() {
     let (db, sources) = exposure_fixture().await;
-    let market_data = market_data_at(&sources, fixed_today());
-    let snapshots = ready_snapshots();
+    let comparison = compute_fixture_comparison(&db, &sources).await;
 
-    let tickers: BTreeMap<i32, String> = BTreeMap::from([
-        (1, "XFAKE1".to_owned()),
-        (2, "XFAKE2".to_owned()),
-        (3, "XFAKE3".to_owned()),
-    ]);
-    let exposures = fixture_exposures;
-
-    // The close before the sale still carries the sold asset.
-    let before_sale = compute_interval_exposure(
-        &snapshots[2],
-        &exposures("2025-01-07").iter().collect::<Vec<_>>(),
-        &tickers,
-    )
-    .expect("the pre-sale exposure should compute");
-    assert_close(before_sale.asset_weights[0].weight, 0.6);
-    assert_close(before_sale.asset_weights[1].weight, 0.4);
-    assert_close(before_sale.cash_weight, 0.0);
-
-    // The close of the sale no longer carries it, and the retained Net
-    // dividend income becomes the 0%-return residual.
-    let after_sale = compute_interval_exposure(
-        &snapshots[3],
-        &exposures("2025-01-08").iter().collect::<Vec<_>>(),
-        &tickers,
-    )
-    .expect("the post-sale exposure should compute");
-    assert_eq!(after_sale.asset_weights.len(), 1);
-    assert_close(after_sale.asset_weights[0].weight, 660.0 / 720.0);
-    assert_close(after_sale.cash_weight, 60.0 / 720.0);
-
-    // The comparison itself uses the prior close: the sold asset still
-    // contributes on 2025-01-08 and stops contributing afterwards.
-    let comparison = compute_exposure_matched_comparison(&db, &market_data, &snapshots)
-        .await
-        .expect("the exposure comparison should be computable");
+    // The closed asset's reference still carries 40% on its sale close and
+    // reports no weight afterwards, so the sale changes only the following
+    // interval's contribution.
     let beta = comparison
         .references
         .iter()
         .find(|reference| reference.reference_id == BETA)
         .expect("the closed asset's reference must stay visible");
-    assert_close(beta.first_weight_pct, 40.0);
-    assert_close(beta.last_weight_pct, 0.0);
-    assert_close(beta.max_weight_pct, 40.0);
+    assert_close(beta.first_weight_pct.unwrap(), 40.0);
+    assert_close(beta.last_weight_pct.unwrap(), 0.0);
+    assert_close(beta.max_weight_pct.unwrap(), 40.0);
     assert_eq!(beta.assets, vec!["XFAKE2".to_owned()]);
-}
 
-/// Assets that share one primary reference aggregate their weights.
-#[tokio::test]
-async fn assets_sharing_one_reference_aggregate_their_weights() {
-    let (db, sources) = exposure_fixture().await;
-    let comparison = compute_fixture_comparison(&db, &sources).await;
-
-    let alpha = comparison
-        .references
+    // The 2025-01-08 interval still carries the sold asset's 40% weight: the
+    // reference wealth of that interval is 106.0 * 1.04, not 106.0 * 1.10.
+    let reference: Vec<f64> = comparison
+        .reference_wealth
         .iter()
-        .find(|reference| reference.reference_id == ALPHA)
-        .expect("the shared reference must be reported once");
-    assert_eq!(alpha.assets, vec!["XFAKE1".to_owned(), "XFAKE3".to_owned()]);
-    // 660 + 200 EUR of 920 EUR of NAV scope on the last invested close.
-    assert_close(alpha.last_weight_pct, 860.0 / 920.0 * 100.0);
-    assert_close(alpha.max_weight_pct, 860.0 / 920.0 * 100.0);
-    assert_close(alpha.first_weight_pct, 60.0);
-
-    assert_eq!(
-        comparison
-            .references
-            .iter()
-            .filter(|reference| reference.reference_id == ALPHA)
-            .count(),
-        1,
-        "a shared reference must not be counted twice"
-    );
+        .map(|point| point.wealth)
+        .collect();
+    assert_close(reference[1], 106.0);
+    assert_close(reference[2], 110.24);
 }
 
 /// The retained Net dividend income is carried inside the NAV scope at a 0%
@@ -540,8 +416,36 @@ async fn retained_dividend_income_is_carried_at_zero_return() {
     assert_close(reference[3], 110.24 * (1.0 + 660.0 / 720.0 * 0.1));
 }
 
+/// Assets that share one primary reference aggregate their weights.
+#[tokio::test]
+async fn assets_sharing_one_reference_aggregate_their_weights() {
+    let (db, sources) = exposure_fixture().await;
+    let comparison = compute_fixture_comparison(&db, &sources).await;
+
+    let alpha = comparison
+        .references
+        .iter()
+        .find(|reference| reference.reference_id == ALPHA)
+        .expect("the shared reference must be reported once");
+    assert_eq!(alpha.assets, vec!["XFAKE1".to_owned(), "XFAKE3".to_owned()]);
+    // 660 + 200 EUR of 920 EUR of NAV scope on the last invested close.
+    assert_close(alpha.last_weight_pct.unwrap(), 860.0 / 920.0 * 100.0);
+    assert_close(alpha.max_weight_pct.unwrap(), 860.0 / 920.0 * 100.0);
+    assert_close(alpha.first_weight_pct.unwrap(), 60.0);
+    assert_eq!(
+        comparison
+            .references
+            .iter()
+            .filter(|reference| reference.reference_id == ALPHA)
+            .count(),
+        1,
+        "a shared reference must not be counted twice"
+    );
+}
+
 /// A missing explicit assignment makes the comparison unavailable; the
-/// remaining weights are never renormalized.
+/// remaining weights are never renormalized, and the selected references stay
+/// visible.
 #[tokio::test]
 async fn missing_assignment_is_unavailable_and_never_renormalized() {
     let (db, sources) = exposure_fixture().await;
@@ -565,7 +469,23 @@ async fn missing_assignment_is_unavailable_and_never_renormalized() {
         other => panic!("expected an unavailable comparison, got {other:?}"),
     }
     assert!(comparison.subject_wealth.is_empty());
-    assert!(comparison.references.is_empty());
+    // The selected reference provenance stays visible on the unavailable
+    // outcome.
+    let alpha = comparison
+        .references
+        .iter()
+        .find(|reference| reference.reference_id == ALPHA)
+        .expect("the selected reference must stay visible");
+    assert_eq!(alpha.display_name, "Verified Alpha Reference");
+    assert_eq!(alpha.return_basis, "total_return");
+    assert_eq!(alpha.adjustment, "dividends_reinvested_once");
+    assert_eq!(alpha.hedge_policy, "Unhedged");
+    assert_eq!(alpha.native_currency, "EUR");
+    assert_eq!(alpha.source, "test_source");
+    assert_eq!(alpha.source_identifier, "ALPHA");
+    assert_eq!(alpha.verification_state, "verified");
+    assert_eq!(alpha.assigned_at.as_deref(), Some("2025-01-11T00:00:00Z"));
+    assert!(alpha.first_weight_pct.is_none());
 }
 
 /// Secondary and candidate references never enter the exposure weights.
@@ -584,48 +504,54 @@ async fn secondary_and_candidate_assignments_never_enter_the_weights() {
         .find(|reference| reference.reference_id == ALPHA)
         .expect("the primary reference must stay in place");
     assert_eq!(alpha.assets, vec!["XFAKE1".to_owned(), "XFAKE3".to_owned()]);
-    assert_close(alpha.first_weight_pct, 60.0);
+    assert_close(alpha.first_weight_pct.unwrap(), 60.0);
     let beta = comparison
         .references
         .iter()
         .find(|reference| reference.reference_id == BETA)
         .expect("the closed asset's reference must stay visible");
     assert_eq!(beta.assets, vec!["XFAKE2".to_owned()]);
-    assert_close(beta.first_weight_pct, 40.0);
+    assert_close(beta.first_weight_pct.unwrap(), 40.0);
 }
 
-/// The standard rows report the comparison's own dates and never depend on a
-/// graph period.
+/// A reference without a qualified observation on an internal weekday makes
+/// the comparison unavailable: a forward-filled mark is not an independent
+/// observation.
 #[tokio::test]
-async fn standard_rows_report_the_comparison_anchors() {
-    let (db, sources) = exposure_fixture().await;
-    let comparison = compute_fixture_comparison(&db, &sources).await;
+async fn a_missing_internal_weekday_observation_makes_the_comparison_unavailable() {
+    let (db, mut sources) = exposure_fixture().await;
+    // ALPHA stops reporting on 2025-01-09. The source has no observation for
+    // that weekday, so the comparison cannot measure the interval.
+    sources.historical_prices.insert(
+        "ALPHA".to_owned(),
+        vec![
+            ("2025-01-03".to_owned(), 100.0),
+            ("2025-01-06".to_owned(), 100.0),
+            ("2025-01-07".to_owned(), 110.0),
+            ("2025-01-08".to_owned(), 110.0),
+            ("2025-01-10".to_owned(), 121.0),
+        ],
+    );
 
-    assert_eq!(comparison.standard_periods.len(), 5);
-    let since = comparison
-        .standard_periods
+    let comparison = compute_fixture_comparison(&db, &sources).await;
+    match &comparison.availability {
+        ComparisonAvailability::Unavailable { reason } => {
+            assert!(
+                reason.contains("no qualified observation"),
+                "the missing observation must be named: {reason}"
+            );
+            assert!(
+                reason.contains("2025-01-09"),
+                "the missing close must be named: {reason}"
+            );
+        }
+        other => panic!("expected an unavailable comparison, got {other:?}"),
+    }
+    // The reference provenance stays visible on the unavailable outcome.
+    assert!(comparison
+        .references
         .iter()
-        .find(|period| {
-            period.period == rstock::models::BenchmarkComparisonPeriod::SinceComparisonStart
-        })
-        .expect("the since-comparison-start row must be present");
-    assert_eq!(since.start_date.as_deref(), Some("2025-01-06"));
-    assert_eq!(since.end_date.as_deref(), Some("2025-01-10"));
-    assert!(matches!(
-        since.subject_return_pct,
-        ComparisonFact::Available { value } if (value - 30.434_782_608_695_66).abs() < 1e-9
-    ));
-    assert!(matches!(
-        since.reference_return_pct,
-        ComparisonFact::Available { value } if (value - 20.345_333_333_333_332).abs() < 1e-9
-    ));
-    assert!(matches!(
-        since.excess_return_percentage_points,
-        ComparisonFact::Available { value } if (value - 10.089_449_275_362_329).abs() < 1e-9
-    ));
-    // Five observations are below the risk-sample minimum, so the risk facts
-    // are not applicable rather than unavailable.
-    assert!(matches!(since.beta, ComparisonFact::NotApplicable { .. }));
+        .any(|reference| reference.reference_id == ALPHA));
 }
 
 /// The comparison reads the exposures in one bounded range and prepares each
@@ -670,6 +596,37 @@ async fn comparison_uses_bounded_reads_and_one_request_per_reference() {
     assert_eq!(beta_request.2, NaiveDate::from_ymd_opt(2025, 1, 8).unwrap());
 }
 
+/// The comparison never rebuilds NAV: the persisted history is untouched and
+/// NAV readiness still reports zero execution reads afterwards.
+#[tokio::test]
+async fn the_comparison_performs_no_second_nav_rebuild() {
+    let (db, sources) = exposure_fixture().await;
+    let market_data = market_data_at(&sources, fixed_today());
+    let before = portfolio_history::Entity::find()
+        .all(&db)
+        .await
+        .expect("NAV history should be readable")
+        .len();
+
+    compute_exposure_matched_comparison(&db, &market_data, &ready_snapshots())
+        .await
+        .expect("the exposure comparison should be computable");
+
+    let after = portfolio_history::Entity::find()
+        .all(&db)
+        .await
+        .expect("NAV history should be readable")
+        .len();
+    assert_eq!(after, before, "the comparison must not write NAV history");
+    let readiness = rstock::services::nav::ensure_portfolio_history(&db, &market_data)
+        .await
+        .expect("NAV readiness should succeed on the untouched history");
+    assert_eq!(
+        readiness.execution_database_reads, 0,
+        "the untouched history needs no rebuild"
+    );
+}
+
 /// A benchmark failure leaves the inventory, the NAV readiness, and the
 /// portfolio-only outcomes intact.
 #[tokio::test]
@@ -696,6 +653,138 @@ async fn benchmark_failure_leaves_the_portfolio_view_intact() {
         rstock::models::PortfolioPerformance::Available(_)
     ));
     assert!(!view.nav_history.is_empty());
+    // The reference provenance and its limitations stay visible.
+    let alpha = view
+        .exposure_benchmark
+        .references
+        .iter()
+        .find(|reference| reference.reference_id == ALPHA)
+        .expect("the selected reference must stay visible");
+    assert_eq!(alpha.display_name, "Verified Alpha Reference");
+    assert!(!alpha.limitations.is_empty());
+    assert!(!view.exposure_benchmark.reference_limitations.is_empty());
+}
+
+/// A missing FX rate for a non-EUR reference keeps the inventory, the ready
+/// NAV, and the portfolio-only outcomes intact.
+#[tokio::test]
+async fn a_missing_fx_rate_keeps_the_portfolio_only_outcomes() {
+    let db = setup_test_db().await;
+    let alpha = insert_asset(&db, "XFAKE1", "Alpha Stock", "stock", "EUR").await;
+    let beta_asset = insert_asset(&db, "XFAKE2", "Beta Stock", "stock", "EUR").await;
+    let gamma = insert_asset(&db, "XFAKE3", "Gamma Stock", "stock", "EUR").await;
+    insert_reference(&db, ALPHA, "Verified Alpha Reference", "ALPHA", "USD").await;
+    assign_reference(&db, "tracked", "XFAKE1", ALPHA).await;
+    assign_reference(&db, "tracked", "XFAKE2", ALPHA).await;
+    assign_reference(&db, "tracked", "XFAKE3", ALPHA).await;
+    insert_nav_history(&db, alpha, beta_asset, gamma).await;
+
+    let mut sources = reference_sources();
+    sources.series_qualifications.insert(
+        ("test_source".to_owned(), "ALPHA".to_owned()),
+        qualification("USD"),
+    );
+    let market_data = market_data_at(&sources, fixed_today());
+
+    let view = get_portfolio_view(&db, &market_data, NavHistoryRequest::All)
+        .await
+        .expect("a missing FX rate must not fail the Portfolio view");
+    assert!(matches!(
+        view.exposure_benchmark.availability,
+        ComparisonAvailability::Unavailable { .. }
+    ));
+    assert!(matches!(
+        view.performance,
+        rstock::models::PortfolioPerformance::Available(_)
+    ));
+    assert!(!view.nav_history.is_empty());
+    // The FX absence is classified with its requested end date.
+    assert!(view
+        .exposure_benchmark
+        .reference_limitations
+        .iter()
+        .any(|limitation| matches!(
+            limitation.subject,
+            rstock::models::MarketDataSubject::FxRate { .. }
+        )));
+}
+
+/// A failed database read is a hard error, not an unavailable comparison.
+#[tokio::test]
+async fn a_failed_database_read_is_a_hard_error() {
+    let (db, sources) = exposure_fixture().await;
+    let market_data = market_data_at(&sources, fixed_today());
+    db.execute_unprepared("DROP TABLE portfolio_asset_history")
+        .await
+        .expect("the exposure table should be droppable");
+
+    let error = get_portfolio_view(&db, &market_data, NavHistoryRequest::All)
+        .await
+        .expect_err("a failed database read must fail the Portfolio view");
+    assert!(
+        error.to_string().contains("portfolio_asset_history")
+            || error.to_string().contains("no such table"),
+        "the database failure must be visible: {error}"
+    );
+}
+
+/// A malformed persisted reference price is a hard error, not an unavailable
+/// comparison.
+#[tokio::test]
+async fn a_malformed_persisted_reference_price_is_a_hard_error() {
+    let (db, sources) = exposure_fixture().await;
+    let market_data = market_data_at(&sources, fixed_today());
+    benchmark_reference_price::ActiveModel {
+        reference_id: Set(ALPHA.to_owned()),
+        date: Set("2025-01-05".to_owned()),
+        closing_price: Set(0.0),
+        is_api_failure: Set(false),
+        is_source_observation: Set(false),
+        ..Default::default()
+    }
+    .insert(&db)
+    .await
+    .expect("the malformed price should persist");
+
+    let error = get_portfolio_view(&db, &market_data, NavHistoryRequest::All)
+        .await
+        .expect_err("a malformed persisted price must fail the Portfolio view");
+    assert!(
+        error
+            .to_string()
+            .contains("invalid persisted benchmark reference price"),
+        "the malformed observation must be visible: {error}"
+    );
+}
+
+/// A mismatched exposure total is a hard error, not an unavailable
+/// comparison.
+#[tokio::test]
+async fn a_mismatched_exposure_total_is_a_hard_error() {
+    let (db, sources) = exposure_fixture().await;
+    let market_data = market_data_at(&sources, fixed_today());
+    let row = portfolio_asset_history::Entity::find()
+        .filter(portfolio_asset_history::Column::Date.eq("2025-01-07"))
+        .one(&db)
+        .await
+        .expect("the exposure row should be readable")
+        .expect("the exposure row should exist");
+    let mut active: portfolio_asset_history::ActiveModel = row.into();
+    active.market_value = Set(600.0);
+    active
+        .update(&db)
+        .await
+        .expect("the exposure row should update");
+
+    let error = get_portfolio_view(&db, &market_data, NavHistoryRequest::All)
+        .await
+        .expect_err("a mismatched exposure total must fail the Portfolio view");
+    assert!(
+        error
+            .to_string()
+            .contains("do not match the persisted asset value"),
+        "the invariant violation must be visible: {error}"
+    );
 }
 
 /// An empty portfolio keeps its domain outcomes and carries no comparison.
@@ -742,12 +831,6 @@ async fn monetary_only_portfolio_retains_its_domain_outcomes() {
         view.exposure_benchmark.availability,
         ComparisonAvailability::NotApplicable { .. }
     ));
-    assert_eq!(
-        view.exposure_benchmark.availability,
-        ComparisonAvailability::NotApplicable {
-            reason: "portfolio has no invested Complete NAV snapshot to anchor an exposure-matched comparison".to_owned()
-        }
-    );
     assert!(view.inventory.monetary_holdings.positions.len() == 1);
     assert!(view.inventory.performance_holdings.positions.is_empty());
 }
@@ -761,9 +844,7 @@ async fn human_and_json_adapters_report_the_same_exposure_facts() {
         .await
         .expect("the Portfolio view should compose");
 
-    let mut json_output = Vec::new();
-    adapters::write_portfolio_json(&mut json_output, &view).expect("JSON should be written");
-    let json = common::parse_json_envelope(&json_output);
+    let json = view_json(&view);
     let comparison = &json["data"]["exposure_benchmark"];
     assert_eq!(comparison["availability"]["status"], "available");
     assert_eq!(comparison["start_date"], "2025-01-06");
@@ -776,6 +857,10 @@ async fn human_and_json_adapters_report_the_same_exposure_facts() {
     assert_eq!(comparison["reference_wealth"][0]["wealth"], 100.0);
     assert_eq!(comparison["references"][0]["reference_id"], ALPHA);
     assert_eq!(
+        comparison["references"][0]["assigned_at"],
+        "2025-01-11T00:00:00Z"
+    );
+    assert_eq!(
         comparison["standard_periods"][4]["period"],
         "since_comparison_start"
     );
@@ -784,16 +869,89 @@ async fn human_and_json_adapters_report_the_same_exposure_facts() {
         "2025-01-06"
     );
 
-    let mut human_output = Vec::new();
-    adapters::write_portfolio_human(&mut human_output, &view, NavHistoryRequest::All)
-        .expect("human output should be written");
-    let human = String::from_utf8(human_output).expect("human output should be UTF-8");
+    let human = view_human(&view);
     assert!(human.contains("Exposure-matched benchmark:"));
     assert!(human.contains("Primary exposure comparison: available"));
     assert!(human.contains("06-01-2025"));
     assert!(human.contains("Verified Alpha Reference"));
     assert!(human.contains("Since Comparison Start"));
     assert!(human.contains("selected retrospectively"));
+    // The assignment moment is shown in the display date format while the
+    // JSON keeps its machine value.
+    assert!(human.contains("assigned 11-01-2025"));
+    assert!(!human.contains("2025-01-11T00:00:00Z"));
+}
+
+/// The human and JSON Adapters report the same facts for an unavailable
+/// comparison, including the reference provenance and its limitations.
+#[tokio::test]
+async fn human_and_json_adapters_report_the_same_unavailable_facts() {
+    let (db, mut sources) = exposure_fixture().await;
+    sources.failing_price_sources.insert("ALPHA".to_owned());
+    let market_data = market_data_at(&sources, fixed_today());
+    let view = get_portfolio_view(&db, &market_data, NavHistoryRequest::All)
+        .await
+        .expect("a benchmark failure must not fail the Portfolio view");
+
+    let json = view_json(&view);
+    let comparison = &json["data"]["exposure_benchmark"];
+    assert_eq!(comparison["availability"]["status"], "unavailable");
+    assert!(comparison["availability"]["reason"]
+        .as_str()
+        .unwrap()
+        .contains("coverage is incomplete"));
+    assert_eq!(comparison["references"][0]["reference_id"], ALPHA);
+    assert_eq!(
+        comparison["references"][0]["verification_state"],
+        "verified"
+    );
+    assert!(!comparison["reference_limitations"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert!(!comparison["references"][0]["limitations"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+
+    let human = view_human(&view);
+    assert!(human.contains("Primary exposure comparison: unavailable"));
+    assert!(human.contains("Verified Alpha Reference"));
+    assert!(human.contains("reference limitation:"));
+}
+
+/// The standard rows report the comparison's own dates and never depend on a
+/// graph period.
+#[tokio::test]
+async fn standard_rows_report_the_comparison_anchors() {
+    let (db, sources) = exposure_fixture().await;
+    let comparison = compute_fixture_comparison(&db, &sources).await;
+
+    assert_eq!(comparison.standard_periods.len(), 5);
+    let since = comparison
+        .standard_periods
+        .iter()
+        .find(|period| {
+            period.period == rstock::models::BenchmarkComparisonPeriod::SinceComparisonStart
+        })
+        .expect("the since-comparison-start row must be present");
+    assert_eq!(since.start_date.as_deref(), Some("2025-01-06"));
+    assert_eq!(since.end_date.as_deref(), Some("2025-01-10"));
+    assert!(matches!(
+        since.subject_return_pct,
+        ComparisonFact::Available { value } if (value - 30.434_782_608_695_66).abs() < 1e-9
+    ));
+    assert!(matches!(
+        since.reference_return_pct,
+        ComparisonFact::Available { value } if (value - 20.345_333_333_333_332).abs() < 1e-9
+    ));
+    assert!(matches!(
+        since.excess_return_percentage_points,
+        ComparisonFact::Available { value } if (value - 10.089_449_275_362_329).abs() < 1e-9
+    ));
+    // Five observations are below the risk-sample minimum, so the risk facts
+    // are not applicable rather than unavailable.
+    assert!(matches!(since.beta, ComparisonFact::NotApplicable { .. }));
 }
 
 /// The fund comparison keeps its accepted `fund_return_pct` row key while the
@@ -863,9 +1021,7 @@ async fn fund_and_portfolio_rows_keep_their_own_keys_with_matching_facts() {
     let view = get_portfolio_view(&db, &market_data, NavHistoryRequest::All)
         .await
         .expect("the Portfolio view should compose");
-    let mut output = Vec::new();
-    adapters::write_portfolio_json(&mut output, &view).expect("JSON should be written");
-    let portfolio_json = common::parse_json_envelope(&output);
+    let portfolio_json = view_json(&view);
     let portfolio_row = &portfolio_json["data"]["exposure_benchmark"]["standard_periods"][4];
     assert_eq!(portfolio_row["subject_return_pct"]["status"], "available");
     assert!(
@@ -879,31 +1035,26 @@ async fn fund_and_portfolio_rows_keep_their_own_keys_with_matching_facts() {
 }
 
 /// Both dashboard aliases report the same exposure comparison through the
-/// library-owned dispatch.
+/// production command dispatch.
 #[tokio::test]
 async fn both_dashboard_aliases_report_the_same_exposure_comparison() {
     let (db, sources) = exposure_fixture().await;
     let market_data = market_data_at(&sources, fixed_today());
 
-    for alias in [
-        rstock::cli::DashboardCommand::Get {
+    let aliases: [fn() -> rstock::cli::Commands; 2] = [
+        || rstock::cli::Commands::Get {
             period: rstock::cli::ChartPeriod::All,
         },
-        rstock::cli::DashboardCommand::PortfolioGet {
-            period: rstock::cli::ChartPeriod::All,
+        || {
+            rstock::cli::Commands::Portfolio(rstock::cli::PortfolioArgs {
+                command: rstock::cli::PortfolioCommands::Get {
+                    period: rstock::cli::ChartPeriod::All,
+                },
+            })
         },
-    ] {
-        let mut json_output = Vec::new();
-        rstock::cli::run_dashboard_command_with_writer(
-            &db,
-            &market_data,
-            alias,
-            rstock::cli::output::OutputFormat::Json,
-            &mut json_output,
-        )
-        .await
-        .expect("the dashboard alias should dispatch");
-        let json = common::parse_json_envelope(&json_output);
+    ];
+    for alias in aliases {
+        let (json, human) = dispatch_dashboard(&db, &market_data, alias).await;
         assert_eq!(json["command"], "portfolio.get");
         assert_eq!(
             json["data"]["exposure_benchmark"]["availability"]["status"],
@@ -918,19 +1069,94 @@ async fn both_dashboard_aliases_report_the_same_exposure_comparison() {
             json["data"]["exposure_benchmark"]["references"][0]["reference_id"],
             ALPHA
         );
-
-        let mut human_output = Vec::new();
-        rstock::cli::run_dashboard_command_with_writer(
-            &db,
-            &market_data,
-            alias,
-            rstock::cli::output::OutputFormat::Human,
-            &mut human_output,
-        )
-        .await
-        .expect("the dashboard alias should dispatch");
-        let human = String::from_utf8(human_output).expect("human output should be UTF-8");
         assert!(human.contains("Primary exposure comparison: available"));
         assert!(human.contains("Exposure-matched benchmark:"));
     }
+}
+
+/// Dispatches one dashboard alias through the production command dispatch and
+/// captures both output formats.
+async fn dispatch_dashboard(
+    db: &DatabaseConnection,
+    market_data: &rstock::services::market_data::MarketData,
+    make_command: fn() -> rstock::cli::Commands,
+) -> (serde_json::Value, String) {
+    let mut json_output = Vec::new();
+    rstock::cli::run_command_with_writer(
+        db,
+        market_data,
+        make_command(),
+        rstock::cli::output::OutputFormat::Json,
+        &mut json_output,
+    )
+    .await
+    .expect("the dashboard alias should dispatch");
+    let json = common::parse_json_envelope(&json_output);
+
+    let mut human_output = Vec::new();
+    rstock::cli::run_command_with_writer(
+        db,
+        market_data,
+        make_command(),
+        rstock::cli::output::OutputFormat::Human,
+        &mut human_output,
+    )
+    .await
+    .expect("the dashboard alias should dispatch");
+    let human = String::from_utf8(human_output).expect("human output should be UTF-8");
+    (json, human)
+}
+
+/// A fund analysis fixture whose assigned primary reference is the same
+/// verified reference the exposure fixture uses.
+async fn fund_fixture() -> (DatabaseConnection, MockMarketDataSources) {
+    let db = setup_test_db().await;
+    common::insert_fund_asset(&db, "XISINFAKE1", "Fund", "EUR", "XCLASS").await;
+    insert_reference(&db, ALPHA, "Verified Alpha Reference", "ALPHA", "EUR").await;
+    assign_reference(&db, "tracked", "XISINFAKE1", ALPHA).await;
+
+    let mut sources = MockMarketDataSources::new();
+    sources.historical_prices.insert(
+        "XCLASS".to_owned(),
+        vec![
+            ("2025-01-06".to_owned(), 100.0),
+            ("2025-01-07".to_owned(), 112.0),
+        ],
+    );
+    sources.historical_prices.insert(
+        "ALPHA".to_owned(),
+        vec![
+            ("2025-01-03".to_owned(), 100.0),
+            ("2025-01-06".to_owned(), 100.0),
+            ("2025-01-07".to_owned(), 110.0),
+            ("2025-01-08".to_owned(), 110.0),
+            ("2025-01-09".to_owned(), 121.0),
+            ("2025-01-10".to_owned(), 121.0),
+        ],
+    );
+    sources.series_qualifications.insert(
+        ("morningstar".to_owned(), "XCLASS".to_owned()),
+        qualification("EUR"),
+    );
+    sources.series_qualifications.insert(
+        ("test_source".to_owned(), "ALPHA".to_owned()),
+        qualification("EUR"),
+    );
+    sources.fund_data.insert(
+        "XCLASS".to_owned(),
+        rstock::models::FundData {
+            fund_currency: Some("EUR".to_owned()),
+            total_holdings: None,
+            portfolio_date: None,
+            holdings: vec![],
+        },
+    );
+    sources.fund_quote_metadata.insert(
+        "XCLASS".to_owned(),
+        rstock::models::FundQuoteMetadata {
+            quote_currency: Some("EUR".to_owned()),
+            ..Default::default()
+        },
+    );
+    (db, sources)
 }

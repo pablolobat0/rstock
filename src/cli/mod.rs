@@ -4,10 +4,7 @@ mod dispatch;
 pub mod display;
 pub mod output;
 
-pub use dispatch::{
-    run_benchmark_command_with_writer, run_command, run_dashboard_command_with_writer,
-    DashboardCommand,
-};
+pub use dispatch::{run_benchmark_command_with_writer, run_command, run_command_with_writer};
 
 use chrono::NaiveDate;
 use clap::{Args, Parser, Subcommand, ValueEnum};

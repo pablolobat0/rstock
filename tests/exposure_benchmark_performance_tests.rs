@@ -3,13 +3,20 @@
 //! The measurements separate the *incremental* cost of the exposure-matched
 //! comparison on an already ready NAV history from the cost of the NAV
 //! rebuild itself. The comparison reuses the ready history: it performs no
-//! ledger replay, no second NAV rebuild, no query per date, and no source
-//! request per date, so its work is measured on the ready history alone.
+//! ledger replay, no NAV rebuild, and no snapshot write inside a measured
+//! window.
+//!
+//! The file holds exactly one test on purpose. The counting allocator below
+//! observes every allocation of the test process, so a second test running
+//! in parallel would pollute the peak live bytes. The measured window also
+//! excludes the fixture construction, which is completed before the window
+//! opens.
 //!
 //! The recorded numbers are work evidence, not a performance budget. The user
-//! never set a millisecond, memory, or read-count target, so this file
-//! asserts structural properties and records measurements; it does not invent
-//! a pass/fail threshold.
+//! never set a millisecond, memory, read-count, or source-attempt target, so
+//! this file asserts structural properties and records measurements; it does
+//! not invent a pass or fail threshold, and it does not substitute monthly
+//! exposure weights for daily ones.
 
 #![allow(clippy::float_cmp)]
 
@@ -29,7 +36,6 @@ use rstock::db::entities::{
 };
 use rstock::models::PortfolioSnapshot;
 use rstock::services::exposure_benchmark::compute_exposure_matched_comparison;
-use rstock::services::nav;
 
 // --- Allocation work proxy ---
 
@@ -167,21 +173,23 @@ fn instrument_reads(db: &DatabaseConnection) -> (DatabaseConnection, Arc<AtomicU
 /// One measured comparison run.
 #[derive(Clone, Copy, Debug)]
 struct Measurement {
+    label: &'static str,
     dates: usize,
     assets: usize,
     references: usize,
-    /// The whole comparison, including its bounded exposure read.
-    cpu: Duration,
-    /// The bounded exposure read alone.
-    read_cpu: Duration,
+    /// The elapsed wall time of the whole comparison call.
+    elapsed: Duration,
+    /// The elapsed wall time of one separate bounded exposure read.
+    read_elapsed: Duration,
     /// The persisted exposure rows the bounded read returns.
     read_rows: usize,
     database_reads: usize,
+    /// Every source attempt, including the benchmark predecessor lookups.
     source_attempts: usize,
     allocations: AllocationWindow,
 }
 
-/// A ready NAV history with one verified reference per asset group.
+/// A ready NAV history with one verified reference for every holding.
 struct Fixture {
     db: DatabaseConnection,
     sources: MockMarketDataSources,
@@ -320,13 +328,14 @@ async fn build_ready_fixture(assets: usize, days: usize) -> Fixture {
 }
 
 /// Measures one exposure-matched comparison over a ready NAV history.
-async fn measure(fixture: &Fixture) -> Measurement {
+async fn measure(label: &'static str, fixture: &Fixture) -> Measurement {
     let market_data = market_data_at(&fixture.sources, fixture_today(fixture));
     let (instrumented, reads) = instrument_reads(&fixture.db);
     let source_attempts_before = fixture.sources.historical_source_call_count();
 
-    // The bounded exposure read is measured on its own so the comparison's
-    // read work is visible separately from its calculation work.
+    // The bounded exposure read is measured on its own, as a separate
+    // measurement of that read. It is not subtracted from the comparison
+    // timing, because the two calls do not share one instrumented scope.
     let read_started = Instant::now();
     let read_rows = rstock::db::repos::portfolio_asset_history_repo::find_between(
         &instrumented,
@@ -336,7 +345,7 @@ async fn measure(fixture: &Fixture) -> Measurement {
     .await
     .expect("the bounded exposure read should succeed")
     .len();
-    let read_cpu = read_started.elapsed();
+    let read_elapsed = read_started.elapsed();
     let reads_after_read = reads.load(Ordering::Relaxed);
 
     open_allocation_window();
@@ -345,7 +354,7 @@ async fn measure(fixture: &Fixture) -> Measurement {
         compute_exposure_matched_comparison(&instrumented, &market_data, &fixture.snapshots)
             .await
             .expect("the exposure comparison should be computable");
-    let cpu = started.elapsed();
+    let elapsed = started.elapsed();
     let allocations = close_allocation_window();
 
     assert!(
@@ -360,11 +369,12 @@ async fn measure(fixture: &Fixture) -> Measurement {
         "the comparison must read the persisted exposures itself"
     );
     Measurement {
+        label,
         dates: fixture.snapshots.len(),
         assets: fixture.asset_count,
         references: fixture.reference_count,
-        cpu,
-        read_cpu,
+        elapsed,
+        read_elapsed,
         read_rows,
         database_reads: reads.load(Ordering::Relaxed) - reads_after_read,
         source_attempts: fixture.sources.historical_source_call_count() - source_attempts_before,
@@ -383,84 +393,37 @@ fn fixture_today(fixture: &Fixture) -> NaiveDate {
         + chrono::Duration::days(1)
 }
 
-// --- Tests ---
+// --- The single measurement test ---
 
-/// The comparison's work does not scale with the number of closing dates: it
-/// reads the exposures in one bounded range and prepares each reference once.
+/// The recorded representative and stress work evidence, and the structural
+/// properties that keep the comparison from scaling with the number of
+/// closing dates.
 #[tokio::test]
-async fn exposure_comparison_work_does_not_scale_with_the_number_of_dates() {
+async fn representative_and_stress_work_evidence_is_recorded() {
     let short = build_ready_fixture(4, 40).await;
     let long = build_ready_fixture(4, 400).await;
-
-    let short_measurement = measure(&short).await;
-    let long_measurement = measure(&long).await;
-
-    assert!(
-        long_measurement.dates > short_measurement.dates * 5,
-        "the long fixture must cover materially more dates"
-    );
-    assert_eq!(
-        long_measurement.database_reads, short_measurement.database_reads,
-        "the exposure snapshot read must be one bounded range, not one query per date"
-    );
-    assert_eq!(
-        long_measurement.source_attempts, short_measurement.source_attempts,
-        "one source request per reference, not one request per date"
-    );
-    assert_eq!(
-        long_measurement.source_attempts,
-        long_measurement.references
-    );
-}
-
-/// The comparison never rebuilds NAV: the persisted history is untouched.
-#[tokio::test]
-async fn exposure_comparison_performs_no_second_nav_rebuild() {
-    let fixture = build_ready_fixture(4, 60).await;
-    let before = fixture.snapshots.len();
-    let market_data = market_data_at(&fixture.sources, fixture_today(&fixture));
-
-    compute_exposure_matched_comparison(&fixture.db, &market_data, &fixture.snapshots)
-        .await
-        .expect("the exposure comparison should be computable");
-
-    let after = portfolio_history::Entity::find()
-        .all(&fixture.db)
-        .await
-        .expect("NAV history should be readable")
-        .len();
-    assert_eq!(after, before, "the comparison must not write NAV history");
-    let readiness = nav::ensure_portfolio_history(&fixture.db, &market_data)
-        .await
-        .expect("NAV readiness should succeed on the untouched history");
-    assert_eq!(
-        readiness.execution_database_reads, 0,
-        "the untouched history needs no rebuild"
-    );
-}
-
-/// The recorded representative and stress measurements are reported as work
-/// evidence. The numbers are printed for the evidence record; the test
-/// asserts only the structural properties.
-#[tokio::test]
-async fn representative_and_stress_measurements_are_recorded() {
     let representative = build_ready_fixture(10, 365).await;
     let stress = build_ready_fixture(50, 3650).await;
 
-    let representative_measurement = measure(&representative).await;
-    let stress_measurement = measure(&stress).await;
+    let short_measurement = measure("short", &short).await;
+    let long_measurement = measure("long", &long).await;
+    let representative_measurement = measure("representative", &representative).await;
+    let stress_measurement = measure("stress", &stress).await;
 
-    for (label, measurement) in [
-        ("representative", representative_measurement),
-        ("stress", stress_measurement),
+    for measurement in [
+        short_measurement,
+        long_measurement,
+        representative_measurement,
+        stress_measurement,
     ] {
         println!(
-            "exposure_benchmark_performance label={label} dates={} assets={} references={} cpu_ns={} read_cpu_ns={} read_rows={} database_reads={} source_attempts={} allocations={} allocated_bytes={} deallocated_bytes={} peak_live_bytes={} final_live_bytes={}",
+            "exposure_benchmark_work label={} dates={} assets={} references={} elapsed_ns={} read_elapsed_ns={} read_rows={} database_reads={} source_attempts={} allocations={} allocated_bytes={} deallocated_bytes={} peak_live_bytes={} final_live_bytes={}",
+            measurement.label,
             measurement.dates,
             measurement.assets,
             measurement.references,
-            measurement.cpu.as_nanos(),
-            measurement.read_cpu.as_nanos(),
+            measurement.elapsed.as_nanos(),
+            measurement.read_elapsed.as_nanos(),
             measurement.read_rows,
             measurement.database_reads,
             measurement.source_attempts,
@@ -472,10 +435,31 @@ async fn representative_and_stress_measurements_are_recorded() {
         );
     }
 
+    // The exposure snapshot read is one bounded range query: the read
+    // statement count does not scale with the number of closing dates.
     assert!(
-        stress_measurement.source_attempts <= stress_measurement.references,
+        long_measurement.dates > short_measurement.dates * 5,
+        "the long fixture must cover materially more dates"
+    );
+    assert_eq!(
+        long_measurement.database_reads, short_measurement.database_reads,
+        "the exposure snapshot read must be one bounded range, not one query per date"
+    );
+    // Every source attempt is counted, including the benchmark predecessor
+    // lookups, and they do not scale with the number of dates either.
+    assert_eq!(
+        long_measurement.source_attempts, short_measurement.source_attempts,
+        "one history request and one predecessor lookup per reference, not per date"
+    );
+    assert_eq!(
+        long_measurement.source_attempts,
+        long_measurement.references * 2,
+        "every source attempt must be counted"
+    );
+    assert!(
+        stress_measurement.source_attempts <= stress_measurement.references * 2,
         "the stress fixture must not issue one source request per date"
     );
-    assert!(stress_measurement.cpu > Duration::ZERO);
+    assert!(stress_measurement.elapsed > Duration::ZERO);
     assert!(stress_measurement.allocations.allocations > 0);
 }

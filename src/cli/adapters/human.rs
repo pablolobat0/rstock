@@ -509,12 +509,12 @@ fn write_exposure_references<W: Write>(
     for reference in &comparison.references {
         writeln!(
             writer,
-            "  Reference: {} [{}] — weight {}% ({}% at the anchor, max {}%); assets {}; currency {}; basis {}; adjustment {}; hedge {}; cadence {}; source {} {}; provenance {}; verification {}; assigned {}",
+            "  Reference: {} [{}] — weight {} ({} at the anchor, max {}); assets {}; currency {}; basis {}; adjustment {}; hedge {}; cadence {}; source {} {}; provenance {}; verification {}; assigned {}",
             reference.display_name,
             reference.reference_id,
-            format_eu(&format!("{:.2}", reference.last_weight_pct)),
-            format_eu(&format!("{:.2}", reference.first_weight_pct)),
-            format_eu(&format!("{:.2}", reference.max_weight_pct)),
+            format_weight(reference.last_weight_pct),
+            format_weight(reference.first_weight_pct),
+            format_weight(reference.max_weight_pct),
             if reference.assets.is_empty() {
                 "none".to_owned()
             } else {
@@ -529,10 +529,35 @@ fn write_exposure_references<W: Write>(
             reference.source_identifier,
             reference.source_provenance,
             reference.verification_state,
-            reference.assigned_at.as_deref().unwrap_or("unknown"),
+            reference
+                .assigned_at
+                .as_deref()
+                .map_or_else(|| "unknown".to_owned(), display_timestamp),
         )?;
+        for limitation in &reference.limitations {
+            writeln!(
+                writer,
+                "    reference limitation: {}",
+                format_market_data_limitation_warning(limitation)
+            )?;
+        }
     }
     Ok(())
+}
+
+/// One measured weight, or the semantic state when it could not be measured.
+fn format_weight(weight: Option<f64>) -> String {
+    weight.map_or_else(
+        || "unavailable".to_owned(),
+        |weight| format_eu(&format!("{weight:.2}%")),
+    )
+}
+
+/// The user-facing date of a stored timestamp. The machine value keeps its
+/// ISO form in the JSON output.
+fn display_timestamp(timestamp: &str) -> String {
+    let date = timestamp.split('T').next().unwrap_or(timestamp);
+    display_date(date)
 }
 
 /// The aligned subject/reference graph of the exposure-matched comparison.

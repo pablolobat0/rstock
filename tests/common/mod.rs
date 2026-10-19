@@ -498,6 +498,8 @@ pub struct MockMarketDataSources {
     pub historical_source_calls: Arc<AtomicUsize>,
     pub historical_price_requests: Arc<Mutex<Vec<(String, chrono::NaiveDate, chrono::NaiveDate)>>>,
     pub benchmark_price_source_requests: Arc<Mutex<Vec<(String, String)>>>,
+    /// The benchmark predecessor lookups, so every source attempt is counted.
+    pub benchmark_predecessor_requests: Arc<Mutex<Vec<(String, String)>>>,
     pub historical_fx_requests: Arc<Mutex<Vec<(String, chrono::NaiveDate, chrono::NaiveDate)>>>,
     pub exchange_rate_delay: std::time::Duration,
     pub historical_predecessor_requests: Arc<Mutex<Vec<(String, chrono::NaiveDate)>>>,
@@ -519,6 +521,7 @@ impl MockMarketDataSources {
             historical_source_calls: Arc::new(AtomicUsize::new(0)),
             historical_price_requests: Arc::new(Mutex::new(Vec::new())),
             benchmark_price_source_requests: Arc::new(Mutex::new(Vec::new())),
+            benchmark_predecessor_requests: Arc::new(Mutex::new(Vec::new())),
             historical_fx_requests: Arc::new(Mutex::new(Vec::new())),
             exchange_rate_delay: std::time::Duration::ZERO,
             historical_predecessor_requests: Arc::new(Mutex::new(Vec::new())),
@@ -536,6 +539,15 @@ impl MockMarketDataSources {
             .lock()
             .expect("historical price request mutex poisoned")
             .clone()
+    }
+
+    /// The number of source attempts, including the benchmark predecessor
+    /// lookups that the history counter alone would miss.
+    pub fn benchmark_predecessor_request_count(&self) -> usize {
+        self.benchmark_predecessor_requests
+            .lock()
+            .expect("benchmark predecessor request mutex poisoned")
+            .len()
     }
 
     pub fn historical_predecessor_request_dates(&self) -> Vec<(String, chrono::NaiveDate)> {
@@ -612,10 +624,15 @@ impl MarketDataSources for MockMarketDataSources {
 
     async fn latest_benchmark_price_before(
         &self,
-        _source: &str,
+        source: &str,
         identifier: &str,
         before: chrono::NaiveDate,
     ) -> anyhow::Result<Option<SourceObservation>> {
+        self.historical_source_calls.fetch_add(1, Ordering::Relaxed);
+        self.benchmark_predecessor_requests
+            .lock()
+            .expect("benchmark predecessor request mutex poisoned")
+            .push((source.to_owned(), identifier.to_owned()));
         Ok(self
             .historical_prices
             .get(identifier)
