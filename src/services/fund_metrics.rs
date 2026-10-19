@@ -11,12 +11,23 @@ use crate::services::market_data::{MarketData, SourceObservation};
 use crate::services::metrics;
 use sea_orm::DatabaseConnection;
 
-pub struct StandardFundMetrics {
+/// The fund-only standard performance rows of one fund.
+///
+/// These rows measure the fund alone. They never depend on a benchmark
+/// reference, so they stay available when the fund's own reference is absent
+/// or unusable, and they never carry a fact measured against a reference the
+/// fund was not assigned.
+pub struct FundOnlyMetrics {
     pub ytd: Option<FundPeriodMetrics>,
     pub one_year: Option<FundPeriodMetrics>,
     pub three_year: Option<FundPeriodMetrics>,
     pub five_year: Option<FundPeriodMetrics>,
     pub all_time: Option<FundPeriodMetrics>,
+}
+
+/// The standard fund rows measured against the legacy shared ACWI proxy.
+pub struct StandardFundMetrics {
+    pub rows: FundOnlyMetrics,
     pub benchmark_reference: BenchmarkReferenceInfo,
     pub benchmark_limitations: Vec<MarketDataLimitation>,
 }
@@ -48,32 +59,25 @@ pub async fn compute_standard_fund_metrics(
         }
     }
     let benchmark_prices = benchmark.benchmark_series;
-    let ytd_start = NaiveDate::from_ymd_opt(today.year(), 1, 1).expect("Jan 1 always valid");
+    let rows = fund_period_metrics(prices, Some(&base_prices), Some(&benchmark_prices), today);
 
     Ok(StandardFundMetrics {
-        ytd: compute_period_metrics(prices, &base_prices, &benchmark_prices, ytd_start, today),
-        one_year: compute_trailing_period_metrics(
-            prices,
-            &base_prices,
-            &benchmark_prices,
-            ONE_YEAR_TRADING_DAYS,
-        ),
-        three_year: compute_trailing_period_metrics(
-            prices,
-            &base_prices,
-            &benchmark_prices,
-            THREE_YEAR_TRADING_DAYS,
-        ),
-        five_year: compute_trailing_period_metrics(
-            prices,
-            &base_prices,
-            &benchmark_prices,
-            FIVE_YEAR_TRADING_DAYS,
-        ),
-        all_time: compute_all_time_metrics(prices, &base_prices, &benchmark_prices, today),
+        rows,
         benchmark_reference: benchmark.benchmark_reference,
         benchmark_limitations,
     })
+}
+
+/// Computes the fund-only standard performance rows of one fund.
+///
+/// The rows need no reference series, so the fund's own reference is neither
+/// required nor consulted. A reference-relative fact is measured by the
+/// Benchmark Module against the fund's own selected reference instead.
+pub async fn compute_fund_only_metrics(
+    prices: &[(String, f64)],
+    today: NaiveDate,
+) -> FundOnlyMetrics {
+    fund_period_metrics(prices, None, None, today)
 }
 
 pub fn format_source_observations(observations: Vec<SourceObservation>) -> Vec<(String, f64)> {
@@ -83,10 +87,47 @@ pub fn format_source_observations(observations: Vec<SourceObservation>) -> Vec<(
         .collect()
 }
 
+/// The five standard performance rows of one fund.
+///
+/// The base-currency and reference series are present only when a reference
+/// is measured; without them the rows keep every fund-only fact and leave the
+/// reference-relative beta unavailable.
+fn fund_period_metrics(
+    prices: &[(String, f64)],
+    base_prices: Option<&[(String, f64)]>,
+    benchmark_prices: Option<&[(String, f64)]>,
+    today: NaiveDate,
+) -> FundOnlyMetrics {
+    let ytd_start = NaiveDate::from_ymd_opt(today.year(), 1, 1).expect("Jan 1 always valid");
+
+    FundOnlyMetrics {
+        ytd: compute_period_metrics(prices, base_prices, benchmark_prices, ytd_start, today),
+        one_year: compute_trailing_period_metrics(
+            prices,
+            base_prices,
+            benchmark_prices,
+            ONE_YEAR_TRADING_DAYS,
+        ),
+        three_year: compute_trailing_period_metrics(
+            prices,
+            base_prices,
+            benchmark_prices,
+            THREE_YEAR_TRADING_DAYS,
+        ),
+        five_year: compute_trailing_period_metrics(
+            prices,
+            base_prices,
+            benchmark_prices,
+            FIVE_YEAR_TRADING_DAYS,
+        ),
+        all_time: compute_all_time_metrics(prices, base_prices, benchmark_prices, today),
+    }
+}
+
 fn compute_all_time_metrics(
     prices: &[(String, f64)],
-    base_prices: &[(String, f64)],
-    benchmark_prices: &[(String, f64)],
+    base_prices: Option<&[(String, f64)]>,
+    benchmark_prices: Option<&[(String, f64)]>,
     today: NaiveDate,
 ) -> Option<FundPeriodMetrics> {
     let start = NaiveDate::parse_from_str(&prices.first()?.0, DATE_FORMAT).ok()?;
@@ -95,8 +136,8 @@ fn compute_all_time_metrics(
 
 fn compute_trailing_period_metrics(
     prices: &[(String, f64)],
-    base_prices: &[(String, f64)],
-    benchmark_prices: &[(String, f64)],
+    base_prices: Option<&[(String, f64)]>,
+    benchmark_prices: Option<&[(String, f64)]>,
     trading_days: usize,
 ) -> Option<FundPeriodMetrics> {
     if prices.len() < 2 {
@@ -112,8 +153,8 @@ fn compute_trailing_period_metrics(
 
 fn compute_period_metrics(
     prices: &[(String, f64)],
-    base_prices: &[(String, f64)],
-    benchmark_prices: &[(String, f64)],
+    base_prices: Option<&[(String, f64)]>,
+    benchmark_prices: Option<&[(String, f64)]>,
     start: NaiveDate,
     end: NaiveDate,
 ) -> Option<FundPeriodMetrics> {
@@ -138,7 +179,12 @@ fn compute_period_metrics(
     let fund_returns = metrics::compute_log_returns(&window_prices);
     let daily_returns = sorted_returns(&fund_returns);
     let nav_values: Vec<f64> = window.iter().map(|(_, p)| *p).collect();
-    let beta = compute_beta_over_observation_intervals(&window, base_prices, benchmark_prices);
+    let beta = match (base_prices, benchmark_prices) {
+        (Some(base_prices), Some(benchmark_prices)) => {
+            compute_beta_over_observation_intervals(&window, base_prices, benchmark_prices)
+        }
+        _ => None,
+    };
 
     Some(FundPeriodMetrics {
         total_return: (end_price / start_price - 1.0) * 100.0,

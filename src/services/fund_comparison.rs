@@ -8,13 +8,13 @@ use crate::constants::{format_date, DATE_FORMAT, MIN_DATA_POINTS};
 use crate::db::repos::asset_repo;
 use crate::models::{
     AlignedFundReturnPoint, AllocationComparison, AllocationEntry, CommonFundHolding,
-    FundComparisonCorrelation, FundComparisonPeriod, FundComparisonResult, FundComparisonSide,
-    FundHolding, FundInfoComparison, FundQuoteMetadata,
+    FundClassIdentity, FundComparisonCorrelation, FundComparisonPeriod, FundComparisonResult,
+    FundComparisonSide, FundHolding, FundInfoComparison, FundQuoteMetadata,
 };
 use crate::services::fund_analysis::{
     compute_breakdown, compute_top_n_weight, record_holdings_snapshot,
 };
-use crate::services::fund_metrics::{compute_standard_fund_metrics, format_source_observations};
+use crate::services::fund_metrics::{compute_fund_only_metrics, format_source_observations};
 use crate::services::market_data::MarketData;
 use crate::services::metrics;
 
@@ -24,7 +24,6 @@ struct FundComparisonData {
     side: FundComparisonSide,
     holdings: Vec<FundHolding>,
     prices: Vec<(String, f64)>,
-    benchmark_reference: crate::models::BenchmarkReferenceInfo,
 }
 
 pub async fn compare_funds(
@@ -47,7 +46,6 @@ pub async fn compare_funds(
     let equity_a = equity_holdings(&fund_a.holdings);
     let equity_b = equity_holdings(&fund_b.holdings);
 
-    let benchmark_reference = fund_a.benchmark_reference.clone();
     Ok(FundComparisonResult {
         sector_allocations: compare_allocations(
             &compute_breakdown(&equity_a, |h| h.sector.clone()),
@@ -65,7 +63,6 @@ pub async fn compare_funds(
         correlation: compute_correlation(&fund_a.prices, &fund_b.prices, period, today),
         fund_a: fund_a.side,
         fund_b: fund_b.side,
-        benchmark_reference,
         risk_free_assumption: crate::models::RiskFreeAssumption::current(),
     })
 }
@@ -100,8 +97,11 @@ async fn build_comparison_side(
         .as_ref()
         .and_then(|metadata| metadata.quote_currency.clone())
         .or_else(|| fund_data.fund_currency.clone());
-    let metrics =
-        compute_standard_fund_metrics(db, market_data, &prices, currency.as_deref(), today).await?;
+    // The direct comparison measures each fund alone. Its rows never depend on
+    // a reference, so they stay available when a fund's own reference is
+    // absent or unusable, and they never carry a fact measured against a
+    // reference the fund was not assigned.
+    let metrics = compute_fund_only_metrics(&prices, today).await;
     let primary_benchmark_comparison = crate::services::benchmark::compare_fund_to_primary(
         db,
         market_data,
@@ -131,6 +131,7 @@ async fn build_comparison_side(
     let side = FundComparisonSide {
         code: code.to_owned(),
         name,
+        class_identity: class_identity(code, local_asset.as_ref()),
         info: FundInfoComparison {
             currency,
             aum: quote_metadata.as_ref().and_then(|metadata| metadata.aum),
@@ -149,7 +150,6 @@ async fn build_comparison_side(
         three_year: metrics.three_year,
         five_year: metrics.five_year,
         all_time: metrics.all_time,
-        benchmark_limitations: metrics.benchmark_limitations,
         primary_benchmark_comparison,
     };
 
@@ -157,8 +157,21 @@ async fn build_comparison_side(
         side,
         holdings: fund_data.holdings,
         prices,
-        benchmark_reference: metrics.benchmark_reference,
     })
+}
+
+/// The exact class identity of one compared fund.
+///
+/// The source code selects the exact class, and the tracked identity — the
+/// ISIN of a fund — states whether this portfolio tracks that exact class. A
+/// fund that is not tracked keeps that absence visible instead of borrowing
+/// another fund's identity.
+fn class_identity(code: &str, asset: Option<&crate::models::Asset>) -> FundClassIdentity {
+    FundClassIdentity {
+        source_code: code.to_owned(),
+        tracked_identity: asset.map(|asset| asset.ticker.clone()),
+        vehicle: asset.map(|asset| asset.asset_type.to_string()),
+    }
 }
 
 fn quote_metadata_or_warn(

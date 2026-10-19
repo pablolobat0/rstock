@@ -29,12 +29,12 @@ pub async fn run_command(
 }
 
 /// Dispatch one parsed CLI command against the application graph, writing the
-/// Portfolio dashboard output through the injected writer.
+/// Portfolio dashboard and fund-comparison output through the injected writer.
 ///
 /// This is the same dispatch path [`run_command`] uses, so a caller that
 /// captures the writer observes exactly the production behaviour of the
-/// `rstock get` and `rstock portfolio get` aliases. The remaining commands
-/// keep their existing successful-output behaviour.
+/// `rstock get`, `rstock portfolio get`, and `rstock compare funds` commands.
+/// The remaining commands keep their existing successful-output behaviour.
 pub async fn run_command_with_writer<W: Write>(
     db: &DatabaseConnection,
     market_data: &MarketData,
@@ -94,8 +94,16 @@ pub async fn run_command_with_writer<W: Write>(
                 code_b,
                 period,
             } => {
-                commands::compare::funds(db, market_data, code_a, code_b, period, output_format)
-                    .await
+                commands::compare::funds_with_writer(
+                    db,
+                    market_data,
+                    code_a,
+                    code_b,
+                    period,
+                    output_format,
+                    writer,
+                )
+                .await
             }
         },
         Commands::Benchmark(args) => {

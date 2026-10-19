@@ -12,5 +12,7 @@ pub use correlation::{
     write_correlation_reference_context,
 };
 pub use fund_analysis::{print_fund_analysis, write_fund_analysis_reference_context};
-pub use fund_comparison::{print_fund_comparison, write_fund_comparison_reference_context};
+pub use fund_comparison::{
+    print_fund_comparison, write_fund_comparison_identity, write_fund_comparison_reference_context,
+};
 pub use transaction::{format_transaction_detail, print_transaction_list, transaction_list_output};

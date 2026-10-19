@@ -1,7 +1,4 @@
-use super::{
-    portfolio::BenchmarkReferenceInfo, FundBenchmarkComparison, FundPeriodMetrics,
-    MarketDataLimitation, RiskFreeAssumption,
-};
+use super::{FundBenchmarkComparison, FundPeriodMetrics, RiskFreeAssumption};
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -13,7 +10,6 @@ pub struct FundComparisonResult {
     pub currency_allocations: Vec<AllocationComparison>,
     pub common_holdings: Vec<CommonFundHolding>,
     pub correlation: FundComparisonCorrelation,
-    pub benchmark_reference: BenchmarkReferenceInfo,
     pub risk_free_assumption: RiskFreeAssumption,
 }
 
@@ -27,14 +23,32 @@ pub struct FundComparisonPeriod {
 pub struct FundComparisonSide {
     pub code: String,
     pub name: String,
+    /// The exact class and vehicle identity of this side.
+    pub class_identity: FundClassIdentity,
     pub info: FundInfoComparison,
     pub ytd: Option<FundPeriodMetrics>,
     pub one_year: Option<FundPeriodMetrics>,
     pub three_year: Option<FundPeriodMetrics>,
     pub five_year: Option<FundPeriodMetrics>,
     pub all_time: Option<FundPeriodMetrics>,
-    pub benchmark_limitations: Vec<MarketDataLimitation>,
     pub primary_benchmark_comparison: FundBenchmarkComparison,
+}
+
+/// The exact class identity of one compared fund.
+///
+/// Two share classes of the same fund are different investments, so the
+/// comparison keeps each side's own identity: the source code that selects the
+/// exact class, and the tracked identity — the ISIN for a fund — when this
+/// portfolio tracks that exact class. A fund that is not tracked has no local
+/// identity, and that absence stays visible instead of being guessed.
+#[derive(Serialize)]
+pub struct FundClassIdentity {
+    /// The source code that selects this exact class.
+    pub source_code: String,
+    /// The tracked user-facing identity of the exact class, when it is tracked.
+    pub tracked_identity: Option<String>,
+    /// The tracked vehicle type of the exact class, when it is tracked.
+    pub vehicle: Option<String>,
 }
 
 #[derive(Serialize)]
