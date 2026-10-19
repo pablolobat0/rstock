@@ -17,6 +17,24 @@ pub async fn get(
     period: ChartPeriod,
     output_format: output::OutputFormat,
 ) -> anyhow::Result<()> {
+    let stdout = io::stdout();
+    let mut writer = stdout.lock();
+    get_with_writer(db, market_data, period, output_format, &mut writer).await
+}
+
+/// Renders the Portfolio dashboard through the injected writer.
+///
+/// One complete Portfolio view, including the requested ready NAV history and
+/// the exposure-matched comparison, is obtained before either output Adapter
+/// writes anything (ADR-0004). Both dashboard aliases route through this
+/// single library dispatch path.
+pub async fn get_with_writer<W: io::Write>(
+    db: &DatabaseConnection,
+    market_data: &MarketData,
+    period: ChartPeriod,
+    output_format: output::OutputFormat,
+    writer: &mut W,
+) -> anyhow::Result<()> {
     let nav_history_request = nav_history_request(period);
     // One complete Portfolio view, including the requested ready NAV history,
     // is obtained before either output Adapter writes anything (ADR-0004).
@@ -24,12 +42,10 @@ pub async fn get(
     let view =
         services::portfolio_view::get_portfolio_view(db, market_data, nav_history_request).await?;
 
-    let stdout = io::stdout();
-    let mut writer = stdout.lock();
     match output_format {
-        output::OutputFormat::Json => adapters::write_portfolio_json(&mut writer, &view),
+        output::OutputFormat::Json => adapters::write_portfolio_json(writer, &view),
         output::OutputFormat::Human => {
-            adapters::write_portfolio_human(&mut writer, &view, nav_history_request)
+            adapters::write_portfolio_human(writer, &view, nav_history_request)
         }
     }
 }

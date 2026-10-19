@@ -1,6 +1,8 @@
 mod asset;
+mod benchmark;
 mod classification;
 mod custom_blend;
+mod exposure_benchmark;
 mod fund_analysis;
 mod fund_comparison;
 mod market_data;
@@ -12,6 +14,10 @@ mod transaction;
 
 pub(crate) use asset::normalize_currency;
 pub use asset::{Asset, AssetInfo, AssetType};
+pub use benchmark::{
+    BenchmarkComparisonPeriod, BenchmarkPeriod, ComparisonAvailability, ComparisonFact,
+    DatedWealthPoint,
+};
 pub use classification::{
     enum_to_db, AssetClass, AssetClassification, BondCredit, BondDuration, EquityStyle, Management,
 };
@@ -19,11 +25,14 @@ pub use custom_blend::{
     BlendComponent, BlendComponentArgument, BlendTargetReset, BlendWealthPoint,
     CustomBlendDefinition, CustomBlendDeletion, CustomBlendPreview,
 };
+pub use exposure_benchmark::{
+    ExposureBenchmarkComparison, ExposureBenchmarkReference, OmittedSeedInterval,
+};
 pub use fund_analysis::{
-    BenchmarkComparisonPeriod, CandidateCorrelationPeriod, CandidateCorrelationResult,
-    CandidateCorrelationRow, ComparisonAvailability, ComparisonCoverageIssue, ComparisonFact,
-    DatedWealthPoint, FundAnalysisResult, FundBenchmarkComparison, FundBenchmarkPeriod, FundData,
-    FundPeriodMetrics, FundQuoteMetadata, HoldingChange, HoldingChangeType, RiskFreeAssumption,
+    CandidateCorrelationPeriod, CandidateCorrelationResult, CandidateCorrelationRow,
+    ComparisonCoverageIssue, FundAnalysisResult, FundBenchmarkComparison, FundBenchmarkPeriod,
+    FundData, FundPeriodMetrics, FundQuoteMetadata, HoldingChange, HoldingChangeType,
+    RiskFreeAssumption,
 };
 pub use fund_comparison::{
     AlignedFundReturnPoint, AllocationComparison, CommonFundHolding, FundComparisonCorrelation,

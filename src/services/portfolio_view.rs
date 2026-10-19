@@ -25,7 +25,7 @@ use crate::models::{
     PortfolioView,
 };
 use crate::services::market_data::MarketData;
-use crate::services::{ledger, metrics, nav, portfolio_inventory};
+use crate::services::{exposure_benchmark, ledger, metrics, nav, portfolio_inventory};
 
 /// Composes one complete, presentation-neutral [`PortfolioView`] for the
 /// requested NAV history period.
@@ -111,10 +111,22 @@ pub async fn get_portfolio_view(
     // is returned instead of after presentation began.
     let nav_history = requested_nav_history(&ready_snapshots, market_data, nav_history_request)?;
 
+    // The exposure-matched comparison reuses the ready NAV history and the
+    // persisted per-asset exposures. An expected missing benchmark input is
+    // an explicit unavailable comparison, so the inventory, the NAV
+    // readiness, and the portfolio-only outcomes stay intact. A database
+    // failure, a corrupt persisted observation, and a violated invariant stay
+    // errors: the view never hides a broken ledger or cache behind an
+    // unavailable comparison.
+    let exposure_benchmark =
+        exposure_benchmark::compute_exposure_matched_comparison(db, market_data, &ready_snapshots)
+            .await?;
+
     Ok(PortfolioView {
         inventory,
         performance,
         nav_history,
+        exposure_benchmark,
     })
 }
 

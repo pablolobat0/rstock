@@ -1,14 +1,10 @@
+use super::benchmark::{
+    BenchmarkComparisonPeriod, BenchmarkPeriod, ComparisonAvailability, ComparisonFact,
+    DatedWealthPoint,
+};
 use super::portfolio::{AllocationEntry, BenchmarkReferenceInfo, FundHolding};
 use super::MarketDataLimitation;
 use serde::Serialize;
-
-#[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case", tag = "status")]
-pub enum ComparisonAvailability {
-    Available,
-    Unavailable { reason: String },
-    NotApplicable { reason: String },
-}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ComparisonCoverageIssue {
@@ -42,12 +38,6 @@ impl std::fmt::Display for ComparisonCoverageIssue {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct DatedWealthPoint {
-    pub date: String,
-    pub wealth: f64,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct FundBenchmarkComparison {
     pub availability: ComparisonAvailability,
     pub role: String,
@@ -76,54 +66,11 @@ pub struct FundBenchmarkComparison {
     pub standard_periods: Vec<FundBenchmarkPeriod>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum BenchmarkComparisonPeriod {
-    Ytd,
-    OneYear,
-    ThreeYear,
-    FiveYear,
-    SinceComparisonStart,
-}
-
-impl BenchmarkComparisonPeriod {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Ytd => "YTD",
-            Self::OneYear => "1Y",
-            Self::ThreeYear => "3Y",
-            Self::FiveYear => "5Y",
-            Self::SinceComparisonStart => "Since Comparison Start",
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(tag = "status", rename_all = "snake_case")]
-pub enum ComparisonFact<T> {
-    Available { value: T },
-    Unavailable { reason: String },
-    NotApplicable { reason: String },
-}
-
-impl<T> ComparisonFact<T> {
-    pub fn available(value: T) -> Self {
-        Self::Available { value }
-    }
-
-    pub fn unavailable(reason: impl Into<String>) -> Self {
-        Self::Unavailable {
-            reason: reason.into(),
-        }
-    }
-
-    pub fn not_applicable(reason: impl Into<String>) -> Self {
-        Self::NotApplicable {
-            reason: reason.into(),
-        }
-    }
-}
-
+/// One standard comparison period of a fund comparison.
+///
+/// The fund's public row keeps its accepted `fund_return_pct` field. The
+/// shared comparison calculation produces the neutral [`BenchmarkPeriod`]
+/// row, and the two carry the same computed facts.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct FundBenchmarkPeriod {
     pub period: BenchmarkComparisonPeriod,
@@ -139,48 +86,6 @@ pub struct FundBenchmarkPeriod {
     pub tracking_error_annualized_pct: ComparisonFact<f64>,
     /// Annualized information ratio from arithmetic daily active returns.
     pub information_ratio: ComparisonFact<f64>,
-}
-
-impl FundBenchmarkComparison {
-    pub fn unavailable(reason: impl Into<String>) -> Self {
-        let reason = reason.into();
-        Self {
-            availability: ComparisonAvailability::Unavailable {
-                reason: reason.clone(),
-            },
-            role: "primary".to_owned(),
-            reference_id: None,
-            reference_name: None,
-            native_currency: None,
-            currency: "EUR".to_owned(),
-            cadence: None,
-            return_basis: None,
-            adjustment: None,
-            hedge_policy: None,
-            source: None,
-            source_identifier: None,
-            source_provenance: None,
-            fund_limitations: Vec::new(),
-            reference_limitations: Vec::new(),
-            start_date: None,
-            end_date: None,
-            fund_return_pct: None,
-            reference_return_pct: None,
-            excess_return_percentage_points: None,
-            fund_wealth: Vec::new(),
-            reference_wealth: Vec::new(),
-            standard_periods: [
-                BenchmarkComparisonPeriod::Ytd,
-                BenchmarkComparisonPeriod::OneYear,
-                BenchmarkComparisonPeriod::ThreeYear,
-                BenchmarkComparisonPeriod::FiveYear,
-                BenchmarkComparisonPeriod::SinceComparisonStart,
-            ]
-            .into_iter()
-            .map(|period| FundBenchmarkPeriod::unavailable(period, reason.clone()))
-            .collect(),
-        }
-    }
 }
 
 impl FundBenchmarkPeriod {
@@ -215,6 +120,82 @@ impl FundBenchmarkPeriod {
             correlation: ComparisonFact::unavailable(reason.clone()),
             tracking_error_annualized_pct: ComparisonFact::unavailable(reason.clone()),
             information_ratio: ComparisonFact::unavailable(reason),
+        }
+    }
+}
+
+/// The fund's output row is the shared computed row with the fund's accepted
+/// field name.
+impl From<BenchmarkPeriod> for FundBenchmarkPeriod {
+    fn from(period: BenchmarkPeriod) -> Self {
+        Self {
+            period: period.period,
+            requested_start_date: period.requested_start_date,
+            start_date: period.start_date,
+            end_date: period.end_date,
+            fund_return_pct: period.subject_return_pct,
+            reference_return_pct: period.reference_return_pct,
+            excess_return_percentage_points: period.excess_return_percentage_points,
+            beta: period.beta,
+            correlation: period.correlation,
+            tracking_error_annualized_pct: period.tracking_error_annualized_pct,
+            information_ratio: period.information_ratio,
+        }
+    }
+}
+
+/// The shared computed row of a fund comparison, for the shared presentation
+/// path.
+impl From<&FundBenchmarkPeriod> for BenchmarkPeriod {
+    fn from(period: &FundBenchmarkPeriod) -> Self {
+        Self {
+            period: period.period,
+            requested_start_date: period.requested_start_date.clone(),
+            start_date: period.start_date.clone(),
+            end_date: period.end_date.clone(),
+            subject_return_pct: period.fund_return_pct.clone(),
+            reference_return_pct: period.reference_return_pct.clone(),
+            excess_return_percentage_points: period.excess_return_percentage_points.clone(),
+            beta: period.beta.clone(),
+            correlation: period.correlation.clone(),
+            tracking_error_annualized_pct: period.tracking_error_annualized_pct.clone(),
+            information_ratio: period.information_ratio.clone(),
+        }
+    }
+}
+
+impl FundBenchmarkComparison {
+    pub fn unavailable(reason: impl Into<String>) -> Self {
+        let reason = reason.into();
+        Self {
+            availability: ComparisonAvailability::Unavailable {
+                reason: reason.clone(),
+            },
+            role: "primary".to_owned(),
+            reference_id: None,
+            reference_name: None,
+            native_currency: None,
+            currency: "EUR".to_owned(),
+            cadence: None,
+            return_basis: None,
+            adjustment: None,
+            hedge_policy: None,
+            source: None,
+            source_identifier: None,
+            source_provenance: None,
+            fund_limitations: Vec::new(),
+            reference_limitations: Vec::new(),
+            start_date: None,
+            end_date: None,
+            fund_return_pct: None,
+            reference_return_pct: None,
+            excess_return_percentage_points: None,
+            fund_wealth: Vec::new(),
+            reference_wealth: Vec::new(),
+            standard_periods: BenchmarkComparisonPeriod::standard_periods()
+                .into_iter()
+                .map(|period| FundBenchmarkPeriod::unavailable(period, reason.clone()))
+                .collect(),
         }
     }
 }
