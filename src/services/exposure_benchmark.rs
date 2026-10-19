@@ -2,10 +2,12 @@
 //!
 //! The comparison is the primary benchmark of the Portfolio dashboard. It
 //! combines the explicitly assigned primary reference of every held asset
-//! through the EUR exposures of the *preceding* Complete NAV snapshot, so
-//! the weights that measured a past interval are the exposures that were
-//! actually held at the previous close. Today's holdings are never projected
-//! backwards, and a same-day trade only changes the next interval's weights.
+//! through the EUR exposures of the *immediately preceding* Complete NAV
+//! close, so the weights that measured an interval are the exposures that
+//! were actually held at the last close before it. A trade or a dividend on a
+//! non-trading day is therefore part of the scope that measured the interval
+//! it happened in, today's holdings are never projected backwards, and a
+//! same-day trade only changes the next interval's weights.
 //!
 //! The complete NAV scope is the denominator of every weight. Monetary
 //! holdings are excluded, and the retained Net dividend income inside NAV is
@@ -66,20 +68,21 @@ const TRACKED_SUBJECT_TYPE: &str = "tracked";
 /// A corrupt persisted scope, a failed database read, and a violated
 /// invariant stay errors; only these two absences are outcome states.
 enum IntervalProblem {
-    /// The persisted history has no per-asset exposure scope for a date, so
-    /// the interval's weights are unknown.
-    MissingScope(String),
     /// An exposed asset has no explicit primary reference assignment.
     MissingAssignment(String),
 }
 
 /// One interval's exposure weights over the complete NAV scope.
 struct IntervalWeights {
-    /// The closing snapshot the interval starts at. Its exposures are the
-    /// prior-close weights of the interval.
+    /// The closing snapshot the interval starts at. It carries the reference
+    /// observation the interval's return is measured from.
     start_date: String,
-    /// The closing snapshot the interval ends at.
+    /// The closing snapshot the interval ends at. It carries the reference
+    /// observation the interval's return is measured to.
     end_date: String,
+    /// The immediately preceding Complete NAV close whose exposures are the
+    /// interval's prior-close weights.
+    weight_date: String,
     /// The aggregated weight of every contributing reference.
     weights: BTreeMap<String, f64>,
 }
@@ -170,9 +173,6 @@ pub async fn compute_exposure_matched_comparison(
     if let Some(problem) = problem {
         let limitations = collected_limitations(&provenance);
         let reason = match problem {
-            IntervalProblem::MissingScope(date) => format!(
-                "the persisted NAV history has no per-asset exposure scope on {date}; the interval weights are unknown"
-            ),
             IntervalProblem::MissingAssignment(missing) => format!(
                 "held asset {missing} has no explicit primary reference assignment; exposure weights are not renormalized"
             ),
@@ -243,10 +243,14 @@ fn observation_dates(anchor: &str, end: &str) -> anyhow::Result<Vec<String>> {
 
 /// The exposure weights of every interval of the comparison.
 ///
-/// Each interval starts at the previous observed close, and that close's
-/// per-asset EUR exposures over the complete NAV scope are the prior-close
-/// weights of the interval. A same-day trade therefore changes the next
-/// interval's weights only.
+/// An interval is measured between two qualified reference observations. Its
+/// weights are the per-asset EUR exposures of the *immediately preceding*
+/// Complete NAV close over the complete NAV scope, so a trade or a dividend
+/// on a non-trading day is already part of the scope that measured the
+/// interval. A same-day trade changes the next interval's weights only.
+///
+/// The weights come from the persisted daily snapshots the Portfolio view
+/// already read, so no per-date query and no ledger replay is needed.
 ///
 /// The second result is the first exposed asset without an explicit primary
 /// assignment. Its weight is not redistributed to the other assets.
@@ -266,25 +270,28 @@ fn interval_weights(
     }
     let empty: Vec<&AssetSnapshot> = Vec::new();
     let mut missing_assignment: Option<String> = None;
+    // The ready snapshots are in ascending chronology, so one forward cursor
+    // finds the immediately preceding Complete NAV close of every interval
+    // without a query per date.
+    let mut cursor = 0usize;
 
     let mut intervals = Vec::with_capacity(observations.len().saturating_sub(1));
     for window in observations.windows(2) {
         let (start_date, end_date) = (&window[0], &window[1]);
-        let snapshot = ready_snapshots
-            .iter()
-            .find(|snapshot| snapshot.date == *start_date)
-            .with_context(|| {
-                format!("the ready NAV history has no Complete NAV snapshot on {start_date}")
-            })?;
-        let rows = exposures_by_date.get(start_date.as_str()).unwrap_or(&empty);
-        if let IntervalScope::Unknown = interval_scope(snapshot, rows)? {
-            return Ok((
-                Vec::new(),
-                Some(IntervalProblem::MissingScope(format!(
-                    "the persisted NAV history has no per-asset exposure scope on {start_date}"
-                ))),
-            ));
+        while cursor + 1 < ready_snapshots.len()
+            && ready_snapshots[cursor + 1].date.as_str() < end_date.as_str()
+        {
+            cursor += 1;
         }
+        let snapshot = &ready_snapshots[cursor];
+        anyhow::ensure!(
+            snapshot.date.as_str() < end_date.as_str(),
+            "the ready NAV history has no Complete NAV snapshot before {end_date}"
+        );
+        let rows = exposures_by_date
+            .get(snapshot.date.as_str())
+            .unwrap_or(&empty);
+        interval_scope(snapshot, rows)?;
         let mut weights: BTreeMap<String, f64> = BTreeMap::new();
         for row in rows {
             let ticker = tickers.get(&row.asset_id).with_context(|| {
@@ -304,6 +311,7 @@ fn interval_weights(
         intervals.push(IntervalWeights {
             start_date: start_date.clone(),
             end_date: end_date.clone(),
+            weight_date: snapshot.date.clone(),
             weights,
         });
     }
@@ -311,28 +319,19 @@ fn interval_weights(
     Ok((intervals, problem))
 }
 
-/// The complete NAV scope of one closing snapshot.
-enum IntervalScope {
-    /// The scope is known. The retained Net dividend income is the residual
-    /// between the complete NAV scope and the asset value; it is carried at a
-    /// 0% return, so it never enters a reference contribution.
-    Known,
-    /// The persisted history has no per-asset exposure scope for this date, so
-    /// the interval's weights are unknown.
-    Unknown,
-}
-
 /// Reads the complete NAV scope of one closing snapshot.
 ///
 /// The persisted per-asset rows and the persisted asset value describe the
 /// same scope. Rows that do not sum to the persisted asset value would double
-/// count or drop exposure, so they remain an invariant violation rather than
-/// an availability state. A date without any per-asset row has no known
-/// exposure scope, which is an expected data absence.
+/// count or drop exposure, and a positive asset value without any per-asset
+/// row means the persisted scope is incomplete; both remain invariant
+/// violations rather than availability states. A snapshot without any
+/// per-asset row and without an asset value is a valid fully-cash scope whose
+/// retained Net dividend income is carried at a 0% return.
 fn interval_scope(
     snapshot: &PortfolioSnapshot,
     exposures: &[&AssetSnapshot],
-) -> anyhow::Result<IntervalScope> {
+) -> anyhow::Result<()> {
     anyhow::ensure!(
         snapshot.total_value > FLOAT_EPSILON,
         "NAV scope has no value on {}",
@@ -349,13 +348,15 @@ fn interval_scope(
         asset_value += exposure.market_value;
     }
 
+    let tolerance = snapshot.total_value.abs() * 1e-6;
     if exposures.is_empty() {
-        if snapshot.asset_value > FLOAT_EPSILON {
-            // The persisted history has no per-asset scope for this date.
-            return Ok(IntervalScope::Unknown);
-        }
+        anyhow::ensure!(
+            snapshot.asset_value <= FLOAT_EPSILON,
+            "the persisted NAV history on {} has no per-asset exposure scope for an asset value of {}",
+            snapshot.date,
+            snapshot.asset_value
+        );
     } else {
-        let tolerance = snapshot.total_value.abs() * 1e-6;
         anyhow::ensure!(
             (asset_value - snapshot.asset_value).abs() <= tolerance,
             "persisted exposures on {} do not match the persisted asset value",
@@ -364,14 +365,12 @@ fn interval_scope(
     }
 
     let retained = snapshot.total_value - snapshot.asset_value;
-    let tolerance = snapshot.total_value.abs() * 1e-6;
     anyhow::ensure!(
         retained >= -tolerance,
         "persisted NAV scope on {} is smaller than its asset value",
         snapshot.date
     );
-    let _cash_weight = retained.max(0.0) / snapshot.total_value;
-    Ok(IntervalScope::Known)
+    Ok(())
 }
 
 /// The window in which each reference contributes to the comparison.
@@ -515,9 +514,17 @@ async fn prepare_reference(
         observations.insert(date.clone(), *value);
     }
     if let Some(missing) = missing_observation(&observations, window) {
+        // The absence is reported with its scoped subject and its date gap, so
+        // the outcome carries an actionable limitation instead of a reason
+        // alone.
+        let limitation = missing_observation_limitation(definition, &observations, &missing);
+        record_limitations(provenance, reference_id, limitation.into_iter().collect());
         return Ok(ReferencePreparation::Unavailable(format!(
-            "primary reference '{}' has no qualified observation on the required close {missing}; forward-filled marks are not independent observations",
-            definition.display_name
+            "primary reference '{}' has no qualified observation on {} ({}) for {}; forward-filled marks are not independent observations",
+            definition.display_name,
+            missing.date,
+            missing.role,
+            missing.date
         )));
     }
 
@@ -525,6 +532,13 @@ async fn prepare_reference(
         observations,
         limitations,
     }))
+}
+
+/// One required close of a reference's contribution window without a
+/// qualified observation, and the role that close plays in the comparison.
+struct MissingObservation {
+    date: String,
+    role: &'static str,
 }
 
 /// The first required close of a reference's contribution window without a
@@ -535,7 +549,7 @@ async fn prepare_reference(
 fn missing_observation(
     observations: &BTreeMap<String, f64>,
     window: &ReferenceWindow,
-) -> Option<String> {
+) -> Option<MissingObservation> {
     let start = parse_date(&window.start).ok()?;
     let end = parse_date(&window.end).ok()?;
     let mut current = start;
@@ -544,11 +558,44 @@ fn missing_observation(
         if (is_weekday(current) || date == window.start || date == window.end)
             && !observations.contains_key(&date)
         {
-            return Some(date);
+            let role = if date == window.start {
+                "the comparison anchor"
+            } else if date == window.end {
+                "the comparison end"
+            } else {
+                "an internal completed weekday"
+            };
+            return Some(MissingObservation { date, role });
         }
         current += Duration::days(1);
     }
     None
+}
+
+/// The classified Market data limitation of a missing qualified observation.
+///
+/// The subject is the scoped reference, the requested end is the close that
+/// has no observation, and the latest available date is the last close the
+/// reference does report.
+fn missing_observation_limitation(
+    definition: &benchmark_reference_repo::BenchmarkReference,
+    observations: &BTreeMap<String, f64>,
+    missing: &MissingObservation,
+) -> Option<MarketDataLimitation> {
+    let requested_end_date = parse_date(&missing.date).ok()?;
+    let latest_available_date = observations
+        .keys()
+        .rfind(|date| date.as_str() < missing.date.as_str())
+        .and_then(|date| parse_date(date).ok());
+    Some(MarketDataLimitation {
+        subject: crate::models::MarketDataSubject::BenchmarkReference {
+            id: definition.id.clone(),
+            display_name: definition.display_name.clone(),
+        },
+        latest_available_date,
+        requested_end_date,
+        classification: crate::models::MarketDataLimitationClassification::ActionableMissingData,
+    })
 }
 
 /// Builds the aligned subject/reference comparison over the ready NAV
@@ -740,14 +787,14 @@ fn interval_reference_return(
         };
         let Some(start_value) = reference.observations.get(&interval.start_date) else {
             return Err(format!(
-                "reference {reference_id} has no qualified observation on the closing snapshot {}",
-                interval.start_date
+                "reference {reference_id} has no qualified observation on the closing snapshot {} of the interval weighted by the {} close",
+                interval.start_date, interval.weight_date
             ));
         };
         let Some(end_value) = reference.observations.get(&interval.end_date) else {
             return Err(format!(
-                "reference {reference_id} has no qualified observation on the closing snapshot {}",
-                interval.end_date
+                "reference {reference_id} has no qualified observation on the closing snapshot {} of the interval weighted by the {} close",
+                interval.end_date, interval.weight_date
             ));
         };
         weighted_return += weight * (end_value / start_value - 1.0);

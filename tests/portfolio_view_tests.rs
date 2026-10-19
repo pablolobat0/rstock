@@ -166,8 +166,10 @@ async fn view_keeps_available_performance_at_older_snapshot_with_limitations() {
     let new_stock_id = common::insert_asset(&db, "XFAKEVA2", "New Stock", "stock", "EUR").await;
     common::insert_transaction(&db, priced_id, "2025-06-02", 2.0, 10.0, 0.0).await;
     common::insert_daily_price(&db, priced_id, "2025-06-06", 11.0, false).await;
-    common::insert_portfolio_snapshot(&db, "2025-06-01", 100.0, 0.0).await;
-    common::insert_portfolio_snapshot(&db, "2025-06-06", 110.0, 0.2).await;
+    // The seed carries no value and the invested close carries the scope of
+    // its per-asset row, so the persisted history stays consistent.
+    common::insert_portfolio_snapshot_with_values(&db, "2025-06-01", 0.0, 0.0, 100.0, 0.0).await;
+    common::insert_portfolio_snapshot_with_values(&db, "2025-06-06", 22.0, 22.0, 110.0, 0.2).await;
     common::insert_portfolio_asset_snapshot(&db, "2025-06-06", priced_id, 2.0, 11.0, 22.0, 1.0)
         .await;
     // This post-checkpoint holding has no required price: NAV remains
@@ -187,8 +189,8 @@ async fn view_keeps_available_performance_at_older_snapshot_with_limitations() {
         panic!("expected available performance, got {:?}", view.performance);
     };
     assert_eq!(performance.effective_valuation_date, "2025-06-06");
-    // The snapshot helper stores its configured total value of 1,000 EUR.
-    assert_close(performance.synchronized_value, 1000.0);
+    // The synchronized value is the invested close's persisted total value.
+    assert_close(performance.synchronized_value, 22.0);
     assert_close(performance.nav, 110.0);
     assert_eq!(performance.inception_date, "2025-06-01");
     // Limitations must mention the stale holding even though performance is
@@ -796,8 +798,10 @@ async fn view_reports_four_independent_limitation_scopes() {
         common::insert_monetary_fund_asset(&db, "XFAKEVM2", "Money Fund", "EUR", "F000VM2").await;
     common::insert_transaction(&db, monetary_id, "2025-06-06", 2.0, 1000.0, 0.0).await;
 
-    common::insert_portfolio_snapshot(&db, "2025-06-01", 100.0, 0.0).await;
-    common::insert_portfolio_snapshot(&db, "2025-06-06", 110.0, 0.2).await;
+    // The seed carries no value and the invested close carries the scope of
+    // its per-asset row, so the persisted history stays consistent.
+    common::insert_portfolio_snapshot_with_values(&db, "2025-06-01", 0.0, 0.0, 100.0, 0.0).await;
+    common::insert_portfolio_snapshot_with_values(&db, "2025-06-06", 10.0, 10.0, 110.0, 0.2).await;
     common::insert_portfolio_asset_snapshot(&db, "2025-06-06", stale_id, 1.0, 10.0, 10.0, 1.0)
         .await;
 

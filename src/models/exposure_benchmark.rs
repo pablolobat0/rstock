@@ -115,9 +115,15 @@ impl ExposureBenchmarkComparison {
     /// The comparison outcome for a portfolio that cannot carry one: an empty
     /// or Monetary-only portfolio has no invested closing snapshot.
     pub fn not_applicable(reason: impl Into<String>) -> Self {
-        Self::empty(ComparisonAvailability::NotApplicable {
-            reason: reason.into(),
-        })
+        let reason = reason.into();
+        let mut comparison = Self::empty(ComparisonAvailability::NotApplicable {
+            reason: reason.clone(),
+        });
+        comparison.standard_periods = BenchmarkComparisonPeriod::standard_periods()
+            .into_iter()
+            .map(|period| BenchmarkPeriod::not_applicable(period, reason.clone()))
+            .collect();
+        comparison
     }
 
     /// The comparison outcome when a required benchmark input is missing.

@@ -292,6 +292,116 @@ fn view_human(view: &PortfolioView) -> String {
     String::from_utf8(output).expect("human output should be UTF-8")
 }
 
+/// A weekend fixture whose portfolio is reallocated between the Friday and
+/// the Monday close.
+///
+/// The ready history covers 2025-01-05 (the seed) through 2025-01-13 (the
+/// Monday close). On Friday the portfolio is 100% asset A. Over the weekend it
+/// is reallocated to 50% A and 50% B, and on Monday A is flat while B gains
+/// 10%. The retained Net dividend income is optional: it is included when
+/// `dividend` is positive.
+async fn weekend_fixture(dividend: f64) -> (DatabaseConnection, MockMarketDataSources) {
+    let db = setup_test_db().await;
+    let alpha_asset = insert_asset(&db, "XFAKE1", "Alpha Stock", "stock", "EUR").await;
+    let beta_asset = insert_asset(&db, "XFAKE2", "Beta Stock", "stock", "EUR").await;
+    insert_reference(&db, ALPHA, "Verified Alpha Reference", "ALPHA", "EUR").await;
+    insert_reference(&db, BETA, "Verified Beta Reference", "BETA", "EUR").await;
+    assign_reference(&db, "tracked", "XFAKE1", ALPHA).await;
+    assign_reference(&db, "tracked", "XFAKE2", BETA).await;
+
+    insert_nav_snapshot(&db, "2025-01-05", 0.0, 0.0, 0.0, 100.0).await;
+    for date in [
+        "2025-01-06",
+        "2025-01-07",
+        "2025-01-08",
+        "2025-01-09",
+        "2025-01-10",
+        "2025-01-11",
+    ] {
+        insert_nav_snapshot(&db, date, 1000.0, 1000.0, 10.0, 100.0).await;
+        insert_exposure(&db, date, alpha_asset, 10.0, 100.0, 1000.0).await;
+    }
+    // The Sunday close holds the reallocated scope.
+    insert_nav_snapshot(&db, "2025-01-12", 1000.0, 1000.0 + dividend, 10.0, 100.0).await;
+    insert_exposure(&db, "2025-01-12", alpha_asset, 5.0, 100.0, 500.0).await;
+    insert_exposure(&db, "2025-01-12", beta_asset, 5.0, 100.0, 500.0).await;
+    // The Monday close keeps the reallocation and gains on B only.
+    insert_nav_snapshot(
+        &db,
+        "2025-01-13",
+        1050.0,
+        1050.0 + dividend,
+        10.0,
+        105.0 + dividend / 10.0,
+    )
+    .await;
+    insert_exposure(&db, "2025-01-13", alpha_asset, 5.0, 100.0, 500.0).await;
+    insert_exposure(&db, "2025-01-13", beta_asset, 5.0, 110.0, 550.0).await;
+
+    let mut sources = MockMarketDataSources::new();
+    sources.historical_prices.insert(
+        "ALPHA".to_owned(),
+        vec![
+            ("2025-01-03".to_owned(), 100.0),
+            ("2025-01-06".to_owned(), 100.0),
+            ("2025-01-07".to_owned(), 100.0),
+            ("2025-01-08".to_owned(), 100.0),
+            ("2025-01-09".to_owned(), 100.0),
+            ("2025-01-10".to_owned(), 100.0),
+            ("2025-01-13".to_owned(), 100.0),
+        ],
+    );
+    sources.historical_prices.insert(
+        "BETA".to_owned(),
+        vec![
+            ("2025-01-03".to_owned(), 50.0),
+            ("2025-01-06".to_owned(), 50.0),
+            ("2025-01-07".to_owned(), 50.0),
+            ("2025-01-08".to_owned(), 50.0),
+            ("2025-01-09".to_owned(), 50.0),
+            ("2025-01-10".to_owned(), 50.0),
+            ("2025-01-13".to_owned(), 55.0),
+        ],
+    );
+    for identifier in ["ALPHA", "BETA"] {
+        sources.series_qualifications.insert(
+            ("test_source".to_owned(), identifier.to_owned()),
+            qualification("EUR"),
+        );
+    }
+    (db, sources)
+}
+
+/// The ready snapshots of the weekend fixture.
+fn weekend_snapshots(dividend: f64) -> Vec<rstock::models::PortfolioSnapshot> {
+    let mut snapshots = vec![snapshot("2025-01-05", 0.0, 0.0, 0.0, 100.0)];
+    for date in [
+        "2025-01-06",
+        "2025-01-07",
+        "2025-01-08",
+        "2025-01-09",
+        "2025-01-10",
+        "2025-01-11",
+    ] {
+        snapshots.push(snapshot(date, 1000.0, 1000.0, 10.0, 100.0));
+    }
+    snapshots.push(snapshot(
+        "2025-01-12",
+        1000.0,
+        1000.0 + dividend,
+        10.0,
+        100.0,
+    ));
+    snapshots.push(snapshot(
+        "2025-01-13",
+        1050.0,
+        1050.0 + dividend,
+        10.0,
+        105.0 + dividend / 10.0,
+    ));
+    snapshots
+}
+
 // --- Tests ---
 
 /// The comparison weights every interval with the *preceding* Complete NAV
@@ -952,6 +1062,204 @@ async fn standard_rows_report_the_comparison_anchors() {
     // Five observations are below the risk-sample minimum, so the risk facts
     // are not applicable rather than unavailable.
     assert!(matches!(since.beta, ComparisonFact::NotApplicable { .. }));
+}
+
+/// A trade over a non-trading day is part of the scope that measured the
+/// Monday interval: the immediately preceding Complete close carries the
+/// reallocated weights, not the stale Friday close.
+#[tokio::test]
+async fn a_weekend_trade_is_reflected_in_the_monday_interval_weights() {
+    let (db, sources) = weekend_fixture(0.0).await;
+    let market_data = market_data_at(&sources, NaiveDate::from_ymd_opt(2025, 1, 14).unwrap());
+    let comparison =
+        compute_exposure_matched_comparison(&db, &market_data, &weekend_snapshots(0.0))
+            .await
+            .expect("the exposure comparison should be computable");
+
+    assert_eq!(comparison.availability, ComparisonAvailability::Available);
+    assert_eq!(comparison.start_date.as_deref(), Some("2025-01-06"));
+    assert_eq!(comparison.end_date.as_deref(), Some("2025-01-13"));
+
+    // The Monday interval weighs the Sunday scope: 50% of a flat A and 50% of
+    // a B that gained 10%, so the exposure-matched benchmark gains 5% and not
+    // the 0% of the stale Friday weights.
+    let reference: Vec<f64> = comparison
+        .reference_wealth
+        .iter()
+        .map(|point| point.wealth)
+        .collect();
+    assert_close(reference[reference.len() - 1], 105.0);
+    assert_close(comparison.reference_return_pct.unwrap(), 5.0);
+    // The portfolio itself gained the same 5% over that interval.
+    assert_close(comparison.subject_return_pct.unwrap(), 5.0);
+}
+
+/// The retained Net dividend income of a weekend dividend is carried inside
+/// the complete NAV scope at a 0% return.
+#[tokio::test]
+async fn a_weekend_dividend_cash_is_carried_at_zero_return() {
+    let (db, sources) = weekend_fixture(100.0).await;
+    let market_data = market_data_at(&sources, NaiveDate::from_ymd_opt(2025, 1, 14).unwrap());
+    let comparison =
+        compute_exposure_matched_comparison(&db, &market_data, &weekend_snapshots(100.0))
+            .await
+            .expect("the exposure comparison should be computable");
+
+    // The Sunday scope is 500 EUR of A, 500 EUR of B, and 100 EUR of retained
+    // Net dividend income over a 1,100 EUR NAV scope. The cash carries a 0%
+    // return, so the interval gains 500/1100 * 10% = 4.5455%.
+    let reference: Vec<f64> = comparison
+        .reference_wealth
+        .iter()
+        .map(|point| point.wealth)
+        .collect();
+    assert_close(
+        reference[reference.len() - 1],
+        100.0 * (1.0 + 500.0 / 1100.0 * 0.1),
+    );
+}
+
+/// A persisted close without any per-asset exposure scope is an invariant
+/// violation, not an expected absence.
+#[tokio::test]
+async fn a_deleted_exposure_scope_is_a_hard_invariant_error() {
+    let (db, sources) = exposure_fixture().await;
+    let market_data = market_data_at(&sources, fixed_today());
+    portfolio_asset_history::Entity::delete_many()
+        .filter(portfolio_asset_history::Column::Date.eq("2025-01-07"))
+        .exec(&db)
+        .await
+        .expect("the exposure rows should be deletable");
+
+    let error = get_portfolio_view(&db, &market_data, NavHistoryRequest::All)
+        .await
+        .expect_err("a deleted exposure scope must fail the Portfolio view");
+    assert!(
+        error
+            .to_string()
+            .contains("no per-asset exposure scope for an asset value of"),
+        "the invariant violation must be visible: {error}"
+    );
+}
+
+/// A not-applicable comparison reports not-applicable standard facts, never
+/// the contradictory unavailable state.
+#[tokio::test]
+async fn a_not_applicable_comparison_reports_not_applicable_standard_facts() {
+    let db = setup_test_db().await;
+    let sources = MockMarketDataSources::new();
+    let market_data = market_data_at(&sources, fixed_today());
+    let view = get_portfolio_view(&db, &market_data, NavHistoryRequest::All)
+        .await
+        .expect("an empty portfolio should compose");
+    assert!(matches!(
+        view.exposure_benchmark.availability,
+        ComparisonAvailability::NotApplicable { .. }
+    ));
+    assert!(view
+        .exposure_benchmark
+        .standard_periods
+        .iter()
+        .all(|period| matches!(
+            period.subject_return_pct,
+            ComparisonFact::NotApplicable { .. }
+        )));
+    assert!(view
+        .exposure_benchmark
+        .standard_periods
+        .iter()
+        .all(|period| matches!(
+            period.reference_return_pct,
+            ComparisonFact::NotApplicable { .. }
+        )));
+
+    let json = view_json(&view);
+    let comparison = &json["data"]["exposure_benchmark"];
+    assert_eq!(comparison["availability"]["status"], "not_applicable");
+    for period in comparison["standard_periods"].as_array().unwrap() {
+        assert_eq!(period["subject_return_pct"]["status"], "not_applicable");
+        assert_eq!(period["reference_return_pct"]["status"], "not_applicable");
+        assert_eq!(period["beta"]["status"], "not_applicable");
+    }
+    let human = view_human(&view);
+    assert!(human.contains("Primary exposure comparison: not applicable"));
+}
+
+/// A missing qualified observation is reported with a scoped, classified
+/// limitation that carries the date gap.
+#[tokio::test]
+async fn a_missing_qualified_observation_reports_a_scoped_limitation() {
+    let (db, mut sources) = exposure_fixture().await;
+    // ALPHA stops reporting on 2025-01-09, an internal completed weekday.
+    sources.historical_prices.insert(
+        "ALPHA".to_owned(),
+        vec![
+            ("2025-01-03".to_owned(), 100.0),
+            ("2025-01-06".to_owned(), 100.0),
+            ("2025-01-07".to_owned(), 110.0),
+            ("2025-01-08".to_owned(), 110.0),
+            ("2025-01-10".to_owned(), 121.0),
+        ],
+    );
+
+    let comparison = compute_fixture_comparison(&db, &sources).await;
+    assert!(matches!(
+        comparison.availability,
+        ComparisonAvailability::Unavailable { .. }
+    ));
+    let limitation = comparison
+        .reference_limitations
+        .iter()
+        .find(|limitation| {
+            matches!(
+                limitation.subject,
+                rstock::models::MarketDataSubject::BenchmarkReference { .. }
+            )
+        })
+        .expect("the missing observation must carry a scoped limitation");
+    assert_eq!(
+        limitation.requested_end_date,
+        NaiveDate::from_ymd_opt(2025, 1, 9).unwrap()
+    );
+    assert_eq!(
+        limitation.latest_available_date,
+        Some(NaiveDate::from_ymd_opt(2025, 1, 8).unwrap())
+    );
+    assert_eq!(
+        limitation.classification,
+        rstock::models::MarketDataLimitationClassification::ActionableMissingData
+    );
+    match &limitation.subject {
+        rstock::models::MarketDataSubject::BenchmarkReference { id, display_name } => {
+            assert_eq!(id, ALPHA);
+            assert_eq!(display_name, "Verified Alpha Reference");
+        }
+        other => panic!("the limitation must name the reference, got {other:?}"),
+    }
+
+    // The same limitation is visible in the human and the JSON output.
+    let market_data = market_data_at(&sources, fixed_today());
+    let view = get_portfolio_view(&db, &market_data, NavHistoryRequest::All)
+        .await
+        .expect("a missing observation must not fail the Portfolio view");
+    let json = view_json(&view);
+    let json_limitations = json["data"]["exposure_benchmark"]["reference_limitations"]
+        .as_array()
+        .expect("the limitations must be an array");
+    assert!(!json_limitations.is_empty());
+    let json_limitation = json_limitations
+        .iter()
+        .find(|limitation| limitation["subject"]["type"] == "benchmark_reference")
+        .expect("the JSON limitation must name the reference");
+    assert_eq!(json_limitation["requested_end_date"], "2025-01-09");
+    assert_eq!(json_limitation["latest_available_date"], "2025-01-08");
+    assert_eq!(json_limitation["classification"], "actionable_missing_data");
+
+    // The human Adapter shows the same limitation in the display date format.
+    let human = view_human(&view);
+    assert!(human.contains("reference limitation:"));
+    assert!(human.contains("09-01-2025"));
+    assert!(human.contains("08-01-2025"));
 }
 
 /// The fund comparison keeps its accepted `fund_return_pct` row key while the

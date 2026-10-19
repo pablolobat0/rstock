@@ -144,11 +144,10 @@ calculation:
 The same file also asserts the structural properties above as an ordinary
 test, so a regression fails the offline suite:
 
-- `exposure_comparison_work_does_not_scale_with_the_number_of_dates` — equal
-  read-statement and source-attempt counts for a 41-day and a 401-day
-  window.
-- `representative_and_stress_measurements_are_recorded` — the recorded
-  representative and stress work evidence, with no invented threshold.
+- `representative_and_stress_work_evidence_is_recorded` — the recorded
+  representative and stress work evidence with no invented threshold, and the
+  equal read-statement and source-attempt counts for the 41-day and 401-day
+  windows.
 
 The NAV-readiness separation is asserted by
 `the_comparison_performs_no_second_nav_rebuild` in

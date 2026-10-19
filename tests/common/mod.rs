@@ -368,10 +368,23 @@ pub async fn insert_portfolio_snapshot(
     nav: f64,
     outstanding_shares: f64,
 ) {
+    insert_portfolio_snapshot_with_values(db, date, 1000.0, 1000.0, nav, outstanding_shares).await;
+}
+
+/// Persists one portfolio snapshot with an explicit scope, so a fixture can
+/// keep the persisted asset value consistent with its per-asset rows.
+pub async fn insert_portfolio_snapshot_with_values(
+    db: &DatabaseConnection,
+    date: &str,
+    asset_value: f64,
+    total_value: f64,
+    nav: f64,
+    outstanding_shares: f64,
+) {
     let record = portfolio_history::ActiveModel {
         date: Set(date.to_owned()),
-        asset_value: Set(1000.0),
-        total_value: Set(1000.0),
+        asset_value: Set(asset_value),
+        total_value: Set(total_value),
         nav: Set(nav),
         outstanding_shares: Set(outstanding_shares),
     };

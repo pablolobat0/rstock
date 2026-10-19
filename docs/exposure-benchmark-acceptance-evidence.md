@@ -10,7 +10,7 @@ against the feature branch `agent/grill-benchmark-framework`.
 | --- | --- |
 | `cargo fmt -- --check` | clean |
 | `cargo clippy -- -D warnings` | clean |
-| `cargo test` (offline) | 38 test binaries, 495 tests, 0 failed |
+| `cargo test` (offline) | 39 test binaries, 534 tests, 0 failed |
 | `cargo clippy --test exposure_benchmark_tests -- -D warnings` | clean |
 | `cargo clippy --test exposure_benchmark_performance_tests -- -D warnings` | clean |
 
@@ -83,7 +83,58 @@ and the Market data limitations. The domain outcome no longer derives
 `Serialize` for this path, so no domain serde representation leaks into the
 JSON contract. The accepted fund JSON key, type, and signature are unchanged.
 
-### 5. The writer-injected dispatch and the public calculation seam were not production paths
+### 5. The Monday interval was weighted with the Friday snapshot
+
+An interval is measured between two qualified reference observations, and its
+weights now come from the **immediately preceding Complete NAV close** — the
+last close before the interval ends — not from the interval's first
+observation. A trade or a dividend on a non-trading day is therefore part of
+the scope that measured the interval it happened in, and no stale Friday
+weight measures a Monday interval. The weights still come from the persisted
+daily snapshots the Portfolio view already read, so no per-date query and no
+ledger replay is needed, and no synthetic weekend market observation is
+invented: the reference series still uses its source-reported weekday marks
+only.
+
+Regressions: `a_weekend_trade_is_reflected_in_the_monday_interval_weights`
+(Friday 100% A, a weekend reallocation to 50% A and 50% B, Monday A flat and
+B +10% produce a +5% benchmark, not the 0% of the stale Friday weights) and
+`a_weekend_dividend_cash_is_carried_at_zero_return` (the weekend's retained
+Net dividend income is inside the complete NAV scope and carries 0%).
+
+### 6. A missing exposure scope was an expected absence
+
+A close whose persisted per-asset rows are gone while its persisted asset
+value is positive is an incomplete persisted scope, not an expected data
+absence: the comparison now fails with an invariant error through the
+Portfolio view and the command dispatch. A close without any per-asset row
+*and* without an asset value stays valid: it is a fully-cash scope whose
+retained Net dividend income is carried at 0%.
+
+Regression: `a_deleted_exposure_scope_is_a_hard_invariant_error`.
+
+### 7. A not-applicable comparison reported unavailable standard facts
+
+A portfolio that cannot carry a comparison now reports **not applicable**
+standard facts with the explicit reason, never the contradictory unavailable
+state. An expected missing required input stays unavailable and remains
+distinct.
+
+Regression: `a_not_applicable_comparison_reports_not_applicable_standard_facts`,
+which asserts the exact human and JSON states.
+
+### 8. A missing qualified observation reported a reason alone
+
+A reference without a qualified observation on the comparison anchor, on the
+comparison end, or on an internal completed weekday now carries a structured
+Market data limitation: the scoped reference subject, the close that has no
+observation as the requested end date, the last close the reference does
+report as the latest available date, and the actionable-missing-data
+classification. No market closure is invented and no weight is renormalized.
+
+Regression: `a_missing_qualified_observation_reports_a_scoped_limitation`.
+
+### 9. The writer-injected dispatch and the public calculation seam were not production paths
 
 - `src/cli/dispatch.rs` now has `run_command_with_writer()`, and `run_command()`
   delegates to it. The dashboard aliases are dispatched through that one
@@ -97,7 +148,7 @@ JSON contract. The accepted fund JSON key, type, and signature are unchanged.
 Regression: `both_dashboard_aliases_report_the_same_exposure_comparison`
 dispatches both aliases through `run_command_with_writer`.
 
-### 6. The performance evidence was not trustworthy
+### 10. The performance evidence was not trustworthy
 
 - The measurement is isolated: the performance file holds exactly one test, so
   no other test of the process allocates inside the measured window, and every
@@ -113,7 +164,7 @@ dispatches both aliases through `run_command_with_writer`.
   previous 722 ms CPU and 59 MB figures are not trusted and are replaced by
   the release-build elapsed wall time and the corrected allocation profile.
 
-### 7. The assignment timestamp was printed as a raw machine value
+### 11. The assignment timestamp was printed as a raw machine value
 
 The human Adapter prints the assignment date in the display date format
 (`11-01-2025`), while the JSON keeps the stored ISO value.
@@ -139,12 +190,13 @@ The human Adapter prints the assignment date in the display date format
 
 ### 2. Prior-close weights, complete NAV scope denominator, retained cash, Monetary exclusion, next-day trades
 
-- `interval_scope()` divides the preceding close's per-asset EUR market
-  values by the complete NAV scope and carries the retained Net dividend
-  income as the 0%-return residual; `interval_reference_weights()` aggregates
-  the weights per primary reference; every interval starts at the previous
-  observed close, so a same-day trade changes the next interval's weights
-  only.
+- `interval_scope()` divides the immediately preceding Complete close's
+  per-asset EUR market values by the complete NAV scope and carries the
+  retained Net dividend income as the 0%-return residual;
+  `interval_reference_weights()` aggregates the weights per primary
+  reference; the weight close is the last close before the interval ends, so
+  a non-trading-day trade or dividend is part of the scope that measured the
+  interval, while a same-day trade changes the next interval's weights only.
 - Monetary holdings never enter the exposure history, because the NAV engine
   excludes them from performance valuation, and they are filtered
   defensively as well.
@@ -152,6 +204,8 @@ The human Adapter prints the assignment date in the display date format
   (hand-calculated reference wealth 106.0, 110.24, 120.345333),
   `same_day_trade_changes_only_the_following_interval_weights`,
   `retained_dividend_income_is_carried_at_zero_return`,
+  `a_weekend_trade_is_reflected_in_the_monday_interval_weights`,
+  `a_weekend_dividend_cash_is_carried_at_zero_return`,
   `monetary_only_portfolio_retains_its_domain_outcomes`.
 
 ### 3. Closed positions, shared-reference aggregation, no renormalization, secondary exclusion
@@ -219,12 +273,14 @@ The human Adapter prints the assignment date in the display date format
 
 ### 7. Offline fixtures, asserted states, and asserted anchors
 
-- `tests/exposure_benchmark_tests.rs` holds 22 offline tests over an in-memory
+- `tests/exposure_benchmark_tests.rs` holds 27 offline tests over an in-memory
   database, dummy assets, a fixed clock, and fake `MarketDataSources`. They
   cover prior-close weighting, next-day trade effects, retained cash, closed
   positions, shared references, first-close anchoring, missing assignments,
   missing observations, the hard-error paths, failure isolation, empty and
-  Monetary-only portfolios, the standard rows, and both dashboard aliases.
+  Monetary-only portfolios, the deleted exposure scope, the not-applicable
+  standard facts, the scoped limitation of a missing observation, the
+  standard rows, and both dashboard aliases.
   The weights, returns, and actual anchors are asserted numerically, and both
   the human and the JSON states are asserted.
 
