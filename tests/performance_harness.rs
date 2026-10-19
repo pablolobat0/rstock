@@ -14,6 +14,16 @@ use rstock::db::repos::transaction_repo;
 use rstock::services::nav;
 use sea_orm::{ConnectionTrait, Database, DbBackend, Statement};
 
+/// The number of migrations applied before the contract transaction schema
+/// migration, located by its stable name so an unrelated additive migration
+/// cannot shift the boundary these tests exercise.
+fn contract_schema_prefix() -> usize {
+    Migrator::migrations()
+        .iter()
+        .position(|migration| migration.name().contains("contract_transaction_schema"))
+        .expect("the contract transaction schema migration should be registered")
+}
+
 #[tokio::test]
 async fn small_behavior_fixture_has_expected_assets_and_ordered_ledger() {
     let db = setup_test_db().await;
@@ -191,6 +201,7 @@ async fn nav_preparation_read_work_does_not_scale_with_calendar_days() {
 #[tokio::test]
 async fn automatic_migration_covers_fresh_partial_and_current_schemas() {
     let migration_count = Migrator::migrations().len();
+    let contract_schema_prefix = contract_schema_prefix();
     for applied_count in 0..=migration_count {
         let directory = tempfile::tempdir().expect("temporary migration database directory");
         let path = directory.path().join("startup.db");
@@ -208,7 +219,7 @@ async fn automatic_migration_covers_fresh_partial_and_current_schemas() {
             ))
             .await
             .expect("historical schema should accept persisted asset data");
-            let transaction_insert = if applied_count < migration_count - 5 {
+            let transaction_insert = if applied_count <= contract_schema_prefix {
                 "INSERT INTO transactions (asset_id, tx_type, date, quantity, price_cents, fees_cents, created_at) VALUES (1, 'buy', '2025-01-01', 1.0, 10000, 0, '2025-01-01T00:00:00')"
             } else {
                 "INSERT INTO transactions (asset_id, tx_type, date, units, unit_price_cents, fees_cents, created_at) VALUES (1, 'buy', '2025-01-01', 1.0, 10000, 0, '2025-01-01T00:00:00')"
@@ -219,7 +230,7 @@ async fn automatic_migration_covers_fresh_partial_and_current_schemas() {
             ))
             .await
             .expect("historical schema should accept persisted ledger data");
-            if applied_count == migration_count - 5 {
+            if applied_count == contract_schema_prefix + 1 {
                 for sql in [
                     "INSERT INTO daily_asset_prices (asset_id, date, closing_price, is_api_failure) VALUES (1, '2025-01-02', 101.0, 0)",
                     "INSERT INTO daily_exchange_rates (from_currency, to_currency, date, rate) VALUES ('USD', 'EUR', '2025-01-02', 0.91)",
@@ -271,7 +282,7 @@ async fn automatic_migration_covers_fresh_partial_and_current_schemas() {
                 .expect("persisted transaction count");
             assert_eq!((asset_count, transaction_count), (1, 1));
         }
-        if applied_count == migration_count - 5 {
+        if applied_count == contract_schema_prefix + 1 {
             let reference_identity: String = db
                 .query_one(Statement::from_string(
                     DbBackend::Sqlite,
@@ -318,7 +329,7 @@ async fn automatic_migration_rolls_back_a_failed_destructive_migration() {
     let db = Database::connect(format!("sqlite://{}?mode=rwc", path.display()))
         .await
         .expect("temporary file-backed database");
-    Migrator::up(&db, Some((Migrator::migrations().len() - 6) as u32))
+    Migrator::up(&db, Some(contract_schema_prefix() as u32))
         .await
         .expect("historical migration prefix should apply");
     db.execute(Statement::from_string(
@@ -346,7 +357,7 @@ async fn automatic_migration_rolls_back_a_failed_destructive_migration() {
             .await
             .expect("migration state after rollback")
             .len(),
-        6
+        Migrator::migrations().len() - contract_schema_prefix()
     );
     let rate: f64 = db
         .query_one(Statement::from_string(
