@@ -29,35 +29,29 @@ pub fn print_fund_comparison(result: &FundComparisonResult) {
 
 fn print_identity(result: &FundComparisonResult) {
     println!("{}", "Fund Comparison".bold().underline());
-    println!(
-        "{} [{}]  vs  {} [{}]",
-        result.fund_a.name, result.fund_a.code, result.fund_b.name, result.fund_b.code
-    );
-    for side in [&result.fund_a, &result.fund_b] {
-        println!("  Exact class: {}", class_identity_line(side));
-    }
+    write_fund_comparison_identity(&mut std::io::stdout().lock(), result)
+        .expect("writing fund-comparison identity to stdout");
     println!();
 }
 
-/// The exact class identity of one compared side.
+/// Writes the identity of the two compared funds.
 ///
 /// Two share classes of the same fund are different investments, so each side
-/// keeps its own identity. A class that this portfolio does not track has no
-/// local identity, and that absence stays visible.
-fn class_identity_line(side: &FundComparisonSide) -> String {
-    match (
-        side.class_identity.tracked_identity.as_deref(),
-        side.class_identity.vehicle.as_deref(),
-    ) {
-        (Some(identity), Some(vehicle)) => {
-            format!("{identity} ({vehicle}, tracked in this portfolio)")
-        }
-        (Some(identity), None) => format!("{identity} (tracked in this portfolio)"),
-        (None, _) => format!(
-            "{} is not tracked in this portfolio; only the source code identifies this exact class",
-            side.class_identity.source_code
-        ),
+/// keeps its own exact class identity. A class that this portfolio does not
+/// track has no local identity, and that absence stays visible.
+pub fn write_fund_comparison_identity<W: Write>(
+    writer: &mut W,
+    result: &FundComparisonResult,
+) -> anyhow::Result<()> {
+    writeln!(
+        writer,
+        "{} [{}]  vs  {} [{}]",
+        result.fund_a.name, result.fund_a.code, result.fund_b.name, result.fund_b.code
+    )?;
+    for side in [&result.fund_a, &result.fund_b] {
+        writeln!(writer, "  Exact class: {}", class_identity_line(side))?;
     }
+    Ok(())
 }
 
 fn print_fund_info(result: &FundComparisonResult) {
@@ -129,7 +123,7 @@ fn print_performance(result: &FundComparisonResult) {
         .expect("writing fund-comparison reference context to stdout");
     println!();
     println!(
-        "Direct fund-to-fund rows measure each fund alone; they use no reference and stay available when a fund's own reference is unusable."
+        "Direct fund-to-fund rows measure each fund alone, in the fund's own currency; they use no reference and stay available when a fund's own reference is unusable."
     );
     println!();
 
@@ -453,6 +447,26 @@ fn apply_table_style(table: &mut Table, separator_lines: &[usize]) {
     }
 }
 
+/// The exact class identity of one compared side.
+///
+/// A class that this portfolio does not track has no local identity, and that
+/// absence stays visible.
+fn class_identity_line(side: &FundComparisonSide) -> String {
+    match (
+        side.class_identity.tracked_identity.as_deref(),
+        side.class_identity.vehicle.as_deref(),
+    ) {
+        (Some(identity), Some(vehicle)) => {
+            format!("{identity} ({vehicle}, tracked in this portfolio)")
+        }
+        (Some(identity), None) => format!("{identity} (tracked in this portfolio)"),
+        (None, _) => format!(
+            "{} is not tracked in this portfolio; only the source code identifies this exact class",
+            side.class_identity.source_code
+        ),
+    }
+}
+
 fn display_aum(fund: &FundComparisonSide) -> String {
     match (fund.info.aum, fund.info.aum_currency.as_deref()) {
         (Some(aum), Some(currency)) => format!("{} {currency}", format_eu(&format!("{aum:.2}"))),
@@ -475,12 +489,9 @@ fn display_date_optional(value: Option<&str>) -> String {
 }
 
 fn display_optional(value: Option<&str>) -> String {
-    value.unwrap_or("N/A").to_owned()
+    super::helpers::display_optional_text(value, "N/A")
 }
 
 fn display_dash(value: Option<&str>) -> String {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map_or_else(|| "—".to_string(), str::to_owned)
+    super::helpers::display_optional_text(value, "—")
 }

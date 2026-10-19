@@ -104,7 +104,7 @@ All business logic lives here. Key modules:
 
 **`fund_comparison.rs`** — `compare_funds()` builds the direct fund-to-fund comparison of two Morningstar fund codes. The direct analysis is fund-only: the aligned correlation graph, the allocation tables, the common holdings, and the standard performance rows measure each fund alone, use no reference, and stay available when a fund's own reference is absent or unusable. Each side also carries its own reference-relative comparison, prepared through the shared Benchmark Module against that fund's own selected primary reference, so two funds with different references never read as one investment universe. Each side keeps its own exact class identity, its own reference identity and purpose, its own actual comparison dates, and its own scoped limitations; a missing or unusable reference leaves only that side's reference-relative facts unavailable and never falls back to the other side's reference or to the old fixed ACWI reference. The selected graph period controls only the correlation and the aligned graph; the standard comparison rows are independent of it. Each compared fund keeps its own holdings snapshot.
 
-**`fund_metrics.rs`** — The standard fund performance rows. `compute_standard_fund_metrics()` measures a fund against the legacy shared ACWI proxy and keeps the beta row of that measure, while `compute_fund_only_metrics()` measures the fund alone and needs no reference series, so the direct fund comparison never presents a fact measured against a reference the fund was not assigned.
+**`fund_metrics.rs`** — The standard fund performance rows. `compute_standard_fund_metrics()` measures a fund against the legacy shared ACWI proxy and keeps the beta row of that measure, while `compute_fund_only_metrics()` measures the fund alone and needs no reference series, so the direct fund comparison never presents a fact measured against a reference the fund was not assigned. Both share the same row calculation.
 
 **`holdings.rs`** — Shared holdings fetch helper used by composition and other look-through paths.
 
@@ -165,7 +165,7 @@ Domain structs organized by concept:
 - `BenchmarkComparisonPeriod` — The YTD, 1Y, 3Y, 5Y, and since-comparison-start periods
 - `ComparisonAvailability`, `ComparisonFact<T>` — The explicit available/unavailable/not-applicable states of a comparison and of one calculated fact
 - `DatedWealthPoint` — One dated point of an aligned wealth series
-- `ReferenceDefinitionInfo` — The identity and purpose of one selected reference definition: its role, universe, instrument, history boundary, verification state, official and objective comparators, and source conventions
+- `ReferencePurposeInfo` — The purpose of one selected reference definition: its role, universe, instrument, history boundary, verification state, and official and objective comparators
 
 **`fund_analysis.rs`**:
 - `FundBenchmarkComparison`, `FundBenchmarkPeriod` — The fund comparison outcome and its accepted `fund_return_pct` period row, mapped from the shared computed row without changing the fund's JSON contract
@@ -175,7 +175,7 @@ Domain structs organized by concept:
 
 **`fund_comparison.rs`**:
 - `FundComparisonResult`, `FundComparisonSide` — The direct fund-to-fund comparison and one compared side, with its own reference-relative comparison
-- `FundClassIdentity` — The exact class identity of one compared side: its source code, its tracked identity, and its vehicle
+- `FundClassIdentity` — The **Fund class identity** of one compared side: its source code, its tracked identity, and its vehicle
 
 **`exposure_benchmark.rs`**:
 - `ExposureBenchmarkComparison` — The exposure-matched primary benchmark: its availability, the aligned subject/reference wealth series, the standard periods, the contributing references, and the omitted seed-to-first-close interval

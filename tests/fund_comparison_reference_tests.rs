@@ -35,6 +35,13 @@ fn human_context(result: &rstock::models::FundComparisonResult) -> String {
     String::from_utf8(human).expect("fund comparison reference context should be UTF-8")
 }
 
+fn human_identity(result: &rstock::models::FundComparisonResult) -> String {
+    let mut human = Vec::new();
+    rstock::cli::display::write_fund_comparison_identity(&mut human, result)
+        .expect("fund comparison identity should serialize");
+    String::from_utf8(human).expect("fund comparison identity should be UTF-8")
+}
+
 fn qualification(
     currency: &str,
     basis: &str,
@@ -241,52 +248,48 @@ async fn each_fund_is_measured_against_its_own_reference() {
 
     let data = fund_comparison_envelope(&result)["data"].clone();
 
-    // Each side keeps its own reference identity and purpose.
+    // Each side keeps its own reference identity, purpose, and conventions.
     let alpha = &data["fund_a"]["primary_benchmark_comparison"];
     let beta = &data["fund_b"]["primary_benchmark_comparison"];
-    assert_eq!(alpha["definition"]["reference_id"], "reference-alpha");
-    assert_eq!(alpha["definition"]["display_name"], "MSCI World");
-    assert_eq!(alpha["definition"]["role"], "Investment universe");
+    assert_eq!(alpha["reference_id"], "reference-alpha");
+    assert_eq!(alpha["reference_name"], "MSCI World");
+    assert_eq!(alpha["source"], "test_source");
+    assert_eq!(alpha["source_identifier"], "XREF1");
+    assert_eq!(alpha["currency"], "EUR");
+    assert_eq!(alpha["native_currency"], "EUR");
+    assert_eq!(alpha["return_basis"], "total_return");
+    assert_eq!(alpha["adjustment"], "dividends_reinvested_once");
+    assert_eq!(alpha["hedge_policy"], "Unhedged");
+    assert_eq!(alpha["purpose"]["role"], "Investment universe");
     assert_eq!(
-        alpha["definition"]["universe"],
+        alpha["purpose"]["universe"],
         "Developed-market large/mid-cap equities"
     );
+    assert_eq!(alpha["purpose"]["official_comparator"], "MSCI World Index");
     assert_eq!(
-        alpha["definition"]["official_comparator"],
-        "MSCI World Index"
-    );
-    assert_eq!(
-        alpha["definition"]["objective_comparator"],
+        alpha["purpose"]["objective_comparator"],
         "Stated objective comparator"
     );
     assert_eq!(
-        alpha["definition"]["history_boundary"],
+        alpha["purpose"]["history_boundary"],
         "2025-01-06 exact fixture class"
     );
-    assert_eq!(alpha["definition"]["verification_state"], "verified");
-    assert_eq!(alpha["definition"]["native_currency"], "EUR");
-    assert_eq!(alpha["definition"]["return_basis"], "total_return");
-    assert_eq!(alpha["definition"]["hedge_policy"], "Unhedged");
+    assert_eq!(alpha["purpose"]["verification_state"], "verified");
+    assert_eq!(alpha["purpose"]["instrument_ticker"], "XREF1");
 
-    assert_eq!(beta["definition"]["reference_id"], "reference-beta");
+    assert_eq!(beta["reference_id"], "reference-beta");
+    assert_eq!(beta["reference_name"], "MSCI ACWI Small Cap Value");
     assert_eq!(
-        beta["definition"]["display_name"],
-        "MSCI ACWI Small Cap Value"
-    );
-    assert_eq!(
-        beta["definition"]["universe"],
+        beta["purpose"]["universe"],
         "Global small-cap value equities"
     );
     assert_eq!(
-        beta["definition"]["official_comparator"],
+        beta["purpose"]["official_comparator"],
         "MSCI ACWI Small Cap Value Index"
     );
 
     // The two sides are not measured against one shared reference.
-    assert_ne!(
-        alpha["definition"]["reference_id"],
-        beta["definition"]["reference_id"]
-    );
+    assert_ne!(alpha["reference_id"], beta["reference_id"]);
     assert_eq!(alpha["availability"]["status"], "available");
     assert_eq!(beta["availability"]["status"], "available");
     // Each side reports the actual comparison dates of its own comparison.
@@ -304,6 +307,29 @@ async fn each_fund_is_measured_against_its_own_reference() {
     assert!(human.contains("MSCI ACWI Small Cap Value"));
     assert!(human.contains("Reference purpose: role Investment universe"));
     assert!(!human.contains("legacy-acwi-etf-proxy"));
+
+    // The human output carries the same reference identity, purpose,
+    // conventions, dates, and scopes as the JSON output.
+    assert!(
+        human.contains("Cobas Internacional FI D primary reference: MSCI World [reference-alpha]")
+    );
+    assert!(human.contains(
+        "Cobas Internacional FI A primary reference: MSCI ACWI Small Cap Value [reference-beta]"
+    ));
+    assert!(human.contains("native currency EUR"));
+    assert!(human.contains("basis total_return"));
+    assert!(human.contains("hedge Unhedged"));
+    assert!(human.contains("universe Developed-market large/mid-cap equities"));
+    assert!(human.contains("universe Global small-cap value equities"));
+    assert!(human.contains("Official comparator: MSCI World Index"));
+    assert!(human.contains("Comparison dates: 01-11-2024 – 08-01-2025"));
+    assert!(human.contains("Since Comparison Start"));
+    assert!(human.contains("Aligned wealth graph (EUR wealth rebased to 100)"));
+
+    // The exact class of each side stays visible in the human output.
+    let identity = human_identity(&result);
+    assert!(identity.contains("Exact class: XSIEIN0001 (fund, tracked in this portfolio)"));
+    assert!(identity.contains("Exact class: XSIEIN0002 (fund, tracked in this portfolio)"));
 }
 
 #[tokio::test]
@@ -337,10 +363,10 @@ async fn an_unusable_reference_affects_only_its_own_side() {
             .contains("no explicit primary reference")
     );
     // The failing side never borrows the other side's reference.
-    assert!(data["fund_b"]["primary_benchmark_comparison"]["definition"].is_null());
+    assert!(data["fund_b"]["primary_benchmark_comparison"]["purpose"].is_null());
     assert!(data["fund_b"]["primary_benchmark_comparison"]["reference_id"].is_null());
     assert_eq!(
-        data["fund_a"]["primary_benchmark_comparison"]["definition"]["reference_id"],
+        data["fund_a"]["primary_benchmark_comparison"]["reference_id"],
         "reference-alpha"
     );
 
@@ -377,9 +403,6 @@ async fn exact_classes_and_vehicles_stay_distinct_and_create_no_holding() {
         "XSIEIN0002"
     );
     assert_eq!(data["fund_a"]["class_identity"]["vehicle"], "fund");
-    assert!(data["fund_a"]["class_identity"]["tracked"]
-        .as_bool()
-        .unwrap());
     assert_ne!(
         data["fund_a"]["class_identity"]["tracked_identity"],
         data["fund_b"]["class_identity"]["tracked_identity"]
@@ -422,12 +445,16 @@ async fn an_untracked_candidate_keeps_its_absence_visible() {
         .expect("fund comparison should succeed");
 
     let data = fund_comparison_envelope(&result)["data"].clone();
-    assert_eq!(data["fund_a"]["class_identity"]["tracked"], false);
     assert!(data["fund_a"]["class_identity"]["tracked_identity"].is_null());
+    assert!(data["fund_a"]["class_identity"]["vehicle"].is_null());
     assert_eq!(
         data["fund_a"]["class_identity"]["source_code"],
         "XCANDIDATE"
     );
+    let identity = human_identity(&result);
+    assert!(identity.contains(
+        "Exact class: XCANDIDATE is not tracked in this portfolio; only the source code identifies this exact class"
+    ));
     assert_eq!(
         data["fund_a"]["primary_benchmark_comparison"]["availability"]["status"],
         "unavailable"
@@ -440,7 +467,7 @@ async fn an_untracked_candidate_keeps_its_absence_visible() {
     );
     // The other side keeps its own reference.
     assert_eq!(
-        data["fund_b"]["primary_benchmark_comparison"]["definition"]["reference_id"],
+        data["fund_b"]["primary_benchmark_comparison"]["reference_id"],
         "reference-alpha"
     );
 }
@@ -509,6 +536,46 @@ async fn the_direct_comparison_keeps_its_full_period_coverage_rule() {
         data["fund_a"]["primary_benchmark_comparison"]["availability"]["status"],
         "available"
     );
+}
+
+#[tokio::test]
+async fn a_scoped_limitation_stays_in_its_own_scope() {
+    let (db, mut sources) = unlike_references_fixture().await;
+    // The first fund's reference stops before the comparison end, so the
+    // reference scope carries the limitation while the fund scope stays clear.
+    let mut reference_prices = sources
+        .historical_prices
+        .get("XREF1")
+        .cloned()
+        .expect("the first reference should have prices");
+    reference_prices.retain(|(date, _)| date != "2025-01-08");
+    sources
+        .historical_prices
+        .insert("XREF1".to_owned(), reference_prices);
+
+    let market = market_data_at(&sources, TODAY);
+    let result = compare_funds(&db, &market, "XCLASS1", "XCLASS2", thirty_day_period())
+        .await
+        .expect("fund comparison should succeed");
+
+    let data = fund_comparison_envelope(&result)["data"].clone();
+    let alpha = &data["fund_a"]["primary_benchmark_comparison"];
+    assert_eq!(alpha["availability"]["status"], "unavailable");
+    assert!(alpha["fund_limitations"].as_array().unwrap().is_empty());
+    assert!(!alpha["reference_limitations"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+
+    // The other side keeps its own complete comparison.
+    assert_eq!(
+        data["fund_b"]["primary_benchmark_comparison"]["availability"]["status"],
+        "available"
+    );
+
+    let human = human_context(&result);
+    assert!(human.contains("Reference limitation: Market data limitation: benchmark reference"));
+    assert!(!human.contains("Fund limitation: Market data limitation: benchmark reference"));
 }
 
 #[tokio::test]

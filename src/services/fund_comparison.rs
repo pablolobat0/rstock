@@ -101,7 +101,7 @@ async fn build_comparison_side(
     // a reference, so they stay available when a fund's own reference is
     // absent or unusable, and they never carry a fact measured against a
     // reference the fund was not assigned.
-    let metrics = compute_fund_only_metrics(&prices, today);
+    let metrics = compute_fund_only_metrics(&prices, today).await;
     let primary_benchmark_comparison = crate::services::benchmark::compare_fund_to_primary(
         db,
         market_data,
@@ -171,7 +171,6 @@ fn class_identity(code: &str, asset: Option<&crate::models::Asset>) -> FundClass
         source_code: code.to_owned(),
         tracked_identity: asset.map(|asset| asset.ticker.clone()),
         vehicle: asset.map(|asset| asset.asset_type.to_string()),
-        tracked: asset.is_some(),
     }
 }
 

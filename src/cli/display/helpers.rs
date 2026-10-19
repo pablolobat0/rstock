@@ -178,10 +178,11 @@ pub(crate) fn write_fund_benchmark_periods<W: Write>(
     if let Some(reference_name) = &comparison.reference_name {
         writeln!(
             writer,
-            "{} primary reference: {} [{}]; currency {}; basis {}; adjustment {}; hedge {}; cadence {}; source {} {}; provenance {}",
+            "{} primary reference: {} [{}]; native currency {}; wealth currency {}; basis {}; adjustment {}; hedge {}; cadence {}; source {} {}; provenance {}",
             fund_name,
             reference_name,
             comparison.reference_id.as_deref().unwrap_or("unknown id"),
+            comparison.native_currency.as_deref().unwrap_or("unknown"),
             comparison.currency,
             comparison.return_basis.as_deref().unwrap_or("unknown"),
             comparison.adjustment.as_deref().unwrap_or("unknown"),
@@ -192,8 +193,8 @@ pub(crate) fn write_fund_benchmark_periods<W: Write>(
             comparison.source_provenance.as_deref().unwrap_or("unknown"),
         )?;
     }
-    if let Some(definition) = &comparison.definition {
-        write_reference_definition_purpose(writer, definition)?;
+    if let Some(purpose) = &comparison.purpose {
+        write_reference_purpose(writer, purpose)?;
     }
     write_comparison_dates(writer, comparison)?;
     write_benchmark_period_rows(
@@ -207,33 +208,33 @@ pub(crate) fn write_fund_benchmark_periods<W: Write>(
     )
 }
 
-/// The purpose and provenance of one selected reference definition.
+/// The purpose of one selected reference definition.
 ///
 /// A rendered comparison carries the meaning of its reference, not only an
 /// identifier, so the investment universe it describes and the official or
 /// objective comparator it records stay inspectable.
-pub(crate) fn write_reference_definition_purpose<W: Write>(
+pub(crate) fn write_reference_purpose<W: Write>(
     writer: &mut W,
-    definition: &crate::models::ReferenceDefinitionInfo,
+    purpose: &crate::models::ReferencePurposeInfo,
 ) -> anyhow::Result<()> {
     writeln!(
         writer,
         "  Reference purpose: role {}; universe {}; instrument {}; verification {}",
-        definition.role,
-        definition.universe,
-        display_optional_text(Some(definition.instrument_ticker.as_str())),
-        definition.verification_state,
+        purpose.role,
+        purpose.universe,
+        display_optional_text(Some(purpose.instrument_ticker.as_str()), "unknown/absent"),
+        purpose.verification_state,
     )?;
     writeln!(
         writer,
-        "  Reference history boundary: {}; source provenance: {}",
-        definition.history_boundary, definition.source_provenance
+        "  Reference history boundary: {}",
+        purpose.history_boundary
     )?;
     writeln!(
         writer,
         "  Official comparator: {}; objective comparator: {}",
-        display_optional_text(definition.official_comparator.as_deref()),
-        display_optional_text(definition.objective_comparator.as_deref()),
+        display_optional_text(purpose.official_comparator.as_deref(), "unknown/absent"),
+        display_optional_text(purpose.objective_comparator.as_deref(), "unknown/absent"),
     )?;
     Ok(())
 }
@@ -338,15 +339,6 @@ pub(crate) fn write_comparison_limitations<W: Write>(
         )?;
     }
     Ok(())
-}
-
-/// One descriptive text that may be absent.
-fn display_optional_text(value: Option<&str>) -> String {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("none")
-        .to_owned()
 }
 
 /// The standard comparison rows shared by the fund and exposure comparisons.
@@ -512,6 +504,17 @@ pub(crate) fn format_market_data_limitation_warning(
             "Market data limitation: FX rate {currency} has latest rate from {latest_available_date}; requested through {requested_end_date}."
         ),
     }
+}
+
+/// One descriptive text that may be absent.
+///
+/// The absent label states what the reader sees in place of the value.
+pub(crate) fn display_optional_text(value: Option<&str>, absent: &str) -> String {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(absent)
+        .to_owned()
 }
 
 #[cfg(test)]

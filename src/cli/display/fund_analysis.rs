@@ -363,10 +363,7 @@ fn print_candidate_correlation(result: &FundAnalysisResult) {
 }
 
 fn display_optional(value: Option<&str>) -> String {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map_or_else(|| "—".to_string(), str::to_owned)
+    super::helpers::display_optional_text(value, "—")
 }
 
 fn build_metric_row(

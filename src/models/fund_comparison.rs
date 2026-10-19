@@ -49,8 +49,6 @@ pub struct FundClassIdentity {
     pub tracked_identity: Option<String>,
     /// The tracked vehicle type of the exact class, when it is tracked.
     pub vehicle: Option<String>,
-    /// Whether this portfolio tracks the exact class.
-    pub tracked: bool,
 }
 
 #[derive(Serialize)]

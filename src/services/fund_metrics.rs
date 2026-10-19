@@ -11,16 +11,6 @@ use crate::services::market_data::{MarketData, SourceObservation};
 use crate::services::metrics;
 use sea_orm::DatabaseConnection;
 
-pub struct StandardFundMetrics {
-    pub ytd: Option<FundPeriodMetrics>,
-    pub one_year: Option<FundPeriodMetrics>,
-    pub three_year: Option<FundPeriodMetrics>,
-    pub five_year: Option<FundPeriodMetrics>,
-    pub all_time: Option<FundPeriodMetrics>,
-    pub benchmark_reference: BenchmarkReferenceInfo,
-    pub benchmark_limitations: Vec<MarketDataLimitation>,
-}
-
 /// The fund-only standard performance rows of one fund.
 ///
 /// These rows measure the fund alone. They never depend on a benchmark
@@ -33,6 +23,13 @@ pub struct FundOnlyMetrics {
     pub three_year: Option<FundPeriodMetrics>,
     pub five_year: Option<FundPeriodMetrics>,
     pub all_time: Option<FundPeriodMetrics>,
+}
+
+/// The standard fund rows measured against the legacy shared ACWI proxy.
+pub struct StandardFundMetrics {
+    pub rows: FundOnlyMetrics,
+    pub benchmark_reference: BenchmarkReferenceInfo,
+    pub benchmark_limitations: Vec<MarketDataLimitation>,
 }
 
 pub async fn compute_standard_fund_metrics(
@@ -65,11 +62,7 @@ pub async fn compute_standard_fund_metrics(
     let rows = fund_period_metrics(prices, Some(&base_prices), Some(&benchmark_prices), today);
 
     Ok(StandardFundMetrics {
-        ytd: rows.ytd,
-        one_year: rows.one_year,
-        three_year: rows.three_year,
-        five_year: rows.five_year,
-        all_time: rows.all_time,
+        rows,
         benchmark_reference: benchmark.benchmark_reference,
         benchmark_limitations,
     })
@@ -80,7 +73,10 @@ pub async fn compute_standard_fund_metrics(
 /// The rows need no reference series, so the fund's own reference is neither
 /// required nor consulted. A reference-relative fact is measured by the
 /// Benchmark Module against the fund's own selected reference instead.
-pub fn compute_fund_only_metrics(prices: &[(String, f64)], today: NaiveDate) -> FundOnlyMetrics {
+pub async fn compute_fund_only_metrics(
+    prices: &[(String, f64)],
+    today: NaiveDate,
+) -> FundOnlyMetrics {
     fund_period_metrics(prices, None, None, today)
 }
 

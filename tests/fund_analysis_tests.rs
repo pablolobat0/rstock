@@ -1490,7 +1490,7 @@ async fn usd_fund_beta_converts_subject_returns_to_eur_before_alignment() {
     .await
     .unwrap();
 
-    assert!((result.all_time.unwrap().beta.unwrap() - 1.0).abs() < 1e-10);
+    assert!((result.rows.all_time.unwrap().beta.unwrap() - 1.0).abs() < 1e-10);
     assert!(result.benchmark_limitations.is_empty());
 }
 
@@ -1529,9 +1529,9 @@ async fn fund_beta_uses_complete_identical_window_intervals_including_flat_days(
     .await
     .unwrap();
 
-    assert_eq!(result.all_time.unwrap().beta, Some(1.0));
-    assert_eq!(result.one_year.unwrap().beta, Some(1.0));
-    assert_eq!(result.ytd.unwrap().beta, Some(1.0));
+    assert_eq!(result.rows.all_time.unwrap().beta, Some(1.0));
+    assert_eq!(result.rows.one_year.unwrap().beta, Some(1.0));
+    assert_eq!(result.rows.ytd.unwrap().beta, Some(1.0));
 
     let weekday_prices: Vec<_> = prices
         .iter()
@@ -1554,9 +1554,9 @@ async fn fund_beta_uses_complete_identical_window_intervals_including_flat_days(
     )
     .await
     .unwrap();
-    assert_eq!(weekday_result.all_time.unwrap().beta, Some(1.0));
-    assert_eq!(weekday_result.one_year.unwrap().beta, Some(1.0));
-    assert_eq!(weekday_result.ytd.unwrap().beta, Some(1.0));
+    assert_eq!(weekday_result.rows.all_time.unwrap().beta, Some(1.0));
+    assert_eq!(weekday_result.rows.one_year.unwrap().beta, Some(1.0));
+    assert_eq!(weekday_result.rows.ytd.unwrap().beta, Some(1.0));
     assert!(weekday_prices
         .windows(2)
         .any(|pair| { pair[0].0 == dates[170] && pair[1].0 == dates[173] }));
@@ -1575,8 +1575,8 @@ async fn fund_beta_uses_complete_identical_window_intervals_including_flat_days(
     )
     .await
     .unwrap();
-    assert!(missing_flat.all_time.unwrap().beta.is_none());
-    assert!(missing_flat.one_year.unwrap().beta.is_none());
+    assert!(missing_flat.rows.all_time.unwrap().beta.is_none());
+    assert!(missing_flat.rows.one_year.unwrap().beta.is_none());
 
     let incomplete_prices: Vec<_> = prices
         .iter()
@@ -1592,10 +1592,10 @@ async fn fund_beta_uses_complete_identical_window_intervals_including_flat_days(
     )
     .await
     .unwrap();
-    let incomplete_all = incomplete.all_time.unwrap();
+    let incomplete_all = incomplete.rows.all_time.unwrap();
     assert!(incomplete_all.beta.is_none());
     assert!(incomplete_all.volatility.is_some());
-    assert!(incomplete.one_year.unwrap().beta.is_none());
+    assert!(incomplete.rows.one_year.unwrap().beta.is_none());
 }
 
 #[tokio::test]
@@ -1764,7 +1764,7 @@ async fn unavailable_fund_fx_remains_a_scoped_limitation_not_a_hard_error() {
     .await
     .unwrap();
 
-    assert!(result.all_time.unwrap().beta.is_none());
+    assert!(result.rows.all_time.unwrap().beta.is_none());
     assert!(result
         .benchmark_limitations
         .iter()
