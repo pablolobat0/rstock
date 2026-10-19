@@ -1,6 +1,12 @@
 use sea_orm_migration::prelude::*;
 use sea_orm_migration::sea_orm::{DatabaseBackend, Statement};
 
+/// The single selection slot of the Strategy benchmark.
+///
+/// The value is repeated in the library's `benchmark_strategy_repo`, because
+/// the migration crate cannot depend on the library that depends on it.
+const SELECTION_SLOT: &str = "portfolio";
+
 #[derive(DeriveMigrationName)]
 pub struct Migration;
 
@@ -44,6 +50,12 @@ impl MigrationTrait for Migration {
                             )
                             .to(BenchmarkReferences::Table, BenchmarkReferences::Id)
                             .on_delete(ForeignKeyAction::Restrict),
+                    )
+                    // The selection is a singleton: the database itself
+                    // refuses a second slot, so a second selected Strategy
+                    // benchmark cannot be stored even by a direct write.
+                    .check(
+                        Expr::col(BenchmarkStrategySelections::SelectionSlot).eq(SELECTION_SLOT),
                     )
                     .to_owned(),
             )

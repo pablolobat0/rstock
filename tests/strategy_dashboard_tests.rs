@@ -572,6 +572,166 @@ async fn the_selected_strategy_never_changes_the_portfolio_accounting_or_valuati
 }
 
 #[tokio::test]
+async fn both_dashboard_aliases_render_the_same_selected_strategy_through_the_dispatch() {
+    let (db, sources) = dashboard_fixture().await;
+    let today = clock();
+    let blend_id = save_strategy_blend(&db, &sources, today).await;
+    let market_data = market_data_at(&sources, today);
+    strategy::select_strategy(&db, &market_data, &blend_id)
+        .await
+        .expect("the strategy should be selected");
+
+    let mut sections = Vec::new();
+    for args in [&["rstock", "get"][..], &["rstock", "portfolio", "get"][..]] {
+        let output = run_dashboard(&db, &sources, today, args, OutputFormat::Human).await;
+        let human = String::from_utf8(output).expect("human output should be UTF-8");
+        let section = section_after(&human, "Strategy benchmark:");
+        for expected in [
+            "Strategy comparison: available",
+            "Comparison window: 02-01-2025 → 04-02-2025",
+            "Strategy anchor: 02-01-2025",
+            "Selected at: 05-02-2025",
+            "basis: explicit_user_selection",
+            "Selected definition: Global Sixty Forty",
+            "Reset rule: monthly",
+            "target weight: 60.00%",
+            "Portfolio return:",
+            "Since Comparison Start",
+        ] {
+            assert!(
+                section.contains(expected),
+                "the alias {args:?} omitted {expected}: {section}"
+            );
+        }
+        sections.push(section.to_owned());
+    }
+    assert_eq!(
+        sections[0], sections[1],
+        "both dashboard aliases must report the same selected strategy"
+    );
+}
+
+#[tokio::test]
+async fn the_unavailable_strategy_keeps_its_anchor_and_earlier_coverage_in_both_outputs() {
+    let (db, sources) = dashboard_fixture().await;
+    let today = clock();
+    let market_data = market_data_at(&sources, today);
+    // A blend admitted from an explicitly selected later start.
+    let definition = custom_blends::create_custom_blend(
+        &db,
+        &market_data,
+        BlendCreateRequest {
+            name: "Later Start".to_owned(),
+            components: vec![rstock::models::BlendComponentArgument {
+                identity: STRATEGY_REFERENCE.to_owned(),
+                weight_percent: 100.0,
+            }],
+            start_date: Some(
+                NaiveDate::parse_from_str("2025-01-16", "%Y-%m-%d").expect("valid start date"),
+            ),
+        },
+    )
+    .await
+    .expect("the blend should be saved");
+    strategy::select_strategy(&db, &market_data, &definition.id)
+        .await
+        .expect("the strategy should be selected");
+
+    // The component loses a required close, so a later required input is
+    // missing for the selected Strategy benchmark.
+    benchmark_reference_price::Entity::delete_many()
+        .filter(benchmark_reference_price::Column::ReferenceId.eq(STRATEGY_REFERENCE))
+        .filter(benchmark_reference_price::Column::Date.eq("2025-02-04"))
+        .exec(&db)
+        .await
+        .expect("the cached prices should be removable");
+    let mut gapped_sources = sources.clone();
+    if let Some(observations) = gapped_sources.historical_prices.get_mut("XSTRAT") {
+        observations.retain(|(date, _)| date != "2025-02-04");
+    }
+
+    let view = portfolio_view(&db, &gapped_sources, today).await;
+    assert!(
+        matches!(
+            view.strategy_benchmark.availability,
+            ComparisonAvailability::Unavailable { .. }
+        ),
+        "the strategy must be unavailable, got {:?}",
+        view.strategy_benchmark.availability
+    );
+    assert_eq!(
+        view.strategy_benchmark.strategy_anchor_date.as_deref(),
+        Some("2025-01-16"),
+        "the known anchor must survive the failed preparation"
+    );
+
+    let human = view_human(&view);
+    let section = section_after(&human, "Strategy benchmark:");
+    assert!(section.contains("Strategy comparison: unavailable"));
+    assert!(section.contains("Strategy anchor: 16-01-2025"));
+    assert!(section.contains("Earlier coverage:"));
+    assert!(section.contains("the comparison was explicitly started on 16-01-2025"));
+    assert!(section.contains("Selected definition: Later Start"));
+
+    let json = view_json(&view);
+    let strategy_json = &json["data"]["strategy_benchmark"];
+    assert_eq!(strategy_json["availability"]["status"], "unavailable");
+    assert_eq!(strategy_json["strategy_anchor_date"], "2025-01-16");
+    assert!(strategy_json["earlier_period_limitation"]
+        .as_str()
+        .expect("the earlier coverage must be visible")
+        .contains("2025-01-16"));
+    assert_eq!(strategy_json["reference_label"], "Later Start");
+    for row in strategy_json["standard_periods"]
+        .as_array()
+        .expect("the standard rows")
+    {
+        assert_eq!(
+            row["subject_return_pct"]["status"], "unavailable",
+            "the standard windows must stay visibly unavailable"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_corrupt_persisted_price_fails_the_portfolio_view_instead_of_hiding() {
+    let (db, sources) = dashboard_fixture().await;
+    let today = clock();
+    let blend_id = save_strategy_blend(&db, &sources, today).await;
+    let market_data = market_data_at(&sources, today);
+    strategy::select_strategy(&db, &market_data, &blend_id)
+        .await
+        .expect("the strategy should be selected");
+
+    // A persisted price of zero is corrupt persisted data, not a missing
+    // observation: the Portfolio view must report it instead of presenting an
+    // unavailable comparison.
+    benchmark_reference_price::Entity::update_many()
+        .col_expr(
+            benchmark_reference_price::Column::ClosingPrice,
+            sea_orm::sea_query::Expr::value(0.0),
+        )
+        .filter(benchmark_reference_price::Column::ReferenceId.eq(STRATEGY_REFERENCE))
+        .exec(&db)
+        .await
+        .expect("the cached prices should be updatable");
+
+    let failure = rstock::services::portfolio_view::get_portfolio_view(
+        &db,
+        &market_data,
+        NavHistoryRequest::All,
+    )
+    .await
+    .expect_err("a corrupt persisted price must fail the Portfolio view");
+    assert!(
+        failure
+            .to_string()
+            .contains("invalid persisted benchmark reference price"),
+        "the failure must name the corrupt observation: {failure}"
+    );
+}
+
+#[tokio::test]
 async fn the_output_adapters_never_fetch_market_data() {
     let (db, sources) = dashboard_fixture().await;
     let today = clock();

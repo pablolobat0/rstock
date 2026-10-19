@@ -7,6 +7,8 @@
 
 use std::io::Write;
 
+use anyhow::Context;
+
 use crate::{
     cli::{display::helpers::display_timestamp, output, StrategyCommands},
     models::StrategySelectionOutcome,
@@ -74,14 +76,21 @@ async fn current_selection(
             note: "No Strategy benchmark is selected".to_owned(),
         });
     };
-    let display_name =
+    // The selected definition is a required lookup: a database failure and a
+    // missing selected definition are both hard failures, never a silent
+    // "nothing is selected".
+    let definition =
         crate::db::repos::benchmark_reference_repo::find_by_id(db, &selection.reference_id)
             .await
-            .ok()
-            .map(|definition| definition.display_name);
+            .with_context(|| {
+                format!(
+                    "the selected Strategy benchmark '{}' is not a known benchmark definition",
+                    selection.reference_id
+                )
+            })?;
     Ok(StrategySelectionOutcome {
         reference_id: Some(selection.reference_id),
-        display_name,
+        display_name: Some(definition.display_name),
         selected: true,
         selected_at: Some(selection.selected_at),
         selection_basis: Some(selection.selection_basis),

@@ -108,7 +108,14 @@ pub async fn unselect_strategy(
     transaction.commit().await?;
     let (replaced_reference_id, replaced_display_name) = match previous.as_ref() {
         Some(previous) => {
-            let replaced = benchmark_reference_repo::find_by_id(db, &previous.reference_id).await?;
+            let replaced = benchmark_reference_repo::find_by_id(db, &previous.reference_id)
+                .await
+                .with_context(|| {
+                    format!(
+                        "the selected Strategy benchmark '{}' is not a known benchmark definition",
+                        previous.reference_id
+                    )
+                })?;
             (
                 Some(previous.reference_id.clone()),
                 Some(replaced.display_name),
@@ -163,17 +170,6 @@ pub async fn compute_strategy_comparison(
     };
     let blend = custom_blend_repo::find_by_id(db, &definition.id).await?;
     let provenance = provenance_of(&selection, &definition, &blend);
-    let series = match prepare_series(db, market_data, &blend).await {
-        Ok(series) => series,
-        Err(StrategyPreparation::Fatal(error)) => return Err(error),
-        Err(StrategyPreparation::Coverage(reason)) => {
-            return Ok(StrategyComparison::unavailable(
-                reason,
-                &provenance,
-                Vec::new(),
-            ));
-        }
-    };
     let Some(portfolio_anchor) = ready_snapshots
         .iter()
         .find(|snapshot| snapshot.total_value > crate::constants::FLOAT_EPSILON)
@@ -184,6 +180,29 @@ pub async fn compute_strategy_comparison(
             Vec::new(),
         ));
     };
+    // The comparison follows the market comparison cadence: it ends at the
+    // last completed weekday on or before the Effective valuation date, so a
+    // Strategy benchmark is never asked for a close the portfolio does not
+    // have either.
+    let effective_end = ready_snapshots
+        .last()
+        .map(|snapshot| snapshot.date.clone())
+        .unwrap_or_default();
+    let series = match prepare_series(db, market_data, &blend, &effective_end).await {
+        Ok(series) => series,
+        Err(StrategyPreparation::Fatal(error)) => return Err(error),
+        Err(StrategyPreparation::Coverage {
+            reason,
+            anchor_date,
+            earlier_period_limitation: limitation,
+        }) => {
+            let mut comparison = StrategyComparison::unavailable(reason, &provenance, Vec::new());
+            comparison.strategy_anchor_date = Some(anchor_date.clone());
+            comparison.earlier_period_limitation =
+                earlier_period_limitation(limitation, &anchor_date, &portfolio_anchor.date);
+            return Ok(comparison);
+        }
+    };
     calculate(&provenance, series, ready_snapshots, &portfolio_anchor.date)
 }
 
@@ -192,8 +211,14 @@ enum StrategyPreparation {
     /// A database failure, corrupt persisted data, or a violated invariant,
     /// which remains an error.
     Fatal(anyhow::Error),
-    /// A missing required input, which makes the comparison unavailable.
-    Coverage(String),
+    /// A missing required input, which makes the comparison unavailable. The
+    /// saved anchor and the coverage the Strategy benchmark cannot offer stay
+    /// known even when a later required input is missing.
+    Coverage {
+        reason: String,
+        anchor_date: String,
+        earlier_period_limitation: Option<String>,
+    },
 }
 
 /// The prepared Strategy benchmark series.
@@ -219,7 +244,14 @@ async fn load_selection(
     let Some(selection) = benchmark_strategy_repo::find_selected(db).await? else {
         return Ok(None);
     };
-    let definition = benchmark_reference_repo::find_by_id(db, &selection.reference_id).await?;
+    let definition = benchmark_reference_repo::find_by_id(db, &selection.reference_id)
+        .await
+        .with_context(|| {
+            format!(
+                "the selected Strategy benchmark '{}' is not a known benchmark definition",
+                selection.reference_id
+            )
+        })?;
     Ok(Some((selection, definition)))
 }
 
@@ -256,20 +288,28 @@ async fn prepare_series(
     db: &DatabaseConnection,
     market_data: &MarketData,
     blend: &CustomBlendDefinition,
+    effective_end: &str,
 ) -> Result<StrategySeries, StrategyPreparation> {
     let start = parse_date(&blend.admitted_start_date).map_err(StrategyPreparation::Fatal)?;
-    let end = market_data.today() - Duration::days(1);
+    let end = last_weekday_on_or_before(effective_end).map_err(StrategyPreparation::Fatal)?;
     if start > end {
         return Err(StrategyPreparation::Fatal(anyhow::anyhow!(
-            "the saved Strategy benchmark '{}' starts on {} but no completed comparison date is available",
+            "the saved Strategy benchmark '{}' starts on {} but the portfolio's ready history ends on {effective_end}",
             blend.id,
             blend.admitted_start_date
         )));
     }
     let window = BlendWindow::new(start, end);
+    let earlier_period_limitation = custom_blends::earlier_period_limitation(blend);
     let series = custom_blends::prepare_saved_blend_series(db, market_data, blend, &window)
         .await
-        .map_err(classify_preparation_failure)?;
+        .map_err(|error| {
+            classify_preparation_failure(
+                error,
+                &blend.admitted_start_date,
+                earlier_period_limitation,
+            )
+        })?;
     Ok(StrategySeries {
         values: series
             .wealth
@@ -283,18 +323,26 @@ async fn prepare_series(
 
 /// Classifies one preparation failure.
 ///
-/// A database failure, corrupt persisted data, and a violated invariant stay
-/// errors; every other failure is a missing required input that makes the
-/// comparison unavailable.
-fn classify_preparation_failure(error: anyhow::Error) -> StrategyPreparation {
-    if error.downcast_ref::<sea_orm::DbErr>().is_some()
-        || error
-            .downcast_ref::<custom_blends::BlendConventionViolation>()
-            .is_some()
+/// Only a typed missing observation is an unavailable comparison. A database
+/// failure, corrupt persisted data, and a violated recorded convention stay
+/// errors, so the classification never hides a broken cache or definition
+/// behind an unavailable comparison.
+fn classify_preparation_failure(
+    error: anyhow::Error,
+    anchor_date: &str,
+    earlier_period_limitation: Option<String>,
+) -> StrategyPreparation {
+    if error
+        .downcast_ref::<custom_blends::BlendCoverageGap>()
+        .is_some()
     {
-        StrategyPreparation::Fatal(error)
+        StrategyPreparation::Coverage {
+            reason: error.to_string(),
+            anchor_date: anchor_date.to_owned(),
+            earlier_period_limitation,
+        }
     } else {
-        StrategyPreparation::Coverage(error.to_string())
+        StrategyPreparation::Fatal(error)
     }
 }
 
@@ -468,6 +516,19 @@ fn earlier_period_limitation(
 /// Whether a date is a completed weekday.
 fn is_weekday(date: NaiveDate) -> bool {
     !matches!(date.weekday(), Weekday::Sat | Weekday::Sun)
+}
+
+/// The last completed weekday on or before the given date.
+///
+/// The comparison follows the market comparison cadence: it ends at the last
+/// completed weekday on or before the Effective valuation date, which the
+/// Portfolio view keeps unchanged.
+fn last_weekday_on_or_before(date: &str) -> anyhow::Result<NaiveDate> {
+    let mut candidate = parse_date(date)?;
+    while !is_weekday(candidate) {
+        candidate -= Duration::days(1);
+    }
+    Ok(candidate)
 }
 
 /// Parses one stored date.

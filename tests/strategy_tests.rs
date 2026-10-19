@@ -16,7 +16,10 @@ use migration::{Migrator, MigratorTrait};
 use rstock::{
     cli::{output::OutputFormat, Cli, Commands},
     db::{
-        entities::{benchmark_blend_component, benchmark_reference, benchmark_reference_price},
+        entities::{
+            benchmark_blend_component, benchmark_reference, benchmark_reference_price,
+            benchmark_strategy_selection,
+        },
         repos::portfolio_history_repo,
     },
     models::{
@@ -136,6 +139,22 @@ fn offline_sources(
         .series_qualifications
         .insert((SOURCE.to_owned(), "XREFB".to_owned()), qualification());
     sources
+}
+
+/// The offline fixture without one completed weekday of a component.
+///
+/// The cached close of that weekday disappears with the observation, so the
+/// component really has an interior weekday gap.
+fn sources_without(
+    sources: &MockMarketDataSources,
+    identifier: &str,
+    excluded: &str,
+) -> MockMarketDataSources {
+    let mut gapped = sources.clone();
+    if let Some(observations) = gapped.historical_prices.get_mut(identifier) {
+        observations.retain(|(date, _)| date != excluded);
+    }
+    gapped
 }
 
 /// The offline fixture with a stepped component and a flat second component.
@@ -874,6 +893,308 @@ async fn a_selected_strategy_refuses_the_destructive_migration_rollback() {
             .expect("the selection should be readable")
             .is_some(),
         "the refused rollback must keep the explicit selection intact"
+    );
+}
+
+#[tokio::test]
+async fn the_database_refuses_a_second_selection_slot() {
+    let db = setup_test_db().await;
+    insert_verified_reference(&db, REFERENCE_A, "XREFA").await;
+
+    let refused = benchmark_strategy_selection::ActiveModel {
+        selection_slot: Set("another-portfolio".to_owned()),
+        reference_id: Set(REFERENCE_A.to_owned()),
+        selected_at: Set("2025-02-05T00:00:00Z".to_owned()),
+        selection_basis: Set(strategy::SELECTION_BASIS_EXPLICIT.to_owned()),
+    }
+    .insert(&db)
+    .await
+    .expect_err("the database must refuse a second selection slot");
+    assert!(
+        refused.to_string().contains("CHECK"),
+        "the refusal must be the singleton constraint: {refused}"
+    );
+
+    let rows = benchmark_strategy_selection::Entity::find()
+        .all(&db)
+        .await
+        .expect("the selection table should be readable");
+    assert!(
+        rows.is_empty(),
+        "the refused insert must not leave a row behind"
+    );
+}
+
+#[tokio::test]
+async fn a_corrupt_persisted_reference_price_stays_a_hard_error() {
+    let db = setup_test_db().await;
+    insert_verified_reference(&db, REFERENCE_A, "XREFA").await;
+    let sources = stepped_sources();
+    let today = clock();
+    let blend_id = save_stepped_blend(&db, &sources, today).await;
+    insert_invested_portfolio(&db).await;
+    let market_data = market_data_at(&sources, today);
+    strategy::select_strategy(&db, &market_data, &blend_id)
+        .await
+        .expect("the strategy should be selected");
+
+    // A persisted price of zero is corrupt persisted data, not a missing
+    // observation: it must never be reported as an unavailable comparison.
+    benchmark_reference_price::Entity::update_many()
+        .col_expr(
+            benchmark_reference_price::Column::ClosingPrice,
+            sea_orm::sea_query::Expr::value(0.0),
+        )
+        .filter(benchmark_reference_price::Column::ReferenceId.eq(REFERENCE_A))
+        .exec(&db)
+        .await
+        .expect("the cached prices should be updatable");
+
+    let failure =
+        strategy::compute_strategy_comparison(&db, &market_data, &ready_snapshots(&db).await)
+            .await
+            .expect_err("a corrupt persisted price must remain an error");
+    assert!(
+        failure
+            .to_string()
+            .contains("invalid persisted benchmark reference price"),
+        "the failure must name the corrupt observation: {failure}"
+    );
+}
+
+#[tokio::test]
+async fn the_strategy_comparison_ends_at_the_ready_nav_end_not_yesterday() {
+    let db = setup_test_db().await;
+    insert_verified_reference(&db, REFERENCE_A, "XREFA").await;
+    // The market is one day further on than the portfolio's ready history:
+    // the comparison must end at the Effective valuation date, not at
+    // yesterday, and it must not require a close the portfolio does not have.
+    let today = NaiveDate::from_ymd_opt(2025, 2, 6).expect("valid clock date");
+    let sources = stepped_sources();
+    // The blend is saved while the last completed close is still the
+    // portfolio's Effective valuation date; the market day moves on afterwards.
+    let blend_id = save_stepped_blend(&db, &sources, clock()).await;
+    insert_invested_portfolio(&db).await;
+    let market_data = market_data_at(&sources, today);
+    strategy::select_strategy(&db, &market_data, &blend_id)
+        .await
+        .expect("the strategy should be selected");
+
+    let comparison =
+        strategy::compute_strategy_comparison(&db, &market_data, &ready_snapshots(&db).await)
+            .await
+            .expect("the comparison should be calculated");
+    assert_eq!(
+        comparison.availability,
+        ComparisonAvailability::Available,
+        "the comparison must be available at the Effective valuation date"
+    );
+    assert_eq!(comparison.end_date.as_deref(), Some(WINDOW_END));
+    assert!(
+        !comparison
+            .reference_wealth
+            .iter()
+            .any(|point| point.date == "2025-02-05"),
+        "the comparison must not require a close after the Effective valuation date"
+    );
+    // The Effective valuation date is unchanged.
+    let latest = common::get_all_snapshots(&db).await;
+    assert_eq!(
+        latest.last().map(|snapshot| snapshot.date.clone()),
+        Some(WINDOW_END.to_owned())
+    );
+}
+
+#[tokio::test]
+async fn a_missing_earlier_close_keeps_the_anchor_and_the_earlier_coverage() {
+    let db = setup_test_db().await;
+    insert_verified_reference(&db, REFERENCE_A, "XREFA").await;
+    let sources = stepped_sources();
+    let today = clock();
+    let market_data = market_data_at(&sources, today);
+    // A blend admitted from an explicitly selected later start.
+    let definition = custom_blends::create_custom_blend(
+        &db,
+        &market_data,
+        BlendCreateRequest {
+            name: "Later Start".to_owned(),
+            components: vec![rstock::models::BlendComponentArgument {
+                identity: REFERENCE_A.to_owned(),
+                weight_percent: 100.0,
+            }],
+            start_date: Some(
+                NaiveDate::parse_from_str("2025-01-16", "%Y-%m-%d").expect("valid start date"),
+            ),
+        },
+    )
+    .await
+    .expect("the blend should be saved");
+    insert_invested_portfolio(&db).await;
+    strategy::select_strategy(&db, &market_data, &definition.id)
+        .await
+        .expect("the strategy should be selected");
+
+    // The strategy's own component loses a required close, so a later
+    // required input is missing.
+    benchmark_reference_price::Entity::delete_many()
+        .filter(benchmark_reference_price::Column::ReferenceId.eq(REFERENCE_A))
+        .filter(benchmark_reference_price::Column::Date.eq("2025-02-04"))
+        .exec(&db)
+        .await
+        .expect("the cached prices should be removable");
+    let gapped_market_data =
+        market_data_at(&sources_without(&sources, "XREFA", "2025-02-04"), today);
+
+    let comparison = strategy::compute_strategy_comparison(
+        &db,
+        &gapped_market_data,
+        &ready_snapshots(&db).await,
+    )
+    .await
+    .expect("a missing close must not fail the command");
+    assert!(
+        matches!(
+            comparison.availability,
+            ComparisonAvailability::Unavailable { .. }
+        ),
+        "the comparison must be unavailable, got {:?}",
+        comparison.availability
+    );
+    // The known anchor and the earlier coverage stay visible.
+    assert_eq!(
+        comparison.strategy_anchor_date.as_deref(),
+        Some("2025-01-16"),
+        "the known anchor must survive the failed preparation"
+    );
+    let limitation = comparison
+        .earlier_period_limitation
+        .as_ref()
+        .expect("the earlier coverage must survive the failed preparation");
+    assert!(
+        limitation.contains("2025-01-16"),
+        "the earlier coverage must name the anchor: {limitation}"
+    );
+    assert_eq!(
+        comparison.reference_id.as_deref(),
+        Some(definition.id.as_str())
+    );
+    assert_eq!(comparison.components.len(), 1);
+    assert_eq!(comparison.reset_rule.as_deref(), Some("monthly"));
+    // The standard windows stay visibly unavailable.
+    assert_eq!(comparison.standard_periods.len(), 5);
+    for period in &comparison.standard_periods {
+        assert!(
+            matches!(
+                period.subject_return_pct,
+                ComparisonFact::Unavailable { .. }
+            ),
+            "the standard window must stay unavailable"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_component_interior_weekday_gap_leaves_the_comparison_unavailable() {
+    let db = setup_test_db().await;
+    insert_verified_reference(&db, REFERENCE_A, "XREFA").await;
+    let sources = stepped_sources();
+    let today = clock();
+    let blend_id = save_stepped_blend(&db, &sources, today).await;
+    insert_invested_portfolio(&db).await;
+    let market_data = market_data_at(&sources, today);
+    strategy::select_strategy(&db, &market_data, &blend_id)
+        .await
+        .expect("the strategy should be selected");
+
+    // The component's own series loses an interior completed weekday: the
+    // cached close disappears and the source no longer reports it.
+    benchmark_reference_price::Entity::delete_many()
+        .filter(benchmark_reference_price::Column::ReferenceId.eq(REFERENCE_A))
+        .filter(benchmark_reference_price::Column::Date.eq("2025-01-20"))
+        .exec(&db)
+        .await
+        .expect("the cached prices should be removable");
+    let gapped_market_data =
+        market_data_at(&sources_without(&sources, "XREFA", "2025-01-20"), today);
+
+    let comparison = strategy::compute_strategy_comparison(
+        &db,
+        &gapped_market_data,
+        &ready_snapshots(&db).await,
+    )
+    .await
+    .expect("a missing component close must not fail the command");
+    let reason = match &comparison.availability {
+        ComparisonAvailability::Unavailable { reason } => reason.clone(),
+        other => panic!("the comparison must be unavailable, got {other:?}"),
+    };
+    assert!(
+        reason.contains("2025-01-20"),
+        "the reason must name the missing component close: {reason}"
+    );
+    assert!(
+        comparison.subject_return_pct.is_none(),
+        "the measured return must not be silently shortened"
+    );
+}
+
+#[tokio::test]
+async fn replacing_and_deleting_the_old_strategy_preserves_the_history() {
+    let db = setup_test_db().await;
+    insert_verified_reference(&db, REFERENCE_A, "XREFA").await;
+    insert_verified_reference(&db, REFERENCE_B, "XREFB").await;
+    let sources = stepped_sources();
+    let today = clock();
+    let first = save_stepped_blend(&db, &sources, today).await;
+    insert_invested_portfolio(&db).await;
+    let market_data = market_data_at(&sources, today);
+    strategy::select_strategy(&db, &market_data, &first)
+        .await
+        .expect("the first strategy should be selected");
+
+    let second = custom_blends::create_custom_blend(
+        &db,
+        &market_data,
+        BlendCreateRequest {
+            name: "All Equity".to_owned(),
+            components: vec![rstock::models::BlendComponentArgument {
+                identity: REFERENCE_B.to_owned(),
+                weight_percent: 100.0,
+            }],
+            start_date: Some(
+                NaiveDate::parse_from_str(WINDOW_START, "%Y-%m-%d").expect("valid start date"),
+            ),
+        },
+    )
+    .await
+    .expect("the second blend should be saved");
+    strategy::select_strategy(&db, &market_data, &second.id)
+        .await
+        .expect("the second strategy should be selected");
+
+    // The replaced definition is deletable again.
+    let deletion = custom_blends::delete_custom_blend(&db, &first)
+        .await
+        .expect("a replaced definition should be deletable");
+    assert!(deletion.deleted);
+    // The historical market data and the NAV history survive the deletion.
+    let cached_prices = benchmark_reference_price::Entity::find()
+        .filter(benchmark_reference_price::Column::ReferenceId.eq(REFERENCE_A))
+        .all(&db)
+        .await
+        .expect("the cached prices should be readable");
+    assert!(
+        !cached_prices.is_empty(),
+        "the deletion must preserve the historical market data"
+    );
+    let snapshots = common::get_all_snapshots(&db).await;
+    assert!(
+        !snapshots.is_empty(),
+        "the deletion must preserve the NAV history"
+    );
+    assert_eq!(
+        snapshots.last().map(|snapshot| snapshot.date.clone()),
+        Some(WINDOW_END.to_owned())
     );
 }
 
