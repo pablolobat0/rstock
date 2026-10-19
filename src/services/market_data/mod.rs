@@ -27,6 +27,23 @@ pub use sources::{
 
 pub(crate) const LEGACY_ACWI_REFERENCE_ID: &str = "legacy-acwi-etf-proxy";
 
+/// A persisted market observation is malformed: its stored date cannot be
+/// parsed or its stored value is not a usable price.
+///
+/// The failure is corrupt persisted data, not a missing observation, so a
+/// caller that separates an unavailable comparison from a broken cache can
+/// tell the two apart through this type.
+#[derive(Debug)]
+pub struct InvalidMarketObservation(pub String);
+
+impl std::fmt::Display for InvalidMarketObservation {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}", self.0)
+    }
+}
+
+impl std::error::Error for InvalidMarketObservation {}
+
 pub(crate) struct NavValuationData {
     asset_prices: HashMap<i32, BTreeMap<NaiveDate, f64>>,
     exchange_rates: HashMap<String, BTreeMap<NaiveDate, f64>>,

@@ -33,7 +33,7 @@ pub async fn run_with_writer<W: Write>(
     match command {
         BlendCommands::List {} => {
             let blends = custom_blends::list_custom_blends(db).await?;
-            write_output(
+            output::write_command_output(
                 writer,
                 format,
                 "blend.list",
@@ -56,7 +56,7 @@ pub async fn run_with_writer<W: Write>(
                 },
             )
             .await?;
-            write_output(
+            output::write_command_output(
                 writer,
                 format,
                 "blend.create",
@@ -66,7 +66,7 @@ pub async fn run_with_writer<W: Write>(
         }
         BlendCommands::Show { blend_id } => {
             let definition = custom_blends::show_custom_blend(db, &blend_id).await?;
-            write_output(
+            output::write_command_output(
                 writer,
                 format,
                 "blend.show",
@@ -76,7 +76,7 @@ pub async fn run_with_writer<W: Write>(
         }
         BlendCommands::Preview { blend_id } => {
             let preview = custom_blends::preview_custom_blend(db, market_data, &blend_id).await?;
-            write_output(
+            output::write_command_output(
                 writer,
                 format,
                 "blend.preview",
@@ -86,7 +86,7 @@ pub async fn run_with_writer<W: Write>(
         }
         BlendCommands::Delete { blend_id } => {
             let deletion = custom_blends::delete_custom_blend(db, &blend_id).await?;
-            write_output(
+            output::write_command_output(
                 writer,
                 format,
                 "blend.delete",
@@ -101,19 +101,6 @@ pub async fn run_with_writer<W: Write>(
 #[derive(Serialize)]
 struct BlendList<'a> {
     blends: &'a [CustomBlendDefinition],
-}
-
-fn write_output<W: Write, T: Serialize>(
-    writer: &mut W,
-    format: output::OutputFormat,
-    command: &str,
-    data: &T,
-    human: &str,
-) -> anyhow::Result<()> {
-    match format {
-        output::OutputFormat::Json => output::write_json(writer, command, data),
-        output::OutputFormat::Human => writeln!(writer, "{human}").map_err(Into::into),
-    }
 }
 
 fn list_human(blends: &[CustomBlendDefinition]) -> String {

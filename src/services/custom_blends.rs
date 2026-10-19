@@ -27,7 +27,8 @@ use sea_orm::{DatabaseConnection, TransactionTrait};
 
 use crate::constants::{format_date, BASE_CURRENCY, DATE_FORMAT};
 use crate::db::repos::{
-    benchmark_assignment_repo, benchmark_reference_repo, custom_blend_repo, portfolio_history_repo,
+    benchmark_assignment_repo, benchmark_reference_repo, benchmark_strategy_repo,
+    custom_blend_repo, portfolio_history_repo,
 };
 use crate::models::{
     BlendComponent, BlendComponentArgument, BlendTargetReset, BlendWealthPoint,
@@ -63,6 +64,56 @@ pub const ACCOUNTING_NOTE: &str = "Monthly target resets are frictionless synthe
 
 /// The saved-definition kind of a Custom blend in the reference catalog.
 pub const CUSTOM_BLEND_KIND: &str = "custom_blend";
+
+/// A recorded convention of an immutable saved definition no longer holds.
+///
+/// The failure is a violated invariant of the saved definition, not a missing
+/// market observation. A caller that separates an unavailable comparison from
+/// a broken definition can tell the two apart through this type.
+#[derive(Debug)]
+pub struct BlendConventionViolation(pub String);
+
+impl std::fmt::Display for BlendConventionViolation {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}", self.0)
+    }
+}
+
+impl std::error::Error for BlendConventionViolation {}
+
+/// A required market observation of a blend component is missing over the
+/// window.
+///
+/// The failure is a missing required input, not a broken definition, so a
+/// caller that separates an unavailable comparison from an error can tell the
+/// two apart through this type.
+#[derive(Debug)]
+pub struct BlendCoverageGap(pub String);
+
+impl std::fmt::Display for BlendCoverageGap {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}", self.0)
+    }
+}
+
+impl std::error::Error for BlendCoverageGap {}
+
+/// The dated wealth series of one saved Custom blend.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SavedBlendSeries {
+    /// The anchor close the series starts at.
+    pub anchor_date: String,
+    /// The last close the series reaches.
+    pub last_observation_date: String,
+    /// The dated rebased wealth series.
+    pub wealth: Vec<BlendWealthPoint>,
+    /// The monthly target resets of the series.
+    pub target_resets: Vec<BlendTargetReset>,
+    /// The cumulative return over the series.
+    pub cumulative_return_pct: f64,
+    /// The honest limitation of the periods the blend cannot cover.
+    pub earlier_period_limitation: Option<String>,
+}
 
 /// The source identity of a Custom blend: it has no market data source.
 const CUSTOM_BLEND_SOURCE: &str = "custom_blend";
@@ -268,9 +319,10 @@ pub async fn preview_custom_blend(
 /// Deletes one unused saved Custom blend definition.
 ///
 /// The usage check and the deletion share one caller-owned transaction, so a
-/// definition that is assigned cannot be deleted and a failed deletion leaves
-/// the saved definition, its components, and every price, FX, ledger, and NAV
-/// row unchanged.
+/// definition that is assigned or explicitly selected as the portfolio's
+/// Strategy benchmark cannot be deleted, and a failed deletion leaves the
+/// saved definition, its components, and every price, FX, ledger, and NAV row
+/// unchanged.
 pub async fn delete_custom_blend(
     db: &DatabaseConnection,
     blend_id: &str,
@@ -283,6 +335,15 @@ pub async fn delete_custom_blend(
         anyhow::bail!(
             "Custom blend '{blend_id}' is in use by {} active assignment(s); remove or replace them before deleting the definition",
             assignments.len()
+        );
+    }
+    if benchmark_strategy_repo::find_by_reference(&transaction, blend_id)
+        .await?
+        .is_some()
+    {
+        transaction.rollback().await?;
+        anyhow::bail!(
+            "Custom blend '{blend_id}' is the explicitly selected Strategy benchmark; unselect or replace it before deleting the definition"
         );
     }
     let deleted = match custom_blend_repo::delete_blend(&transaction, blend_id).await {
@@ -378,6 +439,77 @@ pub fn calculate_blend_wealth(
         wealth: points,
         target_resets,
     })
+}
+
+/// Prepares the dated wealth series of one saved Custom blend over a window.
+///
+/// The saved definition's own persisted facts are validated first, so a
+/// malformed saved definition remains an error. The market-data stage
+/// afterwards reports only a missing required observation, and a recorded
+/// convention that no longer holds remains a violated invariant.
+pub async fn prepare_saved_blend_series(
+    db: &DatabaseConnection,
+    market_data: &MarketData,
+    definition: &CustomBlendDefinition,
+    window: &BlendWindow,
+) -> anyhow::Result<SavedBlendSeries> {
+    let requested = requested_components_from_definition(definition)?;
+    let admitted = admit_components(db, market_data, &requested, window).await?;
+    let series = calculate_blend_wealth(&admitted, window)?;
+    Ok(SavedBlendSeries {
+        anchor_date: series.anchor_date,
+        last_observation_date: series.last_observation_date,
+        wealth: series.wealth,
+        target_resets: series.target_resets,
+        cumulative_return_pct: series.cumulative_return_pct,
+        earlier_period_limitation: earlier_period_limitation(definition),
+    })
+}
+
+/// The honest earlier-period limitation of a saved blend.
+///
+/// A blend admitted from an explicitly selected later start cannot cover the
+/// periods before that date, and the limitation is stated instead of the
+/// window being silently shortened.
+pub fn earlier_period_limitation(definition: &CustomBlendDefinition) -> Option<String> {
+    match definition.admission_basis.as_str() {
+        ADMISSION_BASIS_EXPLICIT_START => Some(format!(
+            "the comparison was explicitly started on {}; the periods before that date are unavailable for this blend",
+            definition.requested_start_date
+        )),
+        ADMISSION_BASIS_FULL_HISTORY => Some(format!(
+            "the comparison starts at the portfolio's first invested closing snapshot {}; the periods before it are outside the portfolio's invested history",
+            definition.requested_start_date
+        )),
+        _ => None,
+    }
+}
+
+/// The portfolio's ready comparison boundary.
+///
+/// The boundary reads the already-persisted Complete NAV history: the first
+/// invested Complete closing snapshot of a positive non-Monetary holding
+/// through the effective complete comparison end. It never rebuilds NAV and
+/// never replays the Transaction ledger.
+pub async fn portfolio_comparison_boundary(
+    db: &DatabaseConnection,
+) -> anyhow::Result<Option<PortfolioComparisonBoundary>> {
+    let Some(first_invested) = custom_blend_repo::find_first_invested_closing_date(db).await?
+    else {
+        return Ok(None);
+    };
+    let snapshot = portfolio_history_repo::find_at_or_before(db, &first_invested).await?;
+    anyhow::ensure!(
+        snapshot.is_some_and(|snapshot| snapshot.date == first_invested),
+        "the first invested closing snapshot {first_invested} has no Complete NAV snapshot; the portfolio history is inconsistent"
+    );
+    let Some(latest) = portfolio_history_repo::find_latest(db).await? else {
+        return Ok(None);
+    };
+    Ok(Some(PortfolioComparisonBoundary {
+        first_invested_date: first_invested,
+        effective_end_date: latest.date,
+    }))
 }
 
 /// The running state of one blend: component values, drifted weights, wealth.
@@ -477,27 +609,29 @@ async fn admit_component(
         )
         .await?;
     let Some(qualification) = prepared.source_qualification.as_ref() else {
-        anyhow::bail!(
+        anyhow::bail!(BlendCoverageGap(format!(
             "component '{}' has no verified return-basis, adjustment, currency, hedge, and cadence qualification",
             request.identity
-        );
+        )));
     };
     if let Some(recorded) = request.recorded.as_ref() {
         anyhow::ensure!(
-            recorded.cadence == qualification.cadence,
-            "component '{}' no longer reports the cadence recorded for this blend (recorded: {}; reported: {})",
-            request.identity,
-            recorded.cadence,
-            qualification.cadence
-        );
+        recorded.cadence == qualification.cadence,
+        BlendConventionViolation(format!(
+                "component '{}' no longer reports the cadence recorded for this blend (recorded: {}; reported: {})",
+                request.identity, recorded.cadence, qualification.cadence
+            ))
+    );
     }
     anyhow::ensure!(
         qualification.currency == definition.currency
             && qualification.return_basis == definition.return_basis_qualification
             && qualification.adjustment == definition.adjustment_qualification
             && qualification.hedge_policy == definition.hedge_policy,
-        "component '{}' does not match its declared currency, adjustment, return basis, or hedge policy",
-        request.identity
+        BlendConventionViolation(format!(
+            "component '{}' does not match its declared currency, adjustment, return basis, or hedge policy",
+            request.identity
+        ))
     );
     anyhow::ensure!(
         qualification.cadence == "daily",
@@ -536,39 +670,44 @@ async fn resolve_component_definition(
 ) -> anyhow::Result<benchmark_reference_repo::BenchmarkReference> {
     if !benchmark_reference_repo::exists(db, &request.identity).await? {
         if custom_blend_repo::exists(db, &request.identity).await? {
-            anyhow::bail!(
+            anyhow::bail!(BlendConventionViolation(format!(
                 "component '{}' is a saved Custom blend; nested blends are not supported",
                 request.identity
-            );
+            )));
         }
-        anyhow::bail!(
+        anyhow::bail!(BlendConventionViolation(format!(
             "component '{}' is not a known benchmark definition",
             request.identity
-        );
+        )));
     }
     let definition = benchmark_reference_repo::find_by_id(db, &request.identity).await?;
     anyhow::ensure!(
         definition.kind != CUSTOM_BLEND_KIND,
-        "component '{}' is a saved Custom blend; nested blends are not supported",
-        request.identity
+        BlendConventionViolation(format!(
+            "component '{}' is a saved Custom blend; nested blends are not supported",
+            request.identity
+        ))
     );
     anyhow::ensure!(
         definition.verification_state == "verified",
-        "component '{}' is not a verified usable series (verification state: {})",
-        request.identity,
-        definition.verification_state
+        BlendConventionViolation(format!(
+            "component '{}' is not a verified usable series (verification state: {})",
+            request.identity, definition.verification_state
+        ))
     );
     if let Some(recorded) = request.recorded.as_ref() {
         anyhow::ensure!(
-            recorded.source == definition.source
+        recorded.source == definition.source
                 && recorded.source_identifier == definition.source_identifier
                 && recorded.currency == definition.currency
                 && recorded.return_basis == definition.return_basis_qualification
                 && recorded.adjustment == definition.adjustment_qualification
                 && recorded.hedge_policy == definition.hedge_policy,
-            "component '{}' no longer matches the source, lookup identity, currency, return basis, adjustment, or hedge policy recorded for this blend",
-            request.identity
-        );
+        BlendConventionViolation(format!(
+                "component '{}' no longer matches the source, lookup identity, currency, return basis, adjustment, or hedge policy recorded for this blend",
+                request.identity
+            ))
+    );
     }
     Ok(definition)
 }
@@ -585,15 +724,19 @@ fn require_window_coverage(
         let key = component.component.component_key.clone();
         let conversion = component.conversion_note();
         anyhow::ensure!(
-            component.series.contains_key(&window.actual_start),
-            "component '{key}' has no anchor close on {}; a Custom blend requires every component to hold the required anchor close{conversion}",
-            format_date(window.actual_start)
-        );
+        component.series.contains_key(&window.actual_start),
+        BlendCoverageGap(format!(
+                "component '{key}' has no anchor close on {}; a Custom blend requires every component to hold the required anchor close{conversion}",
+                format_date(window.actual_start)
+            ))
+    );
         anyhow::ensure!(
-            component.series.contains_key(&window.actual_end),
-            "component '{key}' has no end close on {}; a Custom blend requires every component to hold the required end close{conversion}",
-            format_date(window.actual_end)
-        );
+        component.series.contains_key(&window.actual_end),
+        BlendCoverageGap(format!(
+                "component '{key}' has no end close on {}; a Custom blend requires every component to hold the required end close{conversion}",
+                format_date(window.actual_end)
+            ))
+    );
     }
     let mut day = window.actual_start + Duration::days(1);
     while day < window.actual_end {
@@ -604,10 +747,12 @@ fn require_window_coverage(
                 }
                 anyhow::ensure!(
                     component.series.contains_key(&day),
-                    "component '{}' has no observation on {}; a Custom blend requires complete daily coverage over the whole window{}",
-                    component.component.component_key,
-                    format_date(day),
-                    component.conversion_note()
+                    BlendCoverageGap(format!(
+                        "component '{}' has no observation on {}; a Custom blend requires complete daily coverage over the whole window{}",
+                        component.component.component_key,
+                        format_date(day),
+                        component.conversion_note()
+                    ))
                 );
             }
         }
@@ -674,9 +819,10 @@ fn requested_components_from_definition(
     for component in &definition.components {
         anyhow::ensure!(
             seen.insert(component.component_key.to_ascii_lowercase()),
-            "saved Custom blend '{}' repeats component '{}'",
-            definition.id,
-            component.component_key
+            BlendConventionViolation(format!(
+                "saved Custom blend '{}' repeats component '{}'",
+                definition.id, component.component_key
+            ))
         );
         total += component.target_weight;
         requested.push(BlendComponentRequest {
@@ -690,10 +836,12 @@ fn requested_components_from_definition(
     }
     anyhow::ensure!(
         (total - 1.0).abs() <= WEIGHT_TOLERANCE,
-        "saved Custom blend '{}' target weights total {:.4}%; they must total 100% within {:.2} percentage points",
-        definition.id,
-        total * 100.0,
-        WEIGHT_TOLERANCE * 100.0
+        BlendConventionViolation(format!(
+            "saved Custom blend '{}' target weights total {:.4}%; they must total 100% within {:.2} percentage points",
+            definition.id,
+            total * 100.0,
+            WEIGHT_TOLERANCE * 100.0
+        ))
     );
     Ok(requested)
 }
@@ -735,53 +883,11 @@ async fn admission_window(
     Ok(BlendWindow::new(start, end))
 }
 
-/// The portfolio's ready comparison boundary.
-///
-/// The boundary reads the already-persisted Complete NAV history: the first
-/// invested Complete closing snapshot of a positive non-Monetary holding
-/// through the effective complete comparison end. It never rebuilds NAV and
-/// never replays the Transaction ledger.
-pub async fn portfolio_comparison_boundary(
-    db: &DatabaseConnection,
-) -> anyhow::Result<Option<PortfolioComparisonBoundary>> {
-    let Some(first_invested) = custom_blend_repo::find_first_invested_closing_date(db).await?
-    else {
-        return Ok(None);
-    };
-    let snapshot = portfolio_history_repo::find_at_or_before(db, &first_invested).await?;
-    anyhow::ensure!(
-        snapshot.is_some_and(|snapshot| snapshot.date == first_invested),
-        "the first invested closing snapshot {first_invested} has no Complete NAV snapshot; the portfolio history is inconsistent"
-    );
-    let Some(latest) = portfolio_history_repo::find_latest(db).await? else {
-        return Ok(None);
-    };
-    Ok(Some(PortfolioComparisonBoundary {
-        first_invested_date: first_invested,
-        effective_end_date: latest.date,
-    }))
-}
-
 /// The admission basis of a window.
 fn admission_basis(start_date: Option<NaiveDate>) -> &'static str {
     match start_date {
         Some(_) => ADMISSION_BASIS_EXPLICIT_START,
         None => ADMISSION_BASIS_FULL_HISTORY,
-    }
-}
-
-/// The honest earlier-period limitation of a saved blend.
-fn earlier_period_limitation(definition: &CustomBlendDefinition) -> Option<String> {
-    match definition.admission_basis.as_str() {
-        ADMISSION_BASIS_EXPLICIT_START => Some(format!(
-            "the comparison was explicitly started on {}; the periods before that date are unavailable for this blend",
-            definition.requested_start_date
-        )),
-        ADMISSION_BASIS_FULL_HISTORY => Some(format!(
-            "the comparison starts at the portfolio's first invested closing snapshot {}; the periods before it are outside the portfolio's invested history",
-            definition.requested_start_date
-        )),
-        _ => None,
     }
 }
 

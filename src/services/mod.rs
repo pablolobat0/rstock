@@ -17,4 +17,5 @@ pub mod metrics;
 pub mod nav;
 pub mod portfolio_inventory;
 pub mod portfolio_view;
+pub mod strategy;
 pub mod transactions;

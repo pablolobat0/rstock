@@ -104,9 +104,11 @@ fn convert_reference_series(
     for (date, rate) in fx_values {
         anyhow::ensure!(
             rate.is_finite() && *rate > 0.0,
-            "invalid persisted FX rate for {} on {}",
-            reference.currency,
-            date
+            "{}",
+            super::InvalidMarketObservation(format!(
+                "invalid persisted FX rate for {} on {}",
+                reference.currency, date
+            ))
         );
     }
     let convert = |prices: &BTreeMap<NaiveDate, f64>| {
@@ -127,10 +129,11 @@ fn convert_reference_series(
     for (date, converted) in &series {
         anyhow::ensure!(
             converted.is_finite() && *converted > 0.0,
-            "invalid converted benchmark reference price for {} on {}: {}",
-            reference.id,
-            date,
-            converted
+            "{}",
+            super::InvalidMarketObservation(format!(
+                "invalid converted benchmark reference price for {} on {}: {}",
+                reference.id, date, converted
+            ))
         );
     }
     Ok((series, genuine_series))
@@ -229,13 +232,21 @@ async fn load_cached_prices(
     let mut genuine = BTreeMap::new();
     let mut covered = HashSet::new();
     for row in rows.iter().filter(|row| !row.is_api_failure) {
-        let date = NaiveDate::parse_from_str(&row.date, DATE_FORMAT)?;
+        // A malformed stored date or a non-positive stored price is corrupt
+        // persisted data, not a missing observation.
+        let date = NaiveDate::parse_from_str(&row.date, DATE_FORMAT).map_err(|error| {
+            super::InvalidMarketObservation(format!(
+                "malformed persisted benchmark reference price date for {reference_id} on {}: {error}",
+                row.date
+            ))
+        })?;
         anyhow::ensure!(
             row.price.is_finite() && row.price > 0.0,
-            "invalid persisted benchmark reference price for {} on {}: {}",
-            reference_id,
-            row.date,
-            row.price
+            "{}",
+            super::InvalidMarketObservation(format!(
+                "invalid persisted benchmark reference price for {reference_id} on {}: {}",
+                row.date, row.price
+            ))
         );
         known.insert(date, row.price);
         covered.insert(date);

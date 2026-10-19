@@ -60,6 +60,9 @@ fn empty_view() -> PortfolioView {
         exposure_benchmark: rstock::models::ExposureBenchmarkComparison::not_applicable(
             "portfolio has no invested Complete NAV snapshot to anchor an exposure-matched comparison",
         ),
+        strategy_benchmark: rstock::models::StrategyComparison::not_applicable(
+            "no Strategy benchmark is explicitly selected",
+        ),
     }
 }
 
@@ -610,6 +613,88 @@ fn populated_view() -> PortfolioView {
             nav: 100.0,
         }],
         exposure_benchmark: exposure_benchmark_view(),
+        strategy_benchmark: strategy_benchmark_view(),
+    }
+}
+
+/// The selected Strategy benchmark comparison of the populated view fixture.
+fn strategy_benchmark_view() -> rstock::models::StrategyComparison {
+    rstock::models::StrategyComparison {
+        availability: rstock::models::ComparisonAvailability::Available,
+        role: "strategy".to_owned(),
+        method: "explicit_strategy_selection".to_owned(),
+        subject_label: "Portfolio".to_owned(),
+        reference_label: "Global Sixty Forty".to_owned(),
+        currency: "EUR".to_owned(),
+        start_date: Some("2025-06-02".to_owned()),
+        end_date: Some("2025-06-09".to_owned()),
+        strategy_anchor_date: Some("2025-06-02".to_owned()),
+        earlier_period_limitation: None,
+        reset_rule: Some("monthly".to_owned()),
+        weight_convention: Some(
+            "Beginning-of-interval target weights with return-driven drift between monthly resets"
+                .to_owned(),
+        ),
+        cash_convention: Some(
+            "Synthetic 0% return cash; no market data, no fees, and no transactions".to_owned(),
+        ),
+        components: vec![rstock::models::BlendComponent {
+            component_key: "verified-fake-reference".to_owned(),
+            component_reference_id: Some("verified-fake-reference".to_owned()),
+            display_name: "Verified Fake Reference".to_owned(),
+            target_weight: 0.6,
+            target_weight_percent: 60.0,
+            is_cash: false,
+            currency: "EUR".to_owned(),
+            return_basis: "total_return".to_owned(),
+            adjustment: "dividends_reinvested_once".to_owned(),
+            hedge_policy: "Unhedged".to_owned(),
+            universe: "Equities".to_owned(),
+            source: "test_source".to_owned(),
+            source_identifier: "XREF".to_owned(),
+            cadence: "daily".to_owned(),
+            source_provenance: "deterministic test source".to_owned(),
+            verification_state: "verified".to_owned(),
+        }],
+        definition_kind: Some("custom_blend".to_owned()),
+        reference_id: Some("custom-blend-global-sixty-forty".to_owned()),
+        source: Some("custom_blend".to_owned()),
+        source_identifier: Some(String::new()),
+        source_provenance: Some(
+            "User-defined Custom blend; its components and their conventions are listed with the definition"
+                .to_owned(),
+        ),
+        verification_state: Some("verified".to_owned()),
+        selected_at: Some("2025-06-01T00:00:00Z".to_owned()),
+        selection_basis: Some("explicit_user_selection".to_owned()),
+        subject_return_pct: Some(12.0),
+        reference_return_pct: Some(6.0),
+        excess_return_percentage_points: Some(6.0),
+        subject_wealth: vec![
+            rstock::models::DatedWealthPoint {
+                date: "2025-06-02".to_owned(),
+                wealth: 100.0,
+            },
+            rstock::models::DatedWealthPoint {
+                date: "2025-06-09".to_owned(),
+                wealth: 112.0,
+            },
+        ],
+        reference_wealth: vec![
+            rstock::models::DatedWealthPoint {
+                date: "2025-06-02".to_owned(),
+                wealth: 100.0,
+            },
+            rstock::models::DatedWealthPoint {
+                date: "2025-06-09".to_owned(),
+                wealth: 106.0,
+            },
+        ],
+        standard_periods: rstock::models::BenchmarkComparisonPeriod::standard_periods()
+            .into_iter()
+            .map(|period| rstock::models::BenchmarkPeriod::unavailable(period, "no history"))
+            .collect(),
+        limitations: vec![],
     }
 }
 

@@ -180,6 +180,18 @@ _Avoid_: Component history, lookback window
 The actual completed weekday close a **Custom blend** starts at, resolved from the requested start by calendar rule before any component availability is inspected. Every component must hold that close, so a **Custom blend** never opens on a shortened window.
 _Avoid_: First common observation, first available date
 
+**Strategy benchmark**:
+The optional saved **Custom blend** the portfolio owner explicitly selects to judge allocation decisions against, independently of the portfolio's actual allocation. It is a reference operation: it carries no target allocation, it is never inferred from the holdings, and it never changes the **Exposure-matched benchmark**, the portfolio's weights, its NAV accounting, its inventory, or its Effective valuation date.
+_Avoid_: Exposure-matched benchmark, portfolio weight benchmark, implied strategy
+
+**Strategy selection**:
+The persisted, explicit choice of the **Strategy benchmark**, with the selected definition's identity, the moment of the choice, and the fact that the choice was explicit. At most one **Strategy benchmark** is selected; a later selection replaces the earlier one.
+_Avoid_: Assignment, inferred allocation, auto-detected strategy
+
+**Strategy anchor**:
+The first completed close the **Strategy benchmark** itself starts at, before it is aligned with the portfolio. A **Strategy benchmark** that starts after the portfolio exposes its **Strategy anchor** and the earlier periods it cannot cover.
+_Avoid_: Comparison start, first common observation
+
 **Exposure-matched benchmark**:
 The primary benchmark of the Portfolio dashboard that combines the explicitly assigned primary reference of every held asset through that asset's historical prior-closing EUR exposures.
 _Avoid_: Portfolio weight benchmark, current-holdings benchmark, strategy benchmark
@@ -288,7 +300,15 @@ _Avoid_: NAV inception return, missing history
 - Every **Blend component** must hold the **Blend anchor** and the end close exactly, and every interior completed weekday; a missing close is rejected rather than treated as a market closure.
 - A **Custom blend** is immutable: it is never edited or automatically revised, and a changed strategy is a new definition.
 - A **Monthly blend reset** restores the declared **Blend target weights**; the weights then drift with component wealth until the next reset.
-- A **Custom blend** may be deleted only while no assignment or Strategy selection refers to it; deleting it never removes component price, FX, Transaction ledger, or **NAV** history.
+- A **Custom blend** may be deleted only while no assignment or **Strategy selection** refers to it; deleting it never removes component price, FX, Transaction ledger, or **NAV** history.
+- A **Strategy selection** is explicit: no **Strategy benchmark** and no target allocation is ever inferred from the holdings, and selecting one is a reference operation rather than a rebalancing transaction.
+- At most one **Strategy benchmark** is selected, and the database itself refuses a second selection; a later selection replaces the earlier one, and unselecting or replacing a selection makes an otherwise-unused definition deletable again.
+- The **Strategy benchmark** is compared independently of the **Exposure-matched benchmark**: it keeps its own role, availability, dates, and provenance, and it never changes that comparison's weights, the portfolio's NAV accounting, its inventory, or its Effective valuation date.
+- The **Strategy benchmark** and the portfolio are aligned at the first close they share, so a comparison never measures unmatched endpoints; a **Strategy anchor** after the portfolio's first invested close leaves the earlier periods unavailable instead of shortening a standard window silently.
+- The **Strategy benchmark** comparison needs every completed weekday of its window in both series; a missing close leaves the comparison unavailable rather than shortening the measured return.
+- The **Strategy benchmark** comparison ends at the last completed weekday on or before the Effective valuation date, like the **Exposure-matched benchmark**, so it never asks for a close the portfolio does not have either.
+- A **Strategy benchmark** that starts after the portfolio's ready history shares no completed window with it: that non-overlap is an unavailable comparison that keeps the **Strategy anchor**, the provenance, and the earlier coverage, never a silently shortened window and never a broken portfolio.
+- A **Strategy benchmark** that cannot be prepared keeps its anchor, its provenance, and its unavailable earlier standard windows visible; only a missing market observation makes the comparison unavailable, while corrupt persisted data, a database failure, and a violated recorded convention remain errors.
 - Fund comparison updates holdings snapshot history for each compared fund but does not show holdings snapshot diffs.
 - Assets entering the portfolio ledger should have **Asset classification** available at creation time, including when created by import.
 - **Asset classification** attributes should be consistent with the top-level asset class; equity-specific attributes belong to equity assets, and fixed-income-specific attributes belong to fixed-income assets.

@@ -138,6 +138,54 @@ pub(in crate::cli) fn color_for_value(v: f64) -> Color {
     }
 }
 
+/// The user-facing date of a stored timestamp. The machine value keeps its
+/// ISO form in the JSON output.
+pub(crate) fn display_timestamp(timestamp: &str) -> String {
+    let date = timestamp.split('T').next().unwrap_or(timestamp);
+    crate::constants::display_date(date)
+}
+
+/// The aligned subject/reference graph of one comparison.
+///
+/// The Adapter draws the series it was given: it never requests, fetches, or
+/// recalculates anything.
+pub(crate) fn write_comparison_graph<W: Write>(
+    writer: &mut W,
+    subject_wealth: &[crate::models::DatedWealthPoint],
+    reference_wealth: &[crate::models::DatedWealthPoint],
+    subject_label: &str,
+    reference_label: &str,
+) -> anyhow::Result<()> {
+    use textplots::{Chart, Plot, Shape};
+
+    if subject_wealth.len() < 2 || reference_wealth.len() < 2 {
+        return Ok(());
+    }
+    let subject_points: Vec<(f32, f32)> = subject_wealth
+        .iter()
+        .enumerate()
+        .map(|(index, point)| (index as f32, point.wealth as f32))
+        .collect();
+    let reference_points: Vec<(f32, f32)> = reference_wealth
+        .iter()
+        .enumerate()
+        .map(|(index, point)| (index as f32, point.wealth as f32))
+        .collect();
+    let xmax = (subject_points.len() - 1) as f32;
+    let subject_shape = Shape::Lines(&subject_points);
+    let reference_shape = Shape::Points(&reference_points);
+    let mut chart = Chart::new(180, 40, 0.0, xmax);
+    let plotted = chart.lineplot(&subject_shape).lineplot(&reference_shape);
+    plotted.axis();
+    plotted.figures();
+    writeln!(writer, "{plotted}")?;
+    writeln!(
+        writer,
+        "  Legend: {subject_label} = line, {reference_label} = points"
+    )?;
+    Ok(())
+}
+
 pub(crate) fn write_benchmark_reference_context<W: Write>(
     writer: &mut W,
     reference: &crate::models::BenchmarkReferenceInfo,

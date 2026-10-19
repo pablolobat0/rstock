@@ -10,6 +10,7 @@ mod portfolio;
 mod portfolio_inventory;
 mod portfolio_view;
 mod stock_info;
+mod strategy;
 mod transaction;
 
 pub(crate) use asset::normalize_currency;
@@ -59,6 +60,9 @@ pub use portfolio_view::{
     PortfolioPerformance, PortfolioView,
 };
 pub use stock_info::StockInfo;
+pub use strategy::{
+    StrategyComparison, StrategyProvenance, StrategySelection, StrategySelectionOutcome,
+};
 pub use transaction::{
     cents_are_representable, cents_to_f64, f64_to_cents, BuyOrder, CsvRow, DividendOrder,
     SellOrder, SplitOrder, Transaction, TransactionListItem, TxType,
