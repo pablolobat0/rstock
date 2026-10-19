@@ -8,8 +8,14 @@ async fn reference_migration_copies_legacy_proxy_cache_without_mutating_accounti
     let db = Database::connect("sqlite::memory:")
         .await
         .expect("in-memory SQLite");
-    let migrations = Migrator::migrations().len();
-    Migrator::up(&db, Some((migrations - 5) as u32))
+    // Locate the legacy-proxy migration by its stable name and apply only its
+    // predecessors, so an unrelated additive migration cannot shift the
+    // boundary this test exercises.
+    let predecessors = Migrator::migrations()
+        .iter()
+        .position(|migration| migration.name().contains("add_legacy_benchmark_reference"))
+        .expect("the legacy proxy migration should be registered") as u32;
+    Migrator::up(&db, Some(predecessors))
         .await
         .expect("schema before reference migration");
 

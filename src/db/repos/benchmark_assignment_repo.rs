@@ -1,4 +1,4 @@
-use sea_orm::{sea_query::OnConflict, EntityTrait, QueryOrder, Set};
+use sea_orm::{sea_query::OnConflict, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set};
 
 use crate::db::entities::benchmark_assignment;
 
@@ -44,6 +44,27 @@ pub async fn find_by_subject(
                 is_override: row.is_override,
             }),
     )
+}
+
+/// The active primary assignments that point at one definition.
+pub async fn find_by_reference(
+    db: &impl sea_orm::ConnectionTrait,
+    reference_id: &str,
+) -> anyhow::Result<Vec<PrimaryAssignment>> {
+    Ok(benchmark_assignment::Entity::find()
+        .filter(benchmark_assignment::Column::ReferenceId.eq(reference_id))
+        .order_by_asc(benchmark_assignment::Column::SubjectType)
+        .order_by_asc(benchmark_assignment::Column::SubjectId)
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|row| PrimaryAssignment {
+            subject_type: row.subject_type,
+            subject_id: row.subject_id,
+            reference_id: row.reference_id,
+            is_override: row.is_override,
+        })
+        .collect())
 }
 
 pub async fn upsert(

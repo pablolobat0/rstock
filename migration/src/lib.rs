@@ -20,6 +20,7 @@ mod m20261018_000002_add_reference_catalog_and_assignments;
 mod m20261018_000003_add_exact_candidate_comparators;
 mod m20261018_000004_track_reference_source_observations;
 mod m20261018_000005_add_adjustment_qualification;
+mod m20261019_000001_add_custom_blends;
 
 pub struct Migrator;
 
@@ -56,6 +57,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261018_000003_add_exact_candidate_comparators::Migration),
             Box::new(m20261018_000004_track_reference_source_observations::Migration),
             Box::new(m20261018_000005_add_adjustment_qualification::Migration),
+            Box::new(m20261019_000001_add_custom_blends::Migration),
         ]
     }
 
