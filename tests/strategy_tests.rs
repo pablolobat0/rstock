@@ -18,7 +18,7 @@ use rstock::{
     db::{
         entities::{
             benchmark_blend_component, benchmark_reference, benchmark_reference_price,
-            benchmark_strategy_selection,
+            benchmark_strategy_selection, daily_exchange_rate, portfolio_history,
         },
         repos::portfolio_history_repo,
     },
@@ -52,13 +52,24 @@ fn clock() -> NaiveDate {
 
 /// A component definition whose qualification is verified and daily.
 async fn insert_verified_reference(db: &DatabaseConnection, id: &str, identifier: &str) {
+    insert_verified_reference_in(db, id, identifier, "EUR").await;
+}
+
+/// A component definition in the given currency, whose qualification is
+/// verified and daily.
+async fn insert_verified_reference_in(
+    db: &DatabaseConnection,
+    id: &str,
+    identifier: &str,
+    currency: &str,
+) {
     benchmark_reference::ActiveModel {
         id: Set(id.to_owned()),
         display_name: Set(format!("Strategy reference {identifier}")),
         instrument_ticker: Set(identifier.to_owned()),
         source: Set(SOURCE.to_owned()),
         source_identifier: Set(identifier.to_owned()),
-        currency: Set("EUR".to_owned()),
+        currency: Set(currency.to_owned()),
         adjustment_provenance: Set("Adjusted daily closes".to_owned()),
         adjustment_qualification: Set("dividends_reinvested_once".to_owned()),
         return_basis_qualification: Set("total_return".to_owned()),
@@ -79,8 +90,14 @@ async fn insert_verified_reference(db: &DatabaseConnection, id: &str, identifier
 
 /// The verified daily qualification of the fake components.
 fn qualification() -> SeriesQualification {
+    qualification_in("EUR")
+}
+
+/// The verified daily qualification of a fake component in the given
+/// currency.
+fn qualification_in(currency: &str) -> SeriesQualification {
     SeriesQualification {
-        currency: "EUR".to_owned(),
+        currency: currency.to_owned(),
         return_basis: "total_return".to_owned(),
         adjustment: "dividends_reinvested_once".to_owned(),
         hedge_policy: "Unhedged".to_owned(),
@@ -167,6 +184,27 @@ fn stepped_sources() -> MockMarketDataSources {
         ),
         weekday_observations(WINDOW_START, WINDOW_END, |_| 100.0),
     )
+}
+
+/// The offline fixture of a component in another currency.
+///
+/// The exchange rates convert the component into the base currency, so the
+/// persisted conversion is exercised.
+fn foreign_currency_sources() -> MockMarketDataSources {
+    let mut sources = MockMarketDataSources::new();
+    sources.historical_prices.insert(
+        "XREFA".to_owned(),
+        weekday_observations(WINDOW_START, WINDOW_END, |_| 100.0),
+    );
+    sources.series_qualifications.insert(
+        (SOURCE.to_owned(), "XREFA".to_owned()),
+        qualification_in("USD"),
+    );
+    sources.exchange_rates.insert(
+        "USDEUR".to_owned(),
+        weekday_observations(WINDOW_START, WINDOW_END, |_| 0.5),
+    );
+    sources
 }
 
 /// The portfolio fixture: one invested Complete closing snapshot per weekday,
@@ -1520,5 +1558,502 @@ async fn the_strategy_commands_report_the_same_selection_in_human_and_json() {
     assert_eq!(
         unselected["data"]["replaced_reference_id"],
         blend_id.as_str()
+    );
+}
+
+/// The position of one invalid value inside the ready NAV history.
+#[derive(Clone, Copy)]
+enum InvalidNavPosition {
+    First,
+    Interior,
+    Last,
+}
+
+impl InvalidNavPosition {
+    /// The name of the position, for the failure message.
+    fn label(self) -> &'static str {
+        match self {
+            Self::First => "the first close",
+            Self::Interior => "an interior close",
+            Self::Last => "the current close",
+        }
+    }
+}
+
+/// The Strategy comparison of a portfolio whose ready NAV holds an invalid
+/// value at one position.
+///
+/// The invalid value is written into the ready history the comparison reads,
+/// so the comparison observes exactly the corruption the portfolio holds.
+async fn comparison_with_an_invalid_ready_nav(
+    invalid: f64,
+    position: InvalidNavPosition,
+) -> anyhow::Result<rstock::models::StrategyComparison> {
+    let db = setup_test_db().await;
+    insert_verified_reference(&db, REFERENCE_A, "XREFA").await;
+    let sources = stepped_sources();
+    let blend_id = save_stepped_blend(&db, &sources, clock()).await;
+    insert_invested_portfolio(&db).await;
+    let market_data = market_data_at(&sources, clock());
+    strategy::select_strategy(&db, &market_data, &blend_id)
+        .await
+        .expect("the strategy should be selected");
+    let mut snapshots = ready_snapshots(&db).await;
+    let index = match position {
+        InvalidNavPosition::First => 0,
+        InvalidNavPosition::Interior => snapshots.len() / 2,
+        InvalidNavPosition::Last => snapshots.len() - 1,
+    };
+    snapshots[index].nav = invalid;
+    strategy::compute_strategy_comparison(&db, &market_data, &snapshots).await
+}
+
+#[tokio::test]
+async fn an_invalid_ready_nav_is_a_hard_error_and_not_a_coverage_gap() {
+    for (invalid, label) in [
+        (0.0, "a zero NAV"),
+        (-1.0, "a negative NAV"),
+        (f64::NAN, "a non-finite NAV"),
+    ] {
+        for position in [
+            InvalidNavPosition::First,
+            InvalidNavPosition::Interior,
+            InvalidNavPosition::Last,
+        ] {
+            let failure = comparison_with_an_invalid_ready_nav(invalid, position)
+                .await
+                .expect_err(&format!(
+                    "{label} at {} must be a hard error",
+                    position.label()
+                ));
+            assert!(
+                failure.to_string().contains("invalid fund EUR observation"),
+                "{label} at {} must be reported as corrupt data, not as a coverage gap: {failure}",
+                position.label()
+            );
+        }
+    }
+}
+
+/// The clock of the later-start fixture.
+///
+/// The blend is admitted from an explicit start, so the market day is later
+/// than the portfolio's ready history.
+fn later_clock() -> NaiveDate {
+    NaiveDate::from_ymd_opt(2025, 2, 14).expect("valid clock date")
+}
+
+/// The source of the later-start fixture: one component that holds every
+/// close of the later admission window.
+fn later_start_sources() -> MockMarketDataSources {
+    offline_sources(
+        weekday_observations("2025-02-10", "2025-02-13", |_| 100.0),
+        weekday_observations("2025-02-10", "2025-02-13", |_| 100.0),
+    )
+}
+
+/// Saves one Custom blend that is admitted from an explicit later start.
+async fn save_later_start_blend(
+    db: &DatabaseConnection,
+    sources: &MockMarketDataSources,
+    today: NaiveDate,
+    start: &str,
+) -> String {
+    let market_data = market_data_at(sources, today);
+    let definition = custom_blends::create_custom_blend(
+        db,
+        &market_data,
+        BlendCreateRequest {
+            name: "Later Start".to_owned(),
+            components: vec![
+                rstock::models::BlendComponentArgument {
+                    identity: REFERENCE_A.to_owned(),
+                    weight_percent: 60.0,
+                },
+                rstock::models::BlendComponentArgument {
+                    identity: "cash".to_owned(),
+                    weight_percent: 40.0,
+                },
+            ],
+            start_date: Some(
+                NaiveDate::parse_from_str(start, "%Y-%m-%d").expect("valid start date"),
+            ),
+        },
+    )
+    .await
+    .expect("the blend should be saved");
+    definition.id
+}
+
+/// The portfolio fixture whose ready history ends before the given date.
+///
+/// The persisted asset value matches the persisted per-asset exposures, so
+/// the Portfolio view accepts the history as consistent.
+async fn insert_invested_portfolio_until(db: &DatabaseConnection, end: &str) {
+    let asset_id = common::insert_asset(db, "XFAKE1", "Invested fixture", "stock", "EUR").await;
+    let mut nav = 100.0;
+    for (date, _) in weekday_observations(WINDOW_START, end, |_| 0.0) {
+        common::insert_portfolio_snapshot_with_values(db, &date, nav * 10.0, nav * 10.0, nav, 10.0)
+            .await;
+        common::insert_portfolio_asset_snapshot(db, &date, asset_id, 10.0, nav, nav * 10.0, 1.0)
+            .await;
+        nav += 1.0;
+    }
+}
+
+/// The ready Complete NAV snapshots of the fixture up to the given date.
+async fn ready_snapshots_until(db: &DatabaseConnection, end: &str) -> Vec<PortfolioSnapshot> {
+    portfolio_history_repo::find_between(db, WINDOW_START, end)
+        .await
+        .expect("the ready NAV history should be readable")
+}
+
+#[tokio::test]
+async fn a_strategy_anchor_after_the_ready_history_is_an_unavailable_comparison() {
+    let db = setup_test_db().await;
+    insert_verified_reference(&db, REFERENCE_A, "XREFA").await;
+    let sources = later_start_sources();
+    let blend_id = save_later_start_blend(&db, &sources, later_clock(), "2025-02-10").await;
+    // The portfolio's ready history ends before the selected anchor: a
+    // backdated ledger entry or an unavailable holding price can leave the
+    // ready history older than the selected Strategy benchmark.
+    insert_invested_portfolio_until(&db, "2025-01-31").await;
+    let market_data = market_data_at(&sources, later_clock());
+    strategy::select_strategy(&db, &market_data, &blend_id)
+        .await
+        .expect("the strategy should be selected");
+
+    let comparison = strategy::compute_strategy_comparison(
+        &db,
+        &market_data,
+        &ready_snapshots_until(&db, "2025-01-31").await,
+    )
+    .await
+    .expect("a non-overlapping window must not fail the command");
+
+    assert!(
+        matches!(
+            comparison.availability,
+            ComparisonAvailability::Unavailable { .. }
+        ),
+        "the comparison must be unavailable, got {:?}",
+        comparison.availability
+    );
+    assert_eq!(
+        comparison.strategy_anchor_date.as_deref(),
+        Some("2025-02-10"),
+        "the known anchor must survive the non-overlapping window"
+    );
+    assert_eq!(comparison.reference_id.as_deref(), Some(blend_id.as_str()));
+    assert_eq!(comparison.reference_label, "Later Start");
+    assert_eq!(comparison.definition_kind.as_deref(), Some("custom_blend"));
+    assert!(
+        comparison
+            .earlier_period_limitation
+            .as_deref()
+            .unwrap_or_default()
+            .contains("2025-02-10"),
+        "the earlier coverage must stay visible: {:?}",
+        comparison.earlier_period_limitation
+    );
+    assert_eq!(
+        comparison.standard_periods.len(),
+        5,
+        "every standard window must stay visible"
+    );
+    for period in &comparison.standard_periods {
+        assert!(
+            matches!(
+                period.subject_return_pct,
+                ComparisonFact::Unavailable { .. }
+            ),
+            "every standard window must stay visibly unavailable"
+        );
+    }
+    // The window is never silently shortened: no measured window is reported.
+    assert_eq!(comparison.start_date, None);
+    assert_eq!(comparison.end_date, None);
+    assert!(comparison.subject_wealth.is_empty());
+    assert!(comparison.reference_wealth.is_empty());
+}
+
+#[tokio::test]
+async fn a_malformed_component_price_date_is_a_hard_error() {
+    let db = setup_test_db().await;
+    insert_verified_reference(&db, REFERENCE_A, "XREFA").await;
+    let sources = stepped_sources();
+    let blend_id = save_stepped_blend(&db, &sources, clock()).await;
+    insert_invested_portfolio(&db).await;
+    let market_data = market_data_at(&sources, clock());
+    strategy::select_strategy(&db, &market_data, &blend_id)
+        .await
+        .expect("the strategy should be selected");
+
+    // A persisted component price whose stored date is malformed is corrupt
+    // persisted data, not a missing observation.
+    benchmark_reference_price::ActiveModel {
+        id: sea_orm::NotSet,
+        reference_id: Set(REFERENCE_A.to_owned()),
+        date: Set("2025-01-16x".to_owned()),
+        closing_price: Set(100.0),
+        is_api_failure: Set(false),
+        is_source_observation: Set(true),
+    }
+    .insert(&db)
+    .await
+    .expect("the corrupt cached price should persist");
+
+    let failure =
+        strategy::compute_strategy_comparison(&db, &market_data, &ready_snapshots(&db).await)
+            .await
+            .expect_err("a malformed persisted component date must be a hard error");
+    assert!(
+        failure
+            .to_string()
+            .contains("malformed persisted benchmark reference price date"),
+        "the failure must name the corrupt observation: {failure}"
+    );
+}
+
+#[tokio::test]
+async fn a_corrupt_ready_nav_fails_the_portfolio_view_instead_of_hiding() {
+    let db = setup_test_db().await;
+    insert_verified_reference(&db, REFERENCE_A, "XREFA").await;
+    let sources = stepped_sources();
+    let blend_id = save_stepped_blend(&db, &sources, clock()).await;
+    insert_invested_portfolio_until(&db, WINDOW_END).await;
+    let market_data = market_data_at(&sources, clock());
+    strategy::select_strategy(&db, &market_data, &blend_id)
+        .await
+        .expect("the strategy should be selected");
+
+    // A persisted NAV that is not a positive number is corrupt persisted
+    // data: the Portfolio view must report it instead of presenting an
+    // unavailable comparison.
+    portfolio_history::Entity::update_many()
+        .col_expr(
+            portfolio_history::Column::Nav,
+            sea_orm::sea_query::Expr::value(0.0),
+        )
+        .filter(portfolio_history::Column::Date.eq("2025-01-16"))
+        .exec(&db)
+        .await
+        .expect("the persisted NAV should be updatable");
+
+    let failure = rstock::services::portfolio_view::get_portfolio_view(
+        &db,
+        &market_data,
+        rstock::models::NavHistoryRequest::All,
+    )
+    .await
+    .expect_err("a corrupt persisted NAV must fail the Portfolio view");
+    assert!(
+        failure.to_string().contains("invalid fund EUR observation"),
+        "the failure must name the corrupt observation: {failure}"
+    );
+}
+
+#[tokio::test]
+async fn the_portfolio_view_keeps_its_facts_when_the_strategy_anchor_is_after_the_ready_history() {
+    let db = setup_test_db().await;
+    insert_verified_reference(&db, REFERENCE_A, "XREFA").await;
+    let sources = later_start_sources();
+    let blend_id = save_later_start_blend(&db, &sources, later_clock(), "2025-02-10").await;
+    // The portfolio's ready history ends before the selected anchor.
+    insert_invested_portfolio_until(&db, "2025-01-31").await;
+    let market_data = market_data_at(&sources, later_clock());
+    strategy::select_strategy(&db, &market_data, &blend_id)
+        .await
+        .expect("the strategy should be selected");
+
+    let view = rstock::services::portfolio_view::get_portfolio_view(
+        &db,
+        &market_data,
+        rstock::models::NavHistoryRequest::All,
+    )
+    .await
+    .expect("an older usable portfolio history must not fail the Portfolio view");
+
+    // The Strategy comparison is unavailable and keeps what is still known.
+    assert!(
+        matches!(
+            view.strategy_benchmark.availability,
+            ComparisonAvailability::Unavailable { .. }
+        ),
+        "the strategy comparison must be unavailable, got {:?}",
+        view.strategy_benchmark.availability
+    );
+    assert_eq!(
+        view.strategy_benchmark.strategy_anchor_date.as_deref(),
+        Some("2025-02-10"),
+        "the known anchor must survive the non-overlapping window"
+    );
+    assert_eq!(
+        view.strategy_benchmark.reference_id.as_deref(),
+        Some(blend_id.as_str())
+    );
+    assert!(
+        view.strategy_benchmark
+            .earlier_period_limitation
+            .as_deref()
+            .unwrap_or_default()
+            .contains("2025-02-10"),
+        "the earlier coverage must stay visible"
+    );
+    assert_eq!(view.strategy_benchmark.standard_periods.len(), 5);
+    for period in &view.strategy_benchmark.standard_periods {
+        assert!(
+            matches!(
+                period.subject_return_pct,
+                ComparisonFact::Unavailable { .. }
+            ),
+            "every standard window must stay visibly unavailable"
+        );
+    }
+    // The window is never silently shortened.
+    assert_eq!(view.strategy_benchmark.start_date, None);
+    assert_eq!(view.strategy_benchmark.end_date, None);
+
+    // The older usable portfolio facts stay intact and independent.
+    let rstock::models::PortfolioPerformance::Available(performance) = &view.performance else {
+        panic!("the older ready history must stay measurable");
+    };
+    assert_eq!(
+        performance.effective_valuation_date, "2025-01-31",
+        "the Effective valuation date stays the older usable history"
+    );
+    assert_eq!(performance.inception_date, WINDOW_START);
+    // The exposure-matched primary comparison keeps its own availability: the
+    // fixture assigns no primary reference, so it is unavailable for that own
+    // reason and never because of the Strategy benchmark.
+    if let ComparisonAvailability::Unavailable { reason } = &view.exposure_benchmark.availability {
+        assert!(
+            reason.contains("no explicit primary reference assignment"),
+            "the exposure comparison must not fail because of the Strategy benchmark: {reason}"
+        );
+    } else {
+        panic!(
+            "the exposure comparison keeps its own availability, got {:?}",
+            view.exposure_benchmark.availability
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_invalid_persisted_fx_rate_is_a_hard_error() {
+    let db = setup_test_db().await;
+    insert_verified_reference_in(&db, REFERENCE_A, "XREFA", "USD").await;
+    let sources = foreign_currency_sources();
+    let blend_id = save_stepped_blend(&db, &sources, clock()).await;
+    insert_invested_portfolio(&db).await;
+    let market_data = market_data_at(&sources, clock());
+    strategy::select_strategy(&db, &market_data, &blend_id)
+        .await
+        .expect("the strategy should be selected");
+
+    // A persisted FX rate that is not a positive number is corrupt persisted
+    // data, not a missing observation.
+    daily_exchange_rate::Entity::update_many()
+        .col_expr(
+            daily_exchange_rate::Column::Rate,
+            sea_orm::sea_query::Expr::value(0.0),
+        )
+        .filter(daily_exchange_rate::Column::FromCurrency.eq("USD"))
+        .filter(daily_exchange_rate::Column::ToCurrency.eq("EUR"))
+        .filter(daily_exchange_rate::Column::Date.eq("2025-01-16"))
+        .exec(&db)
+        .await
+        .expect("the persisted exchange rates should be updatable");
+
+    let failure =
+        strategy::compute_strategy_comparison(&db, &market_data, &ready_snapshots(&db).await)
+            .await
+            .expect_err("an invalid persisted FX rate must be a hard error");
+    assert!(
+        failure.to_string().contains("invalid persisted FX rate"),
+        "the failure must name the corrupt observation: {failure}"
+    );
+}
+
+#[tokio::test]
+async fn a_malformed_component_price_date_fails_the_portfolio_view() {
+    let db = setup_test_db().await;
+    insert_verified_reference(&db, REFERENCE_A, "XREFA").await;
+    let sources = stepped_sources();
+    let blend_id = save_stepped_blend(&db, &sources, clock()).await;
+    insert_invested_portfolio_until(&db, WINDOW_END).await;
+    let market_data = market_data_at(&sources, clock());
+    strategy::select_strategy(&db, &market_data, &blend_id)
+        .await
+        .expect("the strategy should be selected");
+
+    // A persisted component price whose stored date is malformed is corrupt
+    // persisted data: the Portfolio view must report it.
+    benchmark_reference_price::ActiveModel {
+        id: sea_orm::NotSet,
+        reference_id: Set(REFERENCE_A.to_owned()),
+        date: Set("2025-01-16x".to_owned()),
+        closing_price: Set(100.0),
+        is_api_failure: Set(false),
+        is_source_observation: Set(true),
+    }
+    .insert(&db)
+    .await
+    .expect("the corrupt cached price should persist");
+
+    let failure = rstock::services::portfolio_view::get_portfolio_view(
+        &db,
+        &market_data,
+        rstock::models::NavHistoryRequest::All,
+    )
+    .await
+    .expect_err("a malformed persisted component date must fail the Portfolio view");
+    assert!(
+        failure
+            .to_string()
+            .contains("malformed persisted benchmark reference price date"),
+        "the failure must name the corrupt observation: {failure}"
+    );
+}
+
+#[tokio::test]
+async fn the_strategy_show_command_reports_a_failed_selected_definition_lookup() {
+    let db = setup_test_db().await;
+    insert_verified_reference(&db, REFERENCE_A, "XREFA").await;
+    let sources = stepped_sources();
+    let blend_id = save_stepped_blend(&db, &sources, clock()).await;
+    let market_data = market_data_at(&sources, clock());
+    strategy::select_strategy(&db, &market_data, &blend_id)
+        .await
+        .expect("the strategy should be selected");
+
+    // The database's foreign key refuses to delete a selected definition, so
+    // the corrupted selection is simulated by bypassing that protection: the
+    // selected definition is gone while the selection still names it.
+    db.execute_unprepared("PRAGMA foreign_keys = OFF")
+        .await
+        .expect("the foreign key protection should be disabled");
+    benchmark_reference::Entity::delete_by_id(blend_id.clone())
+        .exec(&db)
+        .await
+        .expect("the selected definition should be removable");
+    db.execute_unprepared("PRAGMA foreign_keys = ON")
+        .await
+        .expect("the foreign key protection should be restored");
+
+    let failure = run_strategy(
+        &db,
+        &sources,
+        clock(),
+        &["rstock", "strategy", "show"],
+        OutputFormat::Human,
+    )
+    .await
+    .expect_err("a missing selected definition must not be reported as an empty selection");
+    assert!(
+        failure
+            .to_string()
+            .contains("is not a known benchmark definition"),
+        "the failure must name the missing selected definition: {failure}"
     );
 }

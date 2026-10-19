@@ -292,15 +292,24 @@ async fn prepare_series(
 ) -> Result<StrategySeries, StrategyPreparation> {
     let start = parse_date(&blend.admitted_start_date).map_err(StrategyPreparation::Fatal)?;
     let end = last_weekday_on_or_before(effective_end).map_err(StrategyPreparation::Fatal)?;
+    let earlier_period_limitation = custom_blends::earlier_period_limitation(blend);
     if start > end {
-        return Err(StrategyPreparation::Fatal(anyhow::anyhow!(
-            "the saved Strategy benchmark '{}' starts on {} but the portfolio's ready history ends on {effective_end}",
-            blend.id,
-            blend.admitted_start_date
-        )));
+        // The saved anchor is after the portfolio's ready history, so the two
+        // share no completed window. That is an expected non-overlap, not
+        // corrupt data: a backdated ledger entry or an unavailable holding
+        // price can leave the ready history older than the selected anchor.
+        // The comparison is unavailable and keeps the anchor and the earlier
+        // coverage the Strategy benchmark cannot offer.
+        return Err(StrategyPreparation::Coverage {
+            reason: format!(
+                "the selected Strategy benchmark starts on {} but the portfolio's ready history ends on {effective_end}, so the two have no overlapping completed window",
+                blend.admitted_start_date
+            ),
+            anchor_date: blend.admitted_start_date.clone(),
+            earlier_period_limitation,
+        });
     }
     let window = BlendWindow::new(start, end);
-    let earlier_period_limitation = custom_blends::earlier_period_limitation(blend);
     let series = custom_blends::prepare_saved_blend_series(db, market_data, blend, &window)
         .await
         .map_err(|error| {
@@ -352,6 +361,11 @@ fn classify_preparation_failure(
 /// comparison never measures unmatched endpoints. Every completed weekday of
 /// the window must be covered by both series: a missing close leaves the
 /// comparison unavailable instead of silently shortening it.
+///
+/// A broken invariant in the measured data stays an error: a persisted
+/// observation that is not a positive finite number, a malformed date, and an
+/// inconsistent window are corrupt data, not a missing input, so they are
+/// never reported as an unavailable comparison.
 fn calculate(
     provenance: &StrategyProvenance,
     series: StrategySeries,
@@ -424,22 +438,18 @@ fn calculate(
     // The standard rows are measured on the same aligned closes as the graph,
     // and every row exposes its own actual anchor. A trailing window the
     // Strategy benchmark cannot cover stays not applicable instead of being
-    // silently shortened.
-    let standard_periods = match crate::services::benchmark::compute_standard_benchmark_periods(
+    // silently shortened. Every failure of that shared calculation is a
+    // broken invariant rather than an expected missing input: a malformed or
+    // non-positive persisted observation, a non-finite metric, or an
+    // inconsistent window. The expected missing input is already reported
+    // above as an unavailable comparison, so the calculation error stays an
+    // error and never hides corrupt data behind an unavailable comparison.
+    let standard_periods = crate::services::benchmark::compute_standard_benchmark_periods(
         &subject_series,
         &reference_series,
         &anchor_date,
         &end_date,
-    ) {
-        Ok(periods) => periods,
-        Err(error) => {
-            return Ok(StrategyComparison::unavailable(
-                format!("the standard comparison rows could not be calculated: {error}"),
-                provenance,
-                Vec::new(),
-            ));
-        }
-    };
+    )?;
 
     let mut comparison =
         StrategyComparison::selected(provenance, ComparisonAvailability::Available);
