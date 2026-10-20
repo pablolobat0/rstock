@@ -1,6 +1,6 @@
 use super::benchmark::{
-    BenchmarkComparisonPeriod, BenchmarkPeriod, ComparisonAvailability, ComparisonFact,
-    ComparisonRole, DatedWealthPoint, ReferencePurposeInfo,
+    BenchmarkComparisonPeriod, BenchmarkPeriod, CandidateClassIdentity, ComparisonAvailability,
+    ComparisonFact, ComparisonRole, DatedWealthPoint, ReferencePurposeInfo,
 };
 use super::portfolio::{AllocationEntry, BenchmarkReferenceInfo, FundHolding};
 use super::MarketDataLimitation;
@@ -222,6 +222,13 @@ impl FundBenchmarkComparison {
 pub struct FundAnalysisResult {
     pub ms_code: String,
     pub name: Option<String>,
+    /// The exact Fund candidate class this analysis was made as, when the
+    /// analysis names one.
+    ///
+    /// It states which candidate assignment the secondary comparisons belong
+    /// to. It is a research record of an exact class, not a holding, so it
+    /// never claims that this portfolio tracks the class.
+    pub candidate_class: Option<CandidateClassIdentity>,
     pub fund_currency: Option<String>,
     pub aum: Option<f64>,
     pub aum_currency: Option<String>,

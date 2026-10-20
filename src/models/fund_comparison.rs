@@ -1,3 +1,4 @@
+use super::benchmark::CandidateClassIdentity;
 use super::{FundBenchmarkComparison, FundPeriodMetrics, RiskFreeAssumption};
 use serde::Serialize;
 
@@ -25,6 +26,13 @@ pub struct FundComparisonSide {
     pub name: String,
     /// The exact class and vehicle identity of this side.
     pub class_identity: FundClassIdentity,
+    /// The exact Fund candidate class this side is compared as, when the
+    /// comparison names one.
+    ///
+    /// It states which candidate assignment the secondary comparisons belong
+    /// to. It is a research record of an exact class, not a holding, so the
+    /// tracked identity of an untracked class stays absent.
+    pub candidate_class: Option<CandidateClassIdentity>,
     pub info: FundInfoComparison,
     pub ytd: Option<FundPeriodMetrics>,
     pub one_year: Option<FundPeriodMetrics>,

@@ -58,6 +58,21 @@ pub enum ComparisonRole {
     Secondary,
 }
 
+/// The exact Fund candidate class of an analysed fund.
+///
+/// The vehicle and the exact ISIN identify the candidate class, so the
+/// comparison states which candidate assignment produced it. It is a
+/// research record of an exact class, not a holding: the tracked identity of
+/// a class this portfolio does not track stays absent, and this identity
+/// never borrows another class's identity.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct CandidateClassIdentity {
+    /// The vehicle of the exact candidate class, for example "fund".
+    pub vehicle: String,
+    /// The exact ISIN of the candidate class.
+    pub identifier: String,
+}
+
 impl ComparisonRole {
     /// The role as it is shown to the user and serialized.
     pub fn as_str(self) -> &'static str {

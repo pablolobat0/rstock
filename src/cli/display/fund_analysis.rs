@@ -125,6 +125,16 @@ pub fn write_fund_analysis_reference_context<W: Write>(
         &result.benchmark_reference,
         &result.benchmark_limitations,
     )?;
+    // The exact candidate class states which candidate assignment produced
+    // the secondary comparisons of this analysis. It is a research record of
+    // an exact class, not a tracked holding.
+    if let Some(candidate) = &result.candidate_class {
+        writeln!(
+            writer,
+            "Candidate class: {} {} (exact candidate identity; not a holding of this portfolio)",
+            candidate.vehicle, candidate.identifier
+        )?;
+    }
     let comparison = &result.primary_benchmark_comparison;
     match &comparison.availability {
         ComparisonAvailability::Available => writeln!(writer, "Primary comparison: available")?,

@@ -35,6 +35,7 @@ const FUND_CODE: &str = "XCLASS";
 const FUND_ISIN_B: &str = "XSIEIN000002";
 const FUND_CODE_B: &str = "XCLASSB";
 const CANDIDATE_ISIN: &str = "LU1598719752";
+const CANDIDATE_ISIN_B: &str = "LU1598719753";
 const PRIMARY_REFERENCE: &str = "verified-primary-reference";
 const PRIMARY_REFERENCE_B: &str = "verified-primary-reference-b";
 const SECONDARY_REFERENCE: &str = "verified-secondary-reference";
@@ -622,6 +623,43 @@ async fn the_primary_and_the_secondary_of_one_exact_class_cannot_share_a_referen
         "the rejected primary selection must leave the primary reference in place"
     );
 
+    // The Fund candidate of the same exact ISIN and vehicle shares the exact
+    // class, so the secondary comparison of the Tracked asset is not a
+    // candidate for the candidate's primary reference either.
+    let refusal = rejection(
+        run_command(
+            &db,
+            &market_data,
+            &[
+                "rstock",
+                "benchmark",
+                "assign-candidate",
+                "--identifier",
+                FUND_ISIN,
+                "--vehicle",
+                "fund",
+                SECONDARY_REFERENCE,
+            ],
+            OutputFormat::Json,
+        )
+        .await,
+    );
+    assert!(
+        refusal.contains("already a secondary comparison"),
+        "the refusal must name the secondary comparison: {refusal}"
+    );
+    assert!(
+        rstock::db::repos::benchmark_assignment_repo::find_by_subject(
+            &db,
+            "fund_candidate",
+            &format!("fund:{FUND_ISIN}")
+        )
+        .await
+        .unwrap()
+        .is_none(),
+        "the rejected candidate selection must leave no assignment behind"
+    );
+
     // Another reference is a different comparison and is accepted.
     let accepted = run_json(
         &db,
@@ -638,6 +676,233 @@ async fn the_primary_and_the_secondary_of_one_exact_class_cannot_share_a_referen
     .await
     .expect("a different reference should be accepted");
     assert_eq!(accepted["data"]["reference_id"], REPLACEMENT_REFERENCE);
+}
+
+// --- Atomic role enforcement ---
+
+#[tokio::test]
+async fn the_database_refuses_a_role_conflicting_write() {
+    let db = setup_test_db().await;
+    insert_fund_asset(&db, FUND_ISIN, "Exact Class Fund", "EUR", FUND_CODE).await;
+    insert_verified_reference(
+        &db,
+        PRIMARY_REFERENCE,
+        "Verified Primary Reference",
+        PRIMARY_IDENTIFIER,
+    )
+    .await;
+    insert_verified_reference(
+        &db,
+        SECONDARY_REFERENCE,
+        "Verified Secondary Reference",
+        SECONDARY_IDENTIFIER,
+    )
+    .await;
+    assign_primary(&db, "tracked", FUND_ISIN, PRIMARY_REFERENCE).await;
+
+    // The write itself is refused, not only a read that could race with
+    // another writer: the reference already carries the primary role of this
+    // exact class.
+    let refused = rstock::db::repos::benchmark_secondary_assignment_repo::upsert(
+        &db,
+        "tracked",
+        FUND_ISIN,
+        PRIMARY_REFERENCE,
+    )
+    .await;
+    assert!(
+        refused.is_err(),
+        "the database must refuse the write that gives one reference both roles"
+    );
+    assert!(
+        rstock::db::repos::benchmark_secondary_assignment_repo::find_by_subject(
+            &db, "tracked", FUND_ISIN
+        )
+        .await
+        .unwrap()
+        .is_empty(),
+        "the refused write must leave no assignment behind"
+    );
+
+    // The Fund candidate of the same exact ISIN and vehicle is the same exact
+    // class, so its write is refused as well.
+    let refused = rstock::db::repos::benchmark_secondary_assignment_repo::upsert(
+        &db,
+        "fund_candidate",
+        &format!("fund:{FUND_ISIN}"),
+        PRIMARY_REFERENCE,
+    )
+    .await;
+    assert!(
+        refused.is_err(),
+        "the database must refuse the candidate write of the same exact class"
+    );
+    assert!(
+        rstock::db::repos::benchmark_secondary_assignment_repo::find_by_subject(
+            &db,
+            "fund_candidate",
+            &format!("fund:{FUND_ISIN}")
+        )
+        .await
+        .unwrap()
+        .is_empty(),
+        "the refused candidate write must leave no assignment behind"
+    );
+
+    // The other direction: a reference that already carries the secondary role
+    // of the exact class cannot become its primary reference.
+    rstock::db::repos::benchmark_secondary_assignment_repo::upsert(
+        &db,
+        "tracked",
+        FUND_ISIN,
+        SECONDARY_REFERENCE,
+    )
+    .await
+    .expect("a different reference should be accepted as the secondary role");
+    let refused = rstock::db::repos::benchmark_assignment_repo::upsert(
+        &db,
+        "tracked",
+        FUND_ISIN,
+        SECONDARY_REFERENCE,
+        false,
+    )
+    .await;
+    assert!(
+        refused.is_err(),
+        "the database must refuse the write that gives one reference both roles"
+    );
+    let primary =
+        rstock::db::repos::benchmark_assignment_repo::find_by_subject(&db, "tracked", FUND_ISIN)
+            .await
+            .unwrap()
+            .expect("the primary assignment should exist");
+    assert_eq!(
+        primary.reference_id, PRIMARY_REFERENCE,
+        "the refused write must leave the primary reference in place"
+    );
+
+    // The Fund candidate of the same exact ISIN and vehicle is the same exact
+    // class, so the secondary comparison of the Tracked asset refuses the
+    // primary reference of the candidate as well.
+    let refused = rstock::db::repos::benchmark_assignment_repo::upsert(
+        &db,
+        "fund_candidate",
+        &format!("fund:{FUND_ISIN}"),
+        SECONDARY_REFERENCE,
+        false,
+    )
+    .await;
+    assert!(
+        refused.is_err(),
+        "the database must refuse the candidate write of the same exact class"
+    );
+    assert!(
+        rstock::db::repos::benchmark_assignment_repo::find_by_subject(
+            &db,
+            "fund_candidate",
+            &format!("fund:{FUND_ISIN}")
+        )
+        .await
+        .unwrap()
+        .is_none(),
+        "the refused candidate write must leave no assignment behind"
+    );
+}
+
+#[tokio::test]
+async fn concurrent_role_selections_keep_one_role_for_the_reference() {
+    let db = setup_test_db().await;
+    insert_fund_asset(&db, FUND_ISIN, "Exact Class Fund", "EUR", FUND_CODE).await;
+    insert_verified_reference(
+        &db,
+        PRIMARY_REFERENCE,
+        "Verified Primary Reference",
+        PRIMARY_IDENTIFIER,
+    )
+    .await;
+    let sources = MockMarketDataSources::new();
+    let market_data = market_data_at(&sources, TODAY);
+
+    // The same reference is selected as the primary reference and as the
+    // secondary comparison of one exact class at the same time.
+    let (primary, secondary) = tokio::join!(
+        run_command(
+            &db,
+            &market_data,
+            &[
+                "rstock",
+                "benchmark",
+                "assign",
+                "--ticker",
+                FUND_ISIN,
+                PRIMARY_REFERENCE,
+            ],
+            OutputFormat::Json,
+        ),
+        run_command(
+            &db,
+            &market_data,
+            &[
+                "rstock",
+                "benchmark",
+                "assign-secondary",
+                "--ticker",
+                FUND_ISIN,
+                PRIMARY_REFERENCE,
+            ],
+            OutputFormat::Json,
+        ),
+    );
+
+    // Exactly one selection is recorded.
+    assert_eq!(
+        usize::from(primary.is_ok()) + usize::from(secondary.is_ok()),
+        1,
+        "one reference may hold exactly one role of one exact class"
+    );
+    // The refused selection is a typed conflict, not a swallowed error.
+    let refusal = match (primary, secondary) {
+        (Err(error), _) | (_, Err(error)) => error.to_string(),
+        _ => panic!("one selection should have been refused"),
+    };
+    assert!(
+        refusal.contains("already the primary reference")
+            || refusal.contains("already a secondary comparison"),
+        "the refusal must name the conflicting role: {refusal}"
+    );
+
+    // The final state holds one role for the reference.
+    let primary_rows =
+        rstock::db::repos::benchmark_assignment_repo::find_by_subject(&db, "tracked", FUND_ISIN)
+            .await
+            .unwrap();
+    let secondary_rows = rstock::db::repos::benchmark_secondary_assignment_repo::find_by_subject(
+        &db, "tracked", FUND_ISIN,
+    )
+    .await
+    .unwrap();
+    let primary_holds =
+        primary_rows.is_some_and(|assignment| assignment.reference_id == PRIMARY_REFERENCE);
+    let secondary_holds = secondary_rows
+        .iter()
+        .any(|assignment| assignment.reference_id == PRIMARY_REFERENCE);
+    assert_ne!(
+        primary_holds, secondary_holds,
+        "the reference must hold exactly one role of the exact class"
+    );
+
+    // The connection is not poisoned by the refused write: the catalog still
+    // renders the surviving assignment.
+    let catalog = run_json(&db, &market_data, &["rstock", "benchmark", "list"])
+        .await
+        .expect("the catalog should render after the refused write");
+    let assignments = catalog["data"]["assignments"].as_array().unwrap();
+    let secondaries = catalog["data"]["secondary_assignments"].as_array().unwrap();
+    assert_eq!(
+        assignments.len() + secondaries.len(),
+        1,
+        "the catalog must show exactly one recorded role"
+    );
 }
 
 // --- Comparison and display ---
@@ -1406,6 +1671,243 @@ async fn an_explicit_candidate_identity_must_denote_the_analysed_class() {
     .await
     .expect("the matching candidate identity should be accepted");
     assert_eq!(envelope["command"], "analyze.fund");
+}
+
+#[tokio::test]
+async fn the_candidate_identity_is_reported_for_the_analysis_and_each_comparison_side() {
+    let db = setup_test_db().await;
+    let mut sources = MockMarketDataSources::new();
+    // Two exact candidate classes, each with its own secondary reference.
+    // Neither class is tracked by this portfolio, so neither has a tracked
+    // identity.
+    for (code, base, step) in [(FUND_CODE, 100.0, 0.10), (FUND_CODE_B, 80.0, 0.08)] {
+        sources.fund_data.insert(
+            code.to_owned(),
+            FundData {
+                fund_currency: Some("EUR".to_owned()),
+                total_holdings: Some(10),
+                portfolio_date: Some("2025-01-08".to_owned()),
+                holdings: vec![],
+            },
+        );
+        sources.fund_quote_metadata.insert(
+            code.to_owned(),
+            FundQuoteMetadata {
+                quote_currency: Some("EUR".to_owned()),
+                ..Default::default()
+            },
+        );
+        sources
+            .historical_prices
+            .insert(code.to_owned(), weekday_series(base, step));
+        sources.series_qualifications.insert(
+            ("morningstar".to_owned(), code.to_owned()),
+            daily_qualification(),
+        );
+    }
+    for (identifier, base, step) in [
+        (SECONDARY_IDENTIFIER, 25.0, 0.02),
+        (REPLACEMENT_IDENTIFIER, 20.0, 0.01),
+    ] {
+        sources
+            .historical_prices
+            .insert(identifier.to_owned(), weekday_series(base, step));
+        sources.series_qualifications.insert(
+            ("test_source".to_owned(), identifier.to_owned()),
+            daily_qualification(),
+        );
+    }
+    insert_verified_reference(
+        &db,
+        SECONDARY_REFERENCE,
+        "Verified Secondary Reference",
+        SECONDARY_IDENTIFIER,
+    )
+    .await;
+    insert_verified_reference(
+        &db,
+        REPLACEMENT_REFERENCE,
+        "Verified Replacement Reference",
+        REPLACEMENT_IDENTIFIER,
+    )
+    .await;
+    let market_data = market_data_at(&sources, TODAY);
+
+    for (identifier, vehicle, reference) in [
+        (CANDIDATE_ISIN, "fund", SECONDARY_REFERENCE),
+        (CANDIDATE_ISIN_B, "etf", REPLACEMENT_REFERENCE),
+    ] {
+        run_json(
+            &db,
+            &market_data,
+            &[
+                "rstock",
+                "benchmark",
+                "assign-secondary-candidate",
+                "--identifier",
+                identifier,
+                "--vehicle",
+                vehicle,
+                reference,
+            ],
+        )
+        .await
+        .expect("the candidate secondary assignment should succeed");
+    }
+
+    // The analysis reports the exact candidate identity it was given.
+    let envelope = run_json(
+        &db,
+        &market_data,
+        &[
+            "rstock",
+            "analyze",
+            "fund",
+            "--code",
+            FUND_CODE,
+            "--candidate",
+            &format!("fund:{CANDIDATE_ISIN}"),
+            "--json",
+        ],
+    )
+    .await
+    .expect("the candidate fund analysis should succeed");
+    assert_eq!(envelope["command"], "analyze.fund");
+    assert_eq!(envelope["data"]["candidate_class"]["vehicle"], "fund");
+    assert_eq!(
+        envelope["data"]["candidate_class"]["identifier"],
+        CANDIDATE_ISIN
+    );
+    // The candidate class is not a tracked holding, so the tracked identity
+    // of the analysis stays absent and the primary comparison keeps the
+    // accepted absent-reference contract.
+    let primary = &envelope["data"]["primary_benchmark_comparison"]["availability"];
+    assert_eq!(primary["status"], "unavailable");
+    assert!(primary["reason"]
+        .as_str()
+        .unwrap()
+        .contains("no exact tracked-asset identity"));
+
+    // The human output names the same exact identity.
+    let result = rstock::services::fund_analysis::compute_fund_analysis_with_candidate(
+        &db,
+        &market_data,
+        FUND_CODE,
+        CandidateCorrelationPeriod {
+            label: "30D",
+            days: 30,
+        },
+        Some(
+            &rstock::services::benchmark_references::FundCandidateIdentity::parse(&format!(
+                "fund:{CANDIDATE_ISIN}"
+            ))
+            .expect("the candidate identity should parse"),
+        ),
+    )
+    .await
+    .expect("the candidate fund analysis should succeed");
+    let human = analysis_human(&result);
+    assert!(
+        human.contains(CANDIDATE_ISIN),
+        "the human output must name the exact candidate ISIN: {human}"
+    );
+    assert!(
+        human.contains("fund"),
+        "the human output must name the exact candidate vehicle: {human}"
+    );
+
+    // The comparison reports each side's own candidate identity, with its own
+    // secondary reference.
+    let envelope = run_json(
+        &db,
+        &market_data,
+        &[
+            "rstock",
+            "compare",
+            "funds",
+            "--code-a",
+            FUND_CODE,
+            "--candidate-a",
+            &format!("fund:{CANDIDATE_ISIN}"),
+            "--code-b",
+            FUND_CODE_B,
+            "--candidate-b",
+            &format!("etf:{CANDIDATE_ISIN_B}"),
+            "--json",
+        ],
+    )
+    .await
+    .expect("the candidate fund comparison should succeed");
+    assert_eq!(envelope["command"], "compare.funds");
+    assert_eq!(
+        envelope["data"]["fund_a"]["candidate_class"]["vehicle"],
+        "fund"
+    );
+    assert_eq!(
+        envelope["data"]["fund_a"]["candidate_class"]["identifier"],
+        CANDIDATE_ISIN
+    );
+    assert_eq!(
+        envelope["data"]["fund_b"]["candidate_class"]["vehicle"],
+        "etf"
+    );
+    assert_eq!(
+        envelope["data"]["fund_b"]["candidate_class"]["identifier"],
+        CANDIDATE_ISIN_B
+    );
+    // The tracked identity of an untracked side stays absent: the candidate
+    // class never borrows another class's identity.
+    assert!(envelope["data"]["fund_a"]["class_identity"]["tracked_identity"].is_null());
+    assert!(envelope["data"]["fund_a"]["class_identity"]["vehicle"].is_null());
+    assert!(envelope["data"]["fund_b"]["class_identity"]["tracked_identity"].is_null());
+    // Each side keeps its own secondary comparison.
+    assert_eq!(
+        envelope["data"]["fund_a"]["secondary_benchmark_comparisons"][0]["reference_id"],
+        SECONDARY_REFERENCE
+    );
+    assert_eq!(
+        envelope["data"]["fund_b"]["secondary_benchmark_comparisons"][0]["reference_id"],
+        REPLACEMENT_REFERENCE
+    );
+
+    // The human output of the same comparison names each side's own exact
+    // candidate identity.
+    let comparison = rstock::services::fund_comparison::compare_funds_with_candidates(
+        &db,
+        &market_data,
+        FUND_CODE,
+        FUND_CODE_B,
+        rstock::models::FundComparisonPeriod {
+            label: "30D",
+            days: 30,
+        },
+        Some(
+            &rstock::services::benchmark_references::FundCandidateIdentity::parse(&format!(
+                "fund:{CANDIDATE_ISIN}"
+            ))
+            .expect("the candidate identity should parse"),
+        ),
+        Some(
+            &rstock::services::benchmark_references::FundCandidateIdentity::parse(&format!(
+                "etf:{CANDIDATE_ISIN_B}"
+            ))
+            .expect("the candidate identity should parse"),
+        ),
+    )
+    .await
+    .expect("the candidate fund comparison should succeed");
+    let mut human = Vec::new();
+    rstock::cli::display::write_fund_comparison_reference_context(&mut human, &comparison)
+        .expect("the human output should be written");
+    let human = String::from_utf8(human).expect("the human output should be UTF-8");
+    assert!(
+        human.contains(CANDIDATE_ISIN) && human.contains(CANDIDATE_ISIN_B),
+        "the human output must name each side's exact candidate ISIN: {human}"
+    );
+    assert!(
+        human.contains("fund") && human.contains("etf"),
+        "the human output must name each side's exact candidate vehicle: {human}"
+    );
 }
 
 // --- Portfolio isolation ---

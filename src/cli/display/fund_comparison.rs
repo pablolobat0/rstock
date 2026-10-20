@@ -174,6 +174,16 @@ pub fn write_fund_comparison_reference_context<W: Write>(
     )?;
     for side in [&result.fund_a, &result.fund_b] {
         writeln!(writer, "{} reference-relative comparison", side.name)?;
+        // The exact candidate class states which candidate assignment produced
+        // the secondary comparisons of this side. It is a research record of
+        // an exact class, not a tracked holding.
+        if let Some(candidate) = &side.candidate_class {
+            writeln!(
+                writer,
+                "{} candidate class: {} {} (exact candidate identity; not a holding of this portfolio)",
+                side.name, candidate.vehicle, candidate.identifier
+            )?;
+        }
         super::helpers::write_fund_benchmark_periods(
             writer,
             &side.name,

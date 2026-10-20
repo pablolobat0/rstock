@@ -116,6 +116,7 @@ pub async fn compute_fund_analysis_with_candidate(
     Ok(FundAnalysisResult {
         ms_code: ms_code.to_owned(),
         name,
+        candidate_class: candidate_class(candidate),
         fund_currency,
         aum: quote_metadata.as_ref().and_then(|metadata| metadata.aum),
         aum_currency: quote_metadata
@@ -145,6 +146,20 @@ pub async fn compute_fund_analysis_with_candidate(
         holdings_changed,
         last_snapshot_date,
         holding_diff,
+    })
+}
+
+/// The exact Fund candidate class of an analysed fund.
+///
+/// The identity is reported as the research record of an exact class, so a
+/// comparison of an untracked candidate states which candidate assignment
+/// produced it without claiming that this portfolio tracks the class.
+fn candidate_class(
+    candidate: Option<&crate::services::benchmark_references::FundCandidateIdentity>,
+) -> Option<crate::models::CandidateClassIdentity> {
+    candidate.map(|identity| crate::models::CandidateClassIdentity {
+        vehicle: identity.vehicle.as_subject_prefix().to_owned(),
+        identifier: identity.identifier.clone(),
     })
 }
 

@@ -171,6 +171,7 @@ async fn build_comparison_side(
         code: code.to_owned(),
         name,
         class_identity: class_identity(code, local_asset.as_ref()),
+        candidate_class: candidate_class(candidate),
         info: FundInfoComparison {
             currency,
             aum: quote_metadata.as_ref().and_then(|metadata| metadata.aum),
@@ -197,6 +198,20 @@ async fn build_comparison_side(
         side,
         holdings: fund_data.holdings,
         prices,
+    })
+}
+
+/// The exact Fund candidate class of one compared side.
+///
+/// The identity is reported as the research record of an exact class, so a
+/// comparison of an untracked candidate states which candidate assignment
+/// produced it without claiming that this portfolio tracks the class.
+fn candidate_class(
+    candidate: Option<&crate::services::benchmark_references::FundCandidateIdentity>,
+) -> Option<crate::models::CandidateClassIdentity> {
+    candidate.map(|identity| crate::models::CandidateClassIdentity {
+        vehicle: identity.vehicle.as_subject_prefix().to_owned(),
+        identifier: identity.identifier.clone(),
     })
 }
 
