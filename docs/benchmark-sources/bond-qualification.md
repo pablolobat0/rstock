@@ -61,10 +61,14 @@ The two references are different kinds of comparison and must not be merged:
   benchmark line, hedged at the share-class level, is a different investment from the EUR-hedged
   index series.
 
-Bloomberg's own methodology draws the same line: returns on multi-currency indices are calculated
-on both an unhedged and a currency-hedged basis in several reporting currencies, while for a
-single-currency index such as the euro-denominated Euro Aggregate, the returns available in other
-currencies are currency conversions of the index's own currency return, not a hedge. [B4, p. 12]
+Bloomberg's own methodology states the limit of what may be inferred here: returns on
+multi-currency indices are calculated on both an unhedged and a currency-hedged basis in several
+reporting currencies, and the euro-denominated Euro Aggregate may be offered in additional
+currencies for both unhedged and hedged indices. [B4, p. 12; B1, p. 2] The currency of a series
+therefore establishes neither hedging nor the absence of it: a mere currency conversion is not a
+hedge, and an other-currency series may be hedged or unhedged, so the exact hedging policy of the
+series used has to be verified from the provider's own series description. The Ábaco sleeve's
+exact EUR-hedged series stays one of the unresolved gates above.
 
 ## Admission decision
 
@@ -120,8 +124,13 @@ both Bloomberg methodology documents were downloaded and read directly.
   total"; "No está predeterminada la duración media de la cartera de renta fija, pudiendo incluso
   ser negativa puntualmente"),
   <https://www.abaco-capital.com/wp-content/Documentacion/folleto_ARFMG.PDF>.
-- **B1:** Bloomberg, *Bloomberg Euro Aggregate Index* methodology, <https://assets.bbhub.io/professional/sites/27/Euro-Aggregate-Index.pdf>
-  (Index ID 2000; I02000EU / LBEATREU:IND, Total Return EUR Unhedged; launched 1 June 1998; eligibility rules).
+- **B1:** Bloomberg, *Bloomberg Euro Aggregate Index* methodology, read directly (four pages; the
+  document carries the date 29 September 2026). Index ID 2000; base-currency series I02000EU /
+  LBEATREU:IND, Total Return EUR Unhedged; launched 1 June 1998; eligibility rules. Page 2
+  (Publication Currency): "Bloomberg may offer this index in additional currencies for both
+  unhedged and hedged indices", with a cross-reference to Appendix 2 of the Fixed Income Index
+  Methodology for currency hedging and currency returns.
+  <https://assets.bbhub.io/professional/sites/27/Euro-Aggregate-Index.pdf>.
 - **B2:** Bloomberg, *Bloomberg Euro-Aggregate: Treasury 1-3 Year* index page (LET1TREU:IND, future ticker I02119EU),
   <https://www.bloomberg.com/professional/products/indices/quote/LET1TREU:IND> — indexed primary text; the direct page returned HTTP 403 to this investigation.
 - **B3:** Bloomberg, *Bloomberg Euro-Aggregate: Corporate 1-3 Year* index page (I02134US:IND),
