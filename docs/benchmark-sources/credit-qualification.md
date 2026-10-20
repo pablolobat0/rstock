@@ -76,6 +76,10 @@ blend) must carry the verified convention explicitly and must not quietly re-der
 - **Component wealth.** Component returns are evaluated with beginning-of-interval weights and
   compounded into component wealth; the composite is the weighted sum of component wealth at the
   reset, drifting with component wealth between resets. It is not a weighted average of log returns.
+  This weighting and compounding is the *application's* calculation contract, consistent with the
+  saved-blend convention already in the repository; it is not itself documented by ICE or Carmignac.
+  What the primary evidence fixes is the weights, the total-return basis, the EUR treatment and the
+  quarterly reset frequency — not the internal arithmetic of a blended index.
 - **No flattening.** The composite keeps its two components, their weights, their return basis and
   their reset rule visible in human and JSON output. It does not expose arbitrary user nesting and
   does not erase the external schedule by flattening it into a single synthetic series.
