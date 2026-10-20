@@ -25,14 +25,15 @@ its conventions, and its boundaries before enabling it.
 
 | Gate | Evidence and conclusion |
 | --- | --- |
-| Exact class identity | **Verified.** The exact class is *EUR I Acc, ISIN IE00BFZMJT78*, share-class inception **2018-10-31**, fund inception 2018-10-31, base currency EUR, Ireland-domiciled UCITS, daily valuation, management company Neuberger Berman Europe Limited. [N1, N2, N3] |
+| Exact class identity | **Verified.** The exact class is *EUR I Acc, ISIN IE00BFZMJT78*, share-class inception **2018-10-31**, fund inception 2018-10-31, base currency EUR, Ireland-domiciled UCITS, daily valuation. The fund is a sub-fund of **Neuberger Berman Investment Funds PLC**, authorised by the Central Bank of Ireland. The exact-class factsheet is issued by **Neuberger Berman Asset Management Ireland Limited** in the EEA, regulated by the Central Bank of Ireland, and by **Neuberger Berman Europe Limited** for the United Kingdom and outside the EEA; the latter is the issuer of that document there, not the fund's management company. [N1, N2, N3] |
 | Comparator of that exact class | **Verified.** The fund's own factsheet names the benchmark *"Bloomberg Euro Aggregate 1-3 Years (Total Return, EUR)"* for the exact EUR I Acc class; the same statement appears in an independent factsheet copy for the same ISIN. The fund states it is actively managed and that the benchmark is used for comparison purposes only. [N1, N2, N3] |
-| Return basis, currency, hedging | **Verified for the benchmark statement.** The series is a *total return* series published in *EUR*. The Euro Aggregate family measures the investment-grade, **euro-denominated** market, so the series is published in its own index currency: it is neither a currency-converted foreign-currency index nor a hedged variant. The class is EUR-based with euro-denominated assets, so no currency hedge applies to it either. [N1, N2, B1] |
+| Return basis and currency of the benchmark | **Verified for the benchmark statement.** The series is a *total return* series published in *EUR*. The Euro Aggregate family measures the investment-grade, **euro-denominated** market, so the series is published in its own index currency: it is neither a currency-converted foreign-currency index nor a hedged variant. [N1, N2, B1] |
+| Currency-hedge policy of the exact class | **Unverified.** The inspected exact-class documents state the class identity, its EUR denomination, and a euro-denominated investment universe, but none of them states whether the class hedges currency exposure. A EUR denomination and a predominantly euro-denominated portfolio are not evidence of a hedge policy, so no class-level hedge statement is carried into the reference definition and the class policy stays unresolved. [N1, N2, N3] |
 | Index family identity | **Partially confirmed.** The parent index is the *Bloomberg Euro Aggregate Index*, **Index ID 2000**, tickers **I02000EU** / **LBEATREU:IND** (*Total Return EUR Unhedged*), launched **1998-06-01**, covering treasury, government-related, corporate, and securitized investment-grade euro-denominated fixed-rate bonds with at least one year to final maturity. Bloomberg publishes maturity-bucketed members of this family, for example *Euro-Aggregate: Treasury 1-3 Year* (**I02119EU** / LET1TREU:IND) and *Euro-Aggregate: Corporate 1-3 Year* (**I02134US:IND**). [B1, B2, B3] |
 | Exact 1–3 year series identifier | **Unresolved.** The all-sector *Euro Aggregate 1–3 Year* index identifier and ticker were not confirmed from a primary provider page in this investigation. The 1–3 year bucket is evidenced as a *benchmark statement* of the exact class, not as a confirmed series key. Do not infer one from the parent index or from a sibling bucket. |
 | Observation cadence, usable coverage, launch versus back-test boundary | **Unresolved.** No dated primary document or accessible payload establishes the daily publication schedule, the observation history, the correction or revision policy, or the launch date of the 1–3 year series itself. The parent index launch of 1998-06-01 is not the series history. |
-| Permitted access | **Unresolved.** Bloomberg index data is commercial: index levels are delivered through the Bloomberg Terminal, B-PIPE, or a Data License, and are redistributed by licensed vendors such as Refinitiv. No entitlement, contract, or written permission permitting this application to retrieve, cache, compare, and display the series was produced. Public index pages, vendor list pages, and paid third-party chart pages are discovery, not a permitted feed. [B4] |
-| Class history boundary | **Verified.** The exact class starts on 2018-10-31, and the fund inception of the same date does not extend it. No earlier class history is authorized, and the benchmark statement of the exact class is not extended to another class (for example the EUR I Dist or the USD I Acc class of the same fund, whose own inception dates differ). [N1, N2] |
+| Permitted access | **Unresolved.** Bloomberg's fixed-income index methodology states that index subscribers may receive index data in files, that the files may carry index-level and constituent-level returns and characteristics, that index data is also available via authorized redistributors, and that Bloomberg requires index data licenses for services and products linked to the Indices. [B4, p. 63] No license, contract, or written permission permitting this application to retrieve, cache, compare, and display the series was produced, and this investigation did not obtain a dated primary statement of a delivery channel this application may use. Public index pages, vendor list pages, and paid third-party chart pages are discovery, not a permitted feed. |
+| Class history boundary | **Verified.** The exact class starts on 2018-10-31, and the fund inception of the same date does not extend it. The EUR I Dist class of the same fund also starts on 2018-10-31, so it is not an example of a class with a different history; the classes of the same fund that start later are the USD I Acc (15-09-2021), GBP I Dist (28-11-2025), and JPY I Acc (19-12-2025) classes. No earlier class history is authorized, and the benchmark statement of the exact class is not extended to another class. [N2, N3] |
 
 ## Ábaco Renta Fija Mixta Global C — exact class ES0140072028
 
@@ -42,22 +43,28 @@ its conventions, and its boundaries before enabling it.
 | Official comparator of that class | **Verified as absent.** The prospectus states: *"No existe un indice de referencia dado que se realiza una gestión activa y flexible."* The fund has **no reference index**. The 80% Bloomberg Global Aggregate 1–5 Year / 20% MSCI ACWI Small Cap Value reference is therefore an **independently chosen stable comparison target**, not a fund comparator, and it is labelled as such. [A1, P1] |
 | Mandate facts that bound the comparison | **Verified.** The prospectus allows up to 30% equity, states that the currency risk may range between **0% and 50% of total exposure**, that there is no predetermined fixed-income duration (it may even be negative at times), and that any credit quality — including unrated, and even a wholly low-quality portfolio — may be held. A EUR-hedged short-maturity bond sleeve is therefore a deliberate, disclosed comparator choice and not a replica of the fund's risk. [A1] |
 | Selected sleeve identity | **Partially confirmed.** *Bloomberg Global Aggregate 1-5 Year* is evidenced as a published index: the iShares Global Aggregate 1-5 Year Bond Index Fund factsheet of September 2026 names the benchmark *"BBG Global Aggregate 1-5 Year Index (USD)"* with index ticker **I31413US**, covering multi-currency investment-grade securities with 1–5 year maturities. The parent *Bloomberg Global Aggregate* is published as **LEGATRUU:IND** (Total Return Unhedged USD, future ticker I00038US). [I1, I2, B5] |
-| EUR hedging of that sleeve | **Not established for the selected series, and explicitly distinguished from conversion.** Bloomberg's fixed-income methodology states that returns on multi-currency indices are calculated on both an unhedged and a currency-hedged basis in several reporting currencies, and a *Bloomberg Global Aggregate EUR Hedged* variant is listed on third-party index pages. The iShares fund's EUR-hedged share classes hedge **inside the share class** with FX forwards while still tracking the **USD** index; a share-class hedge is therefore not the EUR-hedged index variant, and converting the unhedged USD index into EUR is a conversion, not a hedge. The exact *1–5 Year EUR-hedged* series identifier was not confirmed from a primary provider page. [I1, I3, B4, B6, T1] |
+| EUR hedging of that sleeve | **Not established for the selected series, and explicitly distinguished from conversion.** Bloomberg's fixed-income methodology states that returns on multi-currency indices are calculated on both an unhedged and a currency-hedged basis in several reporting currencies, and a *Bloomberg Global Aggregate EUR Hedged* variant is listed on third-party index pages. The iShares fund's EUR-hedged share classes hedge **inside the share class** with FX forwards while still tracking the **USD** index; a share-class hedge is therefore not the EUR-hedged index variant, and converting the unhedged USD index into EUR is a conversion, not a hedge. The exact *1–5 Year EUR-hedged* series identifier was not confirmed from a primary provider page. [I1, I3, B4 p. 12, B6, T1] |
 | Observation cadence, usable coverage, historical boundaries | **Unresolved.** No accessible payload or dated primary document establishes the daily schedule, the observation history, the correction policy, or the launch-versus-back-test boundary of the exact EUR-hedged 1–5 year series. |
-| Permitted access | **Unresolved.** Same commercial-delivery and entitlement position as the Neuberger reference; no licence, contract, or written permission was produced for retrieval, caching, comparison, or display. [B4] |
+| Permitted access | **Unresolved.** Same position as the Neuberger reference: index data is delivered to subscribers in files and via authorized redistributors under an index data license, and no license, contract, or written permission permitting this application to retrieve, cache, compare, and display the series was produced. [B4, p. 63] |
 
 ## Conversion is not hedging
 
 The two references are different kinds of comparison and must not be merged:
 
 * The Neuberger benchmark is a **euro-denominated** total-return series. Its EUR figures are the
-  index's own currency, so no conversion and no hedge is involved.
+  index's own currency, so no conversion and no hedge is involved. This is a statement about the
+  index series only; the exact class's own currency-hedge policy remains unverified above.
 * The Ábaco sleeve requires the **EUR-hedged** variant of a global, multi-currency index. An
   unhedged USD series expressed in EUR — whether by conversion at the application level or by a
   fund's hedged share class — does not reproduce the currency-hedged return of the index and is
   not admitted as a substitute. The iShares evidence above is the concrete case: the same
   benchmark line, hedged at the share-class level, is a different investment from the EUR-hedged
   index series.
+
+Bloomberg's own methodology draws the same line: returns on multi-currency indices are calculated
+on both an unhedged and a currency-hedged basis in several reporting currencies, while for a
+single-currency index such as the euro-denominated Euro Aggregate, the returns available in other
+currencies are currency conversions of the index's own currency return, not a hedge. [B4, p. 12]
 
 ## Admission decision
 
@@ -80,37 +87,59 @@ currency treatment, no double adjustment, and immutable handling of completed da
 ## Primary-source register
 
 All sources were retrieved on **19–20 October 2026**. Provider pages are mutable; the document
-dates below are the ones the documents themselves carry.
+dates below are the ones the documents themselves carry. Where a document could not be fetched
+directly, the entry says so: `nb.com` answered **HTTP 429** to direct requests for the two
+Neuberger factsheets, and `bloomberg.com` answered **HTTP 403** for its index pages, so those
+were read through indexed primary text; the Swissfunddata factsheet, the Ábaco prospectus, and
+both Bloomberg methodology documents were downloaded and read directly.
 
 - **N1:** Neuberger, *Short Duration Euro Bond Fund* factsheet, published **2026-06-30**
   (exact EUR I Acc class IE00BFZMJT78; benchmark "Bloomberg Euro Aggregate 1-3 Years (Total
   Return, EUR)"; class inception 31-10-2018; "Source: Neuberger Berman, BlackRock Aladdin, as
-  of June 30, 2026"), <https://www.nb.com/api/marketing/file?itemid=3264D7EF472A4A6DA050242E3BE69AEF&v=2>.
+  of June 30, 2026"), <https://www.nb.com/api/marketing/file?itemid=3264D7EF472A4A6DA050242E3BE69AEF&v=2>
+  — indexed primary text; the direct request returned HTTP 429.
 - **N2:** Neuberger, *Short Duration Euro Bond Fund* factsheet, **September 2026** edition (data to
   30 September 2026; same exact class, same benchmark statement, rebranding note of 4 August
   2026, share-class table with the EUR I Dist, GBP I Dist, JPY I Acc, and USD I Acc classes and
   their own inception dates),
-  <https://www.nb.com/api/marketing/file?itemid=772EB6E072B4498A8F9A1E2620A7BBC1&v=3>.
+  <https://www.nb.com/api/marketing/file?itemid=772EB6E072B4498A8F9A1E2620A7BBC1&v=3>
+  — indexed primary text; the direct request returned HTTP 429.
 - **N3:** Swissfunddata, *Neuberger Berman Short Duration Euro Bond Fund EUR I Accumulating
-  Class* factsheet dated **2025-07-31** (independent copy for the same ISIN with the same
-  benchmark statement and class inception), <https://www.swissfunddata.ch/sfdpub/docs/fsm-8350_92_05-20250731-en.pdf>.
+  Class* factsheet dated **2025-07-31**, read directly (six pages). It carries the same
+  benchmark statement for the same ISIN, the share-class table (EUR I Acc 31-10-2018 IE00BFZMJT78;
+  EUR I Dist 31-10-2018 IE00BFZMJS61; USD I Acc 15-09-2021), the "actively managed, not
+  constrained by its benchmark" statement, and the issuer attribution used above
+  (sub-fund of Neuberger Berman Investment Funds PLC; document issued by Neuberger Berman Asset
+  Management Ireland Limited in the EEA and by Neuberger Berman Europe Limited for the United
+  Kingdom and outside the EEA), <https://www.swissfunddata.ch/sfdpub/docs/fsm-8350_92_05-20250731-en.pdf>.
 - **A1:** ABACO CAPITAL, *Folleto — ABACO Renta Fija Mixta Global, FI*, CNMV fund registration
-  **4474**, last updated **2026-06-08** (no reference index; currency risk 0%–50% of total
-  exposure; no predetermined fixed-income duration; class C ISIN ES0140072028 registered
-  2017-12-01), <https://www.abaco-capital.com/wp-content/Documentacion/folleto_ARFMG.PDF>.
+  **4474**, last updated **2026-06-08**, read directly (ten pages; "Última actualización del
+  folleto: 08/06/2026"; fund constituted 23/04/2012, CNMV registration 11/05/2012; class C ISIN
+  ES0140072028 registered 01/12/2017; "No existe un indice de referencia dado que se realiza una
+  gestión activa y flexible"; "El riesgo divisa podrá oscilar entre 0%-50% de la exposición
+  total"; "No está predeterminada la duración media de la cartera de renta fija, pudiendo incluso
+  ser negativa puntualmente"),
+  <https://www.abaco-capital.com/wp-content/Documentacion/folleto_ARFMG.PDF>.
 - **B1:** Bloomberg, *Bloomberg Euro Aggregate Index* methodology, <https://assets.bbhub.io/professional/sites/27/Euro-Aggregate-Index.pdf>
   (Index ID 2000; I02000EU / LBEATREU:IND, Total Return EUR Unhedged; launched 1 June 1998; eligibility rules).
 - **B2:** Bloomberg, *Bloomberg Euro-Aggregate: Treasury 1-3 Year* index page (LET1TREU:IND, future ticker I02119EU),
-  <https://www.bloomberg.com/professional/products/indices/quote/LET1TREU:IND> — retrieved through indexed primary text; the direct page returned HTTP 403 to this investigation.
+  <https://www.bloomberg.com/professional/products/indices/quote/LET1TREU:IND> — indexed primary text; the direct page returned HTTP 403 to this investigation.
 - **B3:** Bloomberg, *Bloomberg Euro-Aggregate: Corporate 1-3 Year* index page (I02134US:IND),
   <https://www.bloomberg.com/professional/products/indices/quote/I02134US:IND> — same retrieval note.
-- **B4:** Bloomberg, *Fixed Income Index Methodology*, published **2026-01-08**
-  (multi-currency indices calculate returns on an unhedged and a currency-hedged basis in several
-  reporting currencies; single-currency index returns are also available in other currencies),
+- **B4:** Bloomberg, *Fixed Income Index Methodology*, published **2026-01-08**, read directly
+  (114 pages). Page 12 (Currency): returns on multi-currency indices are calculated on both an
+  unhedged and a currency-hedged basis in several reporting currencies, and for single-currency
+  indices returns are also available in currencies other than that of the index. Page 63 (Data
+  Distribution and Index Licensing): index subscribers may choose to receive index data in files,
+  which may carry index-level and/or constituent-level returns and characteristics; index data is
+  also available via authorized redistributors; Bloomberg requires index data licenses for
+  services and products linked to the Indices.
   <https://assets.bbhub.io/professional/sites/10/Bloomberg-Index-Publications-Fixed-Income-Index-Methodology.pdf>.
 - **B5:** Bloomberg, *Bloomberg Global-Aggregate Total Return Index Value Unhedged USD* index page (LEGATRUU:IND, future ticker I00038US),
   <https://www.bloomberg.com/professional/products/indices/quote/legatruu:ind> — same retrieval note.
-- **B6:** Bloomberg, *Bloomberg Fixed Income Indices* product page (commercial delivery of index-level and constituent data through the Terminal and licensed platforms; key-index table with tickers such as LBEATREU),
+- **B6:** Bloomberg, *Bloomberg Fixed Income Indices* product page (key-index table with tickers
+  such as LBEATREU; index-level and constituent data described as available on third-party
+  platforms and through the Terminal),
   <https://www.bloomberg.com/professional/products/indices/fixed-income/> — same retrieval note.
 - **I1:** BlackRock, *iShares Global Aggregate 1-5 Year Bond Index Fund (IE)* factsheet, **September 2026** (benchmark "BBG Global Aggregate 1-5 Year Index (USD)"; class D Hedged EUR IE00BMZ3NN11; share class launched 13-May-2021),
   <https://www.ishares.com/gls-download/literature/fact-sheet/ishares-global-aggregate-1-5-year-bond-index-fund-ie-class-d-hedged-eur-factsheet-ie00bmz3nn11-gb-en-individual.pdf>.
