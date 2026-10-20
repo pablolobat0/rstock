@@ -7,17 +7,22 @@ baseline), pull request #139 against the feature branch
 
 ## Verification
 
-| Check | Result |
-| --- | --- |
-| `cargo fmt -- --check` | clean |
-| `cargo clippy --offline -- -D warnings` | clean |
-| `cargo test --offline` | 43 test binaries, 600 tests, 0 failed |
-| `cargo clippy --test secondary_benchmark_tests -- -D warnings` | clean |
+Each command below was run once, offline, on the head this pull request
+proposes, and its exit code is recorded here:
 
-The recorded exit codes and the complete logs of these four commands are in
-`docs/secondary-benchmark-verification.log`. No test performs a network call
-and no test opens the real portfolio database. Every test uses in-memory
-SQLite, a fixed clock, and the fake `MarketDataSources` seam.
+| Command | Exit code | Result |
+| --- | --- | --- |
+| `cargo fmt -- --check` | 0 | clean |
+| `cargo clippy --offline -- -D warnings` | 0 | clean |
+| `cargo clippy --offline --test secondary_benchmark_tests -- -D warnings` | 0 | clean |
+| `cargo test --offline` | 0 | 43 test binaries, 600 tests, 0 failed |
+
+The machine output of that run is a build artifact kept outside the
+repository, at `/tmp/opencode/120-final-verification.log`; the pull request
+holds only this summary, and the exit codes above are the committed record.
+No test performs a network call and no test opens the real portfolio
+database. Every test uses in-memory SQLite, a fixed clock, and the fake
+`MarketDataSources` seam.
 
 ## What was built
 
