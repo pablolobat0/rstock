@@ -2,7 +2,7 @@
 
 Issue #120 (parent #111). Branch `agent/benchmark-120-secondary-comparisons`,
 baseline `b94d752` (the integrated #118 Strategy and #119 fund-comparison
-baseline), pull request against the feature branch
+baseline), pull request #139 against the feature branch
 `agent/grill-benchmark-framework`.
 
 ## Verification
@@ -10,13 +10,14 @@ baseline), pull request against the feature branch
 | Check | Result |
 | --- | --- |
 | `cargo fmt -- --check` | clean |
-| `cargo clippy -- -D warnings` | clean |
-| `cargo test --offline` | 43 test binaries, 596 tests, 0 failed |
+| `cargo clippy --offline -- -D warnings` | clean |
+| `cargo test --offline` | 43 test binaries, 600 tests, 0 failed |
 | `cargo clippy --test secondary_benchmark_tests -- -D warnings` | clean |
 
-No test performs a network call and no test opens the real portfolio
-database. Every test uses in-memory SQLite, a fixed clock, and the fake
-`MarketDataSources` seam.
+The recorded exit codes and the complete logs of these four commands are in
+`docs/secondary-benchmark-verification.log`. No test performs a network call
+and no test opens the real portfolio database. Every test uses in-memory
+SQLite, a fixed clock, and the fake `MarketDataSources` seam.
 
 ## What was built
 
@@ -30,10 +31,21 @@ database. Every test uses in-memory SQLite, a fixed clock, and the fake
   back is refused while secondary assignments exist.
 - **Public commands** — `benchmark assign-secondary`,
   `benchmark remove-secondary`, `benchmark assign-secondary-candidate`, and
-  `benchmark remove-secondary-candidate`, dispatched through the existing
-  library-owned dispatch and the injected writer. `benchmark list` reports
-  the primary assignments and the secondary assignments separately, with the
-  secondary role, the retrospective meaning, and the definition counts.
+  `benchmark remove-secondary-candidate`, dispatched through the library-owned
+  dispatch and the injected writer. `benchmark list` reports the primary
+  assignments and the secondary assignments separately, with the secondary
+  role, the retrospective meaning, and the definition counts.
+- **Exact class identity** — a Tracked asset and the Fund candidate of one
+  exact ISIN and vehicle describe the same investment. The primary reference
+  and the secondary comparison of one exact class must be different
+  comparisons, in both assignment directions, and a rejected selection leaves
+  no assignment behind.
+- **Untracked candidate classes** — `analyze fund --candidate
+  <vehicle>:<ISIN>` and `compare funds --candidate-a/--candidate-b
+  <vehicle>:<ISIN>` state the exact class of an analysed fund with its
+  verified vehicle and ISIN. The secondary comparisons of that class are then
+  reported without a Tracked asset, while the primary comparison keeps the
+  accepted #119 contract of an absent reference for an untracked class.
 - **Shared Benchmark Module** — `compare_fund_to_secondary_references()`
   measures every explicitly selected secondary reference through the same
   preparation, the same convention gates, the same comparison calculation,
@@ -44,34 +56,129 @@ database. Every test uses in-memory SQLite, a fixed clock, and the fake
   role, the reference identity, the conventions, the actual comparison dates,
   the standard rows, the scoped limitations, and the aligned wealth graph.
 
-## Decisions taken inside the acceptance criteria
+## Review findings and how each one is answered
 
-- **A secondary is stored apart from the primary, not as a role column.**
-  One subject may hold several secondary references, so a separate table
-  keeps the "one primary per subject" invariant of `benchmark_assignments`
-  untouched and makes the separation structural instead of conventional.
-- **The same reference cannot be the primary and the secondary of one
-  subject.** One series compared with itself is not a second comparison, so
-  the assignment is refused with a message that names the primary reference.
-- **The secondary assignments of one exact class are read from both records
-  of that class.** The Tracked asset and the Fund candidate of the same exact
-  ISIN describe the same investment, so both records contribute their
-  secondary selections and a reference selected by both is reported once.
-  The primary resolution is unchanged: it still reads the Tracked subject
-  only, as accepted in #119.
-- **The unverified approved targets stay selectable and unusable.** The
-  Cobas Europe Small Cap Value and the plain €STR definitions are approved
-  target definitions with `target_only` verification, so they can be
-  selected as secondary references but their comparison is an explicit
-  unavailable outcome that names the unverified production mapping. No
-  sector reference is seeded, and no unverified source becomes a usable
-  comparison.
-- **The largest dispatch branch is pinned on the heap.** The secondary
-  comparison results grew the fund-comparison branch of
-  `src/cli/dispatch.rs` past the strict `clippy::large_futures` threshold.
-  The `CompareCommands::Funds` branch now pins its future with `Box::pin`,
-  which keeps the dispatch future at 9816 bytes instead of 16496 bytes. The
-  command, its output, its errors, and its JSON envelope are unchanged.
+### P2 — the primary/secondary collision check only covered the identical storage subject
+
+`src/services/benchmark_references.rs` now resolves the *exact class* of a
+subject before every selection. `exact_class_subjects()` returns the records
+that describe one investment: the Tracked asset and the Fund candidate of one
+exact ISIN and vehicle. A candidate `fund:LU1598719752` and the Tracked asset
+`LU1598719752` are one exact class, so a selection of one reference for one
+of them is a selection for that class.
+
+- `save_secondary_assignment()` rejects a reference that is already the
+  primary reference of any record of the exact class.
+- `save_assignment()` rejects a reference that is already a secondary
+  comparison of any record of the exact class.
+- Both checks run before the write, so a rejected selection is atomic: no
+  assignment is created, replaced, or removed.
+
+The finding named two accepted behaviours, `candidate fund:ISIN secondary R
+while tracked ISIN primary R` and `assign secondary R then existing public
+primary assign R`. Both are now rejected with a message that names the
+conflicting role, and the exact-class union can no longer render one series
+as both the primary and the secondary comparison.
+
+Evidence: `tests/secondary_benchmark_tests.rs`:
+`the_primary_and_the_secondary_of_one_exact_class_cannot_share_a_reference`
+(which also asserts that the rejected selection leaves no assignment behind
+and that the primary reference stays in place).
+
+### P2 — the secondary comparison returned nothing without a Tracked asset
+
+`compare_fund_to_secondary_references()` now resolves the secondary
+assignments of the exact class of the analysed fund from every record of that
+class, including the Fund candidate record of an untracked class. The
+identity of an untracked class comes from the user, who states the verified
+vehicle and ISIN of the analysed fund:
+
+- `rstock analyze fund --code <morningstar code> --candidate fund:LU1598719752`
+- `rstock compare funds --code-a <code> --candidate-a fund:LU1598719752 ...`
+
+The candidate record is never matched by name, no Tracked asset row is
+created, and the primary comparison of an untracked class keeps the accepted
+#119 contract (an absent reference with the reason "no exact tracked-asset
+identity"). An explicit identity that contradicts the tracked class of the
+same fund is rejected instead of mixing two classes in one comparison.
+
+Evidence: `tests/secondary_benchmark_tests.rs`:
+`an_untracked_candidate_reports_its_secondary_comparison_without_a_tracked_asset`,
+`the_fund_comparison_reports_the_secondary_comparison_of_an_untracked_candidate`.
+Both fixtures hold no `assets` row for the analysed fund, and both assert the
+aligned returns, the standard rows, and the available state of the secondary
+comparison. `an_explicit_candidate_identity_must_denote_the_analysed_class`
+covers the identity conflict.
+
+### P2 — the tests called handlers and serialized the analysis by hand
+
+Every command in `tests/secondary_benchmark_tests.rs` now travels through
+`cli::run_command_with_writer()` with a real parsed `Commands` value:
+
+- The benchmark management commands write their successful output through the
+  injected writer, so `src/cli/dispatch.rs` routes them through
+  `commands::benchmarks::run_with_writer()`. The command adapter's stdout
+  behaviour is unchanged, because the production dispatch passes the locked
+  stdout as the writer.
+- `commands::analyze::fund_with_writer()` writes the `analyze.fund` envelope
+  through the injected writer, and the dispatch routes the analysis through
+  it. The human renderer still prints its chart to the process stdout, so the
+  human facts are asserted through the production human renderer
+  (`write_fund_analysis_reference_context`), exactly as the accepted #119
+  test does for the fund comparison.
+- Each test asserts the command identity of the produced envelope
+  (`benchmark.assign_secondary`, `benchmark.list`, `analyze.fund`,
+  `compare.funds`), the JSON availability states, and the human facts. No
+  test hand-builds an envelope, and no renderer queries data.
+
+The accepted #119 compare-funds writer is unchanged: the comparison still
+writes one JSON envelope through the injected writer.
+
+### P3 — the private helpers of the shared Benchmark Module preceded the public functions
+
+`src/services/benchmark.rs` now keeps the public entry points
+(`compare_fund_to_primary`, `compare_fund_to_secondary_references`,
+`compare_aligned_eur_series`, `compute_standard_fund_benchmark_periods`,
+`compute_standard_benchmark_periods`) above the private helpers, as
+`docs/CONVENTIONS.md` (Function Ordering) requires. The private
+`secondary_assignments_of_exact_class()` helper and the subject label helper
+now sit below them.
+
+### P3 — the migration read its assignment count as an absent count
+
+`migration/src/m20261020_000001_add_secondary_benchmark_assignments.rs` now
+reads the assignment count as an invariant: a row that cannot be read, or a
+count that cannot be decoded, is an error that refuses the destructive
+rollback. The previous `unwrap_or_default()` chain turned a decode failure
+into an empty count, which would have dropped the table and the assignments
+with it.
+
+Evidence: `tests/secondary_benchmark_tests.rs`:
+`the_secondary_assignment_migration_protects_the_assignments_and_the_history`
+(refuses the in-memory rollback while a secondary assignment exists, keeps the
+assignment, the ledger, and the NAV history, and rolls back cleanly with the
+history intact once the assignment is removed).
+
+### Heuristic — role and vehicle strings
+
+The comparison role is now a closed vocabulary: `models::ComparisonRole`
+(`Primary`, `Secondary`) replaces the free role strings in the comparison
+outcome and in the assignment outcome, and it keeps the accepted JSON values
+`primary` and `secondary`. The candidate vehicle reuses the existing
+`FundCandidateVehicle` enum, and the tracked asset type is read as the
+existing `AssetType` enum, so the exact-class rule no longer compares free
+strings.
+
+## The confirmed bugs, reproduced before the fix
+
+Each confirmed bug was reproduced against the pre-fix code, with the new
+public tests failing, and the same tests passing after the fix:
+
+| Finding | Reproduction (pre-fix) | Result |
+| --- | --- | --- |
+| P2 collision check | the candidate secondary of the exact class's primary reference was accepted | `the_primary_and_the_secondary_of_one_exact_class_cannot_share_a_reference` failed |
+| P2 untracked candidate | the secondary comparison list was empty without a Tracked asset | `an_untracked_candidate_reports_its_secondary_comparison_without_a_tracked_asset` and `the_fund_comparison_reports_the_secondary_comparison_of_an_untracked_candidate` failed |
+| P2 command routing | the benchmark command wrote to the process stdout, not to the injected writer | `secondary_assignments_are_managed_through_the_public_commands` failed |
 
 ## Acceptance criteria and where each one is covered
 
@@ -106,15 +213,16 @@ database. Every test uses in-memory SQLite, a fixed clock, and the fake
   the catalog's `candidates` section; the secondary assignment never writes
   it and never replaces it.
 - The primary assignment row is never touched by a secondary command, and
-  the primary reference of a subject cannot be assigned as its secondary.
+  the primary reference of an exact class cannot be assigned as its
+  secondary, nor a secondary of an exact class as its primary.
 - `tests/secondary_benchmark_tests.rs`:
-  `a_secondary_assignment_never_replaces_the_primary_and_keeps_the_candidate_identity`.
+  `a_secondary_assignment_never_replaces_the_primary_and_keeps_the_candidate_identity`,
+  `the_primary_and_the_secondary_of_one_exact_class_cannot_share_a_reference`.
 
 ### Secondary weights are never included in the Exposure-matched portfolio benchmark. A missing secondary input cannot invalidate a complete primary comparison or portfolio-only facts
 
 - The exposure-matched comparison reads only the primary assignments, and
-  the comparison is byte-for-byte identical before and after a secondary
-  assignment.
+  the comparison is identical before and after a secondary assignment.
 - A secondary whose input is missing leaves only that secondary unavailable;
   the primary comparison and the fund-only rows keep their own outcomes.
 - `tests/secondary_benchmark_tests.rs`:
@@ -135,15 +243,16 @@ database. Every test uses in-memory SQLite, a fixed clock, and the fake
 
 ### Offline assignment, analysis and output tests cover primary/secondary separation, independent availability, candidate identity, deletion protection and no double counting. Additional relative metrics reuse standard-period support when present rather than duplicating it
 
-- The eleven public tests of `tests/secondary_benchmark_tests.rs` cover the
+- The fifteen public tests of `tests/secondary_benchmark_tests.rs` cover the
   assignment management, the separation, the independent availability, the
   exact candidate identity, the deletion protection, the absence of double
   counting, and the reuse of the shared standard-period support.
 - `the_secondary_standard_rows_reuse_the_shared_period_support` compares the
   reported rows with `compute_standard_benchmark_periods()` over the same
   aligned series, so a second calculation would fail the test.
-- `the_secondary_comparisons_of_one_exact_class_include_the_candidate_record`
-  covers the exact-class resolution and the one-reference rule.
+- `an_explicit_candidate_identity_must_denote_the_analysed_class` covers the
+  identity conflict: an identity that names another class is rejected instead
+  of mixing two classes in one comparison.
 
 ## Boundaries that were not crossed
 
@@ -156,11 +265,12 @@ database. Every test uses in-memory SQLite, a fixed clock, and the fake
   and its `FundBenchmarkPeriod` rows, the strategy selection and its
   dashboard section are untouched, and the fund comparison still writes one
   JSON envelope through the injected writer.
-- The only change to an accepted test file is the migration-boundary lookup
-  of `tests/strategy_tests.rs`: the destructive-rollback test now locates
-  the Strategy selection migration by its stable name, exactly as
-  `tests/custom_blend_tests.rs` already does, so an unrelated additive
-  migration cannot shift the boundary the test exercises. The refusal and
-  its message are unchanged.
+- The accepted test files were touched only where the new command options
+  require it: `tests/fund_analysis_tests.rs` and
+  `tests/fund_comparison_reference_tests.rs` pass the new optional candidate
+  options as `None`, which keeps every accepted assertion unchanged, and
+  `tests/strategy_tests.rs` locates the Strategy selection migration by its
+  stable name, exactly as `tests/custom_blend_tests.rs` already does, so an
+  unrelated additive migration cannot shift the boundary the test exercises.
 - The new command leaves were added to the command-surface audit of
   `tests/cli_command_tests.rs`, as `docs/CONVENTIONS.md` requires.

@@ -3,7 +3,7 @@
 //! Every command in this file travels through the library-owned dispatch of a
 //! real command value, so the command identity, the JSON envelope, and the
 //! human facts are the production ones. The fixtures are offline: an
-//! in-memory SQLite database, dummy identities, a fixed clock, and the fake
+//! in-memory `SQLite` database, dummy identities, a fixed clock, and the fake
 //! `MarketDataSources` seam.
 
 #![allow(clippy::float_cmp, clippy::too_many_lines)]
@@ -74,6 +74,17 @@ async fn run_json(
 ) -> anyhow::Result<Value> {
     let output = run_command(db, market_data, args, OutputFormat::Json).await?;
     Ok(common::parse_json_envelope(&output))
+}
+
+/// The message of one rejected command.
+fn rejection(result: anyhow::Result<Vec<u8>>) -> String {
+    match result {
+        Ok(output) => panic!(
+            "the command should have been rejected, but it produced: {}",
+            String::from_utf8_lossy(&output)
+        ),
+        Err(error) => error.to_string(),
+    }
 }
 
 // --- Fixture helpers ---
@@ -530,28 +541,27 @@ async fn the_primary_and_the_secondary_of_one_exact_class_cannot_share_a_referen
     // The Tracked asset and the Fund candidate of one exact ISIN and vehicle
     // describe the same investment, so the primary reference of one is the
     // primary reference of the other.
-    let rejected = run_command(
-        &db,
-        &market_data,
-        &[
-            "rstock",
-            "benchmark",
-            "assign-secondary-candidate",
-            "--identifier",
-            FUND_ISIN,
-            "--vehicle",
-            "fund",
-            PRIMARY_REFERENCE,
-        ],
-        OutputFormat::Json,
-    )
-    .await
-    .expect_err("the primary reference must not become a secondary of the same class");
+    let refusal = rejection(
+        run_command(
+            &db,
+            &market_data,
+            &[
+                "rstock",
+                "benchmark",
+                "assign-secondary-candidate",
+                "--identifier",
+                FUND_ISIN,
+                "--vehicle",
+                "fund",
+                PRIMARY_REFERENCE,
+            ],
+            OutputFormat::Json,
+        )
+        .await,
+    );
     assert!(
-        rejected
-            .to_string()
-            .contains("already the primary reference"),
-        "the refusal must name the primary reference: {rejected}"
+        refusal.contains("already the primary reference"),
+        "the refusal must name the primary reference: {refusal}"
     );
     assert!(
         rstock::db::repos::benchmark_secondary_assignment_repo::find_by_subject(
@@ -582,26 +592,25 @@ async fn the_primary_and_the_secondary_of_one_exact_class_cannot_share_a_referen
     )
     .await
     .expect("the secondary assignment should succeed");
-    let rejected = run_command(
-        &db,
-        &market_data,
-        &[
-            "rstock",
-            "benchmark",
-            "assign",
-            "--ticker",
-            FUND_ISIN,
-            SECONDARY_REFERENCE,
-        ],
-        OutputFormat::Json,
-    )
-    .await
-    .expect_err("a secondary comparison must not become the primary reference");
+    let refusal = rejection(
+        run_command(
+            &db,
+            &market_data,
+            &[
+                "rstock",
+                "benchmark",
+                "assign",
+                "--ticker",
+                FUND_ISIN,
+                SECONDARY_REFERENCE,
+            ],
+            OutputFormat::Json,
+        )
+        .await,
+    );
     assert!(
-        rejected
-            .to_string()
-            .contains("already a secondary comparison"),
-        "the refusal must name the secondary comparison: {rejected}"
+        refusal.contains("already a secondary comparison"),
+        "the refusal must name the secondary comparison: {refusal}"
     );
     let primary =
         rstock::db::repos::benchmark_assignment_repo::find_by_subject(&db, "tracked", FUND_ISIN)
@@ -1346,6 +1355,57 @@ async fn the_fund_comparison_reports_the_secondary_comparison_of_an_untracked_ca
             .expect("the secondary comparisons should be a list")
             .is_empty()
     );
+}
+
+#[tokio::test]
+async fn an_explicit_candidate_identity_must_denote_the_analysed_class() {
+    let (db, sources) = fund_fixture().await;
+    let market_data = market_data_at(&sources, TODAY);
+
+    // The tracked class of the analysed fund is one exact ISIN, so an
+    // identity that names another class is rejected instead of mixing two
+    // classes in one comparison.
+    let refusal = rejection(
+        run_command(
+            &db,
+            &market_data,
+            &[
+                "rstock",
+                "analyze",
+                "fund",
+                "--code",
+                FUND_CODE,
+                "--candidate",
+                &format!("fund:{CANDIDATE_ISIN}"),
+                "--json",
+            ],
+            OutputFormat::Json,
+        )
+        .await,
+    );
+    assert!(
+        refusal.contains("does not denote the tracked class"),
+        "the refusal must name the conflicting identity: {refusal}"
+    );
+
+    // The identity of the tracked class itself is accepted.
+    let envelope = run_json(
+        &db,
+        &market_data,
+        &[
+            "rstock",
+            "analyze",
+            "fund",
+            "--code",
+            FUND_CODE,
+            "--candidate",
+            &format!("fund:{FUND_ISIN}"),
+            "--json",
+        ],
+    )
+    .await
+    .expect("the matching candidate identity should be accepted");
+    assert_eq!(envelope["command"], "analyze.fund");
 }
 
 // --- Portfolio isolation ---
