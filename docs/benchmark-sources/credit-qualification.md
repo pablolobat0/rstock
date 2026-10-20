@@ -27,13 +27,16 @@ quarterly weight resets.
 **The access and coverage gates remain open, and they are asymmetric.** ICE's own Index Platform
 publishes ER00 and HE00 but its index pages, rules and factsheets sit behind ICE SSO authentication
 (`https://indices.ice.com/api/index/ER00` returned the "ICE SSO Client" sign-in page on 20 October
-2026). The only public redistribution of ICE index *levels* found is FRED's "ICE BofA Indices" release
-(sourced to Ice Data Indices, LLC), and that release carries **only** the HE00 series — its OAS,
-effective yield, semi-annual yield-to-worst and total-return index value — with **no ER00 series at
-all**. Its HE00 total-return level is a rolling window: *"Starting in April 2026, this series will only
-include 3 years of observations. For more data, go to the source."* The 75% component therefore has no
-public daily level series, and the 25% component has a public daily series that neither covers the
-class history (first NAV 31/07/2017) nor permits the application's use: the same series notes state
+2026). The only public redistribution of ICE index *levels* located in this investigation is FRED's
+"ICE BofA Indices" release (sourced to Ice Data Indices, LLC), and **in that release** the only Euro
+series are the four HE00 ones — its OAS, effective yield, semi-annual yield-to-worst and total-return
+index value — with **no ER00 series at all**. That establishes an absence *in this release only*: it
+is not a finding that ICE publishes no ER00 level data anywhere, and broader public availability was
+not searched exhaustively, so it remains unverified. The HE00 total-return level in that release is
+also a rolling window: *"Starting in April 2026, this series will only include 3 years of
+observations. For more data, go to the source."* So the 75% component has no daily level series in the
+source searched, and the 25% component has a daily series there that neither covers the class history
+(first NAV 31/07/2017) nor permits the application's use: the same series notes state
 *"Reproduction of this data in any form is prohibited except with the prior written permission of ICE
 Data Indices"*, that end-of-day index values and returns are *"provided for your internal use only"*
 and may not be *"publish[ed], distribute[d] or otherwise furnish[ed] to any third-party without prior
@@ -50,15 +53,15 @@ coverage and payload are evidenced.
 
 | Gate | Evidence and conclusion | Status |
 | --- | --- | --- |
-| Exact class, vehicle and share-class identity | The KID (production date 16/04/2026) names product *Carmignac Portfolio Credit*, manufacturer Carmignac Gestion Luxembourg, **share class A EUR Acc, ISIN LU1623762843**, an accumulation share; the sub-fund was launched on 31/07/2017 as a sub-fund of the Carmignac Portfolio SICAV (CSSF registered 2530). The 30/09/2026 factsheet records *"Date of 1st NAV 31/07/2017"*, Bloomberg *CARUCAE LX*, base currency EUR, dividend policy Accumulation, fund currency EUR. The same factsheet lists the sibling classes with their own ISINs and first-NAV dates — **FW EUR Acc (LU1623763148)**, **F EUR Acc (LU1932489690)**, **A USD Acc Hdg (LU1623763064)**, **A CHF Acc Hdg (LU2020612490)**, **F USD Acc Hdg (LU2020612904)** — so the A EUR Acc history may not be borrowed from any of them. | **Verified** |
+| Exact class, vehicle and share-class identity | The KID (production date 16/04/2026, p. 1) names product *Carmignac Portfolio Credit*, manufacturer Carmignac Gestion Luxembourg, **share class A EUR Acc, ISIN LU1623762843**, an accumulation share; the sub-fund was launched on 31/07/2017 as a sub-fund of the Carmignac Portfolio SICAV (CSSF registered 2530). The 30/09/2026 factsheet (p. 1) records *"Date of 1st NAV 31/07/2017"*, Bloomberg *CARUCAE LX*, base currency EUR, dividend policy Accumulation, fund currency EUR. The sibling classes are taken from the document that actually lists each one, because the two class tables are not the same list: the **product sheet p. 2** lists **FW EUR Acc (LU1623763148, 1st NAV 31/07/2017)** and **F EUR Acc (LU1932489690)**; the **factsheet p. 4** table lists **A EUR Acc (LU1623762843)**, **A EUR Minc (LU1623762926)**, **A USD Acc Hdg (LU1623763064)**, **F EUR Acc (LU1932489690)**, **A CHF Acc Hdg (LU2020612490)**, **F CHF Acc Hdg (LU2020612730)**, **F USD Acc Hdg (LU2020612904)**, **X2 CAD Acc Hdg (LU2772084310)** and **E EUR Acc (LU3003216580)**, and it does not include FW EUR Acc. The A EUR Acc history may not be borrowed from any of these classes. | **Verified** |
 | Component identities and provider series codes | Carmignac's October 2026 presentation names the components with ICE's own codes: *"75% ICE BofAML Euro Corporate (ER00) (coupons reinvested), 25% ICE BofAML Lynch Euro High Yield (coupons reinvested)"*, and labels its charts *"Euro Corporate IG index (ER00)"* and *"Euro HY index (HE00)"*. ICE's own Index Platform finder, as rendered on 20 October 2026, lists *"Euro Corporate ER00"* and *"Euro High Yield HE00"* with daily levels; ICE's published Bond Index Almanac (2019) uses *"Euro Corporate Index (ER00)"*; ICE's 17 June 2020 press release names *"ICE BofA Euro Corporate Index"* and *"ICE BofA Euro High Yield Index"* among the indices moved to real-time publication. Third-party corroboration of the same code↔name mapping: ECB BMCG Item 2B (22 June 2022) and BlackRock's BGF Euro Corporate Bond Fund factsheet (September 2026), which cites *"ICE BofA Euro Corporate Index (ER00) (EUR)"*. | **Verified** |
-| Return / total-return variant | Carmignac specifies *"coupons reinvested"* for both components, i.e. the total-return variant of each index, not a price index and not a gross-return variant. ICE publishes the variant as a distinct series: FRED carries *"ICE BofA Euro High Yield Index **Total Return Index Value**"* separately from the OAS, effective-yield and yield-to-worst analytics of the same HE00 index. **Caution:** ICE's platform snapshot and the total-return level are not the same value — the rendered ICE Index Platform snapshot for 19 October 2026 shows HE00 at 389.28 while the ICE-sourced total-return level for the same date is 390.42 — so the platform's generic "Index Value" must not be used as the total-return series. The exact ICE series code for each component's total-return variant (and for ER00 at all) was not obtained. | **Partially verified** — variant is total return; the exact per-component TR series codes are unresolved |
+| Return / total-return variant | Four conventions have to stay distinct: a price level, a gross total return, a net total return, and a fund return. What the dated primary evidence establishes here is the **total-return treatment of the two components**: Carmignac specifies *"coupons reinvested"* for both components, so the reference takes each component's total-return variant: coupon income is reinvested rather than dropped, as a price-only level would. This is a positive statement of the treatment, **not** an exclusion of any other variant — nothing retrieved states whether ICE publishes further gross or net variants of ER00 or HE00, and no such exclusion is claimed here. The distribution and reinvestment treatment behind the description is partly evidenced by ICE's own construction notes for HE00 (accrued interest on next-day settlement; cash flows received during the month retained in the index until month-end and then removed at rebalancing), but the equivalent ICE-authored description for **ER00** was not retrieved, so the description rests on Carmignac's statement plus the HE00 notes rather than on a verified ER00 methodology. The variant is a distinct published series: FRED carries *"ICE BofA Euro High Yield Index **Total Return Index Value**"* separately from the OAS, effective-yield and yield-to-worst analytics of the same HE00 index. **Caution:** ICE's platform snapshot and the total-return level are not the same value — the rendered ICE Index Platform snapshot for 19 October 2026 shows HE00 at 389.28 while the ICE-sourced total-return level for the same date is 390.42 — so the platform's generic "Index Value" must not be used as the total-return series, and the two must never be presented as equivalent. The exact ICE series code for each component's total-return variant (and for ER00 at all) was not obtained. Separately, the reference is a pre-fee index yardstick — the 20% performance fee is measured against it (product sheet p. 2) — so an index return is neither the fund's net-of-fee return nor a personal after-tax result, and must not be presented as one: index withholding must not be read as the investor's own taxation, and the fund-return convention may not be transferred onto the index series. | **Partially verified** — total-return treatment evidenced; the per-component TR series keys, the ER00 methodology and any gross/net variant characterisation remain unresolved |
 | EUR treatment and hedging | Both components are EUR-denominated Euro-market indices (ER00: EUR-denominated investment-grade corporate debt; HE00: EUR-denominated below-investment-grade corporate debt), so the composite is an unhedged EUR series and no FX conversion is involved. The A EUR Acc class is not a currency-hedged class: the hedged classes are separately identified share classes with their own ISINs (A USD Acc Hdg LU1623763064, A CHF Acc Hdg LU2020612490, F USD Acc Hdg LU2020612904, X2 CAD Acc Hdg LU2772084310) and are out of scope here. EUR denomination is not hedging: the KID states the sub-fund uses derivatives "for hedging or arbitrage purposes, or to expose the portfolio to the following risks (directly or via indices): credit (up to 30% of the net assets), interest rates, currencies, equities and dividends", and the fund's Q3 2026 letter discloses *"Our hedging position through CDS on the Xover (euro high yield) index is sized at 18.7% of the portfolio"* (data as of 30/09/2026). That is a **fund-side** deviation to disclose, not a change to the reference's convention. | **Verified** |
 | Externally specified reset convention | Three independent Carmignac primary documents agree: KID 16/04/2026 *"The sub-fund's reference indicator is rebalanced quarterly"*; monthly factsheet 30/09/2026 *"Rebalancing Frequency: Quarterly"*; October 2026 presentation *"Rebalanced quarterly"*. The composite therefore **must not** inherit the saved custom-blend monthly reset rule, and it must not be flattened into a static 75/25 daily rebalance. The retrieved documents state the *frequency* but not the *anchor close* (which quarter-end close the reset takes place at); that sub-detail remains unevidenced. Separately, each component index rebalances its own constituents monthly on ICE's rule (*"The Index is rebalanced on the last calendar day of the month, based on information available up to and including the third business day before the last business day of the month"*, ICE-authored note on the HE00 series) — that is component-internal and is not the composite's weight reset. | **Verified** (frequency) / **Unresolved** (exact reset anchor close) |
-| Component source identifiers and permitted access | ICE's Index Platform is the primary publisher, and its per-index pages, rules and factsheets are behind ICE SSO authentication (verified 20 October 2026). ICE's 2021 and 2026 fixed-income brochures describe the family but not ER00/HE00 individually. The public FRED redistribution covers HE00 only, under terms that prohibit reproduction without prior written permission, restrict use to internal use only, and forbid third-party distribution and financial-product use without prior written approval of ICE Data. No entitlement, licence, sample payload or approved feed contract for this application was produced. | **Unresolved** — this is the blocking gate |
+| Component source identifiers and permitted access | ICE's Index Platform is the primary publisher, and its per-index pages, rules and factsheets are behind ICE SSO authentication (verified 20 October 2026). ICE's 2021 and 2026 fixed-income brochures describe the family but not ER00/HE00 individually. In the FRED release searched, the Euro series are the four HE00 ones only, under terms that prohibit reproduction without prior written permission, restrict use to internal use only, and forbid third-party distribution and financial-product use without prior written approval of ICE Data. Whether the same series are available elsewhere under usable terms was not established. No entitlement, licence, sample payload or approved feed contract for this application was produced. | **Unresolved** — this is the blocking gate |
 | Observation cadence | ICE publishes both components in real time and end of day: ICE moved *"ICE BofA Euro Corporate Index"* and *"ICE BofA Euro High Yield Index"* to real-time publication (press release, 17 June 2020), and the ICE-sourced HE00 total-return series is published *"Daily, Close"*, with a 20 October 2026 publication carrying the 19 October 2026 close. The *usable* cadence for an admitted ER00 series was not established, because no ER00 payload was obtained. | **Verified for cadence, not for the ER00 payload** |
-| Historical boundaries and coverage | The class history starts 31/07/2017. The only public component series carries a rolling 3-year window (*"Starting in April 2026, this series will only include 3 years of observations"*), which cannot cover the class history even if it were permitted to use. ICE's own index history depth for ER00/HE00 was not obtained from an ICE primary document, and no launch/base date for either total-return series was established. | **Unresolved** |
-| Adjustment provenance | ICE's own construction notes for HE00 document capitalization weighting, accrued interest on next-day settlement, cash flows retained until month-end and removed at rebalancing, and exclusion of defaulted, warrant-bearing and euro legacy currency securities. An ICE-authored equivalent description for ER00 was not retrieved (the description circulating in third-party material is a quotation of ICE's text, not the ICE document). For the application the operative rule is that an index level is *already* a total-return series: no dividend or adjustment factor may be re-applied to it, and the price-return level may not be substituted for the total-return level. | **Partially verified** |
+| Historical boundaries and coverage | The class history starts 31/07/2017. The only component level series located in the searched sources carries a rolling 3-year window (*"Starting in April 2026, this series will only include 3 years of observations"*), which cannot cover the class history even if it were permitted to use. ICE's own index history depth for ER00/HE00 was not obtained from an ICE primary document, and no launch/base date for either total-return series was established. | **Unresolved** |
+| Adjustment provenance | ICE's own construction notes for HE00 document capitalization weighting, accrued interest on next-day settlement, cash flows retained until month-end and removed at rebalancing, and exclusion of defaulted, warrant-bearing and euro legacy currency securities. An ICE-authored equivalent description for ER00 was not retrieved (the description circulating in third-party material is a quotation of ICE's text, not the ICE document). For the application the operative rules are that an index level is *already* a total-return series, so no dividend or adjustment factor may be re-applied to it; that the price-return level may not be substituted for the total-return level; and that source-basis compatibility is checked as an **eligibility gate at admission**, not annotated onto a rendered label afterwards. | **Partially verified** |
 | Comparability limitation (a limitation, not a mapping blocker) | The KID is explicit: *"the sub-fund's investment universe is mostly independent from the indicator… the sub-fund's holdings and the weightings may substantially deviate from the composition of the indicator. There is no limit set on the level of such deviation."* The mandate is global including emerging countries, may hold up to 50% below investment grade, up to 10% equities, up to 20% CoCos, securitisation, and long/short and relative-value strategies. The composite is therefore the fund's **official performance-fee and outperformance yardstick**, not a holdings replica: the reference is Euro-only IG/HY while the fund is global credit with a 50% below-IG allowance. Carmignac's own product sheet describes the portfolio construction as *"Non-benchmarked: Portfolio construction is a result of Fund manager views and market analysis with no bias to any benchmark."* | **Verified** — must be disclosed with the comparison |
 
 ## What a named external composite must preserve
@@ -132,7 +135,11 @@ one, through the public fund-comparison flow with fake source Adapters behind `M
 - a fixture with a price-return level in place of a total-return level proves the application
   rejects the mismatched adjustment basis instead of labelling it total return;
 - exact dates — class first NAV 31/07/2017, reset anchors, and the comparison start/end — are
-  asserted, not approximated.
+  asserted, not approximated;
+- a source gap in either component is never turned into an invented independent daily observation and
+  never triggers an automatic proxy substitution, and no unapproved cadence fallback is introduced:
+  the composite has one external schedule and one component set, and nothing else is substituted for
+  them.
 
 ## Primary-source register
 
@@ -144,26 +151,31 @@ excerpts below are the minimum needed to identify each convention.
 1. **Carmignac Gestion Luxembourg**, *Key Information Document — Carmignac Portfolio Credit A EUR
    Acc (LU1623762843)*, **date of production 16/04/2026**; accessed 20 October 2026.
    <https://www.carmignac.com/assets/sequantis/kideu_LU1623762843_en_LU/KIDEU_Carmignac-Portfolio-Credit-A-EUR-Acc_LU1623762843_INTL_en.pdf>
-   — class, ISIN, launch date, the 75/25 reference indicator, *"rebalanced quarterly"*, the
-   actively-managed/unconstrained and global-universe statements, the 50% below-investment-grade
-   allowance, and the derivative/hedging permissions.
+   — **p. 1**: product, manufacturer, share class, ISIN, date of production, sub-fund launch on
+   31/07/2017, the 75/25 reference indicator, *"The sub-fund's reference indicator is rebalanced
+   quarterly"*, the actively-managed/unconstrained and global-universe statements, the 50%
+   below-investment-grade allowance, and the derivative/hedging permissions.
 2. **Carmignac Gestion**, *Monthly Factsheet — Carmignac Portfolio Credit A EUR Acc*, **data as of
    30/09/2026**; accessed 20 October 2026.
    <https://www.carmignac.com/assets/yoda/FLFPRO_CCR_LU1623762843_INT_en/Monthly-Factsheet-PRO_Carmignac-Portfolio-Credit-A-EUR-Acc_LU1623762843_INTL_en.pdf>
-   — *"75% ICE BofA Euro Corporate Index + 25% ICE BofA Euro High Yield index"*, *"Rebalancing
-   Frequency: Quarterly"*, first NAV 31/07/2017, EUR, Accumulation, sibling-class list.
+   — **p. 1**: *"75% ICE BofA Euro Corporate Index + 25% ICE BofA Euro High Yield index"*, *"Rebalancing
+   Frequency: Quarterly"*, first NAV 31/07/2017, EUR, Accumulation, base and fund currency. **p. 4**:
+   the class table (which does not include FW EUR Acc) and the charges table.
 3. **Carmignac Gestion**, *Product Sheet — Carmignac Portfolio Credit* (**Carmignac at 30/09/2026**);
    accessed 20 October 2026.
    <https://www.carmignac.com/assets/yoda/PSPRO_CCR_FI_en/Product-Sheet-Pro_Carmignac-Portfolio-Credit_FI_en.pdf>
-   — reference-indicator footnote, class table (A EUR Acc LU1623762843, FW EUR Acc LU1623763148,
-   F EUR Acc LU1932489690), 1.2% management fee, 20% performance fee against the reference indicator
-   with a 5-year clawback, and the "non-benchmarked" portfolio-construction statement.
+   — **p. 2**: the reference-indicator footnote (*"Reference indicator: 75% ICE BofA Euro Corporate
+   Index + 25% ICE BofA Euro High Yield index"*), the class table (A EUR Acc LU1623762843, FW EUR Acc
+   LU1623763148, F EUR Acc LU1932489690), 1.2% management fee, 20% performance fee against the
+   reference indicator with a 5-year clawback, the "non-benchmarked" portfolio-construction
+   statement, and *"Source: Carmignac at 30/09/2026"*.
 4. **Carmignac Gestion**, *Carmignac Portfolio Credit — marketing presentation*, **October 2026**
    (Carmignac data 30/09/2026); accessed 20 October 2026.
    <https://www.carmignac.com/uploads/pdf/0001/31/ff64964b22b4b25064b595efeaec61a14f24be52.pdf>
-   — the only retrieved document that states the component codes and return treatment: *"75% ICE
-   BofAML Euro Corporate (ER00) (coupons reinvested), 25% ICE BofAML Lynch Euro High Yield (coupons
-   reinvested). Rebalanced quarterly."*
+   — **p. 16** is the only retrieved document that states the component codes and return treatment:
+   *"Benchmark index: 75% ICE BofAML Euro Corporate (ER00) (coupons reinvested), 25% ICE BofAML Lynch
+   Euro High Yield (coupons reinvested). Rebalanced quarterly."* **p. 15** labels the charts *"Euro
+   Corporate IG index (ER00)"* and *"Euro HY index (HE00)"*.
 5. **Carmignac Gestion**, *Carmignac P. Credit: Letter from the Fund Managers — Q3 2026*, data as of
    30/09/2026 (the parent research record dates the visible publication 13 October 2026); accessed
    20 October 2026.
@@ -194,14 +206,17 @@ excerpts below are the minimum needed to identify each convention.
    of St. Louis), *ICE BofA Euro High Yield Index Total Return Index Value*,
    **series BAMLHE00EHYITRIV**; accessed 20 October 2026.
    <https://fred.stlouisfed.org/series/BAMLHE00EHYITRIV> — frequency *"Daily, Close"*; 2026-10-19:
-   390.42; the rolling three-year observation window; ICE's own index description and construction
-   notes (capitalization weighting, next-day settlement accrued interest, month-end cash retention
-   and rebalancing); and the ICE "Top Level Data" licence terms quoted in the Outcome section.
+   390.42; the rolling three-year observation window that applies in this release; ICE's own index
+   description and construction notes (capitalization weighting, next-day settlement accrued interest,
+   month-end cash retention and rebalancing); and the ICE "Top Level Data" licence terms quoted in
+   the Outcome section.
 9. **Ice Data Indices, LLC** (release *"ICE BofA Indices"*), release index, accessed 20 October 2026.
-   <https://fred.stlouisfed.org/release?rid=209> — the release's only Euro series are the four HE00
-   series (option-adjusted spread, effective yield, total-return index value, semi-annual yield to
-   worst). **No ICE BofA Euro Corporate (ER00) series is present**, so the 75% component has no public
-   daily level series.
+   <https://fred.stlouisfed.org/release?rid=209> — in this release the only Euro series are the four
+   HE00 series (option-adjusted spread, effective yield, total-return index value, semi-annual yield
+   to worst). **No ICE BofA Euro Corporate (ER00) series is present in this release.** That is an
+   absence in this redistribution only: it does not establish that ICE publishes no ER00 level data
+   anywhere, and broader public availability was not searched exhaustively, so it remains
+   unverified.
 10. **ICE**, *Bond Index Almanac*, published 18 April 2019; accessed 20 October 2026.
     <https://www.ice.com/publicdocs/Bond_Index_Almanac_Report.pdf> — ICE's own naming of
     *"Euro Corporate Index (ER00)"* and its ER00 sector tables. Used for identity corroboration only;
