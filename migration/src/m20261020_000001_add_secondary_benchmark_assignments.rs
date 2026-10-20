@@ -41,15 +41,28 @@ impl MigrationTrait for Migration {
         // secondary assignments, so the diagnostic comparisons would silently
         // disappear. Refuse the destructive rollback while secondary
         // assignments exist instead of losing the user's explicit choices.
-        let assignments = manager
+        //
+        // The count is read as an invariant: a row that cannot be read or
+        // decoded is an error, never an absent count, because a silently
+        // empty count would drop the table and the assignments with it.
+        let row = manager
             .get_connection()
             .query_one(Statement::from_string(
                 DatabaseBackend::Sqlite,
                 "SELECT COUNT(*) AS count FROM benchmark_secondary_assignments",
             ))
             .await?
-            .map(|row| row.try_get::<i64>("", "count").unwrap_or_default())
-            .unwrap_or_default();
+            .ok_or_else(|| {
+                DbErr::Custom(
+                    "the secondary assignment count could not be read, so the destructive rollback is refused"
+                        .to_owned(),
+                )
+            })?;
+        let assignments: i64 = row.try_get("", "count").map_err(|error| {
+            DbErr::Custom(format!(
+                "the secondary assignment count could not be decoded ({error}), so the destructive rollback is refused"
+            ))
+        })?;
         if assignments > 0 {
             return Err(DbErr::Custom(
                 "the secondary benchmark assignment migration cannot be rolled back while secondary \

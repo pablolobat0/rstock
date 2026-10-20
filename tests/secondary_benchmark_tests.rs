@@ -1,11 +1,10 @@
 //! Public behaviour of ticket #120: optional secondary comparisons.
 //!
-//! The feature is exercised offline with an in-memory database, dummy
-//! identities, fixed clocks, and fake `MarketDataSources`. Every expectation
-//! is derived from the persisted assignments, the fake observations, and the
-//! shared Benchmark Module, so a change in the separation between the primary
-//! and the secondary comparison fails the test instead of silently changing
-//! the reported comparison.
+//! Every command in this file travels through the library-owned dispatch of a
+//! real command value, so the command identity, the JSON envelope, and the
+//! human facts are the production ones. The fixtures are offline: an
+//! in-memory SQLite database, dummy identities, a fixed clock, and the fake
+//! `MarketDataSources` seam.
 
 #![allow(clippy::float_cmp, clippy::too_many_lines)]
 
@@ -17,18 +16,16 @@ use common::{
     insert_asset, insert_fund_asset, insert_portfolio_asset_snapshot, insert_portfolio_snapshot,
     insert_transaction, market_data_at, setup_test_db, MockMarketDataSources,
 };
+use migration::MigratorTrait;
 use rstock::cli::output::OutputFormat;
 use rstock::constants::format_date;
 use rstock::db::entities::{
     benchmark_assignment, benchmark_reference, benchmark_reference_price, portfolio_asset_history,
     portfolio_history, transaction,
 };
-use rstock::models::{
-    CandidateCorrelationPeriod, ComparisonFact, FundData, FundQuoteMetadata, PortfolioSnapshot,
-};
+use rstock::models::{CandidateCorrelationPeriod, ComparisonFact, FundData, FundQuoteMetadata};
 use rstock::services::benchmark::compute_standard_benchmark_periods;
 use rstock::services::exposure_benchmark::compute_exposure_matched_comparison;
-use rstock::services::fund_analysis::compute_fund_analysis;
 use sea_orm::{ActiveModelTrait, DatabaseConnection, EntityTrait, Set};
 use serde_json::Value;
 
@@ -37,6 +34,7 @@ const FUND_ISIN: &str = "XSIEIN000001";
 const FUND_CODE: &str = "XCLASS";
 const FUND_ISIN_B: &str = "XSIEIN000002";
 const FUND_CODE_B: &str = "XCLASSB";
+const CANDIDATE_ISIN: &str = "LU1598719752";
 const PRIMARY_REFERENCE: &str = "verified-primary-reference";
 const PRIMARY_REFERENCE_B: &str = "verified-primary-reference-b";
 const SECONDARY_REFERENCE: &str = "verified-secondary-reference";
@@ -45,56 +43,37 @@ const PRIMARY_IDENTIFIER: &str = "XREFPRI";
 const PRIMARY_IDENTIFIER_B: &str = "XREFPRB";
 const SECONDARY_IDENTIFIER: &str = "XREFSEC";
 const REPLACEMENT_IDENTIFIER: &str = "XREFREP";
-const CANDIDATE_ISIN: &str = "LU1598719752";
 
 // --- Command helpers ---
 
-fn benchmark_command(args: &[&str]) -> rstock::cli::BenchmarkCommands {
-    match rstock::cli::Cli::try_parse_from(args)
+/// The parsed command of the production CLI.
+fn command(args: &[&str]) -> rstock::cli::Commands {
+    rstock::cli::Cli::try_parse_from(args)
         .expect("the command should parse")
         .command
-    {
-        rstock::cli::Commands::Benchmark(arguments) => arguments.command,
-        other => panic!("expected a benchmark command, got {other:?}"),
-    }
 }
 
-fn blend_command(args: &[&str]) -> rstock::cli::BlendCommands {
-    match rstock::cli::Cli::try_parse_from(args)
-        .expect("the command should parse")
-        .command
-    {
-        rstock::cli::Commands::Blend(arguments) => arguments.command,
-        other => panic!("expected a blend command, got {other:?}"),
-    }
-}
-
-async fn run_benchmark(
+/// Runs one command through the library-owned dispatch, capturing its output.
+async fn run_command(
     db: &DatabaseConnection,
-    command: rstock::cli::BenchmarkCommands,
+    market_data: &rstock::services::market_data::MarketData,
+    args: &[&str],
     format: OutputFormat,
 ) -> anyhow::Result<Vec<u8>> {
     let mut output = Vec::new();
-    rstock::cli::run_benchmark_command_with_writer(db, command, format, &mut output).await?;
+    rstock::cli::run_command_with_writer(db, market_data, command(args), format, &mut output)
+        .await?;
     Ok(output)
 }
 
-async fn run_blend(
+/// Runs one command through the library-owned dispatch and parses its JSON.
+async fn run_json(
     db: &DatabaseConnection,
-    sources: &MockMarketDataSources,
-    command: rstock::cli::BlendCommands,
-) -> anyhow::Result<Vec<u8>> {
-    let market_data = market_data_at(sources, TODAY);
-    let mut output = Vec::new();
-    rstock::cli::run_blend_command_with_writer(
-        db,
-        &market_data,
-        command,
-        OutputFormat::Json,
-        &mut output,
-    )
-    .await?;
-    Ok(output)
+    market_data: &rstock::services::market_data::MarketData,
+    args: &[&str],
+) -> anyhow::Result<Value> {
+    let output = run_command(db, market_data, args, OutputFormat::Json).await?;
+    Ok(common::parse_json_envelope(&output))
 }
 
 // --- Fixture helpers ---
@@ -174,7 +153,8 @@ fn daily_qualification() -> rstock::services::market_data::SeriesQualification {
     }
 }
 
-/// One fund with a primary reference and two candidate secondary references.
+/// One tracked fund with a primary reference and two candidate secondary
+/// references.
 ///
 /// The fund is a Tracked asset whose exact class identity is its ISIN, so
 /// both the primary assignment and the secondary assignments describe the same
@@ -264,15 +244,8 @@ async fn fund_fixture() -> (DatabaseConnection, MockMarketDataSources) {
     (db, sources)
 }
 
-/// The JSON envelope of one fund analysis.
-fn analysis_envelope(result: &rstock::models::FundAnalysisResult) -> Value {
-    let mut output = Vec::new();
-    rstock::cli::output::write_json(&mut output, "analyze.fund", result)
-        .expect("the fund analysis should serialize");
-    common::parse_json_envelope(&output)["data"].clone()
-}
-
-/// The human reference context of one fund analysis.
+/// The human reference context of one fund analysis, through the production
+/// human renderer.
 fn analysis_human(result: &rstock::models::FundAnalysisResult) -> String {
     let mut output = Vec::new();
     rstock::cli::display::write_fund_analysis_reference_context(&mut output, result)
@@ -280,46 +253,29 @@ fn analysis_human(result: &rstock::models::FundAnalysisResult) -> String {
     String::from_utf8(output).expect("the human output should be UTF-8")
 }
 
-async fn analyze(
-    db: &DatabaseConnection,
-    sources: &MockMarketDataSources,
-) -> rstock::models::FundAnalysisResult {
-    let market_data = market_data_at(sources, TODAY);
-    compute_fund_analysis(
-        db,
-        &market_data,
-        FUND_CODE,
-        CandidateCorrelationPeriod {
-            label: "30D",
-            days: 30,
-        },
-    )
-    .await
-    .expect("the fund analysis should succeed")
-}
-
 // --- Assignment management ---
 
 #[tokio::test]
 async fn secondary_assignments_are_managed_through_the_public_commands() {
     let db = setup_test_db().await;
+    let sources = MockMarketDataSources::new();
+    let market_data = market_data_at(&sources, TODAY);
     insert_asset(&db, "XFAKE1", "Tracked fixture", "stock", "EUR").await;
 
-    let output = run_benchmark(
+    let assigned = run_json(
         &db,
-        benchmark_command(&[
+        &market_data,
+        &[
             "rstock",
             "benchmark",
             "assign-secondary",
             "--ticker",
             "XFAKE1",
             "msci-europe-small-cap-value",
-        ]),
-        OutputFormat::Json,
+        ],
     )
     .await
     .expect("the secondary assignment should succeed");
-    let assigned = common::parse_json_envelope(&output);
     assert_eq!(assigned["command"], "benchmark.assign_secondary");
     assert_eq!(assigned["data"]["subject_type"], "tracked");
     assert_eq!(assigned["data"]["subject_id"], "XFAKE1");
@@ -341,15 +297,10 @@ async fn secondary_assignments_are_managed_through_the_public_commands() {
 
     // The catalog reports the secondary assignment beside the primary
     // assignments, never inside them.
-    let list = common::parse_json_envelope(
-        &run_benchmark(
-            &db,
-            benchmark_command(&["rstock", "benchmark", "list"]),
-            OutputFormat::Json,
-        )
+    let list = run_json(&db, &market_data, &["rstock", "benchmark", "list"])
         .await
-        .expect("the catalog should render"),
-    );
+        .expect("the catalog should render");
+    assert_eq!(list["command"], "benchmark.list");
     assert_eq!(list["data"]["assignments"].as_array().unwrap().len(), 0);
     let secondaries = list["data"]["secondary_assignments"].as_array().unwrap();
     assert_eq!(secondaries.len(), 1);
@@ -375,9 +326,10 @@ async fn secondary_assignments_are_managed_through_the_public_commands() {
     assert_eq!(definition["assignment_count"], 0);
 
     let human = String::from_utf8(
-        run_benchmark(
+        run_command(
             &db,
-            benchmark_command(&["rstock", "benchmark", "list"]),
+            &market_data,
+            &["rstock", "benchmark", "list"],
             OutputFormat::Human,
         )
         .await
@@ -389,23 +341,21 @@ async fn secondary_assignments_are_managed_through_the_public_commands() {
     assert!(human.contains("role: secondary"));
 
     // An explicit removal reports the removed identity.
-    let removed = common::parse_json_envelope(
-        &run_benchmark(
-            &db,
-            benchmark_command(&[
-                "rstock",
-                "benchmark",
-                "remove-secondary",
-                "--ticker",
-                "XFAKE1",
-                "--reference-id",
-                "msci-europe-small-cap-value",
-            ]),
-            OutputFormat::Json,
-        )
-        .await
-        .expect("the secondary removal should succeed"),
-    );
+    let removed = run_json(
+        &db,
+        &market_data,
+        &[
+            "rstock",
+            "benchmark",
+            "remove-secondary",
+            "--ticker",
+            "XFAKE1",
+            "--reference-id",
+            "msci-europe-small-cap-value",
+        ],
+    )
+    .await
+    .expect("the secondary removal should succeed");
     assert_eq!(removed["command"], "benchmark.remove_secondary");
     assert_eq!(removed["data"]["removed"], true);
     assert_eq!(
@@ -425,6 +375,8 @@ async fn secondary_assignments_are_managed_through_the_public_commands() {
 #[tokio::test]
 async fn a_secondary_assignment_never_replaces_the_primary_and_keeps_the_candidate_identity() {
     let db = setup_test_db().await;
+    let sources = MockMarketDataSources::new();
+    let market_data = market_data_at(&sources, TODAY);
     insert_asset(&db, "XFAKE1", "Tracked fixture", "stock", "EUR").await;
     assign_primary(
         &db,
@@ -436,24 +388,23 @@ async fn a_secondary_assignment_never_replaces_the_primary_and_keeps_the_candida
 
     // A candidate secondary assignment keeps the exact class identity of the
     // candidate: its ISIN and its vehicle.
-    let candidate = common::parse_json_envelope(
-        &run_benchmark(
-            &db,
-            benchmark_command(&[
-                "rstock",
-                "benchmark",
-                "assign-secondary-candidate",
-                "--identifier",
-                CANDIDATE_ISIN,
-                "--vehicle",
-                "fund",
-                "msci-europe-small-cap-value",
-            ]),
-            OutputFormat::Json,
-        )
-        .await
-        .expect("the candidate secondary assignment should succeed"),
-    );
+    let candidate = run_json(
+        &db,
+        &market_data,
+        &[
+            "rstock",
+            "benchmark",
+            "assign-secondary-candidate",
+            "--identifier",
+            CANDIDATE_ISIN,
+            "--vehicle",
+            "fund",
+            "msci-europe-small-cap-value",
+        ],
+    )
+    .await
+    .expect("the candidate secondary assignment should succeed");
+    assert_eq!(candidate["command"], "benchmark.assign_secondary_candidate");
     assert_eq!(candidate["data"]["subject_type"], "fund_candidate");
     assert_eq!(
         candidate["data"]["subject_id"],
@@ -464,43 +415,39 @@ async fn a_secondary_assignment_never_replaces_the_primary_and_keeps_the_candida
 
     // The same reference under another vehicle is a different candidate and
     // keeps its own assignments.
-    let other_vehicle = common::parse_json_envelope(
-        &run_benchmark(
-            &db,
-            benchmark_command(&[
-                "rstock",
-                "benchmark",
-                "remove-secondary-candidate",
-                "--identifier",
-                CANDIDATE_ISIN,
-                "--vehicle",
-                "etf",
-            ]),
-            OutputFormat::Json,
-        )
-        .await
-        .expect("the removal should succeed"),
-    );
+    let other_vehicle = run_json(
+        &db,
+        &market_data,
+        &[
+            "rstock",
+            "benchmark",
+            "remove-secondary-candidate",
+            "--identifier",
+            CANDIDATE_ISIN,
+            "--vehicle",
+            "etf",
+        ],
+    )
+    .await
+    .expect("the removal should succeed");
     assert_eq!(other_vehicle["data"]["removed"], false);
 
     // The tracked asset's primary reference is untouched by the candidate
     // work, and the tracked asset's own secondary is a separate record.
-    let tracked_secondary = common::parse_json_envelope(
-        &run_benchmark(
-            &db,
-            benchmark_command(&[
-                "rstock",
-                "benchmark",
-                "assign-secondary",
-                "--ticker",
-                "XFAKE1",
-                "estr",
-            ]),
-            OutputFormat::Json,
-        )
-        .await
-        .expect("the secondary assignment should succeed"),
-    );
+    let tracked_secondary = run_json(
+        &db,
+        &market_data,
+        &[
+            "rstock",
+            "benchmark",
+            "assign-secondary",
+            "--ticker",
+            "XFAKE1",
+            "estr",
+        ],
+    )
+    .await
+    .expect("the secondary assignment should succeed");
     assert_eq!(tracked_secondary["data"]["subject_type"], "tracked");
     assert_eq!(tracked_secondary["data"]["reference_id"], "estr");
     let primary =
@@ -510,46 +457,21 @@ async fn a_secondary_assignment_never_replaces_the_primary_and_keeps_the_candida
             .expect("the primary assignment should exist");
     assert_eq!(primary.reference_id, "msci-acwi-small-cap-value-net-eur");
 
-    // The same reference cannot be the primary and the secondary of one
-    // subject: one series compared with itself is not a second comparison.
-    let rejected = run_benchmark(
-        &db,
-        benchmark_command(&[
-            "rstock",
-            "benchmark",
-            "assign-secondary",
-            "--ticker",
-            "XFAKE1",
-            "msci-acwi-small-cap-value-net-eur",
-        ]),
-        OutputFormat::Json,
-    )
-    .await
-    .expect_err("the primary reference must not become a secondary");
-    assert!(
-        rejected
-            .to_string()
-            .contains("already the primary reference"),
-        "the refusal must name the primary reference: {rejected}"
-    );
-
     // Every secondary of one subject can be removed in one explicit act, and
     // the removed identities are reported.
-    let removed = common::parse_json_envelope(
-        &run_benchmark(
-            &db,
-            benchmark_command(&[
-                "rstock",
-                "benchmark",
-                "remove-secondary",
-                "--ticker",
-                "XFAKE1",
-            ]),
-            OutputFormat::Json,
-        )
-        .await
-        .expect("the secondary removal should succeed"),
-    );
+    let removed = run_json(
+        &db,
+        &market_data,
+        &[
+            "rstock",
+            "benchmark",
+            "remove-secondary",
+            "--ticker",
+            "XFAKE1",
+        ],
+    )
+    .await
+    .expect("the secondary removal should succeed");
     assert_eq!(removed["data"]["removed"], true);
     assert_eq!(
         removed["data"]["removed_reference_ids"],
@@ -576,38 +498,179 @@ async fn a_secondary_assignment_never_replaces_the_primary_and_keeps_the_candida
     );
 }
 
-// --- Comparison and display ---
-
 #[tokio::test]
-async fn a_secondary_comparison_is_measured_beside_the_primary_comparison() {
-    let (db, sources) = fund_fixture().await;
-    run_benchmark(
+async fn the_primary_and_the_secondary_of_one_exact_class_cannot_share_a_reference() {
+    let db = setup_test_db().await;
+    let sources = MockMarketDataSources::new();
+    let market_data = market_data_at(&sources, TODAY);
+    insert_fund_asset(&db, FUND_ISIN, "Exact Class Fund", "EUR", FUND_CODE).await;
+    insert_verified_reference(
         &db,
-        benchmark_command(&[
+        PRIMARY_REFERENCE,
+        "Verified Primary Reference",
+        PRIMARY_IDENTIFIER,
+    )
+    .await;
+    insert_verified_reference(
+        &db,
+        SECONDARY_REFERENCE,
+        "Verified Secondary Reference",
+        SECONDARY_IDENTIFIER,
+    )
+    .await;
+    insert_verified_reference(
+        &db,
+        REPLACEMENT_REFERENCE,
+        "Verified Replacement Reference",
+        REPLACEMENT_IDENTIFIER,
+    )
+    .await;
+    assign_primary(&db, "tracked", FUND_ISIN, PRIMARY_REFERENCE).await;
+
+    // The Tracked asset and the Fund candidate of one exact ISIN and vehicle
+    // describe the same investment, so the primary reference of one is the
+    // primary reference of the other.
+    let rejected = run_command(
+        &db,
+        &market_data,
+        &[
+            "rstock",
+            "benchmark",
+            "assign-secondary-candidate",
+            "--identifier",
+            FUND_ISIN,
+            "--vehicle",
+            "fund",
+            PRIMARY_REFERENCE,
+        ],
+        OutputFormat::Json,
+    )
+    .await
+    .expect_err("the primary reference must not become a secondary of the same class");
+    assert!(
+        rejected
+            .to_string()
+            .contains("already the primary reference"),
+        "the refusal must name the primary reference: {rejected}"
+    );
+    assert!(
+        rstock::db::repos::benchmark_secondary_assignment_repo::find_by_subject(
+            &db,
+            "fund_candidate",
+            &format!("fund:{FUND_ISIN}")
+        )
+        .await
+        .unwrap()
+        .is_empty(),
+        "the rejected selection must leave no assignment behind"
+    );
+
+    // The same rule holds in the other direction: a secondary of the exact
+    // class is not a candidate for the primary reference.
+    run_command(
+        &db,
+        &market_data,
+        &[
             "rstock",
             "benchmark",
             "assign-secondary",
             "--ticker",
             FUND_ISIN,
             SECONDARY_REFERENCE,
-        ]),
+        ],
         OutputFormat::Json,
     )
     .await
     .expect("the secondary assignment should succeed");
+    let rejected = run_command(
+        &db,
+        &market_data,
+        &[
+            "rstock",
+            "benchmark",
+            "assign",
+            "--ticker",
+            FUND_ISIN,
+            SECONDARY_REFERENCE,
+        ],
+        OutputFormat::Json,
+    )
+    .await
+    .expect_err("a secondary comparison must not become the primary reference");
+    assert!(
+        rejected
+            .to_string()
+            .contains("already a secondary comparison"),
+        "the refusal must name the secondary comparison: {rejected}"
+    );
+    let primary =
+        rstock::db::repos::benchmark_assignment_repo::find_by_subject(&db, "tracked", FUND_ISIN)
+            .await
+            .unwrap()
+            .expect("the primary assignment should exist");
+    assert_eq!(
+        primary.reference_id, PRIMARY_REFERENCE,
+        "the rejected primary selection must leave the primary reference in place"
+    );
 
-    let result = analyze(&db, &sources).await;
-    let envelope = analysis_envelope(&result);
+    // Another reference is a different comparison and is accepted.
+    let accepted = run_json(
+        &db,
+        &market_data,
+        &[
+            "rstock",
+            "benchmark",
+            "assign",
+            "--ticker",
+            FUND_ISIN,
+            REPLACEMENT_REFERENCE,
+        ],
+    )
+    .await
+    .expect("a different reference should be accepted");
+    assert_eq!(accepted["data"]["reference_id"], REPLACEMENT_REFERENCE);
+}
+
+// --- Comparison and display ---
+
+#[tokio::test]
+async fn a_secondary_comparison_is_measured_beside_the_primary_comparison() {
+    let (db, sources) = fund_fixture().await;
+    let market_data = market_data_at(&sources, TODAY);
+    run_json(
+        &db,
+        &market_data,
+        &[
+            "rstock",
+            "benchmark",
+            "assign-secondary",
+            "--ticker",
+            FUND_ISIN,
+            SECONDARY_REFERENCE,
+        ],
+    )
+    .await
+    .expect("the secondary assignment should succeed");
+
+    let envelope = run_json(
+        &db,
+        &market_data,
+        &["rstock", "analyze", "fund", "--code", FUND_CODE, "--json"],
+    )
+    .await
+    .expect("the fund analysis should succeed");
+    assert_eq!(envelope["command"], "analyze.fund");
+    let data = &envelope["data"];
 
     // The primary comparison keeps its own role and its own reference.
-    let primary = &envelope["primary_benchmark_comparison"];
+    let primary = &data["primary_benchmark_comparison"];
     assert_eq!(primary["role"], "primary");
     assert_eq!(primary["reference_id"], PRIMARY_REFERENCE);
     assert_eq!(primary["availability"]["status"], "available");
 
     // The secondary comparison carries its own role, identity, conventions,
     // dates, and wealth series.
-    let secondaries = envelope["secondary_benchmark_comparisons"]
+    let secondaries = data["secondary_benchmark_comparisons"]
         .as_array()
         .expect("the secondary comparisons should be a list");
     assert_eq!(secondaries.len(), 1);
@@ -643,6 +706,17 @@ async fn a_secondary_comparison_is_measured_beside_the_primary_comparison() {
 
     // The human output shows the role, the reference identity, the dates, and
     // the aligned wealth graph of the secondary comparison.
+    let result = rstock::services::fund_analysis::compute_fund_analysis(
+        &db,
+        &market_data,
+        FUND_CODE,
+        CandidateCorrelationPeriod {
+            label: "30D",
+            days: 30,
+        },
+    )
+    .await
+    .expect("the fund analysis should succeed");
     let human = analysis_human(&result);
     assert!(human.contains("Secondary comparisons (diagnostics only"));
     assert!(human.contains("Secondary Fixture Fund assigned secondary comparison: available"));
@@ -654,19 +728,163 @@ async fn a_secondary_comparison_is_measured_beside_the_primary_comparison() {
 }
 
 #[tokio::test]
+async fn an_untracked_candidate_reports_its_secondary_comparison_without_a_tracked_asset() {
+    let db = setup_test_db().await;
+    let mut sources = MockMarketDataSources::new();
+    // The analysed fund exists only as an exact candidate class: this
+    // portfolio does not track it, so no Tracked asset row exists.
+    sources.fund_data.insert(
+        FUND_CODE.to_owned(),
+        FundData {
+            fund_currency: Some("EUR".to_owned()),
+            total_holdings: Some(10),
+            portfolio_date: Some("2025-01-08".to_owned()),
+            holdings: vec![],
+        },
+    );
+    sources.fund_quote_metadata.insert(
+        FUND_CODE.to_owned(),
+        FundQuoteMetadata {
+            quote_currency: Some("EUR".to_owned()),
+            ..Default::default()
+        },
+    );
+    sources
+        .historical_prices
+        .insert(FUND_CODE.to_owned(), weekday_series(100.0, 0.10));
+    sources.series_qualifications.insert(
+        ("morningstar".to_owned(), FUND_CODE.to_owned()),
+        daily_qualification(),
+    );
+    sources
+        .historical_prices
+        .insert(SECONDARY_IDENTIFIER.to_owned(), weekday_series(25.0, 0.02));
+    sources.series_qualifications.insert(
+        ("test_source".to_owned(), SECONDARY_IDENTIFIER.to_owned()),
+        daily_qualification(),
+    );
+    insert_verified_reference(
+        &db,
+        SECONDARY_REFERENCE,
+        "Verified Secondary Reference",
+        SECONDARY_IDENTIFIER,
+    )
+    .await;
+    let market_data = market_data_at(&sources, TODAY);
+
+    // The candidate secondary assignment succeeds without creating a holding.
+    let assigned = run_json(
+        &db,
+        &market_data,
+        &[
+            "rstock",
+            "benchmark",
+            "assign-secondary-candidate",
+            "--identifier",
+            CANDIDATE_ISIN,
+            "--vehicle",
+            "fund",
+            SECONDARY_REFERENCE,
+        ],
+    )
+    .await
+    .expect("the candidate secondary assignment should succeed");
+    assert_eq!(assigned["data"]["creates_holding"], false);
+    assert!(
+        rstock::db::repos::asset_repo::find_by_ticker(&db, CANDIDATE_ISIN)
+            .await
+            .unwrap()
+            .is_none(),
+        "the candidate assignment must not create a Tracked asset"
+    );
+
+    // The analysis of the exact candidate class reports the secondary
+    // comparison with its aligned returns, standard rows, and graph.
+    let envelope = run_json(
+        &db,
+        &market_data,
+        &[
+            "rstock",
+            "analyze",
+            "fund",
+            "--code",
+            FUND_CODE,
+            "--candidate",
+            &format!("fund:{CANDIDATE_ISIN}"),
+            "--json",
+        ],
+    )
+    .await
+    .expect("the candidate fund analysis should succeed");
+    assert_eq!(envelope["command"], "analyze.fund");
+    let data = &envelope["data"];
+    let secondaries = data["secondary_benchmark_comparisons"]
+        .as_array()
+        .expect("the secondary comparisons should be a list");
+    assert_eq!(secondaries.len(), 1);
+    let secondary = &secondaries[0];
+    assert_eq!(secondary["role"], "secondary");
+    assert_eq!(secondary["reference_id"], SECONDARY_REFERENCE);
+    assert_eq!(secondary["availability"]["status"], "available");
+    assert_eq!(secondary["start_date"], "2024-11-01");
+    assert_eq!(secondary["end_date"], "2025-01-08");
+    assert!(secondary["fund_return_pct"].as_f64().is_some());
+    assert!(secondary["reference_return_pct"].as_f64().is_some());
+    assert!(!secondary["fund_wealth"].as_array().unwrap().is_empty());
+    assert_eq!(secondary["standard_periods"].as_array().unwrap().len(), 5);
+
+    // The primary comparison keeps the accepted contract: an untracked class
+    // has no primary reference of its own.
+    assert_eq!(
+        data["primary_benchmark_comparison"]["availability"]["status"],
+        "unavailable"
+    );
+    assert!(
+        data["primary_benchmark_comparison"]["availability"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("no exact tracked-asset identity")
+    );
+
+    // The human output carries the same secondary facts.
+    let result = rstock::services::fund_analysis::compute_fund_analysis_with_candidate(
+        &db,
+        &market_data,
+        FUND_CODE,
+        CandidateCorrelationPeriod {
+            label: "30D",
+            days: 30,
+        },
+        Some(
+            &rstock::services::benchmark_references::FundCandidateIdentity::parse(&format!(
+                "fund:{CANDIDATE_ISIN}"
+            ))
+            .expect("the candidate identity should parse"),
+        ),
+    )
+    .await
+    .expect("the candidate fund analysis should succeed");
+    let human = analysis_human(&result);
+    assert!(human.contains("Secondary comparisons (diagnostics only"));
+    assert!(human.contains("assigned secondary comparison: available"));
+    assert!(human.contains("Aligned wealth graph (EUR wealth rebased to 100)"));
+}
+
+#[tokio::test]
 async fn a_missing_secondary_input_leaves_the_primary_comparison_intact() {
     let (db, mut sources) = fund_fixture().await;
-    run_benchmark(
+    let market_data = market_data_at(&sources, TODAY);
+    run_json(
         &db,
-        benchmark_command(&[
+        &market_data,
+        &[
             "rstock",
             "benchmark",
             "assign-secondary",
             "--ticker",
             FUND_ISIN,
             SECONDARY_REFERENCE,
-        ]),
-        OutputFormat::Json,
+        ],
     )
     .await
     .expect("the secondary assignment should succeed");
@@ -675,16 +893,23 @@ async fn a_missing_secondary_input_leaves_the_primary_comparison_intact() {
     sources
         .historical_prices
         .insert(SECONDARY_IDENTIFIER.to_owned(), Vec::new());
+    let market_data = market_data_at(&sources, TODAY);
 
-    let result = analyze(&db, &sources).await;
-    let envelope = analysis_envelope(&result);
+    let envelope = run_json(
+        &db,
+        &market_data,
+        &["rstock", "analyze", "fund", "--code", FUND_CODE, "--json"],
+    )
+    .await
+    .expect("the fund analysis should succeed");
+    let data = &envelope["data"];
 
-    let primary = &envelope["primary_benchmark_comparison"];
+    let primary = &data["primary_benchmark_comparison"];
     assert_eq!(primary["availability"]["status"], "available");
     assert_eq!(primary["reference_id"], PRIMARY_REFERENCE);
     assert!(primary["fund_return_pct"].as_f64().is_some());
 
-    let secondary = &envelope["secondary_benchmark_comparisons"][0];
+    let secondary = &data["secondary_benchmark_comparisons"][0];
     assert_eq!(secondary["role"], "secondary");
     assert_eq!(secondary["availability"]["status"], "unavailable");
     assert!(
@@ -705,30 +930,29 @@ async fn a_missing_secondary_input_leaves_the_primary_comparison_intact() {
     assert!(secondary["fund_return_pct"].is_null());
 
     // The fund-only facts of the analysis keep their own outcomes.
-    assert!(envelope["ytd"].is_object());
-    assert!(envelope["one_year"].is_object());
+    assert!(data["ytd"].is_object());
+    assert!(data["one_year"].is_object());
 }
 
 #[tokio::test]
 async fn the_approved_secondary_targets_are_selected_but_never_used_as_unverified_series() {
     let (db, sources) = fund_fixture().await;
+    let market_data = market_data_at(&sources, TODAY);
     for reference_id in ["msci-europe-small-cap-value", "estr"] {
-        let assigned = common::parse_json_envelope(
-            &run_benchmark(
-                &db,
-                benchmark_command(&[
-                    "rstock",
-                    "benchmark",
-                    "assign-secondary",
-                    "--ticker",
-                    FUND_ISIN,
-                    reference_id,
-                ]),
-                OutputFormat::Json,
-            )
-            .await
-            .expect("the approved secondary target should be selectable"),
-        );
+        let assigned = run_json(
+            &db,
+            &market_data,
+            &[
+                "rstock",
+                "benchmark",
+                "assign-secondary",
+                "--ticker",
+                FUND_ISIN,
+                reference_id,
+            ],
+        )
+        .await
+        .expect("the approved secondary target should be selectable");
         assert_eq!(assigned["data"]["reference_id"], reference_id);
         assert_eq!(assigned["data"]["role"], "secondary");
         assert_eq!(
@@ -737,9 +961,14 @@ async fn the_approved_secondary_targets_are_selected_but_never_used_as_unverifie
         );
     }
 
-    let result = analyze(&db, &sources).await;
-    let envelope = analysis_envelope(&result);
-    let secondaries = envelope["secondary_benchmark_comparisons"]
+    let envelope = run_json(
+        &db,
+        &market_data,
+        &["rstock", "analyze", "fund", "--code", FUND_CODE, "--json"],
+    )
+    .await
+    .expect("the fund analysis should succeed");
+    let secondaries = envelope["data"]["secondary_benchmark_comparisons"]
         .as_array()
         .expect("the secondary comparisons should be a list");
     assert_eq!(secondaries.len(), 2);
@@ -759,7 +988,7 @@ async fn the_approved_secondary_targets_are_selected_but_never_used_as_unverifie
     // The complete primary comparison is unaffected by the two unverified
     // secondary targets.
     assert_eq!(
-        envelope["primary_benchmark_comparison"]["availability"]["status"],
+        envelope["data"]["primary_benchmark_comparison"]["availability"]["status"],
         "available"
     );
 }
@@ -767,26 +996,28 @@ async fn the_approved_secondary_targets_are_selected_but_never_used_as_unverifie
 #[tokio::test]
 async fn a_secondary_replacement_compares_the_whole_window_without_a_splice() {
     let (db, sources) = fund_fixture().await;
-    run_benchmark(
+    let market_data = market_data_at(&sources, TODAY);
+    run_json(
         &db,
-        benchmark_command(&[
+        &market_data,
+        &[
             "rstock",
             "benchmark",
             "assign-secondary",
             "--ticker",
             FUND_ISIN,
             SECONDARY_REFERENCE,
-        ]),
-        OutputFormat::Json,
+        ],
     )
     .await
     .expect("the secondary assignment should succeed");
 
     // The explicit replacement removes the first secondary and selects the
     // second one.
-    run_benchmark(
+    run_json(
         &db,
-        benchmark_command(&[
+        &market_data,
+        &[
             "rstock",
             "benchmark",
             "remove-secondary",
@@ -794,33 +1025,35 @@ async fn a_secondary_replacement_compares_the_whole_window_without_a_splice() {
             FUND_ISIN,
             "--reference-id",
             SECONDARY_REFERENCE,
-        ]),
-        OutputFormat::Json,
+        ],
     )
     .await
     .expect("the secondary removal should succeed");
-    let replacement = common::parse_json_envelope(
-        &run_benchmark(
-            &db,
-            benchmark_command(&[
-                "rstock",
-                "benchmark",
-                "assign-secondary",
-                "--ticker",
-                FUND_ISIN,
-                REPLACEMENT_REFERENCE,
-            ]),
-            OutputFormat::Json,
-        )
-        .await
-        .expect("the secondary assignment should succeed"),
-    );
+    let replacement = run_json(
+        &db,
+        &market_data,
+        &[
+            "rstock",
+            "benchmark",
+            "assign-secondary",
+            "--ticker",
+            FUND_ISIN,
+            REPLACEMENT_REFERENCE,
+        ],
+    )
+    .await
+    .expect("the secondary assignment should succeed");
     assert_eq!(replacement["data"]["reference_id"], REPLACEMENT_REFERENCE);
     assert_eq!(replacement["data"]["retrospective"], true);
 
-    let result = analyze(&db, &sources).await;
-    let envelope = analysis_envelope(&result);
-    let secondaries = envelope["secondary_benchmark_comparisons"]
+    let envelope = run_json(
+        &db,
+        &market_data,
+        &["rstock", "analyze", "fund", "--code", FUND_CODE, "--json"],
+    )
+    .await
+    .expect("the fund analysis should succeed");
+    let secondaries = envelope["data"]["secondary_benchmark_comparisons"]
         .as_array()
         .expect("the secondary comparisons should be a list");
     assert_eq!(secondaries.len(), 1);
@@ -838,24 +1071,30 @@ async fn a_secondary_replacement_compares_the_whole_window_without_a_splice() {
 #[tokio::test]
 async fn the_secondary_standard_rows_reuse_the_shared_period_support() {
     let (db, sources) = fund_fixture().await;
-    run_benchmark(
+    let market_data = market_data_at(&sources, TODAY);
+    run_json(
         &db,
-        benchmark_command(&[
+        &market_data,
+        &[
             "rstock",
             "benchmark",
             "assign-secondary",
             "--ticker",
             FUND_ISIN,
             SECONDARY_REFERENCE,
-        ]),
-        OutputFormat::Json,
+        ],
     )
     .await
     .expect("the secondary assignment should succeed");
 
-    let result = analyze(&db, &sources).await;
-    let envelope = analysis_envelope(&result);
-    let secondary = &envelope["secondary_benchmark_comparisons"][0];
+    let envelope = run_json(
+        &db,
+        &market_data,
+        &["rstock", "analyze", "fund", "--code", FUND_CODE, "--json"],
+    )
+    .await
+    .expect("the fund analysis should succeed");
+    let secondary = &envelope["data"]["secondary_benchmark_comparisons"][0];
 
     // The reported rows are the shared standard-period support of the same
     // aligned series, not a second calculation.
@@ -918,103 +1157,40 @@ fn optional_date(date: Option<String>) -> Value {
 }
 
 #[tokio::test]
-async fn the_secondary_comparisons_of_one_exact_class_include_the_candidate_record() {
-    let (db, sources) = fund_fixture().await;
-    // The exact class record of the same fund selects a secondary reference.
-    // The Tracked asset and the Fund candidate of one exact ISIN describe the
-    // same investment, so both records contribute their secondary selections.
-    let candidate = common::parse_json_envelope(
-        &run_benchmark(
-            &db,
-            benchmark_command(&[
-                "rstock",
-                "benchmark",
-                "assign-secondary-candidate",
-                "--identifier",
-                FUND_ISIN,
-                "--vehicle",
-                "fund",
-                SECONDARY_REFERENCE,
-            ]),
-            OutputFormat::Json,
-        )
-        .await
-        .expect("the candidate secondary assignment should succeed"),
-    );
-    assert_eq!(candidate["data"]["subject_id"], format!("fund:{FUND_ISIN}"));
-
-    let result = analyze(&db, &sources).await;
-    let envelope = analysis_envelope(&result);
-    let secondaries = envelope["secondary_benchmark_comparisons"]
-        .as_array()
-        .expect("the secondary comparisons should be a list");
-    assert_eq!(secondaries.len(), 1);
-    assert_eq!(secondaries[0]["reference_id"], SECONDARY_REFERENCE);
-    assert_eq!(secondaries[0]["role"], "secondary");
-    assert_eq!(secondaries[0]["availability"]["status"], "available");
-
-    // The same reference selected by both records is reported once.
-    run_benchmark(
-        &db,
-        benchmark_command(&[
-            "rstock",
-            "benchmark",
-            "assign-secondary",
-            "--ticker",
-            FUND_ISIN,
-            SECONDARY_REFERENCE,
-        ]),
-        OutputFormat::Json,
-    )
-    .await
-    .expect("the tracked secondary assignment should succeed");
-    let result = analyze(&db, &sources).await;
-    let envelope = analysis_envelope(&result);
-    assert_eq!(
-        envelope["secondary_benchmark_comparisons"]
-            .as_array()
-            .expect("the secondary comparisons should be a list")
-            .len(),
-        1
-    );
-}
-
-#[tokio::test]
 async fn the_fund_comparison_reports_the_secondary_comparisons_of_each_side() {
     let (db, sources) = fund_fixture().await;
-    run_benchmark(
+    let market_data = market_data_at(&sources, TODAY);
+    run_json(
         &db,
-        benchmark_command(&[
+        &market_data,
+        &[
             "rstock",
             "benchmark",
             "assign-secondary",
             "--ticker",
             FUND_ISIN,
             SECONDARY_REFERENCE,
-        ]),
-        OutputFormat::Json,
+        ],
     )
     .await
     .expect("the secondary assignment should succeed");
 
-    let market_data = market_data_at(&sources, TODAY);
-    let mut output = Vec::new();
-    rstock::cli::run_command_with_writer(
+    let envelope = run_json(
         &db,
         &market_data,
-        rstock::cli::Commands::Compare(rstock::cli::CompareArgs {
-            command: rstock::cli::CompareCommands::Funds {
-                code_a: FUND_CODE.to_owned(),
-                code_b: FUND_CODE_B.to_owned(),
-                period: rstock::cli::CorrelationPeriod::ThirtyDays,
-            },
-        }),
-        OutputFormat::Json,
-        &mut output,
+        &[
+            "rstock",
+            "compare",
+            "funds",
+            "--code-a",
+            FUND_CODE,
+            "--code-b",
+            FUND_CODE_B,
+            "--json",
+        ],
     )
     .await
     .expect("the fund comparison should succeed");
-    let envelope = common::parse_json_envelope(&output);
     assert_eq!(envelope["command"], "compare.funds");
 
     // The side with the secondary comparison keeps it, and the other side
@@ -1042,7 +1218,7 @@ async fn the_fund_comparison_reports_the_secondary_comparisons_of_each_side() {
         PRIMARY_REFERENCE_B
     );
 
-    let mut human = Vec::new();
+    // The human output of the same comparison carries the secondary facts.
     let result = rstock::services::fund_comparison::compare_funds(
         &db,
         &market_data,
@@ -1055,6 +1231,7 @@ async fn the_fund_comparison_reports_the_secondary_comparisons_of_each_side() {
     )
     .await
     .expect("the fund comparison should succeed");
+    let mut human = Vec::new();
     rstock::cli::display::write_fund_comparison_reference_context(&mut human, &result)
         .expect("the human output should be written");
     let human = String::from_utf8(human).expect("the human output should be UTF-8");
@@ -1063,30 +1240,139 @@ async fn the_fund_comparison_reports_the_secondary_comparisons_of_each_side() {
     assert!(human.contains("secondary reference: Verified Secondary Reference"));
 }
 
+#[tokio::test]
+async fn the_fund_comparison_reports_the_secondary_comparison_of_an_untracked_candidate() {
+    let db = setup_test_db().await;
+    let mut sources = MockMarketDataSources::new();
+    // The first side exists only as an exact candidate class: this portfolio
+    // does not track it, so no Tracked asset row exists.
+    for (code, base, step) in [(FUND_CODE, 100.0, 0.10), (FUND_CODE_B, 80.0, 0.08)] {
+        sources.fund_data.insert(
+            code.to_owned(),
+            FundData {
+                fund_currency: Some("EUR".to_owned()),
+                total_holdings: Some(10),
+                portfolio_date: Some("2025-01-08".to_owned()),
+                holdings: vec![],
+            },
+        );
+        sources.fund_quote_metadata.insert(
+            code.to_owned(),
+            FundQuoteMetadata {
+                quote_currency: Some("EUR".to_owned()),
+                ..Default::default()
+            },
+        );
+        sources
+            .historical_prices
+            .insert(code.to_owned(), weekday_series(base, step));
+        sources.series_qualifications.insert(
+            ("morningstar".to_owned(), code.to_owned()),
+            daily_qualification(),
+        );
+    }
+    sources
+        .historical_prices
+        .insert(SECONDARY_IDENTIFIER.to_owned(), weekday_series(25.0, 0.02));
+    sources.series_qualifications.insert(
+        ("test_source".to_owned(), SECONDARY_IDENTIFIER.to_owned()),
+        daily_qualification(),
+    );
+    insert_verified_reference(
+        &db,
+        SECONDARY_REFERENCE,
+        "Verified Secondary Reference",
+        SECONDARY_IDENTIFIER,
+    )
+    .await;
+    let market_data = market_data_at(&sources, TODAY);
+
+    run_json(
+        &db,
+        &market_data,
+        &[
+            "rstock",
+            "benchmark",
+            "assign-secondary-candidate",
+            "--identifier",
+            CANDIDATE_ISIN,
+            "--vehicle",
+            "fund",
+            SECONDARY_REFERENCE,
+        ],
+    )
+    .await
+    .expect("the candidate secondary assignment should succeed");
+
+    let envelope = run_json(
+        &db,
+        &market_data,
+        &[
+            "rstock",
+            "compare",
+            "funds",
+            "--code-a",
+            FUND_CODE,
+            "--candidate-a",
+            &format!("fund:{CANDIDATE_ISIN}"),
+            "--code-b",
+            FUND_CODE_B,
+            "--json",
+        ],
+    )
+    .await
+    .expect("the candidate fund comparison should succeed");
+    assert_eq!(envelope["command"], "compare.funds");
+
+    // The untracked candidate side reports its secondary comparison, and its
+    // primary comparison keeps the accepted absent-reference contract.
+    let fund_a = &envelope["data"]["fund_a"];
+    let secondaries = fund_a["secondary_benchmark_comparisons"]
+        .as_array()
+        .expect("the secondary comparisons should be a list");
+    assert_eq!(secondaries.len(), 1);
+    assert_eq!(secondaries[0]["role"], "secondary");
+    assert_eq!(secondaries[0]["reference_id"], SECONDARY_REFERENCE);
+    assert_eq!(secondaries[0]["availability"]["status"], "available");
+    assert_eq!(secondaries[0]["start_date"], "2024-11-01");
+    assert_eq!(secondaries[0]["end_date"], "2025-01-08");
+    assert_eq!(
+        fund_a["primary_benchmark_comparison"]["availability"]["status"],
+        "unavailable"
+    );
+    assert!(
+        envelope["data"]["fund_b"]["secondary_benchmark_comparisons"]
+            .as_array()
+            .expect("the secondary comparisons should be a list")
+            .is_empty()
+    );
+}
+
 // --- Portfolio isolation ---
 
 #[tokio::test]
 async fn a_secondary_assignment_never_enters_the_exposure_matched_weights() {
     let (db, sources) = exposure_fixture().await;
-    let before = exposure_comparison(&db, &sources).await;
+    let market_data = market_data_at(&sources, TODAY);
+    let before = exposure_comparison(&db, &market_data).await;
 
     // A third reference becomes the secondary comparison of one held asset.
-    run_benchmark(
+    run_json(
         &db,
-        benchmark_command(&[
+        &market_data,
+        &[
             "rstock",
             "benchmark",
             "assign-secondary",
             "--ticker",
             "XFAKE1",
             "ref-gamma",
-        ]),
-        OutputFormat::Json,
+        ],
     )
     .await
     .expect("the secondary assignment should succeed");
 
-    let after = exposure_comparison(&db, &sources).await;
+    let after = exposure_comparison(&db, &market_data).await;
     assert_eq!(
         before, after,
         "a secondary assignment must not change the exposure-matched comparison"
@@ -1119,6 +1405,8 @@ async fn a_secondary_assignment_never_enters_the_exposure_matched_weights() {
 #[tokio::test]
 async fn a_definition_used_by_a_secondary_assignment_cannot_be_deleted() {
     let db = setup_test_db().await;
+    let sources = MockMarketDataSources::new();
+    let market_data = market_data_at(&sources, TODAY);
     insert_verified_reference(&db, "blend-component", "Blend Component", "XREFA").await;
     let asset_id = insert_asset(&db, "XFAKE1", "Blend fixture", "stock", "EUR").await;
     insert_transaction(&db, asset_id, "2025-01-02", 1.0, 10.0, 0.0).await;
@@ -1126,19 +1414,20 @@ async fn a_definition_used_by_a_secondary_assignment_cannot_be_deleted() {
     insert_portfolio_asset_snapshot(&db, "2025-01-02", asset_id, 1.0, 100.0, 100.0, 1.0).await;
     insert_portfolio_snapshot(&db, "2025-01-08", 110.0, 1.0).await;
     insert_portfolio_asset_snapshot(&db, "2025-01-08", asset_id, 1.0, 110.0, 110.0, 1.0).await;
-    let mut sources = MockMarketDataSources::new();
-    sources.historical_prices.insert(
+    let mut blend_sources = MockMarketDataSources::new();
+    blend_sources.historical_prices.insert(
         "XREFA".to_owned(),
         series_between("2025-01-02", "2025-01-08", 100.0, 0.0),
     );
-    sources.series_qualifications.insert(
+    blend_sources.series_qualifications.insert(
         ("test_source".to_owned(), "XREFA".to_owned()),
         daily_qualification(),
     );
 
-    run_blend(
+    let mut blend_output = Vec::new();
+    rstock::cli::run_blend_command_with_writer(
         &db,
-        &sources,
+        &market_data_at(&blend_sources, TODAY),
         blend_command(&[
             "rstock",
             "blend",
@@ -1150,35 +1439,37 @@ async fn a_definition_used_by_a_secondary_assignment_cannot_be_deleted() {
             "--start",
             "02-01-2025",
         ]),
+        OutputFormat::Json,
+        &mut blend_output,
     )
     .await
     .expect("the blend should be saved");
 
-    let assigned = common::parse_json_envelope(
-        &run_benchmark(
-            &db,
-            benchmark_command(&[
-                "rstock",
-                "benchmark",
-                "assign-secondary",
-                "--ticker",
-                "XFAKE1",
-                "custom-blend-secondary-blend",
-            ]),
-            OutputFormat::Json,
-        )
-        .await
-        .expect("the blend should be assignable as a secondary"),
-    );
+    let assigned = run_json(
+        &db,
+        &market_data,
+        &[
+            "rstock",
+            "benchmark",
+            "assign-secondary",
+            "--ticker",
+            "XFAKE1",
+            "custom-blend-secondary-blend",
+        ],
+    )
+    .await
+    .expect("the blend should be assignable as a secondary");
     assert_eq!(
         assigned["data"]["reference_id"],
         "custom-blend-secondary-blend"
     );
 
-    let rejected = run_blend(
+    let rejected = rstock::cli::run_blend_command_with_writer(
         &db,
-        &sources,
+        &market_data_at(&blend_sources, TODAY),
         blend_command(&["rstock", "blend", "delete", "custom-blend-secondary-blend"]),
+        OutputFormat::Json,
+        &mut Vec::new(),
     )
     .await
     .expect_err("a definition used by a secondary assignment must not be deleted");
@@ -1195,9 +1486,10 @@ async fn a_definition_used_by_a_secondary_assignment_cannot_be_deleted() {
     // Removing the secondary assignment releases the definition, and the
     // deletion preserves the ledger, the NAV history, and the cached
     // observations.
-    run_benchmark(
+    run_json(
         &db,
-        benchmark_command(&[
+        &market_data,
+        &[
             "rstock",
             "benchmark",
             "remove-secondary",
@@ -1205,21 +1497,22 @@ async fn a_definition_used_by_a_secondary_assignment_cannot_be_deleted() {
             "XFAKE1",
             "--reference-id",
             "custom-blend-secondary-blend",
-        ]),
-        OutputFormat::Json,
+        ],
     )
     .await
     .expect("the secondary removal should succeed");
 
-    let deleted = common::parse_json_envelope(
-        &run_blend(
-            &db,
-            &sources,
-            blend_command(&["rstock", "blend", "delete", "custom-blend-secondary-blend"]),
-        )
-        .await
-        .expect("an unused blend should be deleted"),
-    );
+    let mut delete_output = Vec::new();
+    rstock::cli::run_blend_command_with_writer(
+        &db,
+        &market_data_at(&blend_sources, TODAY),
+        blend_command(&["rstock", "blend", "delete", "custom-blend-secondary-blend"]),
+        OutputFormat::Json,
+        &mut delete_output,
+    )
+    .await
+    .expect("an unused blend should be deleted");
+    let deleted = common::parse_json_envelope(&delete_output);
     assert_eq!(deleted["data"]["deleted"], true);
     assert!(
         !rstock::db::repos::custom_blend_repo::exists(&db, "custom-blend-secondary-blend")
@@ -1256,6 +1549,122 @@ async fn a_definition_used_by_a_secondary_assignment_cannot_be_deleted() {
             .len(),
         2
     );
+}
+
+// --- Migration protection ---
+
+#[tokio::test]
+async fn the_secondary_assignment_migration_protects_the_assignments_and_the_history() {
+    let db = setup_test_db().await;
+    let sources = MockMarketDataSources::new();
+    let market_data = market_data_at(&sources, TODAY);
+    let asset_id = insert_asset(&db, "XFAKE1", "Migration fixture", "stock", "EUR").await;
+    insert_transaction(&db, asset_id, "2025-01-02", 1.0, 10.0, 0.0).await;
+    insert_portfolio_snapshot(&db, "2025-01-02", 10.0, 1.0).await;
+    insert_portfolio_asset_snapshot(&db, "2025-01-02", asset_id, 1.0, 10.0, 10.0, 1.0).await;
+    insert_verified_reference(
+        &db,
+        SECONDARY_REFERENCE,
+        "Verified Secondary Reference",
+        SECONDARY_IDENTIFIER,
+    )
+    .await;
+    run_json(
+        &db,
+        &market_data,
+        &[
+            "rstock",
+            "benchmark",
+            "assign-secondary",
+            "--ticker",
+            "XFAKE1",
+            SECONDARY_REFERENCE,
+        ],
+    )
+    .await
+    .expect("the secondary assignment should succeed");
+
+    // The destructive rollback is refused while a secondary assignment
+    // exists, and the assignment, the ledger, and the NAV history survive the
+    // refusal.
+    let refused = migration::Migrator::down(&db, Some(1)).await;
+    assert!(
+        refused.is_err(),
+        "a destructive rollback must be refused while a secondary assignment exists"
+    );
+    let error = refused.expect_err("the rollback must fail").to_string();
+    assert!(
+        error.contains("secondary assignments exist"),
+        "the refusal must explain the refusal: {error}"
+    );
+    assert_eq!(
+        rstock::db::repos::benchmark_secondary_assignment_repo::find_by_subject(
+            &db, "tracked", "XFAKE1"
+        )
+        .await
+        .unwrap()
+        .len(),
+        1
+    );
+    assert_eq!(transaction::Entity::find().all(&db).await.unwrap().len(), 1);
+    assert_eq!(
+        portfolio_history::Entity::find()
+            .all(&db)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+
+    // Once the assignment is removed, the rollback applies and the history
+    // outside the secondary assignments is preserved.
+    run_json(
+        &db,
+        &market_data,
+        &[
+            "rstock",
+            "benchmark",
+            "remove-secondary",
+            "--ticker",
+            "XFAKE1",
+        ],
+    )
+    .await
+    .expect("the secondary removal should succeed");
+    migration::Migrator::down(&db, Some(1))
+        .await
+        .expect("the unused secondary migration should roll back");
+    assert_eq!(transaction::Entity::find().all(&db).await.unwrap().len(), 1);
+    assert_eq!(
+        portfolio_history::Entity::find()
+            .all(&db)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        portfolio_asset_history::Entity::find()
+            .all(&db)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(benchmark_reference::Entity::find_by_id(SECONDARY_REFERENCE)
+        .one(&db)
+        .await
+        .unwrap()
+        .is_some());
+}
+
+// --- Helpers of the other commands ---
+
+fn blend_command(args: &[&str]) -> rstock::cli::BlendCommands {
+    match command(args) {
+        rstock::cli::Commands::Blend(arguments) => arguments.command,
+        other => panic!("expected a blend command, got {other:?}"),
+    }
 }
 
 // --- Exposure fixture ---
@@ -1351,30 +1760,30 @@ async fn insert_exposure(
 }
 
 /// The ready Complete NAV snapshots of the exposure fixture.
-fn ready_snapshots() -> Vec<PortfolioSnapshot> {
+fn ready_snapshots() -> Vec<rstock::models::PortfolioSnapshot> {
     vec![
-        PortfolioSnapshot {
+        rstock::models::PortfolioSnapshot {
             date: "2025-01-05".to_owned(),
             asset_value: 0.0,
             total_value: 0.0,
             outstanding_shares: 0.0,
             nav: 100.0,
         },
-        PortfolioSnapshot {
+        rstock::models::PortfolioSnapshot {
             date: "2025-01-06".to_owned(),
             asset_value: 1000.0,
             total_value: 1000.0,
             outstanding_shares: 10.0,
             nav: 100.0,
         },
-        PortfolioSnapshot {
+        rstock::models::PortfolioSnapshot {
             date: "2025-01-07".to_owned(),
             asset_value: 1100.0,
             total_value: 1100.0,
             outstanding_shares: 10.0,
             nav: 110.0,
         },
-        PortfolioSnapshot {
+        rstock::models::PortfolioSnapshot {
             date: "2025-01-08".to_owned(),
             asset_value: 1100.0,
             total_value: 1100.0,
@@ -1386,10 +1795,9 @@ fn ready_snapshots() -> Vec<PortfolioSnapshot> {
 
 async fn exposure_comparison(
     db: &DatabaseConnection,
-    sources: &MockMarketDataSources,
+    market_data: &rstock::services::market_data::MarketData,
 ) -> rstock::models::ExposureBenchmarkComparison {
-    let market_data = market_data_at(sources, NaiveDate::from_ymd_opt(2025, 1, 9).unwrap());
-    compute_exposure_matched_comparison(db, &market_data, &ready_snapshots())
+    compute_exposure_matched_comparison(db, market_data, &ready_snapshots())
         .await
         .expect("the exposure comparison should be computable")
 }

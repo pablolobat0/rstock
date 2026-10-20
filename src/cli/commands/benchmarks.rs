@@ -21,6 +21,12 @@ pub async fn run(
     run_with_writer(db, command, format, &mut writer).await
 }
 
+/// Runs one benchmark management command, writing its successful output
+/// through the injected writer.
+///
+/// The JSON envelope and the human rendering both travel through the writer,
+/// so the library dispatch of a real command value produces the production
+/// document.
 pub async fn run_with_writer<W: Write>(
     db: &sea_orm::DatabaseConnection,
     command: BenchmarkCommands,

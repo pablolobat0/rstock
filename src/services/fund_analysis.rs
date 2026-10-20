@@ -25,6 +25,24 @@ pub async fn compute_fund_analysis(
     ms_code: &str,
     correlation_period: CandidateCorrelationPeriod,
 ) -> anyhow::Result<FundAnalysisResult> {
+    compute_fund_analysis_with_candidate(db, market_data, ms_code, correlation_period, None).await
+}
+
+/// The deep-dive report of one Morningstar fund code, with the exact
+/// candidate class it is analysed as.
+///
+/// The candidate identity is the verified vehicle and ISIN of the analysed
+/// class. It resolves the secondary comparisons of an exact class that this
+/// portfolio does not track, without creating a Tracked asset and without
+/// changing the primary comparison, which stays the accepted tracked-subject
+/// contract.
+pub async fn compute_fund_analysis_with_candidate(
+    db: &DatabaseConnection,
+    market_data: &MarketData,
+    ms_code: &str,
+    correlation_period: CandidateCorrelationPeriod,
+    candidate: Option<&crate::services::benchmark_references::FundCandidateIdentity>,
+) -> anyhow::Result<FundAnalysisResult> {
     let today = market_data.today();
     let today_str = format_date(today);
 
@@ -69,6 +87,7 @@ pub async fn compute_fund_analysis(
         market_data,
         ms_code,
         asset.as_ref().map(|asset| asset.ticker.as_str()),
+        candidate,
         fund_currency.as_deref(),
         today,
     )
@@ -140,12 +159,15 @@ async fn benchmark_comparisons(
     market_data: &MarketData,
     ms_code: &str,
     ticker: Option<&str>,
+    candidate: Option<&crate::services::benchmark_references::FundCandidateIdentity>,
     fund_currency: Option<&str>,
     today: NaiveDate,
 ) -> anyhow::Result<(
     crate::models::FundBenchmarkComparison,
     Vec<crate::models::FundBenchmarkComparison>,
 )> {
+    crate::services::benchmark_references::ensure_candidate_identity_matches(db, ticker, candidate)
+        .await?;
     let primary = crate::services::benchmark::compare_fund_to_primary(
         db,
         market_data,
@@ -160,6 +182,7 @@ async fn benchmark_comparisons(
         market_data,
         ms_code,
         ticker,
+        candidate,
         fund_currency,
         today,
     )

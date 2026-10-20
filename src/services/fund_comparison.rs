@@ -33,14 +33,34 @@ pub async fn compare_funds(
     code_b: &str,
     period: FundComparisonPeriod,
 ) -> anyhow::Result<FundComparisonResult> {
+    compare_funds_with_candidates(db, market_data, code_a, code_b, period, None, None).await
+}
+
+/// The direct comparison of two Morningstar fund codes, with the exact
+/// candidate class each side is compared as.
+///
+/// The candidate identities are the verified vehicle and ISIN of each side.
+/// They resolve the secondary comparisons of an exact class that this
+/// portfolio does not track, without creating a Tracked asset and without
+/// changing the primary comparison, which stays the accepted tracked-subject
+/// contract.
+pub async fn compare_funds_with_candidates(
+    db: &DatabaseConnection,
+    market_data: &MarketData,
+    code_a: &str,
+    code_b: &str,
+    period: FundComparisonPeriod,
+    candidate_a: Option<&crate::services::benchmark_references::FundCandidateIdentity>,
+    candidate_b: Option<&crate::services::benchmark_references::FundCandidateIdentity>,
+) -> anyhow::Result<FundComparisonResult> {
     if code_a.trim().eq_ignore_ascii_case(code_b.trim()) {
         bail!("cannot compare a fund with itself; provide two different fund codes");
     }
 
     let today = market_data.today();
     let (fund_a, fund_b) = tokio::try_join!(
-        build_comparison_side(db, market_data, code_a, today),
-        build_comparison_side(db, market_data, code_b, today),
+        build_comparison_side(db, market_data, code_a, today, candidate_a),
+        build_comparison_side(db, market_data, code_b, today, candidate_b),
     )?;
 
     let equity_a = equity_holdings(&fund_a.holdings);
@@ -72,6 +92,7 @@ async fn build_comparison_side(
     market_data: &MarketData,
     code: &str,
     today: NaiveDate,
+    candidate: Option<&crate::services::benchmark_references::FundCandidateIdentity>,
 ) -> anyhow::Result<FundComparisonData> {
     let today_str = format_date(today);
     let local_asset = asset_repo::find_by_morningstar_code(db, code).await?;
@@ -102,11 +123,18 @@ async fn build_comparison_side(
     // absent or unusable, and they never carry a fact measured against a
     // reference the fund was not assigned.
     let metrics = compute_fund_only_metrics(&prices, today).await;
+    let tracked_ticker = local_asset.as_ref().map(|asset| asset.ticker.as_str());
+    crate::services::benchmark_references::ensure_candidate_identity_matches(
+        db,
+        tracked_ticker,
+        candidate,
+    )
+    .await?;
     let primary_benchmark_comparison = crate::services::benchmark::compare_fund_to_primary(
         db,
         market_data,
         code,
-        local_asset.as_ref().map(|asset| asset.ticker.as_str()),
+        tracked_ticker,
         currency.as_deref(),
         today,
     )
@@ -116,7 +144,8 @@ async fn build_comparison_side(
             db,
             market_data,
             code,
-            local_asset.as_ref().map(|asset| asset.ticker.as_str()),
+            tracked_ticker,
+            candidate,
             currency.as_deref(),
             today,
         )

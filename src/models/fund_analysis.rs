@@ -1,6 +1,6 @@
 use super::benchmark::{
     BenchmarkComparisonPeriod, BenchmarkPeriod, ComparisonAvailability, ComparisonFact,
-    DatedWealthPoint, ReferencePurposeInfo,
+    ComparisonRole, DatedWealthPoint, ReferencePurposeInfo,
 };
 use super::portfolio::{AllocationEntry, BenchmarkReferenceInfo, FundHolding};
 use super::MarketDataLimitation;
@@ -40,7 +40,8 @@ impl std::fmt::Display for ComparisonCoverageIssue {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct FundBenchmarkComparison {
     pub availability: ComparisonAvailability,
-    pub role: String,
+    /// The role of the selected reference in this comparison.
+    pub role: ComparisonRole,
     /// The purpose of the selected reference definition.
     ///
     /// It is absent when no reference is selected for the subject, and the
@@ -177,7 +178,7 @@ impl FundBenchmarkComparison {
             availability: ComparisonAvailability::Unavailable {
                 reason: reason.clone(),
             },
-            role: "primary".to_owned(),
+            role: ComparisonRole::Primary,
             purpose: None,
             reference_id: None,
             reference_name: None,
@@ -210,9 +211,9 @@ impl FundBenchmarkComparison {
     ///
     /// A secondary reference keeps its own role, so an unavailable secondary
     /// never reads as the missing primary reference of the subject.
-    pub fn unavailable_for_role(role: &str, reason: impl Into<String>) -> Self {
+    pub fn unavailable_for_role(role: ComparisonRole, reason: impl Into<String>) -> Self {
         let mut outcome = Self::unavailable(reason);
-        role.clone_into(&mut outcome.role);
+        outcome.role = role;
         outcome
     }
 }

@@ -5,6 +5,7 @@ use crate::constants::{
 };
 use crate::models::CandidateCorrelationPeriod;
 use crate::services;
+use crate::services::benchmark_references::FundCandidateIdentity;
 use crate::services::market_data::MarketData;
 
 use super::super::display;
@@ -18,13 +19,46 @@ pub async fn fund(
     period: CorrelationPeriod,
     output_format: OutputFormat,
 ) -> anyhow::Result<()> {
+    fund_with_writer(
+        db,
+        market_data,
+        code,
+        period,
+        None,
+        output_format,
+        &mut std::io::stdout().lock(),
+    )
+    .await
+}
+
+/// The same command, writing its successful output through the injected
+/// writer.
+///
+/// The JSON envelope is written through the writer, so a caller that captures
+/// it observes exactly the production document. The human renderer keeps its
+/// existing successful-output behaviour, because the chart library prints to
+/// the process stdout.
+pub async fn fund_with_writer<W: std::io::Write>(
+    db: &DatabaseConnection,
+    market_data: &MarketData,
+    code: String,
+    period: CorrelationPeriod,
+    candidate: Option<&FundCandidateIdentity>,
+    output_format: OutputFormat,
+    writer: &mut W,
+) -> anyhow::Result<()> {
     let candidate_period = candidate_correlation_period(&period);
-    let result =
-        services::fund_analysis::compute_fund_analysis(db, market_data, &code, candidate_period)
-            .await?;
+    let result = services::fund_analysis::compute_fund_analysis_with_candidate(
+        db,
+        market_data,
+        &code,
+        candidate_period,
+        candidate,
+    )
+    .await?;
 
     if output_format.is_json() {
-        return output::emit_json("analyze.fund", &result);
+        return output::write_json(writer, "analyze.fund", &result);
     }
 
     display::print_fund_analysis(&result);

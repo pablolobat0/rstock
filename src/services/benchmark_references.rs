@@ -5,6 +5,7 @@ use crate::db::repos::{
     asset_repo, benchmark_assignment_repo, benchmark_candidate_repo, benchmark_reference_repo,
     benchmark_secondary_assignment_repo, transaction_repo,
 };
+use crate::models::AssetType;
 
 pub use crate::db::repos::benchmark_reference_repo::BenchmarkReference;
 
@@ -12,10 +13,35 @@ pub const ASSIGNMENT_SEMANTICS: &str = "Explicit primary assignments apply retro
 
 pub const SECONDARY_ASSIGNMENT_SEMANTICS: &str = "Explicit secondary assignments are diagnostic comparisons that sit alongside the primary reference; they apply retrospectively, never replace the primary, and never contribute portfolio exposure weights.";
 
+/// The subject type of a Tracked asset's assignments.
+pub const TRACKED_SUBJECT_TYPE: &str = "tracked";
+
+/// The subject type of an exact Fund candidate's assignments.
+pub const FUND_CANDIDATE_SUBJECT_TYPE: &str = "fund_candidate";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FundCandidateVehicle {
     Fund,
     Etf,
+}
+
+/// The exact identity of a Fund candidate class.
+///
+/// The vehicle and the exact ISIN identify the class; a name alias is not an
+/// identity, and one share class is never another share class.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FundCandidateIdentity {
+    pub vehicle: FundCandidateVehicle,
+    pub identifier: String,
+}
+
+/// One subject record of an explicit benchmark assignment.
+///
+/// A subject is a Tracked asset of this portfolio or an exact Fund candidate.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AssignmentSubject {
+    pub subject_type: String,
+    pub subject_id: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -57,7 +83,7 @@ pub struct SecondaryAssignmentView {
     pub subject_type: String,
     pub subject_id: String,
     pub reference_id: String,
-    pub role: String,
+    pub role: ComparisonRole,
     pub retrospective: bool,
     pub creates_holding: bool,
     pub definition: BenchmarkReference,
@@ -114,7 +140,7 @@ pub struct SecondaryAssignmentOutcome {
     pub subject_id: String,
     pub reference_id: String,
     /// The role of the assigned reference in this subject's comparison.
-    pub role: String,
+    pub role: ComparisonRole,
     pub definition: BenchmarkReference,
     pub retrospective: bool,
     pub creates_holding: bool,
@@ -132,7 +158,7 @@ pub struct SecondaryRemovalOutcome {
 }
 
 /// The role a secondary reference plays in a subject's comparison.
-pub use crate::services::benchmark::SECONDARY_ROLE;
+pub use crate::models::ComparisonRole;
 
 pub async fn list_benchmark_catalog(db: &impl ConnectionTrait) -> anyhow::Result<BenchmarkCatalog> {
     let references = benchmark_reference_repo::find_all(db).await?;
@@ -161,7 +187,7 @@ pub async fn list_benchmark_catalog(db: &impl ConnectionTrait) -> anyhow::Result
             subject_type: assignment.subject_type,
             subject_id: assignment.subject_id,
             reference_id: assignment.reference_id.clone(),
-            role: SECONDARY_ROLE.to_owned(),
+            role: ComparisonRole::Secondary,
             retrospective: true,
             creates_holding: false,
             definition: benchmark_reference_repo::find_by_id(db, &assignment.reference_id).await?,
@@ -246,7 +272,14 @@ pub async fn assign_tracked_asset(
     if asset_repo::find_by_ticker(db, ticker).await?.is_none() {
         anyhow::bail!("Tracked asset '{ticker}' not found");
     }
-    save_assignment(db, "tracked", ticker, reference_id, is_override, false).await
+    save_assignment(
+        db,
+        &AssignmentSubject::tracked(ticker),
+        reference_id,
+        is_override,
+        false,
+    )
+    .await
 }
 
 pub async fn assign_fund_candidate(
@@ -255,12 +288,13 @@ pub async fn assign_fund_candidate(
     vehicle: FundCandidateVehicle,
     reference_id: &str,
 ) -> anyhow::Result<AssignmentOutcome> {
-    let identifier = normalized_candidate_identifier(identifier)?;
-    let subject_id = format!("{}:{identifier}", vehicle.as_subject_prefix());
+    let identity = FundCandidateIdentity {
+        vehicle,
+        identifier: normalized_candidate_identifier(identifier)?,
+    };
     save_assignment(
         db,
-        "fund_candidate",
-        &subject_id,
+        &AssignmentSubject::candidate(&identity),
         reference_id,
         false,
         false,
@@ -275,7 +309,7 @@ pub async fn remove_tracked_assignment(
     if asset_repo::find_by_ticker(db, ticker).await?.is_none() {
         anyhow::bail!("Tracked asset '{ticker}' not found");
     }
-    remove_assignment(db, "tracked", ticker).await
+    remove_assignment(db, &AssignmentSubject::tracked(ticker)).await
 }
 
 pub async fn remove_fund_candidate_assignment(
@@ -283,9 +317,11 @@ pub async fn remove_fund_candidate_assignment(
     identifier: &str,
     vehicle: FundCandidateVehicle,
 ) -> anyhow::Result<RemovalOutcome> {
-    let identifier = normalized_candidate_identifier(identifier)?;
-    let subject_id = format!("{}:{identifier}", vehicle.as_subject_prefix());
-    remove_assignment(db, "fund_candidate", &subject_id).await
+    let identity = FundCandidateIdentity {
+        vehicle,
+        identifier: normalized_candidate_identifier(identifier)?,
+    };
+    remove_assignment(db, &AssignmentSubject::candidate(&identity)).await
 }
 
 /// Assigns one optional secondary reference to a Tracked asset.
@@ -301,7 +337,7 @@ pub async fn assign_secondary_tracked_asset(
     if asset_repo::find_by_ticker(db, ticker).await?.is_none() {
         anyhow::bail!("Tracked asset '{ticker}' not found");
     }
-    save_secondary_assignment(db, "tracked", ticker, reference_id).await
+    save_secondary_assignment(db, &AssignmentSubject::tracked(ticker), reference_id).await
 }
 
 /// Assigns one optional secondary reference to an exact Fund candidate
@@ -312,9 +348,11 @@ pub async fn assign_secondary_fund_candidate(
     vehicle: FundCandidateVehicle,
     reference_id: &str,
 ) -> anyhow::Result<SecondaryAssignmentOutcome> {
-    let identifier = normalized_candidate_identifier(identifier)?;
-    let subject_id = format!("{}:{identifier}", vehicle.as_subject_prefix());
-    save_secondary_assignment(db, "fund_candidate", &subject_id, reference_id).await
+    let identity = FundCandidateIdentity {
+        vehicle,
+        identifier: normalized_candidate_identifier(identifier)?,
+    };
+    save_secondary_assignment(db, &AssignmentSubject::candidate(&identity), reference_id).await
 }
 
 /// Removes one optional secondary reference of a Tracked asset.
@@ -330,7 +368,7 @@ pub async fn remove_secondary_tracked_asset(
     if asset_repo::find_by_ticker(db, ticker).await?.is_none() {
         anyhow::bail!("Tracked asset '{ticker}' not found");
     }
-    remove_secondary_assignment(db, "tracked", ticker, reference_id).await
+    remove_secondary_assignment(db, &AssignmentSubject::tracked(ticker), reference_id).await
 }
 
 /// Removes one optional secondary reference of an exact Fund candidate.
@@ -340,25 +378,41 @@ pub async fn remove_secondary_fund_candidate(
     vehicle: FundCandidateVehicle,
     reference_id: Option<&str>,
 ) -> anyhow::Result<SecondaryRemovalOutcome> {
-    let identifier = normalized_candidate_identifier(identifier)?;
-    let subject_id = format!("{}:{identifier}", vehicle.as_subject_prefix());
-    remove_secondary_assignment(db, "fund_candidate", &subject_id, reference_id).await
+    let identity = FundCandidateIdentity {
+        vehicle,
+        identifier: normalized_candidate_identifier(identifier)?,
+    };
+    remove_secondary_assignment(db, &AssignmentSubject::candidate(&identity), reference_id).await
 }
 
 async fn save_assignment(
     db: &impl ConnectionTrait,
-    subject_type: &str,
-    subject_id: &str,
+    subject: &AssignmentSubject,
     reference_id: &str,
     is_override: bool,
     creates_holding: bool,
 ) -> anyhow::Result<AssignmentOutcome> {
     let definition = benchmark_reference_repo::find_by_id(db, reference_id).await?;
-    benchmark_assignment_repo::upsert(db, subject_type, subject_id, reference_id, is_override)
-        .await?;
+    // The primary reference and the secondary comparison of one exact class
+    // must be different comparisons. The check runs before the write, so a
+    // rejected selection leaves no assignment behind.
+    if let Some(conflict) = secondary_reference_conflict(db, subject, reference_id).await? {
+        anyhow::bail!(
+            "reference '{reference_id}' is already a secondary comparison of {}; the primary reference and the secondary comparison of one exact class must be different comparisons",
+            conflict.describe()
+        );
+    }
+    benchmark_assignment_repo::upsert(
+        db,
+        &subject.subject_type,
+        &subject.subject_id,
+        reference_id,
+        is_override,
+    )
+    .await?;
     Ok(AssignmentOutcome {
-        subject_type: subject_type.to_owned(),
-        subject_id: subject_id.to_owned(),
+        subject_type: subject.subject_type.clone(),
+        subject_id: subject.subject_id.clone(),
         reference_id: reference_id.to_owned(),
         definition,
         is_override,
@@ -369,44 +423,52 @@ async fn save_assignment(
 
 async fn remove_assignment(
     db: &impl ConnectionTrait,
-    subject_type: &str,
-    subject_id: &str,
+    subject: &AssignmentSubject,
 ) -> anyhow::Result<RemovalOutcome> {
     Ok(RemovalOutcome {
-        subject_type: subject_type.to_owned(),
-        subject_id: subject_id.to_owned(),
-        removed: benchmark_assignment_repo::delete_by_subject(db, subject_type, subject_id).await?,
+        subject_type: subject.subject_type.clone(),
+        subject_id: subject.subject_id.clone(),
+        removed: benchmark_assignment_repo::delete_by_subject(
+            db,
+            &subject.subject_type,
+            &subject.subject_id,
+        )
+        .await?,
     })
 }
 
 /// Records one explicit secondary assignment.
 ///
-/// The primary assignment of the same subject is left untouched: a secondary
-/// selection never replaces the primary. The same reference as the primary is
-/// rejected, because one series compared with itself is not a second
-/// comparison and would read as a duplicated diagnostic.
+/// The primary assignment of the exact class is left untouched: a secondary
+/// selection never replaces the primary. The same reference as the primary of
+/// the exact class is rejected, because one series compared with itself is not
+/// a second comparison and the exact-class union would render it twice.
 async fn save_secondary_assignment(
     db: &impl ConnectionTrait,
-    subject_type: &str,
-    subject_id: &str,
+    subject: &AssignmentSubject,
     reference_id: &str,
 ) -> anyhow::Result<SecondaryAssignmentOutcome> {
     let definition = benchmark_reference_repo::find_by_id(db, reference_id).await?;
-    if let Some(primary) =
-        benchmark_assignment_repo::find_by_subject(db, subject_type, subject_id).await?
-    {
-        if primary.reference_id == reference_id {
-            anyhow::bail!(
-                "reference '{reference_id}' is already the primary reference of {subject_type} '{subject_id}'; a secondary must be a different comparison"
-            );
-        }
+    // The check runs before the write, so a rejected selection leaves no
+    // assignment behind.
+    if let Some(conflict) = primary_reference_conflict(db, subject, reference_id).await? {
+        anyhow::bail!(
+            "reference '{reference_id}' is already the primary reference of {}; the primary reference and the secondary comparison of one exact class must be different comparisons",
+            conflict.describe()
+        );
     }
-    benchmark_secondary_assignment_repo::upsert(db, subject_type, subject_id, reference_id).await?;
+    benchmark_secondary_assignment_repo::upsert(
+        db,
+        &subject.subject_type,
+        &subject.subject_id,
+        reference_id,
+    )
+    .await?;
     Ok(SecondaryAssignmentOutcome {
-        subject_type: subject_type.to_owned(),
-        subject_id: subject_id.to_owned(),
+        subject_type: subject.subject_type.clone(),
+        subject_id: subject.subject_id.clone(),
         reference_id: reference_id.to_owned(),
-        role: SECONDARY_ROLE.to_owned(),
+        role: ComparisonRole::Secondary,
         definition,
         retrospective: true,
         creates_holding: false,
@@ -417,16 +479,15 @@ async fn save_secondary_assignment(
 /// the subject when no reference is named.
 async fn remove_secondary_assignment(
     db: &impl ConnectionTrait,
-    subject_type: &str,
-    subject_id: &str,
+    subject: &AssignmentSubject,
     reference_id: Option<&str>,
 ) -> anyhow::Result<SecondaryRemovalOutcome> {
     let removed_reference_ids = match reference_id {
         Some(reference_id) => {
             let removed = benchmark_secondary_assignment_repo::delete_by_subject_reference(
                 db,
-                subject_type,
-                subject_id,
+                &subject.subject_type,
+                &subject.subject_id,
                 reference_id,
             )
             .await?;
@@ -437,25 +498,218 @@ async fn remove_secondary_assignment(
             }
         }
         None => {
-            benchmark_secondary_assignment_repo::delete_by_subject(db, subject_type, subject_id)
-                .await?
+            benchmark_secondary_assignment_repo::delete_by_subject(
+                db,
+                &subject.subject_type,
+                &subject.subject_id,
+            )
+            .await?
         }
     };
     Ok(SecondaryRemovalOutcome {
-        subject_type: subject_type.to_owned(),
-        subject_id: subject_id.to_owned(),
+        subject_type: subject.subject_type.clone(),
+        subject_id: subject.subject_id.clone(),
         removed: !removed_reference_ids.is_empty(),
         removed_reference_ids,
     })
 }
 
 impl FundCandidateVehicle {
-    fn as_subject_prefix(self) -> &'static str {
+    /// The subject prefix of this vehicle in a candidate subject record.
+    pub fn as_subject_prefix(self) -> &'static str {
         match self {
             Self::Fund => "fund",
             Self::Etf => "etf",
         }
     }
+
+    /// The vehicle of a Tracked asset type.
+    ///
+    /// A stock has no Fund candidate identity, so it has no candidate
+    /// vehicle.
+    pub fn of_asset_type(asset_type: &AssetType) -> Option<Self> {
+        match asset_type {
+            AssetType::Fund => Some(Self::Fund),
+            AssetType::Etf => Some(Self::Etf),
+            AssetType::Stock => None,
+        }
+    }
+}
+
+impl FundCandidateIdentity {
+    /// Parses one explicit `<vehicle>:<ISIN>` identity.
+    pub fn parse(value: &str) -> anyhow::Result<Self> {
+        let (vehicle, identifier) = value.split_once(':').ok_or_else(|| {
+            anyhow::anyhow!("invalid candidate identity '{value}', expected <vehicle>:<ISIN>")
+        })?;
+        let vehicle = match vehicle.trim().to_ascii_lowercase().as_str() {
+            "fund" => FundCandidateVehicle::Fund,
+            "etf" => FundCandidateVehicle::Etf,
+            other => anyhow::bail!("unknown candidate vehicle '{other}', expected fund or etf"),
+        };
+        Ok(Self {
+            vehicle,
+            identifier: normalized_candidate_identifier(identifier)?,
+        })
+    }
+
+    /// Reads the identity of a candidate subject record.
+    pub fn from_subject_id(subject_id: &str) -> Option<Self> {
+        let (vehicle, identifier) = subject_id.split_once(':')?;
+        let vehicle = match vehicle {
+            "fund" => FundCandidateVehicle::Fund,
+            "etf" => FundCandidateVehicle::Etf,
+            _ => return None,
+        };
+        Some(Self {
+            vehicle,
+            identifier: identifier.to_owned(),
+        })
+    }
+
+    /// The subject record of this exact class.
+    pub fn subject_id(&self) -> String {
+        format!("{}:{}", self.vehicle.as_subject_prefix(), self.identifier)
+    }
+}
+
+impl AssignmentSubject {
+    /// The subject record of a Tracked asset.
+    pub fn tracked(ticker: &str) -> Self {
+        Self {
+            subject_type: TRACKED_SUBJECT_TYPE.to_owned(),
+            subject_id: ticker.to_owned(),
+        }
+    }
+
+    /// The subject record of an exact Fund candidate.
+    pub fn candidate(identity: &FundCandidateIdentity) -> Self {
+        Self {
+            subject_type: FUND_CANDIDATE_SUBJECT_TYPE.to_owned(),
+            subject_id: identity.subject_id(),
+        }
+    }
+
+    /// The subject as it is shown to the user.
+    pub fn describe(&self) -> String {
+        format!("{} '{}'", self.subject_type, self.subject_id)
+    }
+}
+
+/// The subject records that describe one exact class.
+///
+/// The Tracked asset and the Fund candidate of one exact ISIN and vehicle
+/// describe the same investment, so one explicit selection for one of them is
+/// a selection for that exact class. A Tracked stock has no candidate
+/// identity, so its exact class is the Tracked record alone.
+pub async fn exact_class_subjects(
+    db: &impl ConnectionTrait,
+    subject: &AssignmentSubject,
+) -> anyhow::Result<Vec<AssignmentSubject>> {
+    let mut subjects = vec![subject.clone()];
+    match subject.subject_type.as_str() {
+        TRACKED_SUBJECT_TYPE => {
+            if let Some(asset) = asset_repo::find_by_ticker(db, &subject.subject_id).await? {
+                if let Some(vehicle) = FundCandidateVehicle::of_asset_type(&asset.asset_type) {
+                    subjects.push(AssignmentSubject::candidate(&FundCandidateIdentity {
+                        vehicle,
+                        identifier: subject.subject_id.clone(),
+                    }));
+                }
+            }
+        }
+        FUND_CANDIDATE_SUBJECT_TYPE => {
+            if let Some(identity) = FundCandidateIdentity::from_subject_id(&subject.subject_id) {
+                if let Some(asset) = asset_repo::find_by_ticker(db, &identity.identifier).await? {
+                    if FundCandidateVehicle::of_asset_type(&asset.asset_type)
+                        == Some(identity.vehicle)
+                    {
+                        subjects.push(AssignmentSubject::tracked(&identity.identifier));
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(subjects)
+}
+
+/// Checks that an explicit candidate identity denotes the analysed class.
+///
+/// The Tracked asset and the Fund candidate of one exact ISIN and vehicle
+/// describe the same investment, so an identity that names another class is
+/// rejected instead of mixing two classes in one comparison. An untracked
+/// fund has no local identity to contradict, so the explicit identity is the
+/// class.
+pub async fn ensure_candidate_identity_matches(
+    db: &impl ConnectionTrait,
+    ticker: Option<&str>,
+    candidate: Option<&FundCandidateIdentity>,
+) -> anyhow::Result<()> {
+    let (Some(ticker), Some(candidate)) = (ticker, candidate) else {
+        return Ok(());
+    };
+    let Some(asset) = asset_repo::find_by_ticker(db, ticker).await? else {
+        return Ok(());
+    };
+    let Some(vehicle) = FundCandidateVehicle::of_asset_type(&asset.asset_type) else {
+        anyhow::bail!(
+            "the tracked asset '{ticker}' is not a fund or ETF, so it has no exact Fund candidate identity"
+        );
+    };
+    anyhow::ensure!(
+        candidate.identifier == ticker && candidate.vehicle == vehicle,
+        "the explicit candidate identity '{}' does not denote the tracked class '{ticker}'",
+        candidate.subject_id()
+    );
+    Ok(())
+}
+
+/// The exact class subject whose primary reference already uses the reference.
+async fn primary_reference_conflict(
+    db: &impl ConnectionTrait,
+    subject: &AssignmentSubject,
+    reference_id: &str,
+) -> anyhow::Result<Option<AssignmentSubject>> {
+    for candidate in exact_class_subjects(db, subject).await? {
+        let Some(primary) = benchmark_assignment_repo::find_by_subject(
+            db,
+            &candidate.subject_type,
+            &candidate.subject_id,
+        )
+        .await?
+        else {
+            continue;
+        };
+        if primary.reference_id == reference_id {
+            return Ok(Some(candidate));
+        }
+    }
+    Ok(None)
+}
+
+/// The exact class subject whose secondary comparison already uses the
+/// reference.
+async fn secondary_reference_conflict(
+    db: &impl ConnectionTrait,
+    subject: &AssignmentSubject,
+    reference_id: &str,
+) -> anyhow::Result<Option<AssignmentSubject>> {
+    for candidate in exact_class_subjects(db, subject).await? {
+        let secondaries = benchmark_secondary_assignment_repo::find_by_subject(
+            db,
+            &candidate.subject_type,
+            &candidate.subject_id,
+        )
+        .await?;
+        if secondaries
+            .iter()
+            .any(|secondary| secondary.reference_id == reference_id)
+        {
+            return Ok(Some(candidate));
+        }
+    }
+    Ok(None)
 }
 
 fn normalized_candidate_identifier(identifier: &str) -> anyhow::Result<String> {
