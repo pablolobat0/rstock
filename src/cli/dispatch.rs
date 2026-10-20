@@ -94,7 +94,11 @@ pub async fn run_command_with_writer<W: Write>(
                 code_b,
                 period,
             } => {
-                commands::compare::funds_with_writer(
+                // The fund comparison is the largest command of the dispatch,
+                // so it is pinned on the heap to keep the dispatch future
+                // small. The command itself, its output, and its errors are
+                // unchanged.
+                Box::pin(commands::compare::funds_with_writer(
                     db,
                     market_data,
                     code_a,
@@ -102,7 +106,7 @@ pub async fn run_command_with_writer<W: Write>(
                     period,
                     output_format,
                     writer,
-                )
+                ))
                 .await
             }
         },

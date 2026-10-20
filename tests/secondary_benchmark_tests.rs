@@ -7,7 +7,7 @@
 //! and the secondary comparison fails the test instead of silently changing
 //! the reported comparison.
 
-#![allow(clippy::float_cmp)]
+#![allow(clippy::float_cmp, clippy::too_many_lines)]
 
 pub mod common;
 
