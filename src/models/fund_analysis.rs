@@ -1,6 +1,6 @@
 use super::benchmark::{
-    BenchmarkComparisonPeriod, BenchmarkPeriod, ComparisonAvailability, ComparisonFact,
-    DatedWealthPoint, ReferencePurposeInfo,
+    BenchmarkComparisonPeriod, BenchmarkPeriod, CandidateClassIdentity, ComparisonAvailability,
+    ComparisonFact, ComparisonRole, DatedWealthPoint, ReferencePurposeInfo,
 };
 use super::portfolio::{AllocationEntry, BenchmarkReferenceInfo, FundHolding};
 use super::MarketDataLimitation;
@@ -40,7 +40,8 @@ impl std::fmt::Display for ComparisonCoverageIssue {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct FundBenchmarkComparison {
     pub availability: ComparisonAvailability,
-    pub role: String,
+    /// The role of the selected reference in this comparison.
+    pub role: ComparisonRole,
     /// The purpose of the selected reference definition.
     ///
     /// It is absent when no reference is selected for the subject, and the
@@ -177,7 +178,7 @@ impl FundBenchmarkComparison {
             availability: ComparisonAvailability::Unavailable {
                 reason: reason.clone(),
             },
-            role: "primary".to_owned(),
+            role: ComparisonRole::Primary,
             purpose: None,
             reference_id: None,
             reference_name: None,
@@ -205,12 +206,29 @@ impl FundBenchmarkComparison {
                 .collect(),
         }
     }
+
+    /// The unavailable outcome of one comparison with an explicit role.
+    ///
+    /// A secondary reference keeps its own role, so an unavailable secondary
+    /// never reads as the missing primary reference of the subject.
+    pub fn unavailable_for_role(role: ComparisonRole, reason: impl Into<String>) -> Self {
+        let mut outcome = Self::unavailable(reason);
+        outcome.role = role;
+        outcome
+    }
 }
 
 #[derive(Serialize)]
 pub struct FundAnalysisResult {
     pub ms_code: String,
     pub name: Option<String>,
+    /// The exact Fund candidate class this analysis was made as, when the
+    /// analysis names one.
+    ///
+    /// It states which candidate assignment the secondary comparisons belong
+    /// to. It is a research record of an exact class, not a holding, so it
+    /// never claims that this portfolio tracks the class.
+    pub candidate_class: Option<CandidateClassIdentity>,
     pub fund_currency: Option<String>,
     pub aum: Option<f64>,
     pub aum_currency: Option<String>,
@@ -230,6 +248,13 @@ pub struct FundAnalysisResult {
     pub benchmark_reference: BenchmarkReferenceInfo,
     pub benchmark_limitations: Vec<MarketDataLimitation>,
     pub primary_benchmark_comparison: FundBenchmarkComparison,
+    /// The optional secondary comparisons of this exact class.
+    ///
+    /// Each secondary is a diagnostic comparison beside the primary one. It
+    /// never replaces the primary reference and never contributes a portfolio
+    /// exposure weight, and its availability is independent of the primary
+    /// comparison.
+    pub secondary_benchmark_comparisons: Vec<FundBenchmarkComparison>,
     pub risk_free_assumption: RiskFreeAssumption,
     pub candidate_correlation: CandidateCorrelationResult,
     pub holdings_changed: bool,

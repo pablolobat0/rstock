@@ -174,6 +174,16 @@ pub fn write_fund_comparison_reference_context<W: Write>(
     )?;
     for side in [&result.fund_a, &result.fund_b] {
         writeln!(writer, "{} reference-relative comparison", side.name)?;
+        // The exact candidate class states which candidate assignment produced
+        // the secondary comparisons of this side. It is a research record of
+        // an exact class, not a tracked holding.
+        if let Some(candidate) = &side.candidate_class {
+            writeln!(
+                writer,
+                "{} candidate class: {} {} (exact candidate identity; not a holding of this portfolio)",
+                side.name, candidate.vehicle, candidate.identifier
+            )?;
+        }
         super::helpers::write_fund_benchmark_periods(
             writer,
             &side.name,
@@ -192,6 +202,21 @@ pub fn write_fund_comparison_reference_context<W: Write>(
             super::helpers::write_comparison_wealth_graph(
                 writer,
                 &side.primary_benchmark_comparison,
+            )?;
+        }
+        // The optional secondary comparisons are diagnostics beside this
+        // side's primary comparison. They never change the primary rows and
+        // never borrow the other side's reference.
+        if !side.secondary_benchmark_comparisons.is_empty() {
+            writeln!(
+                writer,
+                "{} secondary comparisons (diagnostics only; the primary reference above is unchanged)",
+                side.name
+            )?;
+            super::helpers::write_secondary_benchmark_comparisons(
+                writer,
+                &side.name,
+                &side.secondary_benchmark_comparisons,
             )?;
         }
     }

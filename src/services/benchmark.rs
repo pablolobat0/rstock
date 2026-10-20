@@ -4,10 +4,14 @@
 //! only admits compatible definitions and calculates presentation-neutral facts.
 
 use crate::constants::{format_date, FLOAT_EPSILON, MIN_DATA_POINTS, TRADING_DAYS_PER_YEAR};
+use crate::db::repos::benchmark_secondary_assignment_repo::SecondaryAssignment;
 use crate::models::{
     BenchmarkComparisonPeriod, BenchmarkPeriod, ComparisonAvailability, ComparisonCoverageIssue,
-    ComparisonFact, DatedWealthPoint, FundBenchmarkComparison, FundBenchmarkPeriod,
+    ComparisonFact, ComparisonRole, DatedWealthPoint, FundBenchmarkComparison, FundBenchmarkPeriod,
     ReferencePurposeInfo,
+};
+use crate::services::benchmark_references::{
+    exact_class_subjects, AssignmentSubject, FundCandidateIdentity,
 };
 use crate::services::market_data::MarketData;
 use anyhow::Context;
@@ -30,14 +34,20 @@ pub async fn compare_fund_to_primary(
     today: NaiveDate,
 ) -> anyhow::Result<FundBenchmarkComparison> {
     let Some(ticker) = ticker else {
-        return Ok(FundBenchmarkComparison::unavailable(
+        return Ok(FundBenchmarkComparison::unavailable_for_role(
+            ComparisonRole::Primary,
             "fund analysis has no exact tracked-asset identity; assign a reference to its ISIN",
         ));
     };
-    let Some(assignment) =
-        crate::db::repos::benchmark_assignment_repo::find_by_subject(db, "tracked", ticker).await?
+    let Some(assignment) = crate::db::repos::benchmark_assignment_repo::find_by_subject(
+        db,
+        crate::services::benchmark_references::TRACKED_SUBJECT_TYPE,
+        ticker,
+    )
+    .await?
     else {
-        return Ok(FundBenchmarkComparison::unavailable(
+        return Ok(FundBenchmarkComparison::unavailable_for_role(
+            ComparisonRole::Primary,
             "no explicit primary reference is assigned to this tracked fund",
         ));
     };
@@ -49,13 +59,62 @@ pub async fn compare_fund_to_primary(
         market_data,
         FundComparisonRequest {
             ms_code,
-            ticker,
+            ticker: Some(ticker),
+            candidate: None,
             fund_currency,
             today,
         },
         definition,
+        ComparisonRole::Primary,
     )
     .await
+}
+
+/// Compares the fund against every explicitly selected secondary reference.
+///
+/// Each secondary is an independent diagnostic comparison. A secondary whose
+/// inputs are missing, unqualified, or unverified makes only that secondary
+/// unavailable: the primary comparison and the portfolio-only facts keep their
+/// own outcomes.
+///
+/// The secondary assignments of one exact class are read from every record of
+/// that class — the Tracked asset and the Fund candidate of the same exact
+/// ISIN and vehicle — because both describe the same investment. One
+/// reference is reported once even when several records select it. An
+/// untracked candidate needs no Tracked asset: its exact candidate identity
+/// resolves the same secondary assignments.
+pub async fn compare_fund_to_secondary_references(
+    db: &DatabaseConnection,
+    market_data: &MarketData,
+    ms_code: &str,
+    ticker: Option<&str>,
+    candidate: Option<&FundCandidateIdentity>,
+    fund_currency: Option<&str>,
+    today: NaiveDate,
+) -> anyhow::Result<Vec<FundBenchmarkComparison>> {
+    let assignments = secondary_assignments_of_exact_class(db, ticker, candidate).await?;
+    let mut comparisons = Vec::with_capacity(assignments.len());
+    for assignment in assignments {
+        let definition =
+            crate::db::repos::benchmark_reference_repo::find_by_id(db, &assignment.reference_id)
+                .await?;
+        let comparison = compare_assigned_fund(
+            db,
+            market_data,
+            FundComparisonRequest {
+                ms_code,
+                ticker,
+                candidate,
+                fund_currency,
+                today,
+            },
+            definition,
+            ComparisonRole::Secondary,
+        )
+        .await?;
+        comparisons.push(comparison);
+    }
+    Ok(comparisons)
 }
 
 /// Aligns genuinely common observations across the declared complete interval.
@@ -182,9 +241,69 @@ pub fn compute_standard_benchmark_periods(
 
 struct FundComparisonRequest<'a> {
     ms_code: &'a str,
-    ticker: &'a str,
+    ticker: Option<&'a str>,
+    candidate: Option<&'a FundCandidateIdentity>,
     fund_currency: Option<&'a str>,
     today: NaiveDate,
+}
+
+/// The identity of the compared class, as it is shown in a limitation.
+///
+/// A Tracked class is named by its ticker and an untracked candidate class by
+/// its exact ISIN, so a missing observation never hides behind an empty
+/// identity.
+fn subject_label(request: &FundComparisonRequest<'_>) -> String {
+    match (request.ticker, request.candidate) {
+        (Some(ticker), _) => ticker.to_owned(),
+        (None, Some(candidate)) => candidate.identifier.clone(),
+        (None, None) => request.ms_code.to_owned(),
+    }
+}
+
+/// The secondary assignments of one exact class, without duplicates.
+///
+/// Every record of the exact class contributes its secondary selections: the
+/// Tracked asset and the Fund candidate of the same exact ISIN and vehicle
+/// describe the same investment. A reference selected by more than one record
+/// is reported once.
+async fn secondary_assignments_of_exact_class(
+    db: &DatabaseConnection,
+    ticker: Option<&str>,
+    candidate: Option<&FundCandidateIdentity>,
+) -> anyhow::Result<Vec<SecondaryAssignment>> {
+    let mut subjects: Vec<AssignmentSubject> = Vec::new();
+    if let Some(ticker) = ticker {
+        subjects.push(AssignmentSubject::tracked(ticker));
+    }
+    if let Some(candidate) = candidate {
+        subjects.push(AssignmentSubject::candidate(candidate));
+    }
+    let mut exact_class: Vec<AssignmentSubject> = Vec::new();
+    for subject in &subjects {
+        for equivalent in exact_class_subjects(db, subject).await? {
+            if !exact_class.contains(&equivalent) {
+                exact_class.push(equivalent);
+            }
+        }
+    }
+    let mut assignments: Vec<SecondaryAssignment> = Vec::new();
+    for subject in exact_class {
+        for secondary in crate::db::repos::benchmark_secondary_assignment_repo::find_by_subject(
+            db,
+            &subject.subject_type,
+            &subject.subject_id,
+        )
+        .await?
+        {
+            if !assignments
+                .iter()
+                .any(|existing| existing.reference_id == secondary.reference_id)
+            {
+                assignments.push(secondary);
+            }
+        }
+    }
+    Ok(assignments)
 }
 
 async fn compare_assigned_fund(
@@ -192,8 +311,10 @@ async fn compare_assigned_fund(
     market_data: &MarketData,
     request: FundComparisonRequest<'_>,
     definition: crate::db::repos::benchmark_reference_repo::BenchmarkReference,
+    role: ComparisonRole,
 ) -> anyhow::Result<FundBenchmarkComparison> {
-    let mut outcome = FundBenchmarkComparison::unavailable("comparison inputs are not qualified");
+    let mut outcome =
+        FundBenchmarkComparison::unavailable_for_role(role, "comparison inputs are not qualified");
     outcome.purpose = Some(ReferencePurposeInfo::from(&definition));
     outcome.reference_id = Some(definition.id.clone());
     outcome.reference_name = Some(definition.display_name.clone());
@@ -209,19 +330,22 @@ async fn compare_assigned_fund(
         return Ok(unavailable(
             outcome,
             format!(
-                "primary reference '{}' has unverified production mapping ({})",
-                definition.display_name, definition.verification_state
+                "{} reference '{}' has unverified production mapping ({})",
+                role.as_str(),
+                definition.display_name,
+                definition.verification_state
             ),
         ));
     }
     let end_date = format_date(latest_completed_weekday(request.today));
     let start = NaiveDate::from_ymd_opt(2000, 1, 1).expect("literal date should be valid");
+    let subject_label = subject_label(&request);
     let subject_market = market_data
         .prepare_fund_comparison_market_data(
             db,
             crate::services::market_data::FundComparisonRequest {
                 ms_code: request.ms_code,
-                ticker: request.ticker,
+                ticker: subject_label.as_str(),
                 currency: request.fund_currency,
                 start_date: start,
                 end_date: request.today,

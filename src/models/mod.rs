@@ -16,8 +16,8 @@ mod transaction;
 pub(crate) use asset::normalize_currency;
 pub use asset::{Asset, AssetInfo, AssetType};
 pub use benchmark::{
-    BenchmarkComparisonPeriod, BenchmarkPeriod, ComparisonAvailability, ComparisonFact,
-    DatedWealthPoint, ReferencePurposeInfo,
+    BenchmarkComparisonPeriod, BenchmarkPeriod, CandidateClassIdentity, ComparisonAvailability,
+    ComparisonFact, ComparisonRole, DatedWealthPoint, ReferencePurposeInfo,
 };
 pub use classification::{
     enum_to_db, AssetClass, AssetClassification, BondCredit, BondDuration, EquityStyle, Management,

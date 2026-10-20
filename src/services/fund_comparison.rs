@@ -33,14 +33,34 @@ pub async fn compare_funds(
     code_b: &str,
     period: FundComparisonPeriod,
 ) -> anyhow::Result<FundComparisonResult> {
+    compare_funds_with_candidates(db, market_data, code_a, code_b, period, None, None).await
+}
+
+/// The direct comparison of two Morningstar fund codes, with the exact
+/// candidate class each side is compared as.
+///
+/// The candidate identities are the verified vehicle and ISIN of each side.
+/// They resolve the secondary comparisons of an exact class that this
+/// portfolio does not track, without creating a Tracked asset and without
+/// changing the primary comparison, which stays the accepted tracked-subject
+/// contract.
+pub async fn compare_funds_with_candidates(
+    db: &DatabaseConnection,
+    market_data: &MarketData,
+    code_a: &str,
+    code_b: &str,
+    period: FundComparisonPeriod,
+    candidate_a: Option<&crate::services::benchmark_references::FundCandidateIdentity>,
+    candidate_b: Option<&crate::services::benchmark_references::FundCandidateIdentity>,
+) -> anyhow::Result<FundComparisonResult> {
     if code_a.trim().eq_ignore_ascii_case(code_b.trim()) {
         bail!("cannot compare a fund with itself; provide two different fund codes");
     }
 
     let today = market_data.today();
     let (fund_a, fund_b) = tokio::try_join!(
-        build_comparison_side(db, market_data, code_a, today),
-        build_comparison_side(db, market_data, code_b, today),
+        build_comparison_side(db, market_data, code_a, today, candidate_a),
+        build_comparison_side(db, market_data, code_b, today, candidate_b),
     )?;
 
     let equity_a = equity_holdings(&fund_a.holdings);
@@ -72,6 +92,7 @@ async fn build_comparison_side(
     market_data: &MarketData,
     code: &str,
     today: NaiveDate,
+    candidate: Option<&crate::services::benchmark_references::FundCandidateIdentity>,
 ) -> anyhow::Result<FundComparisonData> {
     let today_str = format_date(today);
     let local_asset = asset_repo::find_by_morningstar_code(db, code).await?;
@@ -102,15 +123,33 @@ async fn build_comparison_side(
     // absent or unusable, and they never carry a fact measured against a
     // reference the fund was not assigned.
     let metrics = compute_fund_only_metrics(&prices, today).await;
+    let tracked_ticker = local_asset.as_ref().map(|asset| asset.ticker.as_str());
+    crate::services::benchmark_references::ensure_candidate_identity_matches(
+        db,
+        tracked_ticker,
+        candidate,
+    )
+    .await?;
     let primary_benchmark_comparison = crate::services::benchmark::compare_fund_to_primary(
         db,
         market_data,
         code,
-        local_asset.as_ref().map(|asset| asset.ticker.as_str()),
+        tracked_ticker,
         currency.as_deref(),
         today,
     )
     .await?;
+    let secondary_benchmark_comparisons =
+        crate::services::benchmark::compare_fund_to_secondary_references(
+            db,
+            market_data,
+            code,
+            tracked_ticker,
+            candidate,
+            currency.as_deref(),
+            today,
+        )
+        .await?;
     let top_10_weight = compute_top_n_weight(&fund_data.holdings, 10);
     record_holdings_snapshot(
         db,
@@ -132,6 +171,7 @@ async fn build_comparison_side(
         code: code.to_owned(),
         name,
         class_identity: class_identity(code, local_asset.as_ref()),
+        candidate_class: candidate_class(candidate),
         info: FundInfoComparison {
             currency,
             aum: quote_metadata.as_ref().and_then(|metadata| metadata.aum),
@@ -151,12 +191,27 @@ async fn build_comparison_side(
         five_year: metrics.five_year,
         all_time: metrics.all_time,
         primary_benchmark_comparison,
+        secondary_benchmark_comparisons,
     };
 
     Ok(FundComparisonData {
         side,
         holdings: fund_data.holdings,
         prices,
+    })
+}
+
+/// The exact Fund candidate class of one compared side.
+///
+/// The identity is reported as the research record of an exact class, so a
+/// comparison of an untracked candidate states which candidate assignment
+/// produced it without claiming that this portfolio tracks the class.
+fn candidate_class(
+    candidate: Option<&crate::services::benchmark_references::FundCandidateIdentity>,
+) -> Option<crate::models::CandidateClassIdentity> {
+    candidate.map(|identity| crate::models::CandidateClassIdentity {
+        vehicle: identity.vehicle.as_subject_prefix().to_owned(),
+        identifier: identity.identifier.clone(),
     })
 }
 

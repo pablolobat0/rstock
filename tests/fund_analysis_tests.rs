@@ -355,6 +355,7 @@ async fn assigned_fund_comparison_uses_qualified_shared_market_data_path() {
                 command: rstock::cli::AnalyzeCommands::Fund {
                     code: "XCLASS".to_owned(),
                     period: rstock::cli::CorrelationPeriod::OneYear,
+                    candidate: None,
                 },
             }),
             output_format,

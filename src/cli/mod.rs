@@ -17,6 +17,7 @@ use crate::models::{
     AssetClass, AssetType, BlendComponentArgument, BondCredit, BondDuration, EquityStyle,
     Management,
 };
+use crate::services::benchmark_references::FundCandidateIdentity;
 
 fn parse_date(s: &str) -> Result<NaiveDate, String> {
     let date = NaiveDate::parse_from_str(s, DISPLAY_DATE_FORMAT)
@@ -26,6 +27,14 @@ fn parse_date(s: &str) -> Result<NaiveDate, String> {
         return Err(format!("date cannot be in the future: {s}"));
     }
     Ok(date)
+}
+
+/// Parses one explicit `<vehicle>:<ISIN>` candidate identity.
+///
+/// The vehicle and the exact ISIN identify the class; a name alias is not an
+/// identity.
+fn parse_candidate_identity(value: &str) -> Result<FundCandidateIdentity, String> {
+    FundCandidateIdentity::parse(value).map_err(|error| error.to_string())
 }
 
 fn parse_positive_f64(s: &str) -> Result<f64, String> {
@@ -175,6 +184,38 @@ pub enum BenchmarkCommands {
         #[arg(long, value_enum)]
         vehicle: CandidateVehicle,
     },
+    /// Explicitly assign an optional secondary reference to a Tracked asset
+    AssignSecondary {
+        #[arg(short = 't', long = "ticker")]
+        ticker: String,
+        reference_id: String,
+    },
+    /// Remove an optional secondary reference of a Tracked asset
+    RemoveSecondary {
+        #[arg(short = 't', long = "ticker")]
+        ticker: String,
+        /// The secondary reference to remove; every secondary of the asset when absent
+        #[arg(long)]
+        reference_id: Option<String>,
+    },
+    /// Explicitly assign an optional secondary reference to an exact Fund candidate
+    AssignSecondaryCandidate {
+        #[arg(long)]
+        identifier: String,
+        #[arg(long, value_enum)]
+        vehicle: CandidateVehicle,
+        reference_id: String,
+    },
+    /// Remove an optional secondary reference of an exact Fund candidate
+    RemoveSecondaryCandidate {
+        #[arg(long)]
+        identifier: String,
+        #[arg(long, value_enum)]
+        vehicle: CandidateVehicle,
+        /// The secondary reference to remove; every secondary of the candidate when absent
+        #[arg(long)]
+        reference_id: Option<String>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -287,6 +328,16 @@ pub enum CompareCommands {
         /// Period reserved for comparison correlation and graph sections
         #[arg(short, long, value_enum, default_value = "1y")]
         period: CorrelationPeriod,
+
+        /// The exact Fund candidate class of the first fund, as <vehicle>:<ISIN>;
+        /// it resolves the secondary comparisons of a class this portfolio does not track
+        #[arg(long = "candidate-a", value_parser = parse_candidate_identity)]
+        candidate_a: Option<FundCandidateIdentity>,
+
+        /// The exact Fund candidate class of the second fund, as <vehicle>:<ISIN>;
+        /// it resolves the secondary comparisons of a class this portfolio does not track
+        #[arg(long = "candidate-b", value_parser = parse_candidate_identity)]
+        candidate_b: Option<FundCandidateIdentity>,
     },
 }
 
@@ -310,6 +361,11 @@ pub enum AnalyzeCommands {
         /// Time period for candidate correlation calculation
         #[arg(short, long, value_enum, default_value = "1y")]
         period: CorrelationPeriod,
+
+        /// The exact Fund candidate class of the analysed fund, as <vehicle>:<ISIN>;
+        /// it resolves the secondary comparisons of a class this portfolio does not track
+        #[arg(long, value_parser = parse_candidate_identity)]
+        candidate: Option<FundCandidateIdentity>,
     },
 
     /// Correlation analysis: static matrix and rolling pair correlation

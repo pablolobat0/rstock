@@ -7,11 +7,25 @@ use crate::constants::{
 };
 use crate::models::FundComparisonPeriod;
 use crate::services;
+use crate::services::benchmark_references::FundCandidateIdentity;
 use crate::services::market_data::MarketData;
 
 use super::super::display;
 use super::super::output::{self, OutputFormat};
 use super::super::CorrelationPeriod;
+
+/// The two compared funds of one fund comparison command.
+///
+/// The candidate identities are the verified vehicle and ISIN of each side.
+/// They resolve the secondary comparisons of an exact class that this
+/// portfolio does not track, without creating a Tracked asset.
+pub struct FundComparisonRequest<'a> {
+    pub code_a: String,
+    pub code_b: String,
+    pub candidate_a: Option<&'a FundCandidateIdentity>,
+    pub candidate_b: Option<&'a FundCandidateIdentity>,
+    pub period: CorrelationPeriod,
+}
 
 pub async fn funds(
     db: &DatabaseConnection,
@@ -26,9 +40,13 @@ pub async fn funds(
     funds_with_writer(
         db,
         market_data,
-        code_a,
-        code_b,
-        period,
+        FundComparisonRequest {
+            code_a,
+            code_b,
+            candidate_a: None,
+            candidate_b: None,
+            period,
+        },
         output_format,
         &mut writer,
     )
@@ -44,18 +62,18 @@ pub async fn funds(
 pub async fn funds_with_writer<W: Write>(
     db: &DatabaseConnection,
     market_data: &MarketData,
-    code_a: String,
-    code_b: String,
-    period: CorrelationPeriod,
+    request: FundComparisonRequest<'_>,
     output_format: OutputFormat,
     writer: &mut W,
 ) -> anyhow::Result<()> {
-    let result = services::fund_comparison::compare_funds(
+    let result = services::fund_comparison::compare_funds_with_candidates(
         db,
         market_data,
-        &code_a,
-        &code_b,
-        fund_comparison_period(&period),
+        &request.code_a,
+        &request.code_b,
+        fund_comparison_period(&request.period),
+        request.candidate_a,
+        request.candidate_b,
     )
     .await?;
 

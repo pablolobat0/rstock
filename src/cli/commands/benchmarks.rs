@@ -6,7 +6,8 @@ use crate::{
     cli::{output, BenchmarkCommands, CandidateVehicle},
     services::benchmark_references::{
         self, AssignmentOutcome, BenchmarkCatalog, BenchmarkReference, BenchmarkShow,
-        CandidateComparator, FundCandidateVehicle, RemovalOutcome,
+        CandidateComparator, FundCandidateVehicle, RemovalOutcome, SecondaryAssignmentOutcome,
+        SecondaryRemovalOutcome,
     },
 };
 
@@ -20,6 +21,12 @@ pub async fn run(
     run_with_writer(db, command, format, &mut writer).await
 }
 
+/// Runs one benchmark management command, writing its successful output
+/// through the injected writer.
+///
+/// The JSON envelope and the human rendering both travel through the writer,
+/// so the library dispatch of a real command value produces the production
+/// document.
 pub async fn run_with_writer<W: Write>(
     db: &sea_orm::DatabaseConnection,
     command: BenchmarkCommands,
@@ -92,9 +99,88 @@ pub async fn run_with_writer<W: Write>(
             .await?;
             write_removal(writer, format, "benchmark.remove_candidate", &outcome)
         }
+        BenchmarkCommands::AssignSecondary { .. }
+        | BenchmarkCommands::RemoveSecondary { .. }
+        | BenchmarkCommands::AssignSecondaryCandidate { .. }
+        | BenchmarkCommands::RemoveSecondaryCandidate { .. } => {
+            run_secondary_command(db, command, format, writer).await
+        }
     }
 }
 
+/// Runs one explicit secondary assignment command.
+///
+/// The secondary commands are kept apart from the primary ones because a
+/// secondary never replaces a primary reference and never becomes a holding.
+async fn run_secondary_command<W: Write>(
+    db: &sea_orm::DatabaseConnection,
+    command: BenchmarkCommands,
+    format: output::OutputFormat,
+    writer: &mut W,
+) -> anyhow::Result<()> {
+    match command {
+        BenchmarkCommands::AssignSecondary {
+            ticker,
+            reference_id,
+        } => {
+            let outcome =
+                benchmark_references::assign_secondary_tracked_asset(db, &ticker, &reference_id)
+                    .await?;
+            write_secondary_assignment(writer, format, "benchmark.assign_secondary", &outcome)
+        }
+        BenchmarkCommands::RemoveSecondary {
+            ticker,
+            reference_id,
+        } => {
+            let outcome = benchmark_references::remove_secondary_tracked_asset(
+                db,
+                &ticker,
+                reference_id.as_deref(),
+            )
+            .await?;
+            write_secondary_removal(writer, format, "benchmark.remove_secondary", &outcome)
+        }
+        BenchmarkCommands::AssignSecondaryCandidate {
+            identifier,
+            vehicle,
+            reference_id,
+        } => {
+            let outcome = benchmark_references::assign_secondary_fund_candidate(
+                db,
+                &identifier,
+                fund_vehicle(vehicle),
+                &reference_id,
+            )
+            .await?;
+            write_secondary_assignment(
+                writer,
+                format,
+                "benchmark.assign_secondary_candidate",
+                &outcome,
+            )
+        }
+        BenchmarkCommands::RemoveSecondaryCandidate {
+            identifier,
+            vehicle,
+            reference_id,
+        } => {
+            let outcome = benchmark_references::remove_secondary_fund_candidate(
+                db,
+                &identifier,
+                fund_vehicle(vehicle),
+                reference_id.as_deref(),
+            )
+            .await?;
+            write_secondary_removal(
+                writer,
+                format,
+                "benchmark.remove_secondary_candidate",
+                &outcome,
+            )
+        }
+        _ => anyhow::bail!("the requested command is not a secondary assignment command"),
+    }
+}
 fn fund_vehicle(vehicle: CandidateVehicle) -> FundCandidateVehicle {
     match vehicle {
         CandidateVehicle::Fund => FundCandidateVehicle::Fund,
@@ -127,6 +213,69 @@ fn write_removal<W: Write>(
             if outcome.removed { "Removed" } else { "No" },
             outcome.subject_type,
             outcome.subject_id
+        ),
+    )
+}
+
+/// Writes the outcome of one explicit secondary assignment.
+///
+/// The secondary keeps its own role, its own reference identity, and the
+/// retrospective meaning of the explicit selection. It never replaces the
+/// primary reference and never creates a holding.
+fn write_secondary_assignment<W: Write>(
+    writer: &mut W,
+    format: output::OutputFormat,
+    command: &str,
+    outcome: &SecondaryAssignmentOutcome,
+) -> anyhow::Result<()> {
+    write_output(
+        writer,
+        format,
+        command,
+        outcome,
+        &format!(
+            "Assigned {} [{}] as a {} comparison of {} {} retrospectively; assignment role: {}; definition role: {}; universe: {}; return basis: {}; currency: {}; hedge policy: {}; source: {}; history: {}; verification: {}; creates holding: {}",
+            outcome.definition.display_name,
+            outcome.definition.id,
+            outcome.role,
+            outcome.subject_type,
+            outcome.subject_id,
+            outcome.role,
+            outcome.definition.role,
+            outcome.definition.universe,
+            outcome.definition.return_basis_qualification,
+            outcome.definition.currency,
+            outcome.definition.hedge_policy,
+            outcome.definition.source_provenance,
+            outcome.definition.history_boundary,
+            outcome.definition.verification_state,
+            outcome.creates_holding,
+        ),
+    )
+}
+
+/// Writes the outcome of one explicit secondary removal.
+fn write_secondary_removal<W: Write>(
+    writer: &mut W,
+    format: output::OutputFormat,
+    command: &str,
+    outcome: &SecondaryRemovalOutcome,
+) -> anyhow::Result<()> {
+    write_output(
+        writer,
+        format,
+        command,
+        outcome,
+        &format!(
+            "{} secondary comparison assignment(s) for {} {}: {}",
+            if outcome.removed { "Removed" } else { "No" },
+            outcome.subject_type,
+            outcome.subject_id,
+            if outcome.removed_reference_ids.is_empty() {
+                "none".to_owned()
+            } else {
+                outcome.removed_reference_ids.join(", ")
+            }
         ),
     )
 }
@@ -166,6 +315,21 @@ fn list_human(catalog: &BenchmarkCatalog) -> String {
             } else {
                 ""
             }
+        ));
+    }
+    lines.push(format!(
+        "Explicit secondary assignments ({}):",
+        catalog.secondary_assignment_semantics
+    ));
+    for assignment in &catalog.secondary_assignments {
+        lines.push(format!(
+            "{} {} → {} (role: {}; retrospective: {}; creates holding: {})",
+            assignment.subject_type,
+            assignment.subject_id,
+            assignment.definition.display_name,
+            assignment.role,
+            assignment.retrospective,
+            assignment.creates_holding,
         ));
     }
     lines.push(

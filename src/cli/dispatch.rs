@@ -12,8 +12,9 @@ use super::commands;
 use super::output::OutputFormat;
 use super::{
     AnalyzeCommands, AssetCommands, BenchmarkCommands, BlendCommands, Commands, CompareCommands,
-    CorrelationCommands, PortfolioCommands, TransactionCommands,
+    CorrelationCommands, CorrelationPeriod, PortfolioCommands, TransactionCommands,
 };
+use crate::services::benchmark_references::FundCandidateIdentity;
 use crate::services::market_data::MarketData;
 
 /// Dispatch one parsed CLI command against the application graph.
@@ -59,47 +60,27 @@ pub async fn run_command_with_writer<W: Write>(
         Commands::Transaction(args) => {
             run_transaction_command(db, args.command, output_format).await
         }
-        Commands::Analyze(args) => match args.command {
-            AnalyzeCommands::Composition {} => {
-                commands::analyze::composition(db, market_data, output_format).await
-            }
-            AnalyzeCommands::Fund { code, period } => {
-                commands::analyze::fund(db, market_data, code, period, output_format).await
-            }
-            AnalyzeCommands::Correlation(args) => match args.command {
-                CorrelationCommands::Matrix { period } => {
-                    commands::analyze::correlation_matrix(db, market_data, period, output_format)
-                        .await
-                }
-                CorrelationCommands::Rolling {
-                    identifier_a,
-                    identifier_b,
-                    period,
-                } => {
-                    commands::analyze::rolling_correlation(
-                        db,
-                        market_data,
-                        identifier_a,
-                        identifier_b,
-                        period,
-                        output_format,
-                    )
-                    .await
-                }
-            },
-        },
+        Commands::Analyze(args) => {
+            run_analyze_command(db, market_data, args.command, output_format, writer).await
+        }
         Commands::Compare(args) => match args.command {
             CompareCommands::Funds {
                 code_a,
                 code_b,
                 period,
+                candidate_a,
+                candidate_b,
             } => {
-                commands::compare::funds_with_writer(
+                run_fund_comparison(
                     db,
                     market_data,
-                    code_a,
-                    code_b,
-                    period,
+                    commands::compare::FundComparisonRequest {
+                        code_a,
+                        code_b,
+                        candidate_a: candidate_a.as_ref(),
+                        candidate_b: candidate_b.as_ref(),
+                        period,
+                    },
                     output_format,
                     writer,
                 )
@@ -107,7 +88,7 @@ pub async fn run_command_with_writer<W: Write>(
             }
         },
         Commands::Benchmark(args) => {
-            commands::benchmarks::run(db, args.command, output_format).await
+            commands::benchmarks::run_with_writer(db, args.command, output_format, writer).await
         }
         Commands::Blend(args) => {
             commands::custom_blends::run(db, market_data, args.command, output_format).await
@@ -146,6 +127,102 @@ pub async fn run_blend_command_with_writer<W: Write>(
     writer: &mut W,
 ) -> anyhow::Result<()> {
     commands::custom_blends::run_with_writer(db, market_data, command, output_format, writer).await
+}
+
+/// Dispatches one fund comparison command through the library-owned CLI
+/// adapter.
+///
+/// The fund comparison is the largest command of the dispatch, so it is
+/// pinned on the heap to keep the dispatch future small. The command itself,
+/// its output, and its errors are unchanged.
+async fn run_fund_comparison<W: Write>(
+    db: &DatabaseConnection,
+    market_data: &MarketData,
+    request: commands::compare::FundComparisonRequest<'_>,
+    output_format: OutputFormat,
+    writer: &mut W,
+) -> anyhow::Result<()> {
+    Box::pin(commands::compare::funds_with_writer(
+        db,
+        market_data,
+        request,
+        output_format,
+        writer,
+    ))
+    .await
+}
+
+/// Dispatches one analysis command through the library-owned CLI adapters.
+async fn run_analyze_command<W: Write>(
+    db: &DatabaseConnection,
+    market_data: &MarketData,
+    command: AnalyzeCommands,
+    output_format: OutputFormat,
+    writer: &mut W,
+) -> anyhow::Result<()> {
+    match command {
+        AnalyzeCommands::Composition {} => {
+            commands::analyze::composition(db, market_data, output_format).await
+        }
+        AnalyzeCommands::Fund {
+            code,
+            period,
+            candidate,
+        } => {
+            run_fund_analysis(
+                db,
+                market_data,
+                code,
+                period,
+                candidate,
+                output_format,
+                writer,
+            )
+            .await
+        }
+        AnalyzeCommands::Correlation(args) => match args.command {
+            CorrelationCommands::Matrix { period } => {
+                commands::analyze::correlation_matrix(db, market_data, period, output_format).await
+            }
+            CorrelationCommands::Rolling {
+                identifier_a,
+                identifier_b,
+                period,
+            } => {
+                commands::analyze::rolling_correlation(
+                    db,
+                    market_data,
+                    identifier_a,
+                    identifier_b,
+                    period,
+                    output_format,
+                )
+                .await
+            }
+        },
+    }
+}
+
+/// Dispatches one fund analysis command through the library-owned CLI adapter.
+async fn run_fund_analysis<W: Write>(
+    db: &DatabaseConnection,
+    market_data: &MarketData,
+    code: String,
+    period: CorrelationPeriod,
+    candidate: Option<FundCandidateIdentity>,
+    output_format: OutputFormat,
+    writer: &mut W,
+) -> anyhow::Result<()> {
+    commands::analyze::fund_with_writer(
+        db,
+        market_data,
+        code,
+        period,
+        candidate.as_ref(),
+        output_format,
+        writer,
+    )
+    .await
 }
 
 async fn run_transaction_command(

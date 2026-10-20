@@ -125,6 +125,16 @@ pub fn write_fund_analysis_reference_context<W: Write>(
         &result.benchmark_reference,
         &result.benchmark_limitations,
     )?;
+    // The exact candidate class states which candidate assignment produced
+    // the secondary comparisons of this analysis. It is a research record of
+    // an exact class, not a tracked holding.
+    if let Some(candidate) = &result.candidate_class {
+        writeln!(
+            writer,
+            "Candidate class: {} {} (exact candidate identity; not a holding of this portfolio)",
+            candidate.vehicle, candidate.identifier
+        )?;
+    }
     let comparison = &result.primary_benchmark_comparison;
     match &comparison.availability {
         ComparisonAvailability::Available => writeln!(writer, "Primary comparison: available")?,
@@ -178,6 +188,20 @@ pub fn write_fund_analysis_reference_context<W: Write>(
     )?;
     if matches!(comparison.availability, ComparisonAvailability::Available) {
         super::helpers::write_comparison_wealth_graph(writer, comparison)?;
+    }
+    // The optional secondary comparisons are diagnostics beside the primary
+    // one. They keep their own role, conventions, dates, and graphs, and
+    // they never change the primary comparison above.
+    if !result.secondary_benchmark_comparisons.is_empty() {
+        writeln!(
+            writer,
+            "Secondary comparisons (diagnostics only; the primary reference above is unchanged):"
+        )?;
+        super::helpers::write_secondary_benchmark_comparisons(
+            writer,
+            result.name.as_deref().unwrap_or(&result.ms_code),
+            &result.secondary_benchmark_comparisons,
+        )?;
     }
     Ok(())
 }

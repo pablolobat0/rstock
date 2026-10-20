@@ -25,6 +25,24 @@ pub async fn compute_fund_analysis(
     ms_code: &str,
     correlation_period: CandidateCorrelationPeriod,
 ) -> anyhow::Result<FundAnalysisResult> {
+    compute_fund_analysis_with_candidate(db, market_data, ms_code, correlation_period, None).await
+}
+
+/// The deep-dive report of one Morningstar fund code, with the exact
+/// candidate class it is analysed as.
+///
+/// The candidate identity is the verified vehicle and ISIN of the analysed
+/// class. It resolves the secondary comparisons of an exact class that this
+/// portfolio does not track, without creating a Tracked asset and without
+/// changing the primary comparison, which stays the accepted tracked-subject
+/// contract.
+pub async fn compute_fund_analysis_with_candidate(
+    db: &DatabaseConnection,
+    market_data: &MarketData,
+    ms_code: &str,
+    correlation_period: CandidateCorrelationPeriod,
+    candidate: Option<&crate::services::benchmark_references::FundCandidateIdentity>,
+) -> anyhow::Result<FundAnalysisResult> {
     let today = market_data.today();
     let today_str = format_date(today);
 
@@ -64,11 +82,12 @@ pub async fn compute_fund_analysis(
         today,
     )
     .await?;
-    let primary_benchmark_comparison = crate::services::benchmark::compare_fund_to_primary(
+    let (primary_benchmark_comparison, secondary_benchmark_comparisons) = benchmark_comparisons(
         db,
         market_data,
         ms_code,
         asset.as_ref().map(|asset| asset.ticker.as_str()),
+        candidate,
         fund_currency.as_deref(),
         today,
     )
@@ -97,6 +116,7 @@ pub async fn compute_fund_analysis(
     Ok(FundAnalysisResult {
         ms_code: ms_code.to_owned(),
         name,
+        candidate_class: candidate_class(candidate),
         fund_currency,
         aum: quote_metadata.as_ref().and_then(|metadata| metadata.aum),
         aum_currency: quote_metadata
@@ -120,12 +140,69 @@ pub async fn compute_fund_analysis(
         benchmark_reference: metrics.benchmark_reference,
         benchmark_limitations: metrics.benchmark_limitations,
         primary_benchmark_comparison,
+        secondary_benchmark_comparisons,
         risk_free_assumption: crate::models::RiskFreeAssumption::current(),
         candidate_correlation,
         holdings_changed,
         last_snapshot_date,
         holding_diff,
     })
+}
+
+/// The exact Fund candidate class of an analysed fund.
+///
+/// The identity is reported as the research record of an exact class, so a
+/// comparison of an untracked candidate states which candidate assignment
+/// produced it without claiming that this portfolio tracks the class.
+fn candidate_class(
+    candidate: Option<&crate::services::benchmark_references::FundCandidateIdentity>,
+) -> Option<crate::models::CandidateClassIdentity> {
+    candidate.map(|identity| crate::models::CandidateClassIdentity {
+        vehicle: identity.vehicle.as_subject_prefix().to_owned(),
+        identifier: identity.identifier.clone(),
+    })
+}
+
+/// The primary and the optional secondary benchmark comparisons of one fund.
+///
+/// The two roles are measured by the shared Benchmark Module through the
+/// same preparation and the same comparison calculation. A secondary is a
+/// diagnostic beside the primary reference: it never replaces the primary
+/// reference and never contributes a portfolio exposure weight.
+async fn benchmark_comparisons(
+    db: &DatabaseConnection,
+    market_data: &MarketData,
+    ms_code: &str,
+    ticker: Option<&str>,
+    candidate: Option<&crate::services::benchmark_references::FundCandidateIdentity>,
+    fund_currency: Option<&str>,
+    today: NaiveDate,
+) -> anyhow::Result<(
+    crate::models::FundBenchmarkComparison,
+    Vec<crate::models::FundBenchmarkComparison>,
+)> {
+    crate::services::benchmark_references::ensure_candidate_identity_matches(db, ticker, candidate)
+        .await?;
+    let primary = crate::services::benchmark::compare_fund_to_primary(
+        db,
+        market_data,
+        ms_code,
+        ticker,
+        fund_currency,
+        today,
+    )
+    .await?;
+    let secondary = crate::services::benchmark::compare_fund_to_secondary_references(
+        db,
+        market_data,
+        ms_code,
+        ticker,
+        candidate,
+        fund_currency,
+        today,
+    )
+    .await?;
+    Ok((primary, secondary))
 }
 
 async fn compute_candidate_correlation(
