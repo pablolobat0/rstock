@@ -7,19 +7,25 @@ baseline), pull request #139 against the feature branch
 
 ## Verification
 
-Each command below was run once, offline, on the head this pull request
-proposes, and its exit code is recorded here:
+The code was validated on the tested code head
+`1304f13676904d85d9f4f461e169aec15a88c965`, the commit that carries the
+cross-role constraint, the reported candidate identity, and the reordered
+reference interfaces. Each command below was run once, offline, on that head,
+and its exit code is recorded here:
 
 | Command | Exit code | Result |
 | --- | --- | --- |
 | `cargo fmt -- --check` | 0 | clean |
 | `cargo clippy --offline -- -D warnings` | 0 | clean |
 | `cargo clippy --offline --test secondary_benchmark_tests -- -D warnings` | 0 | clean |
-| `cargo test --offline` | 0 | 43 test binaries, 600 tests, 0 failed |
+| `cargo test --offline` | 0 | 43 test binaries, 603 tests, 0 failed |
 
 The machine output of that run is a build artifact kept outside the
 repository, at `/tmp/opencode/120-final-verification.log`; the pull request
 holds only this summary, and the exit codes above are the committed record.
+The only change after the tested head is this document and the architecture
+note, so the tested code is the code of the pull request.
+
 No test performs a network call and no test opens the real portfolio
 database. Every test uses in-memory SQLite, a fixed clock, and the fake
 `MarketDataSources` seam.
@@ -44,13 +50,17 @@ database. Every test uses in-memory SQLite, a fixed clock, and the fake
   exact ISIN and vehicle describe the same investment. The primary reference
   and the secondary comparison of one exact class must be different
   comparisons, in both assignment directions, and a rejected selection leaves
-  no assignment behind.
+  no assignment behind. The database enforces that rule inside the write
+  itself, so two concurrent selections of one reference cannot both persist.
 - **Untracked candidate classes** — `analyze fund --candidate
   <vehicle>:<ISIN>` and `compare funds --candidate-a/--candidate-b
   <vehicle>:<ISIN>` state the exact class of an analysed fund with its
   verified vehicle and ISIN. The secondary comparisons of that class are then
   reported without a Tracked asset, while the primary comparison keeps the
-  accepted #119 contract of an absent reference for an untracked class.
+  accepted #119 contract of an absent reference for an untracked class. The
+  exact candidate class is reported with the result, in human and JSON, so the
+  output states which candidate assignment produced the comparison; the
+  tracked identity of an untracked class stays absent.
 - **Shared Benchmark Module** — `compare_fund_to_secondary_references()`
   measures every explicitly selected secondary reference through the same
   preparation, the same convention gates, the same comparison calculation,
@@ -174,6 +184,80 @@ outcome and in the assignment outcome, and it keeps the accepted JSON values
 existing `AssetType` enum, so the exact-class rule no longer compares free
 strings.
 
+### P2 — the opposite-role check and the write were two independent steps
+
+`src/services/benchmark_references.rs` checked the opposite role with a read
+and then wrote the assignment in a second, independent step. Two concurrent
+selections of one reference could both read "no conflict" and both persist, so
+one reference could hold both roles of one exact class. The reproduction below
+showed exactly that: the concurrent primary and secondary selection of one
+reference both succeeded.
+
+The decision is now the database's. The migration installs four SQLite
+triggers — a `BEFORE INSERT` and a `BEFORE UPDATE` trigger on each of the two
+assignment tables — that refuse a write giving one reference the other role of
+one exact class. The check runs inside the write, so the decision and the
+write are one atomic step, and the check compares the subject with its
+exact-class counterpart: the Tracked asset and the Fund candidate of one exact
+ISIN and vehicle are one exact class in both role directions.
+
+- `save_assignment()` and `save_secondary_assignment()` no longer decide the
+  conflict with an advisory read. They attempt the write and translate the
+  database refusal into the typed conflict, naming the conflicting subject
+  from the state the database holds.
+- A refused write leaves no assignment behind: the database aborts the
+  statement, and the previous value of the row stays in place.
+- An unrelated database error is propagated unchanged, so no error is
+  swallowed and no failure is reported as a conflict.
+- The constraint adds no lock that the write did not already take, so it
+  cannot leave a connection busy or poisoned: the catalog still renders after
+  a refused write, which the concurrency test asserts.
+
+Evidence: `tests/secondary_benchmark_tests.rs`:
+`the_database_refuses_a_role_conflicting_write` (the write path itself is
+refused for the same subject, for the Fund candidate of the same exact ISIN
+and vehicle, and in both role directions, and the refused write leaves no
+assignment behind) and `concurrent_role_selections_keep_one_role_for_the_reference`
+(the concurrent primary and secondary selection of one reference records
+exactly one role, the refused selection is a typed conflict, and the
+connection still serves the catalog afterwards).
+
+### P2 — the explicit candidate identity was dropped from the returned output
+
+The analysis and the comparison used the explicit candidate vehicle and ISIN
+to resolve the secondary comparisons and then dropped that identity. An
+available candidate-only comparison therefore reported only a source code
+with a null tracked identity and a null vehicle, so the human and the JSON
+output could not say which candidate assignment produced the comparison.
+
+The exact candidate class is now part of the result:
+
+- `models::CandidateClassIdentity` states the vehicle and the exact ISIN of
+  the candidate class.
+- `FundAnalysisResult.candidate_class` and `FundComparisonSide.candidate_class`
+  carry it, so each side of a comparison states its own exact identity.
+- The human output names it: the fund analysis reports "Candidate class:
+  `<vehicle>` `<ISIN>` (exact candidate identity; not a holding of this
+  portfolio)" and each side of the comparison reports the same.
+- The tracked identity is untouched: a class this portfolio does not track
+  keeps its null tracked identity and its null vehicle, and the candidate
+  identity never borrows another class's identity. The primary comparison
+  keeps the accepted absent-reference contract for an untracked class.
+
+Evidence: `tests/secondary_benchmark_tests.rs`:
+`the_candidate_identity_is_reported_for_the_analysis_and_each_comparison_side`
+(the JSON and the human output of the analysis and of both comparison sides
+name the supplied ISIN and vehicle, each side keeps its own secondary
+reference, and the tracked identity stays absent).
+
+### P3 — public reference interfaces below the private helpers
+
+`src/services/benchmark_references.rs` kept `exact_class_subjects()` and
+`ensure_candidate_identity_matches()` — both public — below the private
+helpers. They now sit with the other public entry points, above the private
+helpers, as `docs/CONVENTIONS.md` (Function Ordering) requires. Only the
+order changed; no behaviour changed.
+
 ## The confirmed bugs, reproduced before the fix
 
 Each confirmed bug was reproduced against the pre-fix code, with the new
@@ -184,6 +268,9 @@ public tests failing, and the same tests passing after the fix:
 | P2 collision check | the candidate secondary of the exact class's primary reference was accepted | `the_primary_and_the_secondary_of_one_exact_class_cannot_share_a_reference` failed |
 | P2 untracked candidate | the secondary comparison list was empty without a Tracked asset | `an_untracked_candidate_reports_its_secondary_comparison_without_a_tracked_asset` and `the_fund_comparison_reports_the_secondary_comparison_of_an_untracked_candidate` failed |
 | P2 command routing | the benchmark command wrote to the process stdout, not to the injected writer | `secondary_assignments_are_managed_through_the_public_commands` failed |
+| P2 opposite-role race | the concurrent primary and secondary selection of one reference both succeeded and the reference held both roles | `concurrent_role_selections_keep_one_role_for_the_reference` failed with two recorded roles |
+| P2 database constraint | the write path itself persisted the conflicting role | `the_database_refuses_a_role_conflicting_write` failed |
+| P2 candidate identity | the reported identity of a candidate-only comparison was null | `the_candidate_identity_is_reported_for_the_analysis_and_each_comparison_side` failed |
 
 ## Acceptance criteria and where each one is covered
 
@@ -248,16 +335,22 @@ public tests failing, and the same tests passing after the fix:
 
 ### Offline assignment, analysis and output tests cover primary/secondary separation, independent availability, candidate identity, deletion protection and no double counting. Additional relative metrics reuse standard-period support when present rather than duplicating it
 
-- The fifteen public tests of `tests/secondary_benchmark_tests.rs` cover the
+- The eighteen public tests of `tests/secondary_benchmark_tests.rs` cover the
   assignment management, the separation, the independent availability, the
   exact candidate identity, the deletion protection, the absence of double
-  counting, and the reuse of the shared standard-period support.
+  counting, the reuse of the shared standard-period support, the atomic
+  cross-role enforcement, and the reported candidate identity.
 - `the_secondary_standard_rows_reuse_the_shared_period_support` compares the
   reported rows with `compute_standard_benchmark_periods()` over the same
   aligned series, so a second calculation would fail the test.
 - `an_explicit_candidate_identity_must_denote_the_analysed_class` covers the
   identity conflict: an identity that names another class is rejected instead
   of mixing two classes in one comparison.
+- `the_database_refuses_a_role_conflicting_write` and
+  `concurrent_role_selections_keep_one_role_for_the_reference` cover the
+  atomic cross-role enforcement, and
+  `the_candidate_identity_is_reported_for_the_analysis_and_each_comparison_side`
+  covers the reported candidate identity.
 
 ## Boundaries that were not crossed
 
@@ -279,3 +372,12 @@ public tests failing, and the same tests passing after the fix:
   unrelated additive migration cannot shift the boundary the test exercises.
 - The new command leaves were added to the command-surface audit of
   `tests/cli_command_tests.rs`, as `docs/CONVENTIONS.md` requires.
+- The cross-role constraint is part of the migration that introduced the
+  secondary assignment table, because that migration is still unmerged: the
+  table and the constraint that reads it land together, and the rollback
+  removes the constraint before the table. A database that already applied
+  the earlier form of that migration would need the constraint added by a
+  later migration when this branch is integrated.
+- The new result fields are additive: `candidate_class` is null for every
+  analysis and comparison that does not name an exact candidate class, so the
+  accepted JSON documents keep their shape.
