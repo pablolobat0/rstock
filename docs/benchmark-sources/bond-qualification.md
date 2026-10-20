@@ -42,7 +42,7 @@ its conventions, and its boundaries before enabling it.
 | Official comparator of that class | **Verified as absent.** The prospectus states: *"No existe un indice de referencia dado que se realiza una gestión activa y flexible."* The fund has **no reference index**. The 80% Bloomberg Global Aggregate 1–5 Year / 20% MSCI ACWI Small Cap Value reference is therefore an **independently chosen stable comparison target**, not a fund comparator, and it is labelled as such. [A1, P1] |
 | Mandate facts that bound the comparison | **Verified.** The prospectus allows up to 30% equity, states that the currency risk may range between **0% and 50% of total exposure**, that there is no predetermined fixed-income duration (it may even be negative at times), and that any credit quality — including unrated, and even a wholly low-quality portfolio — may be held. A EUR-hedged short-maturity bond sleeve is therefore a deliberate, disclosed comparator choice and not a replica of the fund's risk. [A1] |
 | Selected sleeve identity | **Partially confirmed.** *Bloomberg Global Aggregate 1-5 Year* is evidenced as a published index: the iShares Global Aggregate 1-5 Year Bond Index Fund factsheet of September 2026 names the benchmark *"BBG Global Aggregate 1-5 Year Index (USD)"* with index ticker **I31413US**, covering multi-currency investment-grade securities with 1–5 year maturities. The parent *Bloomberg Global Aggregate* is published as **LEGATRUU:IND** (Total Return Unhedged USD, future ticker I00038US). [I1, I2, B5] |
-| EUR hedging of that sleeve | **Not established for the selected series, and explicitly distinguished from conversion.** Bloomberg's fixed-income methodology states that returns on multi-currency indices are calculated on both an unhedged and a currency-hedged basis in several reporting currencies, and a *Bloomberg Global Aggregate EUR Hedged* variant is published. The iShares fund's EUR-hedged share classes hedge **inside the share class** with FX forwards while still tracking the **USD** index; a share-class hedge is therefore not the EUR-hedged index variant, and converting the unhedged USD index into EUR is a conversion, not a hedge. The exact *1–5 Year EUR-hedged* series identifier was not confirmed from a primary provider page. [I1, I3, B4, B6] |
+| EUR hedging of that sleeve | **Not established for the selected series, and explicitly distinguished from conversion.** Bloomberg's fixed-income methodology states that returns on multi-currency indices are calculated on both an unhedged and a currency-hedged basis in several reporting currencies, and a *Bloomberg Global Aggregate EUR Hedged* variant is listed on third-party index pages. The iShares fund's EUR-hedged share classes hedge **inside the share class** with FX forwards while still tracking the **USD** index; a share-class hedge is therefore not the EUR-hedged index variant, and converting the unhedged USD index into EUR is a conversion, not a hedge. The exact *1–5 Year EUR-hedged* series identifier was not confirmed from a primary provider page. [I1, I3, B4, B6, T1] |
 | Observation cadence, usable coverage, historical boundaries | **Unresolved.** No accessible payload or dated primary document establishes the daily schedule, the observation history, the correction policy, or the launch-versus-back-test boundary of the exact EUR-hedged 1–5 year series. |
 | Permitted access | **Unresolved.** Same commercial-delivery and entitlement position as the Neuberger reference; no licence, contract, or written permission was produced for retrieval, caching, comparison, or display. [B4] |
 
@@ -86,9 +86,10 @@ dates below are the ones the documents themselves carry.
   (exact EUR I Acc class IE00BFZMJT78; benchmark "Bloomberg Euro Aggregate 1-3 Years (Total
   Return, EUR)"; class inception 31-10-2018; "Source: Neuberger Berman, BlackRock Aladdin, as
   of June 30, 2026"), <https://www.nb.com/api/marketing/file?itemid=3264D7EF472A4A6DA050242E3BE69AEF&v=2>.
-- **N2:** Neuberger, *Short Duration Euro Bond Fund* factsheet published **2026-09-30** (same
-  class, same benchmark statement, rebranding note of 4 August 2026, share-class table with the
-  EUR I Dist, GBP I Dist, JPY I Acc, and USD I Acc classes and their own inception dates),
+- **N2:** Neuberger, *Short Duration Euro Bond Fund* factsheet, **September 2026** edition (data to
+  30 September 2026; same exact class, same benchmark statement, rebranding note of 4 August
+  2026, share-class table with the EUR I Dist, GBP I Dist, JPY I Acc, and USD I Acc classes and
+  their own inception dates),
   <https://www.nb.com/api/marketing/file?itemid=772EB6E072B4498A8F9A1E2620A7BBC1&v=3>.
 - **N3:** Swissfunddata, *Neuberger Berman Short Duration Euro Bond Fund EUR I Accumulating
   Class* factsheet dated **2025-07-31** (independent copy for the same ISIN with the same
@@ -118,6 +119,9 @@ dates below are the ones the documents themselves carry.
 - **I3:** BlackRock, *iShares Global Aggregate 1-5 Year Bond Index Fund (IE)* KIID, class D Distributing USD Hedged (index description: multi-currency investment-grade securities with 1–5 year maturities; the share class is hedged with FX forwards),
   <https://www.ishares.com/gls-download/literature/kiid/ucits_kiid-ishares-global-aggregate-1-5-year-bond-index-fund-ie-class-d-hedged-dist-usd-gb-ie00bf2mw460-en.pdf>.
 - **P1:** Benchmark-framework session record of 2026-10-17, in which the user approved the stable Ábaco reference as *80% Bloomberg Global Aggregate 1–5 Year total return EUR-hedged / 20% MSCI ACWI Small Cap Value net EUR unhedged* with monthly target resets — retained in the parent research notes, not a public primary document.
+- **T1:** Third-party index listing for *Bloomberg Global Aggregate EUR Hedged* (total return, EUR,
+  hedged), <https://ycharts.com/indices/%5EBBGATREURH>, accessed 19 October 2026. It is
+  discovery of a published variant, not a primary provider document and not a permitted feed.
 
 No source observation was admitted, no production mapping was enabled, and no network call was
 made from the test suite.
