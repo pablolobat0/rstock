@@ -9,6 +9,9 @@ use crate::models::AssetType;
 
 pub use crate::db::repos::benchmark_reference_repo::BenchmarkReference;
 
+/// The role a selected reference plays in a subject's comparison.
+pub use crate::models::ComparisonRole;
+
 pub const ASSIGNMENT_SEMANTICS: &str = "Explicit primary assignments apply retrospectively to the selected comparison window and do not mutate portfolio history.";
 
 pub const SECONDARY_ASSIGNMENT_SEMANTICS: &str = "Explicit secondary assignments are diagnostic comparisons that sit alongside the primary reference; they apply retrospectively, never replace the primary, and never contribute portfolio exposure weights.";
@@ -156,9 +159,6 @@ pub struct SecondaryRemovalOutcome {
     /// secondary never hides which assignments it dropped.
     pub removed_reference_ids: Vec<String>,
 }
-
-/// The role a secondary reference plays in a subject's comparison.
-pub use crate::models::ComparisonRole;
 
 pub async fn list_benchmark_catalog(db: &impl ConnectionTrait) -> anyhow::Result<BenchmarkCatalog> {
     let references = benchmark_reference_repo::find_all(db).await?;
