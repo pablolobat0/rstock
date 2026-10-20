@@ -19,6 +19,22 @@ pub type ComparisonCalculation = anyhow::Result<Result<AlignedComparison, Compar
 type StandardPeriodObservations = Vec<(String, f64, f64)>;
 type StandardPeriodWindow = anyhow::Result<Result<StandardPeriodObservations, String>>;
 
+/// The role of the primary reference in one subject's comparison.
+pub const PRIMARY_ROLE: &str = "primary";
+
+/// The role of an optional secondary reference in one subject's comparison.
+///
+/// A secondary reference is a diagnostic comparison beside the primary one. It
+/// never replaces the primary reference and never contributes a portfolio
+/// exposure weight.
+pub const SECONDARY_ROLE: &str = "secondary";
+
+/// The subject type of a Tracked asset's assignments.
+const TRACKED_SUBJECT_TYPE: &str = "tracked";
+
+/// The subject type of an exact Fund candidate's assignments.
+const FUND_CANDIDATE_SUBJECT_TYPE: &str = "fund_candidate";
+
 /// Resolve an explicit assignment, gate each source by its qualification,
 /// prepare EUR series through `MarketData`, then calculate one complete outcome.
 pub async fn compare_fund_to_primary(
@@ -30,14 +46,20 @@ pub async fn compare_fund_to_primary(
     today: NaiveDate,
 ) -> anyhow::Result<FundBenchmarkComparison> {
     let Some(ticker) = ticker else {
-        return Ok(FundBenchmarkComparison::unavailable(
+        return Ok(FundBenchmarkComparison::unavailable_for_role(
+            PRIMARY_ROLE,
             "fund analysis has no exact tracked-asset identity; assign a reference to its ISIN",
         ));
     };
-    let Some(assignment) =
-        crate::db::repos::benchmark_assignment_repo::find_by_subject(db, "tracked", ticker).await?
+    let Some(assignment) = crate::db::repos::benchmark_assignment_repo::find_by_subject(
+        db,
+        TRACKED_SUBJECT_TYPE,
+        ticker,
+    )
+    .await?
     else {
-        return Ok(FundBenchmarkComparison::unavailable(
+        return Ok(FundBenchmarkComparison::unavailable_for_role(
+            PRIMARY_ROLE,
             "no explicit primary reference is assigned to this tracked fund",
         ));
     };
@@ -54,8 +76,104 @@ pub async fn compare_fund_to_primary(
             today,
         },
         definition,
+        PRIMARY_ROLE,
     )
     .await
+}
+
+/// Compares the fund against every explicitly selected secondary reference.
+///
+/// Each secondary is an independent diagnostic comparison. A secondary whose
+/// inputs are missing, unqualified, or unverified makes only that secondary
+/// unavailable: the primary comparison and the portfolio-only facts keep their
+/// own outcomes.
+///
+/// The secondary assignments of one exact class are read from both records of
+/// that class — the Tracked asset and the Fund candidate of the same exact
+/// ISIN — because both describe the same investment. One reference is reported
+/// once even when both records select it.
+pub async fn compare_fund_to_secondary_references(
+    db: &DatabaseConnection,
+    market_data: &MarketData,
+    ms_code: &str,
+    ticker: Option<&str>,
+    fund_currency: Option<&str>,
+    today: NaiveDate,
+) -> anyhow::Result<Vec<FundBenchmarkComparison>> {
+    let Some(ticker) = ticker else {
+        return Ok(Vec::new());
+    };
+    let assignments = secondary_assignments_of_exact_class(db, ticker).await?;
+    let mut comparisons = Vec::with_capacity(assignments.len());
+    for assignment in assignments {
+        let definition =
+            crate::db::repos::benchmark_reference_repo::find_by_id(db, &assignment.reference_id)
+                .await?;
+        let comparison = compare_assigned_fund(
+            db,
+            market_data,
+            FundComparisonRequest {
+                ms_code,
+                ticker,
+                fund_currency,
+                today,
+            },
+            definition,
+            SECONDARY_ROLE,
+        )
+        .await?;
+        comparisons.push(comparison);
+    }
+    Ok(comparisons)
+}
+
+/// The secondary assignments of one exact class, without duplicates.
+///
+/// The Tracked asset and the Fund candidate of one exact ISIN describe the
+/// same investment, so both records contribute their secondary selections.
+/// A reference selected by both records is reported once.
+async fn secondary_assignments_of_exact_class(
+    db: &DatabaseConnection,
+    ticker: &str,
+) -> anyhow::Result<Vec<crate::db::repos::benchmark_secondary_assignment_repo::SecondaryAssignment>>
+{
+    use crate::db::repos::benchmark_secondary_assignment_repo;
+
+    let mut assignments =
+        benchmark_secondary_assignment_repo::find_by_subject(db, TRACKED_SUBJECT_TYPE, ticker)
+            .await?;
+    if let Some(asset) = crate::db::repos::asset_repo::find_by_ticker(db, ticker).await? {
+        if let Some(vehicle) = candidate_vehicle_prefix(asset.asset_type.to_string().as_str()) {
+            let candidate_subject = format!("{vehicle}:{ticker}");
+            for assignment in benchmark_secondary_assignment_repo::find_by_subject(
+                db,
+                FUND_CANDIDATE_SUBJECT_TYPE,
+                &candidate_subject,
+            )
+            .await?
+            {
+                if !assignments
+                    .iter()
+                    .any(|existing| existing.reference_id == assignment.reference_id)
+                {
+                    assignments.push(assignment);
+                }
+            }
+        }
+    }
+    Ok(assignments)
+}
+
+/// The candidate subject prefix of a tracked asset type.
+///
+/// A stock has no Fund candidate identity, so it contributes no candidate
+/// subject.
+fn candidate_vehicle_prefix(asset_type: &str) -> Option<&'static str> {
+    match asset_type {
+        "fund" => Some("fund"),
+        "etf" => Some("etf"),
+        _ => None,
+    }
 }
 
 /// Aligns genuinely common observations across the declared complete interval.
@@ -192,8 +310,10 @@ async fn compare_assigned_fund(
     market_data: &MarketData,
     request: FundComparisonRequest<'_>,
     definition: crate::db::repos::benchmark_reference_repo::BenchmarkReference,
+    role: &str,
 ) -> anyhow::Result<FundBenchmarkComparison> {
-    let mut outcome = FundBenchmarkComparison::unavailable("comparison inputs are not qualified");
+    let mut outcome =
+        FundBenchmarkComparison::unavailable_for_role(role, "comparison inputs are not qualified");
     outcome.purpose = Some(ReferencePurposeInfo::from(&definition));
     outcome.reference_id = Some(definition.id.clone());
     outcome.reference_name = Some(definition.display_name.clone());
@@ -209,7 +329,7 @@ async fn compare_assigned_fund(
         return Ok(unavailable(
             outcome,
             format!(
-                "primary reference '{}' has unverified production mapping ({})",
+                "{role} reference '{}' has unverified production mapping ({})",
                 definition.display_name, definition.verification_state
             ),
         ));

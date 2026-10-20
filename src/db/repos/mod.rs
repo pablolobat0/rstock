@@ -14,6 +14,7 @@ pub mod asset_repo;
 pub mod benchmark_assignment_repo;
 pub mod benchmark_candidate_repo;
 pub mod benchmark_reference_repo;
+pub mod benchmark_secondary_assignment_repo;
 pub mod benchmark_strategy_repo;
 pub mod custom_blend_repo;
 pub mod daily_price_repo;

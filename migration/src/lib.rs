@@ -22,6 +22,7 @@ mod m20261018_000004_track_reference_source_observations;
 mod m20261018_000005_add_adjustment_qualification;
 mod m20261019_000001_add_custom_blends;
 mod m20261019_000002_add_strategy_selection;
+mod m20261020_000001_add_secondary_benchmark_assignments;
 
 pub struct Migrator;
 
@@ -60,6 +61,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261018_000005_add_adjustment_qualification::Migration),
             Box::new(m20261019_000001_add_custom_blends::Migration),
             Box::new(m20261019_000002_add_strategy_selection::Migration),
+            Box::new(m20261020_000001_add_secondary_benchmark_assignments::Migration),
         ]
     }
 

@@ -175,6 +175,38 @@ pub enum BenchmarkCommands {
         #[arg(long, value_enum)]
         vehicle: CandidateVehicle,
     },
+    /// Explicitly assign an optional secondary reference to a Tracked asset
+    AssignSecondary {
+        #[arg(short = 't', long = "ticker")]
+        ticker: String,
+        reference_id: String,
+    },
+    /// Remove an optional secondary reference of a Tracked asset
+    RemoveSecondary {
+        #[arg(short = 't', long = "ticker")]
+        ticker: String,
+        /// The secondary reference to remove; every secondary of the asset when absent
+        #[arg(long)]
+        reference_id: Option<String>,
+    },
+    /// Explicitly assign an optional secondary reference to an exact Fund candidate
+    AssignSecondaryCandidate {
+        #[arg(long)]
+        identifier: String,
+        #[arg(long, value_enum)]
+        vehicle: CandidateVehicle,
+        reference_id: String,
+    },
+    /// Remove an optional secondary reference of an exact Fund candidate
+    RemoveSecondaryCandidate {
+        #[arg(long)]
+        identifier: String,
+        #[arg(long, value_enum)]
+        vehicle: CandidateVehicle,
+        /// The secondary reference to remove; every secondary of the candidate when absent
+        #[arg(long)]
+        reference_id: Option<String>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]

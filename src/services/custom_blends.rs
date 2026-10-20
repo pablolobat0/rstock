@@ -27,8 +27,8 @@ use sea_orm::{DatabaseConnection, TransactionTrait};
 
 use crate::constants::{format_date, BASE_CURRENCY, DATE_FORMAT};
 use crate::db::repos::{
-    benchmark_assignment_repo, benchmark_reference_repo, benchmark_strategy_repo,
-    custom_blend_repo, portfolio_history_repo,
+    benchmark_assignment_repo, benchmark_reference_repo, benchmark_secondary_assignment_repo,
+    benchmark_strategy_repo, custom_blend_repo, portfolio_history_repo,
 };
 use crate::models::{
     BlendComponent, BlendComponentArgument, BlendTargetReset, BlendWealthPoint,
@@ -335,6 +335,15 @@ pub async fn delete_custom_blend(
         anyhow::bail!(
             "Custom blend '{blend_id}' is in use by {} active assignment(s); remove or replace them before deleting the definition",
             assignments.len()
+        );
+    }
+    let secondary_assignments =
+        benchmark_secondary_assignment_repo::find_by_reference(&transaction, blend_id).await?;
+    if !secondary_assignments.is_empty() {
+        transaction.rollback().await?;
+        anyhow::bail!(
+            "Custom blend '{blend_id}' is in use by {} active secondary assignment(s); remove or replace them before deleting the definition",
+            secondary_assignments.len()
         );
     }
     if benchmark_strategy_repo::find_by_reference(&transaction, blend_id)

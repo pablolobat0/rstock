@@ -179,6 +179,20 @@ pub fn write_fund_analysis_reference_context<W: Write>(
     if matches!(comparison.availability, ComparisonAvailability::Available) {
         super::helpers::write_comparison_wealth_graph(writer, comparison)?;
     }
+    // The optional secondary comparisons are diagnostics beside the primary
+    // one. They keep their own role, conventions, dates, and graphs, and
+    // they never change the primary comparison above.
+    if !result.secondary_benchmark_comparisons.is_empty() {
+        writeln!(
+            writer,
+            "Secondary comparisons (diagnostics only; the primary reference above is unchanged):"
+        )?;
+        super::helpers::write_secondary_benchmark_comparisons(
+            writer,
+            result.name.as_deref().unwrap_or(&result.ms_code),
+            &result.secondary_benchmark_comparisons,
+        )?;
+    }
     Ok(())
 }
 

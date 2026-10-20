@@ -50,6 +50,19 @@ fn clock() -> NaiveDate {
     NaiveDate::from_ymd_opt(2025, 2, 5).expect("valid clock date")
 }
 
+/// The number of `down` steps that reaches the Strategy selection migration.
+///
+/// The migration is located by its stable name, so an unrelated additive
+/// migration cannot shift the boundary this test exercises.
+fn migrations_from_strategy_selection() -> u32 {
+    let migrations = Migrator::migrations();
+    let index = migrations
+        .iter()
+        .position(|migration| migration.name().contains("add_strategy_selection"))
+        .expect("the strategy selection migration should be registered");
+    (migrations.len() - index) as u32
+}
+
 /// A component definition whose qualification is verified and daily.
 async fn insert_verified_reference(db: &DatabaseConnection, id: &str, identifier: &str) {
     insert_verified_reference_in(db, id, identifier, "EUR").await;
@@ -915,7 +928,7 @@ async fn a_selected_strategy_refuses_the_destructive_migration_rollback() {
         .await
         .expect("the strategy should be selected");
 
-    let rollback = Migrator::down(&db, Some(1)).await;
+    let rollback = Migrator::down(&db, Some(migrations_from_strategy_selection())).await;
     assert!(
         rollback.is_err(),
         "a destructive rollback must be refused while a Strategy benchmark is selected"

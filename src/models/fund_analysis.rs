@@ -205,6 +205,16 @@ impl FundBenchmarkComparison {
                 .collect(),
         }
     }
+
+    /// The unavailable outcome of one comparison with an explicit role.
+    ///
+    /// A secondary reference keeps its own role, so an unavailable secondary
+    /// never reads as the missing primary reference of the subject.
+    pub fn unavailable_for_role(role: &str, reason: impl Into<String>) -> Self {
+        let mut outcome = Self::unavailable(reason);
+        role.clone_into(&mut outcome.role);
+        outcome
+    }
 }
 
 #[derive(Serialize)]
@@ -230,6 +240,13 @@ pub struct FundAnalysisResult {
     pub benchmark_reference: BenchmarkReferenceInfo,
     pub benchmark_limitations: Vec<MarketDataLimitation>,
     pub primary_benchmark_comparison: FundBenchmarkComparison,
+    /// The optional secondary comparisons of this exact class.
+    ///
+    /// Each secondary is a diagnostic comparison beside the primary one. It
+    /// never replaces the primary reference and never contributes a portfolio
+    /// exposure weight, and its availability is independent of the primary
+    /// comparison.
+    pub secondary_benchmark_comparisons: Vec<FundBenchmarkComparison>,
     pub risk_free_assumption: RiskFreeAssumption,
     pub candidate_correlation: CandidateCorrelationResult,
     pub holdings_changed: bool,

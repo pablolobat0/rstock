@@ -194,6 +194,21 @@ pub fn write_fund_comparison_reference_context<W: Write>(
                 &side.primary_benchmark_comparison,
             )?;
         }
+        // The optional secondary comparisons are diagnostics beside this
+        // side's primary comparison. They never change the primary rows and
+        // never borrow the other side's reference.
+        if !side.secondary_benchmark_comparisons.is_empty() {
+            writeln!(
+                writer,
+                "{} secondary comparisons (diagnostics only; the primary reference above is unchanged)",
+                side.name
+            )?;
+            super::helpers::write_secondary_benchmark_comparisons(
+                writer,
+                &side.name,
+                &side.secondary_benchmark_comparisons,
+            )?;
+        }
     }
     Ok(())
 }

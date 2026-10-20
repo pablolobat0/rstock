@@ -204,21 +204,24 @@ pub(crate) fn write_fund_benchmark_periods<W: Write>(
 ) -> anyhow::Result<()> {
     use crate::models::ComparisonAvailability;
 
+    // The comparison carries its own role, so a secondary reference never
+    // reads as the primary reference of the same subject.
+    let role = comparison.role.as_str();
     match &comparison.availability {
         ComparisonAvailability::Available => {
-            writeln!(writer, "{fund_name} assigned primary comparison: available")?;
+            writeln!(writer, "{fund_name} assigned {role} comparison: available")?;
         }
         ComparisonAvailability::Unavailable { reason } => {
             writeln!(
                 writer,
-                "{fund_name} assigned primary comparison: unavailable ({})",
+                "{fund_name} assigned {role} comparison: unavailable ({})",
                 display_reason(reason)
             )?;
         }
         ComparisonAvailability::NotApplicable { reason } => {
             writeln!(
                 writer,
-                "{fund_name} assigned primary comparison: not applicable ({})",
+                "{fund_name} assigned {role} comparison: not applicable ({})",
                 display_reason(reason)
             )?;
         }
@@ -226,7 +229,7 @@ pub(crate) fn write_fund_benchmark_periods<W: Write>(
     if let Some(reference_name) = &comparison.reference_name {
         writeln!(
             writer,
-            "{} primary reference: {} [{}]; native currency {}; wealth currency {}; basis {}; adjustment {}; hedge {}; cadence {}; source {} {}; provenance {}",
+            "{} {role} reference: {} [{}]; native currency {}; wealth currency {}; basis {}; adjustment {}; hedge {}; cadence {}; source {} {}; provenance {}",
             fund_name,
             reference_name,
             comparison.reference_id.as_deref().unwrap_or("unknown id"),
@@ -254,6 +257,34 @@ pub(crate) fn write_fund_benchmark_periods<W: Write>(
             .map(crate::models::BenchmarkPeriod::from)
             .collect::<Vec<_>>(),
     )
+}
+
+/// The optional secondary comparisons of one subject.
+///
+/// Every secondary is rendered with its own role, reference identity,
+/// conventions, dates, standard rows, and aligned wealth graph, so a
+/// diagnostic comparison never hides behind the primary one.
+pub(crate) fn write_secondary_benchmark_comparisons<W: Write>(
+    writer: &mut W,
+    fund_name: &str,
+    comparisons: &[crate::models::FundBenchmarkComparison],
+) -> anyhow::Result<()> {
+    for comparison in comparisons {
+        write_fund_benchmark_periods(writer, fund_name, comparison)?;
+        write_comparison_limitations(
+            writer,
+            "Fund comparison",
+            "Secondary reference comparison",
+            comparison,
+        )?;
+        if matches!(
+            comparison.availability,
+            crate::models::ComparisonAvailability::Available
+        ) {
+            write_comparison_wealth_graph(writer, comparison)?;
+        }
+    }
+    Ok(())
 }
 
 /// The purpose of one selected reference definition.

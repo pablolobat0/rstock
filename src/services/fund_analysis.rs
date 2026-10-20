@@ -64,7 +64,7 @@ pub async fn compute_fund_analysis(
         today,
     )
     .await?;
-    let primary_benchmark_comparison = crate::services::benchmark::compare_fund_to_primary(
+    let (primary_benchmark_comparison, secondary_benchmark_comparisons) = benchmark_comparisons(
         db,
         market_data,
         ms_code,
@@ -120,12 +120,51 @@ pub async fn compute_fund_analysis(
         benchmark_reference: metrics.benchmark_reference,
         benchmark_limitations: metrics.benchmark_limitations,
         primary_benchmark_comparison,
+        secondary_benchmark_comparisons,
         risk_free_assumption: crate::models::RiskFreeAssumption::current(),
         candidate_correlation,
         holdings_changed,
         last_snapshot_date,
         holding_diff,
     })
+}
+
+/// The primary and the optional secondary benchmark comparisons of one fund.
+///
+/// The two roles are measured by the shared Benchmark Module through the
+/// same preparation and the same comparison calculation. A secondary is a
+/// diagnostic beside the primary reference: it never replaces the primary
+/// reference and never contributes a portfolio exposure weight.
+async fn benchmark_comparisons(
+    db: &DatabaseConnection,
+    market_data: &MarketData,
+    ms_code: &str,
+    ticker: Option<&str>,
+    fund_currency: Option<&str>,
+    today: NaiveDate,
+) -> anyhow::Result<(
+    crate::models::FundBenchmarkComparison,
+    Vec<crate::models::FundBenchmarkComparison>,
+)> {
+    let primary = crate::services::benchmark::compare_fund_to_primary(
+        db,
+        market_data,
+        ms_code,
+        ticker,
+        fund_currency,
+        today,
+    )
+    .await?;
+    let secondary = crate::services::benchmark::compare_fund_to_secondary_references(
+        db,
+        market_data,
+        ms_code,
+        ticker,
+        fund_currency,
+        today,
+    )
+    .await?;
+    Ok((primary, secondary))
 }
 
 async fn compute_candidate_correlation(

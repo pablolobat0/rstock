@@ -111,6 +111,16 @@ async fn build_comparison_side(
         today,
     )
     .await?;
+    let secondary_benchmark_comparisons =
+        crate::services::benchmark::compare_fund_to_secondary_references(
+            db,
+            market_data,
+            code,
+            local_asset.as_ref().map(|asset| asset.ticker.as_str()),
+            currency.as_deref(),
+            today,
+        )
+        .await?;
     let top_10_weight = compute_top_n_weight(&fund_data.holdings, 10);
     record_holdings_snapshot(
         db,
@@ -151,6 +161,7 @@ async fn build_comparison_side(
         five_year: metrics.five_year,
         all_time: metrics.all_time,
         primary_benchmark_comparison,
+        secondary_benchmark_comparisons,
     };
 
     Ok(FundComparisonData {

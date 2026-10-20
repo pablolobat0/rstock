@@ -32,6 +32,13 @@ pub struct FundComparisonSide {
     pub five_year: Option<FundPeriodMetrics>,
     pub all_time: Option<FundPeriodMetrics>,
     pub primary_benchmark_comparison: FundBenchmarkComparison,
+    /// The optional secondary comparisons of this exact class.
+    ///
+    /// Each secondary is a diagnostic comparison beside the primary one. It
+    /// never replaces the primary reference and never contributes a portfolio
+    /// exposure weight, and its availability is independent of the primary
+    /// comparison.
+    pub secondary_benchmark_comparisons: Vec<FundBenchmarkComparison>,
 }
 
 /// The exact class identity of one compared fund.
